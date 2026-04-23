@@ -1,0 +1,130 @@
+import type { BookingStatus, BookingSource, UnitStatus } from "@/lib/types/database";
+
+export type ZoomLevel = "compacto" | "confort" | "amplio";
+
+export const ZOOM_CONFIG: Record<
+  ZoomLevel,
+  { cellWidth: number; rowHeight: number; dayLabel: "narrow" | "full"; label: string }
+> = {
+  compacto: { cellWidth: 36, rowHeight: 52, dayLabel: "narrow", label: "Compacto" },
+  confort: { cellWidth: 56, rowHeight: 64, dayLabel: "full", label: "Confort" },
+  amplio: { cellWidth: 88, rowHeight: 76, dayLabel: "full", label: "Amplio" },
+};
+
+export const SIDEBAR_WIDTH = 232; // ancho del panel fijo izquierdo
+export const HEADER_HEIGHT = 56; // ancho del header de días + mes
+
+// ─── Paleta de reservas ─────────────────────────────────────────────────────
+// Gradientes + bordes pensados para que se lean en el grid a baja altura
+export const BOOKING_BAR_STYLE: Record<
+  BookingStatus,
+  {
+    label: string;
+    gradient: string;     // tailwind gradient classes
+    border: string;       // tailwind border classes
+    ring: string;         // hover ring
+    text: string;         // text color
+    hex: string;          // fallback / legend dot
+  }
+> = {
+  pendiente: {
+    label: "Pendiente",
+    gradient: "from-amber-200/70 via-amber-100/80 to-amber-200/70 dark:from-amber-500/25 dark:via-amber-500/15 dark:to-amber-500/25",
+    border: "border-amber-500/60 border-dashed",
+    ring: "hover:ring-amber-500/50",
+    text: "text-amber-950 dark:text-amber-50",
+    hex: "#f59e0b",
+  },
+  confirmada: {
+    label: "Confirmada",
+    gradient: "from-emerald-500 via-emerald-500 to-teal-500",
+    border: "border-emerald-600/40",
+    ring: "hover:ring-emerald-400/50",
+    text: "text-white",
+    hex: "#10b981",
+  },
+  check_in: {
+    label: "In-house",
+    gradient: "from-blue-600 via-blue-500 to-sky-500",
+    border: "border-blue-700/40",
+    ring: "hover:ring-blue-400/60",
+    text: "text-white",
+    hex: "#3b82f6",
+  },
+  check_out: {
+    label: "Check-out",
+    gradient: "from-cyan-500 via-teal-500 to-teal-600",
+    border: "border-cyan-600/40",
+    ring: "hover:ring-cyan-400/50",
+    text: "text-white",
+    hex: "#06b6d4",
+  },
+  cancelada: {
+    label: "Cancelada",
+    gradient: "from-rose-400/40 via-rose-300/40 to-rose-400/40",
+    border: "border-rose-500/50 border-dashed",
+    ring: "hover:ring-rose-400/40",
+    text: "text-rose-950/80 line-through",
+    hex: "#ef4444",
+  },
+  no_show: {
+    label: "No-show",
+    gradient: "from-violet-500/60 via-fuchsia-500/50 to-violet-500/60",
+    border: "border-violet-500/60 border-dashed",
+    ring: "hover:ring-violet-400/50",
+    text: "text-white",
+    hex: "#7c3aed",
+  },
+};
+
+export const SOURCE_ACCENT: Record<BookingSource, string> = {
+  directo: "#0f766e",
+  airbnb: "#FF5A5F",
+  booking: "#003580",
+  expedia: "#FBC04B",
+  vrbo: "#1B6BFF",
+  whatsapp: "#25D366",
+  instagram: "#E4405F",
+  otro: "#64748b",
+};
+
+// Overlay sobre celdas cuando la unidad no tiene reserva pero tiene estado
+// operacional especial (limpieza, mantenimiento, bloqueo).
+export const UNIT_OVERLAY_STYLE: Partial<
+  Record<UnitStatus, { pattern: string; label: string; hex: string }>
+> = {
+  limpieza: {
+    pattern:
+      "repeating-linear-gradient(135deg, rgba(6,182,212,0.18) 0 8px, rgba(6,182,212,0.06) 8px 16px)",
+    label: "Limpieza",
+    hex: "#06b6d4",
+  },
+  mantenimiento: {
+    pattern:
+      "repeating-linear-gradient(135deg, rgba(249,115,22,0.18) 0 8px, rgba(249,115,22,0.06) 8px 16px)",
+    label: "Mantenimiento",
+    hex: "#f97316",
+  },
+  bloqueado: {
+    pattern:
+      "repeating-linear-gradient(135deg, rgba(100,116,139,0.25) 0 8px, rgba(100,116,139,0.08) 8px 16px)",
+    label: "Bloqueado",
+    hex: "#64748b",
+  },
+};
+
+export const ROW_COLOR_ALT = "bg-muted/25";
+
+// Precomputa Date -> offset (en días) desde startDate.
+// Nota: usamos noon local para evitar DST off-by-one.
+export function dayOffset(startISO: string, targetISO: string): number {
+  const s = new Date(startISO + "T12:00:00");
+  const t = new Date(targetISO + "T12:00:00");
+  return Math.round((t.getTime() - s.getTime()) / 86_400_000);
+}
+
+export function isoAddDays(iso: string, days: number): string {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
