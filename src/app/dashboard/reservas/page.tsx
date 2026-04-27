@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { Plus, CalendarRange } from "lucide-react";
+import { Plus } from "lucide-react";
 import { listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { Button } from "@/components/ui/button";
@@ -19,9 +18,6 @@ export default async function ReservasPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Link href="/dashboard/reservas/calendario">
-            <Button variant="outline" className="gap-2"><CalendarRange size={16} /> Calendario</Button>
-          </Link>
           <BookingFormDialog units={units}>
             <Button className="gap-2"><Plus size={16} /> Nueva reserva</Button>
           </BookingFormDialog>

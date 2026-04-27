@@ -175,7 +175,6 @@ export async function changeBookingStatus(id: string, newStatus: BookingStatus, 
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
-  revalidatePath("/dashboard/reservas/calendario");
 }
 
 /**
@@ -216,6 +215,5 @@ export async function moveBooking(input: {
 
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
-  revalidatePath("/dashboard/reservas/calendario");
   return data as Booking;
 }

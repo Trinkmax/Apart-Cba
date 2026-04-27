@@ -7,7 +7,6 @@ import {
   Building2,
   Users,
   CalendarDays,
-  CalendarRange,
   Hotel,
   Wrench,
   Sparkles,
@@ -56,7 +55,6 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, resource: "*" },
       { label: "Grid PMS", href: "/dashboard/unidades/kanban", icon: Hotel, resource: "units" },
-      { label: "Calendario", href: "/dashboard/reservas/calendario", icon: CalendarRange, resource: "bookings" },
       { label: "Unidades", href: "/dashboard/unidades", icon: Building2, resource: "units" },
       { label: "Reservas", href: "/dashboard/reservas", icon: CalendarDays, resource: "bookings" },
       { label: "Huéspedes", href: "/dashboard/huespedes", icon: Users, resource: "guests" },

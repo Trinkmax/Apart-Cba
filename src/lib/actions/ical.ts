@@ -153,7 +153,6 @@ export async function syncIcalFeed(feedId: string): Promise<{ imported: number; 
 
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");
-  revalidatePath("/dashboard/reservas/calendario");
   return { imported, skipped };
 }
 
