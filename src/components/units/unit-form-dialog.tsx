@@ -41,7 +41,7 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
   const router = useRouter();
   const isEdit = !!unit;
 
-  const [form, setForm] = useState<UnitInput>({
+  const initialForm: UnitInput = {
     code: unit?.code ?? "",
     name: unit?.name ?? "",
     address: unit?.address ?? "",
@@ -59,7 +59,8 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
     status: unit?.status ?? "disponible",
     description: unit?.description ?? "",
     notes: unit?.notes ?? "",
-  });
+  };
+  const [form, setForm] = useState<UnitInput>(initialForm);
 
   function set<K extends keyof UnitInput>(key: K, value: UnitInput[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -75,6 +76,7 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
         } else {
           await createUnit(form);
           toast.success("Unidad creada");
+          setForm(initialForm);
         }
         setOpen(false);
         router.refresh();

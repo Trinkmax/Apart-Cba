@@ -25,14 +25,16 @@ export default async function DashboardLayout({
         memberships={session.memberships}
         profile={session.profile}
       />
-      <SidebarInset>
+      <SidebarInset className="min-w-0 overflow-x-hidden">
         <TopBar
           currentOrg={organization}
           currentRole={role}
           memberships={session.memberships}
           profile={session.profile}
         />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+          {children}
+        </main>
       </SidebarInset>
     </SidebarProvider>
   );

@@ -32,7 +32,16 @@ export default async function UnidadesPage() {
         </div>
       </div>
 
-      <UnitsGrid units={units} />
+      <UnitsGrid
+        units={units}
+        emptyCta={
+          <UnitFormDialog owners={owners}>
+            <Button className="gap-2">
+              <Plus size={16} /> Crear primera unidad
+            </Button>
+          </UnitFormDialog>
+        }
+      />
     </div>
   );
 }

@@ -148,8 +148,10 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html,
   body {
     @apply bg-background text-foreground antialiased;
+    overflow-x: hidden;
     font-feature-settings: "ss01", "cv11", "cv02";
   }
   :focus-visible {

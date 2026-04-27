@@ -19,7 +19,13 @@ import { formatMoney, getInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { UnitWithRelations, UnitStatus } from "@/lib/types/database";
 
-export function UnitsGrid({ units }: { units: UnitWithRelations[] }) {
+export function UnitsGrid({
+  units,
+  emptyCta,
+}: {
+  units: UnitWithRelations[];
+  emptyCta?: React.ReactNode;
+}) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<UnitStatus | "all">("all");
 
@@ -72,10 +78,15 @@ export function UnitsGrid({ units }: { units: UnitWithRelations[] }) {
       {filtered.length === 0 ? (
         <Card className="p-12 text-center border-dashed">
           <Building2 className="size-10 mx-auto text-muted-foreground/50 mb-3" />
-          <p className="text-sm font-medium">Sin unidades</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {query || statusFilter !== "all" ? "Probá ajustando los filtros" : "Cargá tu primera unidad"}
+          <p className="text-sm font-medium">
+            {query || statusFilter !== "all" ? "Sin coincidencias" : "Aún no cargaste unidades"}
           </p>
+          <p className="text-xs text-muted-foreground mt-1 mb-4">
+            {query || statusFilter !== "all"
+              ? "Probá ajustando los filtros"
+              : "Cargá tu primera unidad para empezar a operar"}
+          </p>
+          {!query && statusFilter === "all" && emptyCta}
         </Card>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
