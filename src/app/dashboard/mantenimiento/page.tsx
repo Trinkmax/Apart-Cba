@@ -16,21 +16,31 @@ export default async function MantenimientoPage() {
     listOwners(),
   ]);
 
+  const open = tickets.filter(
+    (t) => !["resuelto", "cerrado"].includes((t as TicketWithUnit).status)
+  ).length;
+
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Mantenimiento</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {tickets.length} tickets · {tickets.filter((t) => !["resuelto", "cerrado"].includes((t as TicketWithUnit).status)).length} abiertos
+            {tickets.length} tickets · {open} abiertos · arrastrá las cards entre columnas para cambiar el estado
           </p>
         </div>
         <TicketFormDialog units={units} owners={owners}>
-          <Button className="gap-2"><Plus size={16} /> Nuevo ticket</Button>
+          <Button className="gap-2">
+            <Plus size={16} /> Nuevo ticket
+          </Button>
         </TicketFormDialog>
       </div>
 
-      <TicketsBoard tickets={tickets as TicketWithUnit[]} />
+      <TicketsBoard
+        initialTickets={tickets as TicketWithUnit[]}
+        units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}
+        owners={owners}
+      />
     </div>
   );
 }

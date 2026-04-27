@@ -485,6 +485,21 @@ export interface UnitAmenity {
   notes: string | null;
 }
 
+export type InventoryMovementType = "restock" | "consume" | "adjust" | "initial";
+
+export interface InventoryMovement {
+  id: string;
+  organization_id: string;
+  unit_id: string;
+  amenity_id: string;
+  movement_type: InventoryMovementType;
+  quantity_delta: number;
+  quantity_after: number | null;
+  performed_by: string | null;
+  notes: string | null;
+  performed_at: string;
+}
+
 export interface ConciergeRequest {
   id: string;
   organization_id: string;

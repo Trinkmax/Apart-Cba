@@ -112,3 +112,16 @@ export async function changeTicketStatus(id: string, status: TicketStatus) {
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath(`/dashboard/mantenimiento/${id}`);
 }
+
+export async function deleteTicket(id: string) {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("maintenance_tickets")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/mantenimiento");
+}
