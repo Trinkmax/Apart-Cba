@@ -70,3 +70,32 @@ export async function changeConciergeStatus(id: string, status: ConciergeStatus)
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/conserjeria");
 }
+
+export async function updateConciergeRequest(id: string, input: Partial<ConciergeInput>) {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("concierge_requests")
+    .update(input)
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/conserjeria");
+  return data as ConciergeRequest;
+}
+
+export async function deleteConciergeRequest(id: string) {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("concierge_requests")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/conserjeria");
+}

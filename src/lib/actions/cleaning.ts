@@ -115,3 +115,32 @@ export async function updateCleaningChecklist(id: string, checklist: { item: str
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/m/limpieza");
 }
+
+export async function updateCleaningTask(id: string, input: Partial<CleaningInput>) {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("cleaning_tasks")
+    .update(input)
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/limpieza");
+  return data as CleaningTask;
+}
+
+export async function deleteCleaningTask(id: string) {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("cleaning_tasks")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/limpieza");
+}

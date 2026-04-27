@@ -1,26 +1,41 @@
-import { Sparkles } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import { listCleaningTasks } from "@/lib/actions/cleaning";
+import { listUnitsEnriched } from "@/lib/actions/units";
+import { Button } from "@/components/ui/button";
 import { CleaningBoard } from "@/components/cleaning/cleaning-board";
+import { CleaningFormDialog } from "@/components/cleaning/cleaning-form-dialog";
 import type { CleaningTask, Unit } from "@/lib/types/database";
 
 type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
 
 export default async function LimpiezaPage() {
-  const tasks = (await listCleaningTasks()) as CT[];
+  const [tasks, units] = await Promise.all([
+    listCleaningTasks() as Promise<CT[]>,
+    listUnitsEnriched(),
+  ]);
+
+  const pendientes = tasks.filter((t) => t.status === "pendiente").length;
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-          <Sparkles className="size-5 text-cyan-500" />
-          Limpieza
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          {tasks.length} tareas · {tasks.filter((t) => t.status === "pendiente").length} pendientes
-        </p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+            <Sparkles className="size-5 text-cyan-500" />
+            Limpieza
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {tasks.length} tareas · {pendientes} pendientes · arrastrá las cards entre columnas para cambiar el estado
+          </p>
+        </div>
+        <CleaningFormDialog units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}>
+          <Button className="gap-2">
+            <Plus size={16} /> Nueva tarea
+          </Button>
+        </CleaningFormDialog>
       </div>
 
-      <CleaningBoard tasks={tasks} />
+      <CleaningBoard initialTasks={tasks} />
     </div>
   );
 }

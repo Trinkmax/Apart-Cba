@@ -7,6 +7,11 @@ import { ConciergeFormDialog } from "@/components/concierge/concierge-form-dialo
 
 export default async function ConserjeriaPage() {
   const [requests, units] = await Promise.all([listConciergeRequests(), listUnitsEnriched()]);
+  const unitsLite = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
+
+  const pendientes = (requests as { status: string }[]).filter(
+    (r) => r.status === "pendiente"
+  ).length;
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
@@ -17,15 +22,17 @@ export default async function ConserjeriaPage() {
             Conserjería
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Pedidos del huésped: late check-out, toallas extra, transfer, tours
+            {requests.length} pedidos · {pendientes} pendientes · arrastrá las cards entre columnas
           </p>
         </div>
-        <ConciergeFormDialog units={units}>
-          <Button className="gap-2"><Plus size={16} /> Nuevo pedido</Button>
+        <ConciergeFormDialog units={unitsLite}>
+          <Button className="gap-2">
+            <Plus size={16} /> Nuevo pedido
+          </Button>
         </ConciergeFormDialog>
       </div>
 
-      <ConciergeBoard requests={requests as never} />
+      <ConciergeBoard initialRequests={requests as never} units={unitsLite} />
     </div>
   );
 }
