@@ -60,6 +60,7 @@ import {
 } from "@/lib/actions/amenities";
 import { formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { AMENITY_ICONS, prettyCategory, resolveAmenityIcon } from "@/lib/amenity-icons";
 import type {
   Amenity,
   InventoryMovement,
@@ -80,7 +81,18 @@ interface Props {
   movements: MovementWithRefs[];
 }
 
-const ICONS = ["🧻", "☕", "🧼", "🛏️", "🛁", "🍷", "🧴", "🧹", "📦", "💡", "🍴", "👕", "🧊", "🧂"];
+function AmenityIcon({
+  name,
+  className,
+  size = 18,
+}: {
+  name: string | null | undefined;
+  className?: string;
+  size?: number;
+}) {
+  const Icon = resolveAmenityIcon(name);
+  return <Icon size={size} className={className} aria-hidden />;
+}
 
 export function InventoryWorkspace({
   amenities: initialAmenities,
@@ -319,7 +331,7 @@ function StockMatrix({
             {consumables.map((a) => (
               <SelectItem key={a.id} value={a.id}>
                 <span className="flex items-center gap-2">
-                  <span>{a.icon ?? "📦"}</span>
+                  <AmenityIcon name={a.icon} size={14} className="text-muted-foreground" />
                   {a.name}
                 </span>
               </SelectItem>
@@ -362,7 +374,9 @@ function StockMatrix({
                 className="w-[120px] shrink-0 px-2 py-2 text-center border-r last:border-r-0"
               >
                 <div className="flex flex-col items-center gap-1">
-                  <span className="text-base leading-none">{a.icon ?? "📦"}</span>
+                  <span className="size-7 rounded-md bg-primary/10 text-primary flex items-center justify-center">
+                    <AmenityIcon name={a.icon} size={14} />
+                  </span>
                   <span className="text-[11px] font-medium leading-tight line-clamp-1">
                     {a.name}
                   </span>
@@ -529,8 +543,10 @@ function StockCell({
         </DialogTrigger>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <span className="text-2xl">{amenity.icon ?? "📦"}</span>
+            <DialogTitle className="flex items-center gap-3">
+              <span className="size-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <AmenityIcon name={amenity.icon} size={20} />
+              </span>
               <div>
                 <div>{amenity.name}</div>
                 <div className="text-xs font-normal text-muted-foreground font-mono">
@@ -702,7 +718,7 @@ function Catalog({
       {grouped.map(([cat, items]) => (
         <section key={cat} className="space-y-3">
           <h2 className="text-[11px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
-            {cat}
+            {prettyCategory(cat)}
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {items.map((a) => (
@@ -740,12 +756,12 @@ function AmenityCard({
         <div className="flex items-start gap-3">
           <span
             className={cn(
-              "size-12 rounded-xl flex items-center justify-center text-2xl shrink-0",
-              "bg-gradient-to-br from-primary/10 to-primary/5 ring-1 ring-primary/10"
+              "size-12 rounded-xl flex items-center justify-center shrink-0",
+              "bg-gradient-to-br from-primary/15 to-primary/5 ring-1 ring-primary/10 text-primary"
             )}
             aria-hidden
           >
-            {amenity.icon ?? "📦"}
+            <AmenityIcon name={amenity.icon} size={22} />
           </span>
           <div className="flex-1 min-w-0">
             <div className="font-semibold text-sm leading-tight truncate">{amenity.name}</div>
@@ -796,7 +812,7 @@ function AmenityFormDialog({
   const [form, setForm] = useState<AmenityInput>({
     name: amenity?.name ?? "",
     category: amenity?.category ?? "Consumibles",
-    icon: amenity?.icon ?? "📦",
+    icon: amenity?.icon ?? "box",
     consumable: amenity?.consumable ?? true,
     unit_label: amenity?.unit_label ?? "unidades",
     default_par_level: amenity?.default_par_level ?? 1,
@@ -868,20 +884,21 @@ function AmenityFormDialog({
 
           <div className="space-y-1.5">
             <Label>Icono</Label>
-            <div className="flex flex-wrap gap-1.5">
-              {ICONS.map((icon) => (
+            <div className="grid grid-cols-9 gap-1.5 p-2 rounded-lg border bg-muted/20 max-h-44 overflow-auto">
+              {AMENITY_ICONS.map(({ name, label, icon: Icon }) => (
                 <button
-                  key={icon}
+                  key={name}
                   type="button"
-                  onClick={() => set("icon", icon)}
+                  title={label}
+                  onClick={() => set("icon", name)}
                   className={cn(
-                    "size-9 rounded-lg border text-lg transition-all hover:bg-accent",
-                    form.icon === icon
-                      ? "ring-2 ring-primary border-primary scale-105"
-                      : "border-border"
+                    "size-9 rounded-lg border flex items-center justify-center transition-all hover:bg-accent",
+                    form.icon === name
+                      ? "ring-2 ring-primary border-primary bg-primary/10 text-primary scale-105"
+                      : "border-border text-muted-foreground"
                   )}
                 >
-                  {icon}
+                  <Icon size={16} />
                 </button>
               ))}
             </div>
@@ -1066,8 +1083,8 @@ function AlertsPanel({
               key={`${unit.id}-${amenity.id}`}
               className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors"
             >
-              <span className="text-xl shrink-0" aria-hidden>
-                {amenity.icon ?? "📦"}
+              <span className="size-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <AmenityIcon name={amenity.icon} size={16} />
               </span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -1152,8 +1169,8 @@ function MovementsLog({ movements }: { movements: MovementWithRefs[] }) {
               >
                 <Icon size={14} />
               </span>
-              <span className="text-lg shrink-0" aria-hidden>
-                {m.amenity.icon ?? "📦"}
+              <span className="size-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <AmenityIcon name={m.amenity.icon} size={15} />
               </span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -1282,7 +1299,7 @@ function BulkRestockDialog({
                   {amenities.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
                       <span className="flex items-center gap-2">
-                        <span>{a.icon ?? "📦"}</span>
+                        <AmenityIcon name={a.icon} size={14} className="text-muted-foreground" />
                         {a.name}
                       </span>
                     </SelectItem>

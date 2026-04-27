@@ -153,9 +153,7 @@ export default async function DashboardHome() {
             <div className="space-y-2">
               {kpis.next_check_ins.map((b) => (
                 <Link key={b.id} href={`/dashboard/reservas/${b.id}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-accent/30 transition-colors">
-                  <div className="size-9 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 flex items-center justify-center text-[11px] font-bold">
-                    {formatDate(b.check_in_date, "d MMM")}
-                  </div>
+                  <DateTile date={b.check_in_date} variant="emerald" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{b.guest_name ?? "Sin huésped"}</div>
                     <div className="text-xs text-muted-foreground">
@@ -182,9 +180,7 @@ export default async function DashboardHome() {
             <div className="space-y-2">
               {kpis.next_check_outs.map((b) => (
                 <Link key={b.id} href={`/dashboard/reservas/${b.id}`} className="flex items-center gap-3 p-2 rounded-lg hover:bg-accent/30 transition-colors">
-                  <div className="size-9 rounded-lg bg-cyan-500/15 text-cyan-700 dark:text-cyan-400 flex items-center justify-center text-[11px] font-bold">
-                    {formatDate(b.check_out_date, "d MMM")}
-                  </div>
+                  <DateTile date={b.check_out_date} variant="cyan" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium truncate">{b.guest_name ?? "—"}</div>
                     <div className="text-xs text-muted-foreground">
@@ -197,6 +193,35 @@ export default async function DashboardHome() {
           )}
         </Card>
       </div>
+    </div>
+  );
+}
+
+function DateTile({
+  date,
+  variant,
+}: {
+  date: string;
+  variant: "emerald" | "cyan";
+}) {
+  const styles = {
+    emerald:
+      "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/20",
+    cyan: "bg-cyan-500/15 text-cyan-700 dark:text-cyan-400 border-cyan-500/20",
+  } as const;
+  return (
+    <div
+      className={cn(
+        "shrink-0 w-12 h-12 rounded-lg border flex flex-col items-center justify-center leading-none",
+        styles[variant]
+      )}
+    >
+      <span className="text-base font-bold tabular-nums">
+        {formatDate(date, "d")}
+      </span>
+      <span className="text-[9px] uppercase tracking-wider mt-0.5 opacity-80">
+        {formatDate(date, "MMM")}
+      </span>
     </div>
   );
 }
