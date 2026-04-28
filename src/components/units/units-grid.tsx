@@ -89,20 +89,20 @@ export function UnitsGrid({
           {!query && statusFilter === "all" && emptyCta}
         </Card>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 auto-rows-fr">
           {filtered.map((unit) => {
             const meta = UNIT_STATUS_META[unit.status];
             return (
               <Link
                 key={unit.id}
                 href={`/dashboard/unidades/${unit.id}`}
-                className="group focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
+                className="group h-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
               >
                 <Card className={cn(
-                  "overflow-hidden transition-all duration-200 hover:shadow-md hover:border-primary/30 group-hover:-translate-y-0.5"
+                  "h-full flex flex-col overflow-hidden transition-all duration-200 hover:shadow-md hover:border-primary/30 group-hover:-translate-y-0.5"
                 )}>
-                  <div className="h-1" style={{ backgroundColor: meta.color }} />
-                  <div className="p-4">
+                  <div className="h-1 shrink-0" style={{ backgroundColor: meta.color }} />
+                  <div className="p-4 flex-1 flex flex-col">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="font-semibold tracking-tight font-mono text-sm">{unit.code}</div>
@@ -144,18 +144,20 @@ export function UnitsGrid({
                       </div>
                     )}
 
-                    {unit.primary_owner && (
-                      <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-border/50">
-                        <Avatar className="size-5">
-                          <AvatarFallback className="text-[8px] bg-muted">
-                            {getInitials(unit.primary_owner.full_name)}
-                          </AvatarFallback>
-                        </Avatar>
-                        <span className="text-[11px] text-muted-foreground truncate">
-                          {unit.primary_owner.full_name}
-                        </span>
-                      </div>
-                    )}
+                    <div className="mt-auto pt-3">
+                      {unit.primary_owner && (
+                        <div className="flex items-center gap-1.5 pt-3 border-t border-border/50">
+                          <Avatar className="size-5">
+                            <AvatarFallback className="text-[8px] bg-muted">
+                              {getInitials(unit.primary_owner.full_name)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <span className="text-[11px] text-muted-foreground truncate">
+                            {unit.primary_owner.full_name}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </Card>
               </Link>
