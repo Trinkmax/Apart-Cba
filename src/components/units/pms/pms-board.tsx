@@ -28,6 +28,7 @@ import {
   GripVertical,
   Hotel,
   Loader2,
+  MessageSquareText,
   Moon,
   Plus,
   Search,
@@ -1417,8 +1418,26 @@ function BookingBar({
           <div className={cn("flex-1 min-w-0 px-2 flex items-center gap-1.5", style.text)}>
             <GripVertical size={10} className="opacity-50 shrink-0 hidden sm:block" />
             <div className="min-w-0 flex-1 leading-tight">
-              <div className="truncate text-[11px] font-semibold">
-                {booking.guest?.full_name ?? "Sin huésped"}
+              <div className="flex items-center gap-1 truncate text-[11px] font-semibold">
+                <span className="truncate">{booking.guest?.full_name ?? "Sin huésped"}</span>
+                {booking.internal_notes && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="shrink-0 inline-flex items-center justify-center size-3.5 rounded-full bg-amber-400/90 text-amber-950 ring-1 ring-amber-50/40 shadow-sm"
+                        aria-label="Tiene comentario interno"
+                      >
+                        <MessageSquareText size={9} strokeWidth={2.5} />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs whitespace-pre-wrap">
+                      <span className="text-[10px] uppercase tracking-wider opacity-70 block mb-0.5">
+                        Comentario interno
+                      </span>
+                      {booking.internal_notes}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
               </div>
               <div className="flex items-center gap-1.5 text-[9px] opacity-90 truncate">
                 <span className="flex items-center gap-0.5">
