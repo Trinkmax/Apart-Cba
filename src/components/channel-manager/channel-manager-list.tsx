@@ -1,7 +1,7 @@
 "use client";
 
 import { useTransition } from "react";
-import { RefreshCw, Trash2, ExternalLink, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
+import { RefreshCw, Trash2, Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
