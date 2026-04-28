@@ -28,7 +28,9 @@ import {
   GripVertical,
   Hotel,
   Loader2,
+  Maximize2,
   MessageSquareText,
+  Minimize2,
   Moon,
   Plus,
   Search,
@@ -252,6 +254,81 @@ export function PmsBoard({
     dragRef.current = next;
     setDragState(next ? { ...next } : null);
   }, []);
+
+  // ── zen mode (pantalla completa animada, oculta sidebar + topbar)
+  // Estados:
+  //   "idle"          → in-flow normal
+  //   "expanding"     → fixed en rect capturado, animando hacia inset:0
+  //   "expanded"      → fixed inset:0
+  //   "collapsing"    → fixed en inset:0, animando hacia rect capturado
+  type ZenPhase = "idle" | "expanding" | "expanded" | "collapsing";
+  const [zenPhase, setZenPhase] = useState<ZenPhase>("idle");
+  const zenRectRef = useRef<{ top: number; left: number; width: number; height: number } | null>(null);
+  const zenWrapperRef = useRef<HTMLDivElement | null>(null);
+  const ZEN_ANIM_MS = 380;
+
+  const enterZen = useCallback(() => {
+    const el = zenWrapperRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    zenRectRef.current = { top: r.top, left: r.left, width: r.width, height: r.height };
+    setZenPhase("expanding");
+    // siguiente frame → cambiar a 'expanded' para que la transición arranque
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => setZenPhase("expanded"));
+    });
+  }, []);
+
+  const exitZen = useCallback(() => {
+    // recapturar el rect destino por si el viewport o el sidebar cambiaron
+    setZenPhase("collapsing");
+    window.setTimeout(() => {
+      setZenPhase("idle");
+      zenRectRef.current = null;
+    }, ZEN_ANIM_MS);
+  }, []);
+
+  const toggleZen = useCallback(() => {
+    if (zenPhase === "idle") enterZen();
+    else if (zenPhase === "expanded") exitZen();
+  }, [zenPhase, enterZen, exitZen]);
+
+  const zenActive = zenPhase !== "idle";
+  const zenAtFullscreen = zenPhase === "expanding" || zenPhase === "expanded";
+
+  // ESC para salir
+  useEffect(() => {
+    if (zenPhase !== "expanded") return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") exitZen();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zenPhase, exitZen]);
+
+  // Bloquear scroll del body mientras zen está activo
+  useEffect(() => {
+    if (!zenActive) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [zenActive]);
+
+  // Estilos del wrapper según fase
+  const zenStyle: React.CSSProperties | undefined = useMemo(() => {
+    if (zenPhase === "idle") return undefined;
+    const r = zenRectRef.current;
+    if (zenAtFullscreen) {
+      return { top: 0, left: 0, width: "100vw", height: "100vh" };
+    }
+    // expanding (initial frame) o collapsing
+    if (r) {
+      return { top: r.top, left: r.left, width: r.width, height: r.height };
+    }
+    return undefined;
+  }, [zenPhase, zenAtFullscreen]);
 
   // ── constantes de zoom
   const { cellWidth: CELL, rowHeight: ROW } = ZOOM_CONFIG[zoom];
@@ -525,7 +602,20 @@ export function PmsBoard({
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-col h-[calc(100vh-4rem)] bg-background">
+      <div
+        ref={zenWrapperRef}
+        className={cn(
+          "flex flex-col bg-background",
+          zenActive
+            ? "fixed z-[60] shadow-2xl ring-1 ring-border/40 transition-[top,left,width,height] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[top,left,width,height]"
+            : "h-[calc(100vh-4rem)]"
+        )}
+        style={
+          zenActive
+            ? { ...zenStyle, transitionDuration: `${ZEN_ANIM_MS}ms` }
+            : undefined
+        }
+      >
         {/* ═══════ Toolbar superior ═══════ */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
           <div className="flex items-center gap-2 px-4 py-2.5 flex-wrap">
@@ -707,6 +797,30 @@ export function PmsBoard({
                   {realtimeConnected
                     ? "Actualizaciones en tiempo real activas"
                     : "Realtime desconectado"}
+                </TooltipContent>
+              </Tooltip>
+
+              {/* Zen mode (pantalla completa) */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={zenActive ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={toggleZen}
+                    aria-pressed={zenActive}
+                    disabled={zenPhase === "expanding" || zenPhase === "collapsing"}
+                  >
+                    {zenActive ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                    <span className="hidden md:inline">
+                      {zenActive ? "Salir Zen" : "Zen"}
+                    </span>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {zenActive
+                    ? "Salir del modo pantalla completa (Esc)"
+                    : "Modo Zen — calendario a pantalla completa"}
                 </TooltipContent>
               </Tooltip>
 

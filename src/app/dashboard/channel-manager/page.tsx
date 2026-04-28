@@ -1,7 +1,6 @@
-import { Cable, Plus, Wifi, Download, Upload } from "lucide-react";
+import { Cable, Wifi, Download, Upload } from "lucide-react";
 import { listIcalFeeds, listUnitExportFeeds } from "@/lib/actions/ical";
 import { listUnitsEnriched } from "@/lib/actions/units";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { IcalFeedDialog } from "@/components/channel-manager/ical-feed-dialog";
@@ -30,11 +29,7 @@ export default async function ChannelManagerPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <SyncAllButton />
-          <IcalFeedDialog units={units}>
-            <Button className="gap-2">
-              <Plus size={16} /> Conectar feed
-            </Button>
-          </IcalFeedDialog>
+          <IcalFeedDialog units={units} />
         </div>
       </div>
 
