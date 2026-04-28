@@ -19,12 +19,16 @@ import {
 } from "date-fns";
 import { es } from "date-fns/locale";
 import {
+  ArrowDownUp,
   CalendarDays,
+  Check,
   ChevronLeft,
   ChevronRight,
   Filter,
   GripVertical,
   Hotel,
+  Loader2,
+  MessageSquareText,
   Moon,
   Plus,
   Search,
@@ -33,7 +37,31 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useRouter } from "next/navigation";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -58,6 +86,7 @@ import {
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META, UNIT_STATUS_META } from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { moveBooking } from "@/lib/actions/bookings";
+import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { cn } from "@/lib/utils";
 import type {
   Booking,
@@ -116,8 +145,9 @@ export function PmsBoard({
   days,
   orgCurrency = "ARS",
 }: PmsBoardProps) {
+  const router = useRouter();
   // ── estado base
-  const [units] = useState(initialUnits);
+  const [units, setUnits] = useState(initialUnits);
   const [bookings, setBookings] = useState(initialBookings);
   const [windowStart, setWindowStart] = useState(startISO);
   const [windowDays, setWindowDays] = useState(days);
@@ -131,6 +161,60 @@ export function PmsBoard({
   );
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [, startTransition] = useTransition();
+
+  // ── modo edición de orden
+  const [editMode, setEditMode] = useState(false);
+  const [draftOrder, setDraftOrder] = useState<UnitWithRelations[]>(initialUnits);
+  const [confirmReorderOpen, setConfirmReorderOpen] = useState(false);
+  const [isSavingOrder, startSaveOrderTransition] = useTransition();
+  const reorderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+  );
+  const orderChanged = useMemo(() => {
+    if (!editMode) return false;
+    if (draftOrder.length !== units.length) return false;
+    for (let i = 0; i < draftOrder.length; i++) {
+      if (draftOrder[i].id !== units[i].id) return true;
+    }
+    return false;
+  }, [editMode, draftOrder, units]);
+
+  function enterEditMode() {
+    setDraftOrder(units);
+    setEditMode(true);
+  }
+  function cancelEditMode() {
+    setEditMode(false);
+    setConfirmReorderOpen(false);
+    setDraftOrder(units);
+  }
+  function handleReorderDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = draftOrder.findIndex((u) => u.id === active.id);
+    const newIndex = draftOrder.findIndex((u) => u.id === over.id);
+    if (oldIndex === -1 || newIndex === -1) return;
+    setDraftOrder((prev) => arrayMove(prev, oldIndex, newIndex));
+  }
+  function applyReorder() {
+    const ids = draftOrder.map((u) => u.id);
+    startSaveOrderTransition(async () => {
+      try {
+        await reorderUnitsGlobal(ids);
+        setUnits(draftOrder);
+        setEditMode(false);
+        setConfirmReorderOpen(false);
+        toast.success("Orden actualizado", {
+          description: `${draftOrder.length} unidades reordenadas`,
+        });
+        router.refresh();
+      } catch (e) {
+        toast.error("No se pudo guardar el orden", {
+          description: (e as Error).message,
+        });
+      }
+    });
+  }
 
   // ── popovers
   const [openBookingId, setOpenBookingId] = useState<string | null>(null);
@@ -615,9 +699,33 @@ export function PmsBoard({
                 </TooltipContent>
               </Tooltip>
 
+              {/* Toggle modo reordenar */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={editMode ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={editMode ? cancelEditMode : enterEditMode}
+                  >
+                    <ArrowDownUp size={12} />
+                    {editMode ? "Salir de orden" : "Reordenar"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {editMode
+                    ? "Cancelar cambios y salir del modo de orden"
+                    : "Activar modo edición para reordenar las unidades"}
+                </TooltipContent>
+              </Tooltip>
+
               {/* Nueva reserva */}
               <BookingFormDialog units={units}>
-                <Button size="sm" className="h-8 gap-1.5 text-xs">
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  disabled={editMode}
+                >
                   <Plus size={13} /> Nueva
                 </Button>
               </BookingFormDialog>
@@ -654,7 +762,93 @@ export function PmsBoard({
           </div>
         </div>
 
-        {/* ═══════ Grid ═══════ */}
+        {/* ═══════ Banner de modo edición ═══════ */}
+        {editMode && (
+          <div className="shrink-0 border-b bg-amber-50 dark:bg-amber-500/10 border-amber-300/60 dark:border-amber-500/30">
+            <div className="flex items-center gap-3 px-4 py-2.5 flex-wrap">
+              <div className="flex items-center gap-2">
+                <div className="size-7 rounded-md bg-amber-500/20 flex items-center justify-center ring-1 ring-amber-500/30">
+                  <ArrowDownUp size={13} className="text-amber-700 dark:text-amber-300" />
+                </div>
+                <div className="leading-tight">
+                  <div className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+                    Modo edición de orden
+                  </div>
+                  <div className="text-[10px] text-amber-700/80 dark:text-amber-300/80">
+                    Arrastrá las filas para definir el orden de las unidades.
+                  </div>
+                </div>
+              </div>
+              <div className="ml-auto flex items-center gap-2">
+                {orderChanged && (
+                  <Badge variant="secondary" className="text-[10px] gap-1 bg-amber-500/20 text-amber-900 dark:text-amber-200 border-amber-500/30">
+                    Cambios sin guardar
+                  </Badge>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={cancelEditMode}
+                  disabled={isSavingOrder}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs"
+                  onClick={() => setConfirmReorderOpen(true)}
+                  disabled={!orderChanged || isSavingOrder}
+                >
+                  <Check size={12} />
+                  Guardar orden
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══════ Panel reorden (modo edición) ═══════ */}
+        {editMode ? (
+          <div className="flex-1 overflow-auto bg-muted/20">
+            <div className="max-w-2xl mx-auto p-4 sm:p-6">
+              <div className="rounded-xl border bg-card overflow-hidden shadow-sm">
+                <div className="px-4 py-3 border-b bg-muted/30 flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-widest font-semibold text-muted-foreground">
+                    Unidad
+                  </span>
+                  <span className="text-[10px] uppercase tracking-widest font-semibold text-muted-foreground">
+                    {draftOrder.length} unidades
+                  </span>
+                </div>
+                <DndContext
+                  sensors={reorderSensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleReorderDragEnd}
+                >
+                  <SortableContext
+                    items={draftOrder.map((u) => u.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <ul className="divide-y divide-border/60">
+                      {draftOrder.map((unit, idx) => (
+                        <SortableUnitOrderRow
+                          key={unit.id}
+                          unit={unit}
+                          index={idx}
+                        />
+                      ))}
+                    </ul>
+                  </SortableContext>
+                </DndContext>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-3 px-1">
+                El orden se aplica a la grilla de Unidades y a las filas del Calendario PMS.
+              </p>
+            </div>
+          </div>
+        ) : (
+        /* ═══════ Grid ═══════ */
         <div
           ref={scrollRef}
           className="flex-1 overflow-auto relative"
@@ -843,6 +1037,35 @@ export function PmsBoard({
             )}
           </div>
         </div>
+        )}
+
+        {/* Confirmación de guardar orden */}
+        <Dialog
+          open={confirmReorderOpen}
+          onOpenChange={(o) => { if (!isSavingOrder) setConfirmReorderOpen(o); }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Guardar nuevo orden</DialogTitle>
+              <DialogDescription>
+                Vas a actualizar el orden de {draftOrder.length} unidades. Esto se reflejará en la grilla de Unidades y en el Calendario PMS.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setConfirmReorderOpen(false)}
+                disabled={isSavingOrder}
+              >
+                Revisar de nuevo
+              </Button>
+              <Button onClick={applyReorder} disabled={isSavingOrder}>
+                {isSavingOrder ? <Loader2 className="animate-spin" size={14} /> : <Check size={14} />}
+                Confirmar y guardar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Edit dialog (portal controlado) */}
         {editBooking && (
@@ -1195,8 +1418,26 @@ function BookingBar({
           <div className={cn("flex-1 min-w-0 px-2 flex items-center gap-1.5", style.text)}>
             <GripVertical size={10} className="opacity-50 shrink-0 hidden sm:block" />
             <div className="min-w-0 flex-1 leading-tight">
-              <div className="truncate text-[11px] font-semibold">
-                {booking.guest?.full_name ?? "Sin huésped"}
+              <div className="flex items-center gap-1 truncate text-[11px] font-semibold">
+                <span className="truncate">{booking.guest?.full_name ?? "Sin huésped"}</span>
+                {booking.internal_notes && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="shrink-0 inline-flex items-center justify-center size-3.5 rounded-full bg-amber-400/90 text-amber-950 ring-1 ring-amber-50/40 shadow-sm"
+                        aria-label="Tiene comentario interno"
+                      >
+                        <MessageSquareText size={9} strokeWidth={2.5} />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs whitespace-pre-wrap">
+                      <span className="text-[10px] uppercase tracking-wider opacity-70 block mb-0.5">
+                        Comentario interno
+                      </span>
+                      {booking.internal_notes}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
               </div>
               <div className="flex items-center gap-1.5 text-[9px] opacity-90 truncate">
                 <span className="flex items-center gap-0.5">
@@ -1257,6 +1498,90 @@ function HiddenTriggerAutoOpen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   return <button ref={ref} type="button" className="hidden" />;
+}
+
+function SortableUnitOrderRow({
+  unit,
+  index,
+}: {
+  unit: UnitWithRelations;
+  index: number;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: unit.id });
+  const meta = UNIT_STATUS_META[unit.status];
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+  };
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "relative flex items-center gap-3 px-4 py-3 bg-card transition-colors",
+        isDragging && "z-10 shadow-2xl ring-2 ring-primary/40 rounded-md bg-card",
+        !isDragging && "hover:bg-muted/40"
+      )}
+    >
+      {/* Posición */}
+      <span className="text-[10px] font-mono tabular-nums text-muted-foreground w-6 text-right shrink-0">
+        {(index + 1).toString().padStart(2, "0")}
+      </span>
+
+      {/* Drag handle */}
+      <button
+        type="button"
+        className="cursor-grab active:cursor-grabbing text-muted-foreground/60 hover:text-foreground transition-colors p-1 -m-1 rounded touch-none"
+        aria-label={`Arrastrar ${unit.code}`}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={16} />
+      </button>
+
+      {/* Avatar code */}
+      <div
+        className="size-9 rounded-lg shrink-0 flex items-center justify-center ring-1 ring-border/60"
+        style={{
+          background: `linear-gradient(135deg, ${meta.color}22, ${meta.color}10)`,
+          color: meta.color,
+        }}
+      >
+        <span className="text-[10px] font-bold tracking-tight">
+          {unit.code.slice(0, 3).toUpperCase()}
+        </span>
+      </div>
+
+      {/* Code + name */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="font-mono font-semibold text-sm truncate">{unit.code}</span>
+          <span
+            className="size-1.5 rounded-full shrink-0"
+            style={{ backgroundColor: meta.color }}
+          />
+        </div>
+        <div className="text-[11px] text-muted-foreground truncate">{unit.name}</div>
+      </div>
+
+      {/* Status badge */}
+      <Badge
+        variant="secondary"
+        className="text-[10px] gap-1 font-normal shrink-0 hidden sm:inline-flex"
+        style={{ color: meta.color, borderColor: meta.color + "40" }}
+      >
+        <span className="status-dot" style={{ backgroundColor: meta.color }} />
+        {meta.label}
+      </Badge>
+    </li>
+  );
 }
 
 function QuickAddBridge({

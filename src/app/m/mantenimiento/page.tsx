@@ -35,7 +35,7 @@ export default async function MobileTicketsPage() {
             const pm = TICKET_PRIORITY_META[t.priority];
             const sm = TICKET_STATUS_META[t.status];
             return (
-              <Link key={t.id} href={`/dashboard/mantenimiento/${t.id}`}>
+              <Link key={t.id} href={`/m/mantenimiento/${t.id}`}>
                 <Card className="p-4 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between gap-2">
                     <div className="font-semibold leading-snug">{t.title}</div>

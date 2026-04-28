@@ -22,15 +22,15 @@ export default async function MantenimientoPage() {
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] items-start gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight">Mantenimiento</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {tickets.length} tickets · {open} abiertos · arrastrá las cards entre columnas para cambiar el estado
           </p>
         </div>
         <TicketFormDialog units={units} owners={owners}>
-          <Button className="gap-2">
+          <Button className="gap-2 justify-self-start sm:justify-self-end shrink-0">
             <Plus size={16} /> Nuevo ticket
           </Button>
         </TicketFormDialog>

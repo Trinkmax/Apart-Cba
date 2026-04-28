@@ -14,9 +14,11 @@ import {
   Phone,
   Mail,
   CircleDot,
+  Lock,
   LogIn,
   LogOut,
   Ban,
+  StickyNote,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -174,8 +176,34 @@ export function PmsBookingPopoverContent({
         <>
           <Separator />
           <div className="px-4 py-3">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Notas</div>
-            <p className="text-xs text-foreground/90">{booking.notes}</p>
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+              <StickyNote size={10} />
+              Notas
+            </div>
+            <p className="text-xs text-foreground/90 whitespace-pre-wrap">{booking.notes}</p>
+          </div>
+        </>
+      )}
+
+      {booking.internal_notes && (
+        <>
+          <Separator />
+          <div className="px-4 py-3 bg-amber-50/60 dark:bg-amber-500/10">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-semibold text-amber-800 dark:text-amber-300">
+                <Lock size={10} />
+                Comentario interno
+              </div>
+              <Badge
+                variant="outline"
+                className="text-[9px] h-4 px-1.5 font-normal border-amber-500/40 text-amber-800 dark:text-amber-300"
+              >
+                Solo equipo
+              </Badge>
+            </div>
+            <p className="text-xs text-amber-900/90 dark:text-amber-100/90 whitespace-pre-wrap">
+              {booking.internal_notes}
+            </p>
           </div>
         </>
       )}

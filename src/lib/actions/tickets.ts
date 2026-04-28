@@ -96,6 +96,36 @@ export async function updateTicket(id: string, input: TicketInput) {
   return data as MaintenanceTicket;
 }
 
+/**
+ * Permite al colaborador asignado (o al admin) actualizar solo el costo real
+ * sin tocar otros campos del ticket. Útil desde la vista mobile.
+ */
+export async function updateTicketCost(
+  id: string,
+  actualCost: number | null,
+  costCurrency: string
+) {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("maintenance_tickets")
+    .update({
+      actual_cost: actualCost,
+      cost_currency: costCurrency,
+    })
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/mantenimiento");
+  revalidatePath(`/dashboard/mantenimiento/${id}`);
+  revalidatePath(`/m/mantenimiento/${id}`);
+  revalidatePath("/m/mantenimiento");
+  return data as MaintenanceTicket;
+}
+
 export async function changeTicketStatus(id: string, status: TicketStatus) {
   await requireSession();
   const { organization } = await getCurrentOrg();
