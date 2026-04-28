@@ -38,11 +38,13 @@ import { searchGuests } from "@/lib/actions/guests";
 import { BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
 import { formatNights } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Booking, Guest, Unit } from "@/lib/types/database";
+import type { Booking, BookingWithRelations, Guest, Unit } from "@/lib/types/database";
+
+type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
 
 interface BookingFormDialogProps {
   children: React.ReactNode;
-  booking?: Booking;
+  booking?: Booking | BookingWithRelations;
   units: Pick<Unit, "id" | "code" | "name" | "default_commission_pct" | "base_price" | "base_price_currency" | "cleaning_fee">[];
   defaultUnitId?: string;
   defaultCheckIn?: string;
@@ -65,7 +67,9 @@ export function BookingFormDialog({
   const router = useRouter();
   const isEdit = !!booking;
 
-  const [selectedGuest, setSelectedGuest] = useState<Guest | null>(null);
+  const [selectedGuest, setSelectedGuest] = useState<SelectedGuest | null>(
+    () => (booking && "guest" in booking ? booking.guest ?? null : null)
+  );
   const [guestSearchOpen, setGuestSearchOpen] = useState(false);
   const [guestQuery, setGuestQuery] = useState("");
   const [guestResults, setGuestResults] = useState<Guest[]>([]);
@@ -207,7 +211,7 @@ export function BookingFormDialog({
                 <PopoverTrigger asChild>
                   <Button type="button" variant="outline" role="combobox" className="flex-1 justify-start gap-2 font-normal">
                     <Search size={14} className="text-muted-foreground" />
-                    {selectedGuest?.full_name ?? form.guest_id ? selectedGuest?.full_name ?? "Seleccionado" : "Buscar huésped existente…"}
+                    {selectedGuest?.full_name ?? (form.guest_id ? "Seleccionado" : "Buscar huésped existente…")}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[400px] p-0" align="start">
