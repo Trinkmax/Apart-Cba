@@ -119,6 +119,17 @@ interface PmsBoardProps {
   orgCurrency?: string;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+// Convierte "HH:MM[:SS]" a fracción de día (0..1). 11:00 → 0.4583
+function timeToDayFraction(time: string | null | undefined, fallback = 0): number {
+  if (!time) return fallback;
+  const [hh, mm] = time.split(":").map((s) => parseInt(s, 10));
+  if (isNaN(hh)) return fallback;
+  const h = Math.min(23, Math.max(0, hh));
+  const m = Math.min(59, Math.max(0, isNaN(mm) ? 0 : mm));
+  return (h + m / 60) / 24;
+}
+
 // ─── Tipos de drag ──────────────────────────────────────────────────────────
 type DragMode = "move" | "resize-left" | "resize-right";
 
@@ -1073,9 +1084,9 @@ export function PmsBoard({
             key={editBooking.id}
             booking={editBooking}
             units={units}
-          >
-            <HiddenTriggerAutoOpen onMount={() => null} onClose={() => setEditBooking(null)} />
-          </BookingFormDialog>
+            open
+            onOpenChange={(o) => { if (!o) setEditBooking(null); }}
+          />
         )}
 
         {/* Quick-add dialog */}
@@ -1323,9 +1334,14 @@ function BookingBar({
   unitCode,
   unitName,
 }: BookingBarProps) {
-  // cálculo de offsets
-  let ciOffset = dayOffset(windowStart, booking.check_in_date);
-  let coOffset = dayOffset(windowStart, booking.check_out_date);
+  // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
+  // (15:00 → +0.625 del día; 11:00 → +0.458 del día). Esto hace que la barra "pise"
+  // visualmente el día de salida hasta la hora real de check-out, y deja espacio
+  // para una nueva reserva el mismo día por la tarde.
+  const ciFrac = timeToDayFraction(booking.check_in_time, 15 / 24);
+  const coFrac = timeToDayFraction(booking.check_out_time, 11 / 24);
+  let ciOffset = dayOffset(windowStart, booking.check_in_date) + ciFrac;
+  let coOffset = dayOffset(windowStart, booking.check_out_date) + coFrac;
   let rowOffsetPx = 0;
 
   if (dragState) {
@@ -1335,10 +1351,10 @@ function BookingBar({
       rowOffsetPx = dragState.rowDelta * rowHeight;
     } else if (dragState.mode === "resize-left") {
       ciOffset += dragState.dayDelta;
-      if (ciOffset >= coOffset) ciOffset = coOffset - 1;
+      if (ciOffset >= coOffset - 0.25) ciOffset = coOffset - 0.5;
     } else if (dragState.mode === "resize-right") {
       coOffset += dragState.dayDelta;
-      if (coOffset <= ciOffset) coOffset = ciOffset + 1;
+      if (coOffset <= ciOffset + 0.25) coOffset = ciOffset + 0.5;
     }
   }
 
@@ -1481,24 +1497,6 @@ function BookingBar({
   );
 }
 
-// ───── Bridge: abre BookingFormDialog programáticamente con defaults ─────
-function HiddenTriggerAutoOpen({
-  onMount,
-  onClose,
-}: {
-  onMount: () => void;
-  onClose: () => void;
-}) {
-  const ref = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    ref.current?.click();
-    onMount();
-    // cerrar al desmontar
-    return () => onClose();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return <button ref={ref} type="button" className="hidden" />;
-}
 
 function SortableUnitOrderRow({
   unit,
@@ -1597,19 +1595,14 @@ function QuickAddBridge({
   checkOut: string;
   onClose: () => void;
 }) {
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    triggerRef.current?.click();
-  }, []);
   return (
     <BookingFormDialog
       units={units}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
       defaultCheckOut={checkOut}
-      onClosed={onClose}
-    >
-      <button ref={triggerRef} type="button" className="hidden" />
-    </BookingFormDialog>
+      open
+      onOpenChange={(o) => { if (!o) onClose(); }}
+    />
   );
 }

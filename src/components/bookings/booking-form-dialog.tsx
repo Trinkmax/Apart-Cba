@@ -43,12 +43,17 @@ import type { Booking, BookingWithRelations, Guest, Unit } from "@/lib/types/dat
 type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
 
 interface BookingFormDialogProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   booking?: Booking | BookingWithRelations;
   units: Pick<Unit, "id" | "code" | "name" | "default_commission_pct" | "base_price" | "base_price_currency" | "cleaning_fee">[];
   defaultUnitId?: string;
   defaultCheckIn?: string;
   defaultCheckOut?: string;
+  /** Si se setea, el dialog arranca abierto y no necesita trigger */
+  defaultOpen?: boolean;
+  /** Estado controlado (opcional). Si se pasa, ignora defaultOpen y children. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   /** Callback cuando el dialog se cierra (para coordinar con el parent) */
   onClosed?: () => void;
 }
@@ -60,9 +65,18 @@ export function BookingFormDialog({
   defaultUnitId,
   defaultCheckIn,
   defaultCheckOut,
+  defaultOpen = false,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
   onClosed,
 }: BookingFormDialogProps) {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (o: boolean) => {
+    if (!isControlled) setInternalOpen(o);
+    controlledOnOpenChange?.(o);
+  };
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const isEdit = !!booking;
@@ -162,7 +176,7 @@ export function BookingFormDialog({
         if (!o) onClosed?.();
       }}
     >
-      <DialogTrigger asChild>{children}</DialogTrigger>
+      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar reserva" : "Nueva reserva"}</DialogTitle>
