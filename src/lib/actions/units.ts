@@ -269,6 +269,29 @@ export async function reorderUnits(
   revalidatePath("/dashboard/unidades/kanban");
 }
 
+/**
+ * Reordena globalmente todas las unidades (vista Unidades).
+ * Asigna position = índice en el array, ignorando status.
+ */
+export async function reorderUnitsGlobal(orderedIds: string[]): Promise<void> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  await Promise.all(
+    orderedIds.map((id, idx) =>
+      admin
+        .from("units")
+        .update({ position: idx })
+        .eq("id", id)
+        .eq("organization_id", organization.id)
+    )
+  );
+
+  revalidatePath("/dashboard/unidades");
+  revalidatePath("/dashboard/unidades/kanban");
+}
+
 export async function linkOwnerToUnit(
   unitId: string,
   ownerId: string,
