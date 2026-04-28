@@ -192,6 +192,8 @@ export interface Unit {
   neighborhood: string | null;
   floor: string | null;
   apartment: string | null;
+  tower: string | null;
+  internal_extra: string | null;
   bedrooms: number | null;
   bathrooms: number | null;
   max_guests: number | null;

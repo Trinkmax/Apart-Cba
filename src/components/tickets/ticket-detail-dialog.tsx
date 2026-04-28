@@ -43,6 +43,7 @@ import {
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { TicketPhotosSection } from "./ticket-photos-section";
 import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/database";
 
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
@@ -437,6 +438,9 @@ export function TicketDetailDialog({
               </Field>
             )}
           </div>
+
+          {/* Fotos del trabajo (evidencia) */}
+          <TicketPhotosSection ticketId={ticket.id} />
 
           {/* Notas internas */}
           {(isEditing || ticket.notes) && (

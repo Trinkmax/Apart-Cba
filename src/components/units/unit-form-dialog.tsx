@@ -48,6 +48,8 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
     neighborhood: unit?.neighborhood ?? "",
     floor: unit?.floor ?? "",
     apartment: unit?.apartment ?? "",
+    tower: unit?.tower ?? "",
+    internal_extra: unit?.internal_extra ?? "",
     bedrooms: unit?.bedrooms ?? null,
     bathrooms: unit?.bathrooms ?? null,
     max_guests: unit?.max_guests ?? 2,
@@ -141,7 +143,7 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-4 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="neighborhood">Barrio</Label>
                   <Input
@@ -149,6 +151,15 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
                     value={form.neighborhood ?? ""}
                     onChange={(e) => set("neighborhood", e.target.value)}
                     placeholder="Nueva Córdoba"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tower">Torre</Label>
+                  <Input
+                    id="tower"
+                    value={form.tower ?? ""}
+                    onChange={(e) => set("tower", e.target.value)}
+                    placeholder="Torre A"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -196,6 +207,17 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
                   onChange={(e) => set("description", e.target.value)}
                   placeholder="Descripción para huéspedes / promoción"
                   rows={3}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="internal_extra">Extra interno</Label>
+                <Textarea
+                  id="internal_extra"
+                  value={form.internal_extra ?? ""}
+                  onChange={(e) => set("internal_extra", e.target.value)}
+                  placeholder="Diferencial o comentario interno (no visible al huésped)"
+                  rows={2}
                 />
               </div>
             </TabsContent>

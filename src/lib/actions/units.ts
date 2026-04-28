@@ -24,6 +24,8 @@ const unitSchema = z.object({
   neighborhood: z.string().optional().nullable(),
   floor: z.string().optional().nullable(),
   apartment: z.string().optional().nullable(),
+  tower: z.string().optional().nullable(),
+  internal_extra: z.string().optional().nullable(),
   bedrooms: z.coerce.number().int().min(0).optional().nullable(),
   bathrooms: z.coerce.number().int().min(0).optional().nullable(),
   max_guests: z.coerce.number().int().min(1).optional().nullable(),

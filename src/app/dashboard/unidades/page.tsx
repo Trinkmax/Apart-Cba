@@ -21,7 +21,7 @@ export default async function UnidadesPage() {
         <div className="flex items-center gap-2">
           <Link href="/dashboard/unidades/kanban">
             <Button variant="outline" className="gap-2">
-              <Hotel size={16} /> Grid PMS
+              <Hotel size={16} /> Calendario
             </Button>
           </Link>
           <UnitFormDialog owners={owners}>
