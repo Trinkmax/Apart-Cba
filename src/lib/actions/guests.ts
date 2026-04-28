@@ -63,6 +63,77 @@ export async function getGuest(id: string) {
   return data;
 }
 
+export interface GuestProfileBooking {
+  id: string;
+  status: string;
+  source: string;
+  check_in_date: string;
+  check_out_date: string;
+  guests_count: number;
+  currency: string;
+  total_amount: number;
+  paid_amount: number;
+  unit: { id: string; code: string; name: string } | null;
+}
+
+export interface GuestProfileConciergeRequest {
+  id: string;
+  request_type: string | null;
+  description: string;
+  status: string;
+  priority: string;
+  scheduled_for: string | null;
+  completed_at: string | null;
+  cost: number | null;
+  cost_currency: string | null;
+}
+
+export interface GuestProfile extends Guest {
+  bookings: GuestProfileBooking[];
+  concierge_requests: GuestProfileConciergeRequest[];
+}
+
+export async function getGuestProfile(id: string): Promise<GuestProfile | null> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const [guestRes, bookingsRes, conciergeRes] = await Promise.all([
+    admin
+      .from("guests")
+      .select("*")
+      .eq("id", id)
+      .eq("organization_id", organization.id)
+      .maybeSingle(),
+    admin
+      .from("bookings")
+      .select(
+        `id, status, source, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount, unit:units(id, code, name)`
+      )
+      .eq("guest_id", id)
+      .eq("organization_id", organization.id)
+      .order("check_in_date", { ascending: false }),
+    admin
+      .from("concierge_requests")
+      .select(
+        `id, request_type, description, status, priority, scheduled_for, completed_at, cost, cost_currency`
+      )
+      .eq("guest_id", id)
+      .eq("organization_id", organization.id)
+      .order("created_at", { ascending: false }),
+  ]);
+
+  if (guestRes.error) throw new Error(guestRes.error.message);
+  if (!guestRes.data) return null;
+  if (bookingsRes.error) throw new Error(bookingsRes.error.message);
+  if (conciergeRes.error) throw new Error(conciergeRes.error.message);
+
+  return {
+    ...(guestRes.data as Guest),
+    bookings: (bookingsRes.data ?? []) as unknown as GuestProfileBooking[],
+    concierge_requests: (conciergeRes.data ?? []) as GuestProfileConciergeRequest[],
+  };
+}
+
 export async function createGuest(input: GuestInput): Promise<Guest> {
   await requireSession();
   const { organization } = await getCurrentOrg();
