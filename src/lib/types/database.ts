@@ -209,6 +209,7 @@ export interface Unit {
   description: string | null;
   notes: string | null;
   active: boolean;
+  ical_export_token: string;
   created_at: string;
   updated_at: string;
 }

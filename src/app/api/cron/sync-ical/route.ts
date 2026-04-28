@@ -8,7 +8,17 @@ export const maxDuration = 300; // Fluid Compute — hasta 5 min para sync masiv
  * Sincroniza todos los feeds iCal activos de todas las organizaciones.
  * Idempotente — safe para correr 1x/día vía Vercel Cron (plan Hobby).
  */
-export async function GET() {
+export async function GET(req: Request) {
+  // Vercel Cron envía Authorization: Bearer <CRON_SECRET>. Si está definido,
+  // exigimos match — protege el endpoint de ser disparado por terceros.
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const auth = req.headers.get("authorization");
+    if (auth !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
   const admin = createAdminClient();
   const { data: feeds, error } = await admin
     .from("ical_feeds")
@@ -44,13 +54,20 @@ export async function GET() {
       for (const ev of events) {
         const event = new ICAL.Event(ev);
         const uid = event.uid;
+        if (!uid) { skipped++; continue; }
         const startDate = event.startDate.toJSDate();
         const endDate = event.endDate.toJSDate();
         const summary = event.summary ?? "";
+        const isBlock = /not available|blocked|unavailable|closed/i.test(summary);
+
+        // Self-import guard: ignora eventos que vienen de nuestro propio feed
+        if (uid.includes("apartcba-")) { skipped++; continue; }
 
         const { data: existing } = await admin
           .from("bookings")
           .select("id")
+          .eq("organization_id", feed.organization_id)
+          .eq("unit_id", feed.unit_id)
           .eq("source", feed.source)
           .eq("external_id", uid)
           .maybeSingle();
@@ -68,7 +85,7 @@ export async function GET() {
           check_out_time: "11:00",
           currency: "ARS",
           total_amount: 0,
-          notes: `Importado de ${feed.source}: ${summary}`,
+          notes: isBlock ? "Bloqueo (sin reserva real)" : `Importado de ${feed.source}: ${summary}`,
           guests_count: 1,
         });
         if (!insertError) imported++;
@@ -83,6 +100,12 @@ export async function GET() {
       results.totalImported += imported;
       results.totalSkipped += skipped;
     } catch (e) {
+      const msg = (e as Error).message;
+      await admin.from("ical_feeds").update({
+        last_sync_at: new Date().toISOString(),
+        last_sync_status: "error",
+        last_sync_error: msg,
+      }).eq("id", f.id);
       results.errors++;
     }
   }

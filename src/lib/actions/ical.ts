@@ -6,7 +6,7 @@ import ICAL from "ical.js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import type { IcalFeed, BookingSource } from "@/lib/types/database";
+import type { IcalFeed, BookingSource, Unit } from "@/lib/types/database";
 
 const feedSchema = z.object({
   unit_id: z.string().uuid(),
@@ -90,17 +90,27 @@ export async function syncIcalFeed(feedId: string): Promise<{ imported: number; 
     for (const ev of events) {
       const event = new ICAL.Event(ev);
       const uid = event.uid;
+      if (!uid) { skipped++; continue; }
       const startDate = event.startDate.toJSDate();
       const endDate = event.endDate.toJSDate();
       const summary = event.summary ?? "";
 
-      // Skip blocks (Airbnb often marks "Not available" blocks)
+      // Detectar bloqueos (Airbnb los marca "Not available", "Reserved" puede
+      // ser reserva o bloqueo manual del host — lo importamos igual).
       const isBlock = /not available|blocked|unavailable|closed/i.test(summary);
 
-      // Check if exists
+      // Self-import guard: si la reserva ya está en Apart-Cba (por nuestro
+      // feed de salida), Airbnb/Booking nos la devuelven con un UID que
+      // contiene "apartcba-<id>". No re-importar.
+      if (uid.includes("apartcba-")) { skipped++; continue; }
+
+      // Dedup por (organization_id, unit_id, source, external_id) — evita
+      // colisiones entre orgs y entre unidades del mismo source.
       const { data: existing } = await admin
         .from("bookings")
         .select("id")
+        .eq("organization_id", organization.id)
+        .eq("unit_id", feed.unit_id)
         .eq("source", feed.source as BookingSource)
         .eq("external_id", uid)
         .maybeSingle();
@@ -114,7 +124,7 @@ export async function syncIcalFeed(feedId: string): Promise<{ imported: number; 
         unit_id: feed.unit_id,
         source: feed.source as BookingSource,
         external_id: uid,
-        status: isBlock ? "confirmada" : "confirmada",
+        status: "confirmada",
         check_in_date: startDate.toISOString().slice(0, 10),
         check_in_time: "15:00",
         check_out_date: endDate.toISOString().slice(0, 10),
@@ -154,6 +164,60 @@ export async function syncIcalFeed(feedId: string): Promise<{ imported: number; 
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");
   return { imported, skipped };
+}
+
+export type UnitExportRow = Pick<Unit, "id" | "code" | "name"> & {
+  ical_export_token: string;
+  export_url: string;
+};
+
+/**
+ * Devuelve cada unidad activa con su URL pública de exportación iCal,
+ * lista para pegar en Airbnb/Booking ("Import calendar").
+ */
+export async function listUnitExportFeeds(): Promise<UnitExportRow[]> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("units")
+    .select("id, code, name, ical_export_token")
+    .eq("organization_id", organization.id)
+    .eq("active", true)
+    .order("code");
+  if (error) throw new Error(error.message);
+
+  const base = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  return (data ?? []).map((u) => ({
+    id: u.id,
+    code: u.code,
+    name: u.name,
+    ical_export_token: u.ical_export_token,
+    export_url: `${base}/api/ical/${u.id}.ics?token=${u.ical_export_token}`,
+  }));
+}
+
+/**
+ * Rota el token de exportación de una unidad. Las URLs viejas dejan de
+ * funcionar — usar solo si el token se filtró.
+ */
+export async function rotateExportToken(unitId: string): Promise<string> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  const { error } = await admin
+    .from("units")
+    .update({ ical_export_token: token })
+    .eq("id", unitId)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/dashboard/channel-manager");
+  return token;
 }
 
 export async function syncAllFeeds(): Promise<{ totalImported: number; totalSkipped: number; errors: number }> {
