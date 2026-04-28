@@ -9,7 +9,10 @@
       "Bash(npm install *)",
       "Bash(/mnt/c/Users/Agust/Apart-Cba/node_modules/.bin/tsc --noEmit)",
       "Bash(node_modules/.bin/tsc --noEmit)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "mcp__supabase-textos__execute_sql",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git stash *)"
     ]
   }
 }

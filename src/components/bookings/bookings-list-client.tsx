@@ -1,26 +1,96 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
-import { Search, CalendarDays, User } from "lucide-react";
+import { Search, CalendarDays, User, Wifi } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
+import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { formatDate, formatMoney, formatNights } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import type { BookingStatus, BookingWithRelations, Unit } from "@/lib/types/database";
 
 interface Props {
   bookings: BookingWithRelations[];
   units: Pick<Unit, "id" | "code" | "name">[];
+  organizationId: string;
 }
 
-export function BookingsListClient({ bookings }: Props) {
+export function BookingsListClient({ bookings: initialBookings, organizationId }: Props) {
+  const [bookings, setBookings] = useState(initialBookings);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<BookingStatus | "all">("all");
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
+  // Sync con server data cuando llega nuevo prop (router.refresh tras crear/editar).
+  useEffect(() => {
+    setBookings(initialBookings);
+  }, [initialBookings]);
+
+  // Realtime — refresca la lista cuando otros usuarios crean/editan reservas.
+  useEffect(() => {
+    const supabase = createBrowserSupabase();
+
+    async function fetchWithRelations(id: string): Promise<BookingWithRelations | null> {
+      const { data } = await supabase
+        .from("bookings")
+        .select(
+          "*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      return (data as BookingWithRelations | null) ?? null;
+    }
+
+    const channel = supabase
+      .channel(`apartcba:bookings-list:${organizationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "apartcba",
+          table: "bookings",
+          filter: `organization_id=eq.${organizationId}`,
+        },
+        async (payload) => {
+          const id =
+            (payload.new as { id?: string })?.id ??
+            (payload.old as { id?: string })?.id;
+          if (!id) return;
+
+          if (payload.eventType === "DELETE") {
+            setBookings((prev) => prev.filter((x) => x.id !== id));
+            return;
+          }
+
+          const full = await fetchWithRelations(id);
+          if (!full) return;
+          setBookings((prev) => {
+            const idx = prev.findIndex((x) => x.id === id);
+            if (idx === -1) return [full, ...prev];
+            const next = prev.slice();
+            next[idx] = full;
+            return next;
+          });
+        }
+      )
+      .subscribe((status) => setRealtimeConnected(status === "SUBSCRIBED"));
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [organizationId]);
 
   const filtered = useMemo(() => {
     return bookings.filter((b) => {
@@ -39,8 +109,8 @@ export function BookingsListClient({ bookings }: Props) {
   }, [bookings, query, statusFilter]);
 
   return (
-    <>
-      <div className="flex gap-3 flex-wrap">
+    <TooltipProvider delayDuration={300}>
+      <div className="flex gap-3 flex-wrap items-center">
         <div className="relative flex-1 max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder="Buscar por unidad, huésped, ID externo…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9 h-10" />
@@ -59,6 +129,32 @@ export function BookingsListClient({ bookings }: Props) {
             ))}
           </SelectContent>
         </Select>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={cn(
+                "ml-auto flex items-center gap-1.5 text-[11px] font-medium px-2.5 h-8 rounded-md",
+                realtimeConnected
+                  ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                  : "bg-muted text-muted-foreground"
+              )}
+            >
+              <Wifi
+                size={12}
+                className={cn(realtimeConnected && "animate-pulse")}
+              />
+              <span className="hidden md:inline">
+                {realtimeConnected ? "En vivo" : "Sin conexión"}
+              </span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {realtimeConnected
+              ? "Las reservas se sincronizan en tiempo real"
+              : "Reconectando…"}
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       {filtered.length === 0 ? (
@@ -119,6 +215,6 @@ export function BookingsListClient({ bookings }: Props) {
           </div>
         </Card>
       )}
-    </>
+    </TooltipProvider>
   );
 }

@@ -1,12 +1,17 @@
 import { Plus } from "lucide-react";
 import { listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingsListClient } from "@/components/bookings/bookings-list-client";
 
 export default async function ReservasPage() {
-  const [bookings, units] = await Promise.all([listBookings(), listUnitsEnriched()]);
+  const [bookings, units, { organization }] = await Promise.all([
+    listBookings(),
+    listUnitsEnriched(),
+    getCurrentOrg(),
+  ]);
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
@@ -24,7 +29,11 @@ export default async function ReservasPage() {
         </div>
       </div>
 
-      <BookingsListClient bookings={bookings} units={units} />
+      <BookingsListClient
+        bookings={bookings}
+        units={units}
+        organizationId={organization.id}
+      />
     </div>
   );
 }
