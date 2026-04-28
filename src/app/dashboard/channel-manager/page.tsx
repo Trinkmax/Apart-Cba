@@ -28,6 +28,14 @@ export default async function ChannelManagerPage() {
             Sincronización bidireccional con Airbnb, Booking, Expedia y otros via iCal
           </p>
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <SyncAllButton />
+          <IcalFeedDialog units={units}>
+            <Button className="gap-2">
+              <Plus size={16} /> Conectar feed
+            </Button>
+          </IcalFeedDialog>
+        </div>
       </div>
 
       <Tabs defaultValue="import" className="space-y-4">
@@ -41,13 +49,6 @@ export default async function ChannelManagerPage() {
         </TabsList>
 
         <TabsContent value="import" className="space-y-4">
-          <div className="flex justify-end gap-2">
-            <SyncAllButton />
-            <IcalFeedDialog units={units}>
-              <Button className="gap-2"><Plus size={16} /> Conectar feed</Button>
-            </IcalFeedDialog>
-          </div>
-
           <Card className="p-4 border-l-4 border-l-amber-500 bg-amber-500/5">
             <div className="flex gap-3">
               <Wifi className="size-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
@@ -56,7 +57,7 @@ export default async function ChannelManagerPage() {
                 <ol className="list-decimal pl-5 text-muted-foreground text-xs space-y-1">
                   <li>En Airbnb: Listing → Calendar → Availability → Sync calendars → <b>Export calendar</b>.</li>
                   <li>En Booking: Extranet → Rates &amp; Availability → Sync calendars → pestaña <b>Export calendar</b>.</li>
-                  <li>Pegá la URL acá y elegí la unidad correspondiente.</li>
+                  <li>Tocá <b>+ Conectar feed</b> arriba a la derecha y pegá la URL.</li>
                   <li>El sistema sincroniza automáticamente una vez al día (Vercel Cron, 03:00 UTC). Forzá manualmente con &quot;Sincronizar todos&quot;.</li>
                 </ol>
               </div>
