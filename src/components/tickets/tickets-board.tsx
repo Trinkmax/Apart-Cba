@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Building2, CheckCircle2, Clock, Package, Wrench } from "lucide-react";
+import { AlertTriangle, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatTimeAgo, formatMoney } from "@/lib/format";
 import { changeTicketStatus } from "@/lib/actions/tickets";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { TicketDetailDialog } from "./ticket-detail-dialog";
+import { TicketFormDialog } from "./ticket-form-dialog";
 
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
 
@@ -69,6 +71,16 @@ export function TicketsBoard({ initialTickets, units, owners }: Props) {
           setOpenTicketId(null);
         }}
       />
+
+      {/* FAB siempre visible — vía garantizada para crear tickets */}
+      <TicketFormDialog units={units} owners={owners}>
+        <Button
+          size="lg"
+          className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"
+        >
+          <Plus size={18} /> Nuevo ticket
+        </Button>
+      </TicketFormDialog>
     </>
   );
 }
