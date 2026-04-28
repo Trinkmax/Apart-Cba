@@ -91,7 +91,6 @@ import { moveBooking } from "@/lib/actions/bookings";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { cn } from "@/lib/utils";
 import type {
-  Booking,
   BookingSource,
   BookingStatus,
   BookingWithRelations,
@@ -255,6 +254,24 @@ export function PmsBoard({
     setDragState(next ? { ...next } : null);
   }, []);
 
+  // Sincroniza con los datos del servidor cuando llega un nuevo prop
+  // (p. ej. router.refresh() tras crear/editar). Preserva las reservas con
+  // mutaciones optimistas en curso (drag-and-drop) — realtime se encarga
+  // de propagar esos cambios al resto de los clientes.
+  useEffect(() => {
+    setBookings((prev) => {
+      const pending = pendingMutateIds.current;
+      if (pending.size === 0) return initialBookings;
+      const prevById = new Map(prev.map((b) => [b.id, b]));
+      return initialBookings.map((b) =>
+        pending.has(b.id) && prevById.has(b.id) ? prevById.get(b.id)! : b
+      );
+    });
+  }, [initialBookings]);
+  useEffect(() => {
+    setUnits(initialUnits);
+  }, [initialUnits]);
+
   // ── zen mode (pantalla completa animada, oculta sidebar + topbar)
   // Estados:
   //   "idle"          → in-flow normal
@@ -390,6 +407,20 @@ export function PmsBoard({
   // ── realtime
   useEffect(() => {
     const supabase = createBrowserSupabase();
+
+    // Trae la reserva con sus relaciones (unit + guest) para que la fila del
+    // grid muestre el huésped y la unidad correctamente, no solo "Sin huésped".
+    async function fetchWithRelations(id: string): Promise<BookingWithRelations | null> {
+      const { data } = await supabase
+        .from("bookings")
+        .select(
+          "*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)"
+        )
+        .eq("id", id)
+        .maybeSingle();
+      return (data as BookingWithRelations | null) ?? null;
+    }
+
     const channel = supabase
       .channel(`apartcba:bookings:${organizationId}`)
       .on(
@@ -400,20 +431,29 @@ export function PmsBoard({
           table: "bookings",
           filter: `organization_id=eq.${organizationId}`,
         },
-        (payload) => {
+        async (payload) => {
           const id =
-            (payload.new as { id?: string })?.id ?? (payload.old as { id?: string })?.id;
-          if (id && pendingMutateIds.current.has(id)) return;
-          if (payload.eventType === "INSERT") {
-            const b = payload.new as Booking;
-            setBookings((prev) => (prev.find((x) => x.id === b.id) ? prev : [...prev, b as BookingWithRelations]));
-          } else if (payload.eventType === "UPDATE") {
-            const b = payload.new as Booking;
-            setBookings((prev) => prev.map((x) => (x.id === b.id ? { ...x, ...b } : x)));
-          } else if (payload.eventType === "DELETE") {
-            const old = payload.old as { id?: string };
-            if (old?.id) setBookings((prev) => prev.filter((x) => x.id !== old.id));
+            (payload.new as { id?: string })?.id ??
+            (payload.old as { id?: string })?.id;
+          if (!id) return;
+          if (pendingMutateIds.current.has(id)) return;
+
+          if (payload.eventType === "DELETE") {
+            setBookings((prev) => prev.filter((x) => x.id !== id));
+            return;
           }
+
+          // INSERT / UPDATE → re-fetch con relaciones para no perder unit/guest.
+          const full = await fetchWithRelations(id);
+          if (!full) return;
+
+          setBookings((prev) => {
+            const idx = prev.findIndex((x) => x.id === id);
+            if (idx === -1) return [...prev, full];
+            const next = prev.slice();
+            next[idx] = full;
+            return next;
+          });
         }
       )
       .subscribe((status) => setRealtimeConnected(status === "SUBSCRIBED"));

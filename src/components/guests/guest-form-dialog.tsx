@@ -56,6 +56,9 @@ export function GuestFormDialog({ children, guest, onCreated }: GuestFormDialogP
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Evita que el submit burbujee a un <form> padre en el árbol de React
+    // (p. ej. cuando este diálogo se abre dentro de BookingFormDialog).
+    e.stopPropagation();
     startTransition(async () => {
       try {
         const result = isEdit && guest ? await updateGuest(guest.id, form) : await createGuest(form);

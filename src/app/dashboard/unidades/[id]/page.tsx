@@ -2,7 +2,6 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft,
-  Edit,
   MapPin,
   Bed,
   Bath,
@@ -14,13 +13,12 @@ import {
 } from "lucide-react";
 import { getUnit } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { UnitFormDialog } from "@/components/units/unit-form-dialog";
+import { EditUnitButton } from "@/components/units/edit-unit-button";
 import { UnitOwnersManager } from "@/components/units/unit-owners-manager";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney, getInitials } from "@/lib/format";
@@ -75,11 +73,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
             )}
           </div>
         </div>
-        <UnitFormDialog unit={u}>
-          <Button variant="outline" className="gap-2">
-            <Edit size={14} /> Editar
-          </Button>
-        </UnitFormDialog>
+        <EditUnitButton unit={u} />
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
