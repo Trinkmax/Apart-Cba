@@ -30,13 +30,27 @@ import { UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
 import type { Unit, Owner } from "@/lib/types/database";
 
 interface UnitFormDialogProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   unit?: Unit;
   owners?: Owner[];
+  /** Estado controlado (opcional). Si se pasa, ignora el children/trigger. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
-  const [open, setOpen] = useState(false);
+export function UnitFormDialog({
+  children,
+  unit,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+}: UnitFormDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (o: boolean) => {
+    if (!isControlled) setInternalOpen(o);
+    controlledOnOpenChange?.(o);
+  };
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const isEdit = !!unit;
@@ -90,7 +104,7 @@ export function UnitFormDialog({ children, unit }: UnitFormDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{children}</DialogTrigger>
+      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar unidad" : "Nueva unidad"}</DialogTitle>
