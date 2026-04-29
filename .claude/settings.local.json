@@ -18,7 +18,22 @@
       "mcp__supabase-textos__list_migrations",
       "mcp__supabase-textos__list_tables",
       "mcp__supabase-textos__apply_migration",
-      "Bash(npx eslint *)"
+      "Bash(npx eslint *)",
+      "Bash(netstat -tlnp)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3001)",
+      "Bash(tee /tmp/devout.log)",
+      "Bash(pkill -f \"next dev\")",
+      "Bash(pkill -f \"node.*next/dist/bin/next\")",
+      "Bash(wait)",
+      "Bash(nohup npm *)",
+      "Bash(echo \"Started with PID $!\")",
+      "mcp__supabase__list_tables",
+      "mcp__supabase__get_advisors",
+      "Bash(git rm *)",
+      "Bash(awk '/^\\\\/\\\\/ ─── Mensajería ─/{exit} {print}' /Users/ignaciobaldovino/Apart-Cba/src/lib/types/database.ts)",
+      "Bash(mv /tmp/database.ts.new /Users/ignaciobaldovino/Apart-Cba/src/lib/types/database.ts)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
