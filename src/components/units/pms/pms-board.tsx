@@ -688,6 +688,50 @@ export function PmsBoard({
     setPendingMove(null);
   }
 
+  // Cambio de fecha pedido desde el popover (cards de check-in / check-out).
+  // Construye un PendingMove y abre el MoveConfirmDialog para que pase por el
+  // mismo flujo de confirmación que los drags (preview, conflictos, precio).
+  function requestDateChangeFromPopover(
+    booking: BookingWithRelations,
+    field: "check_in_date" | "check_out_date",
+    newDateISO: string
+  ) {
+    const newCheckIn = field === "check_in_date" ? newDateISO : booking.check_in_date;
+    const newCheckOut = field === "check_out_date" ? newDateISO : booking.check_out_date;
+    if (newCheckOut <= newCheckIn) {
+      toast.error("Fecha inválida", {
+        description: "El check-out debe ser posterior al check-in",
+      });
+      return;
+    }
+    if (
+      newCheckIn === booking.check_in_date &&
+      newCheckOut === booking.check_out_date
+    ) {
+      return;
+    }
+
+    // Optimistic ghost en el grid
+    setBookings((bs) =>
+      bs.map((b) =>
+        b.id === booking.id
+          ? { ...b, check_in_date: newCheckIn, check_out_date: newCheckOut }
+          : b
+      )
+    );
+    pendingMutateIds.current.add(booking.id);
+
+    setPendingMove({
+      booking,
+      operation: field === "check_in_date" ? "resize-left" : "resize-right",
+      targetUnitId: booking.unit_id,
+      targetUnitCode: booking.unit?.code ?? null,
+      targetUnitName: booking.unit?.name ?? null,
+      newCheckInDate: newCheckIn,
+      newCheckOutDate: newCheckOut,
+    });
+  }
+
   // ── click en celda vacía → abrir quick-add
   const onCellClick = useCallback(
     (unit: UnitWithRelations, date: Date) => {
@@ -1230,6 +1274,7 @@ export function PmsBoard({
                         onPointerDown={onBarPointerDown}
                         onPointerMove={onBarPointerMove}
                         onPointerUp={onBarPointerUp}
+                        onRequestDateChange={requestDateChangeFromPopover}
                         unitCode={unit.code}
                         unitName={unit.name}
                       />
@@ -1600,6 +1645,11 @@ interface BookingBarProps {
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations
   ) => void;
+  onRequestDateChange: (
+    booking: BookingWithRelations,
+    field: "check_in_date" | "check_out_date",
+    newDateISO: string
+  ) => void;
   unitCode: string;
   unitName: string;
 }
@@ -1617,6 +1667,7 @@ function BookingBar({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onRequestDateChange,
   unitCode,
   unitName,
 }: BookingBarProps) {
@@ -1802,6 +1853,10 @@ function BookingBar({
           unitName={unitName}
           onEdit={onEdit}
           onStatusChanged={() => onOpenChange(false)}
+          onRequestDateChange={(field, iso) => {
+            onOpenChange(false);
+            onRequestDateChange(booking, field, iso);
+          }}
         />
       </PopoverContent>
     </Popover>

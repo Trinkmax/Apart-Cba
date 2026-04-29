@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -19,11 +19,18 @@ import {
   LogOut,
   Ban,
   StickyNote,
+  Pencil as PencilIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatNights, getInitials } from "@/lib/format";
 import { changeBookingStatus } from "@/lib/actions/bookings";
@@ -36,6 +43,15 @@ interface PmsBookingPopoverProps {
   unitName: string;
   onEdit: () => void;
   onStatusChanged?: (nextStatus: BookingStatus) => void;
+  /**
+   * Callback al pedir cambio de fecha desde las cards check-in/check-out.
+   * El parent (PmsBoard) abre el flujo MoveConfirmDialog con el preview
+   * (conflictos, recálculo de precio, reason, etc.) consistente con el drag.
+   */
+  onRequestDateChange?: (
+    field: "check_in_date" | "check_out_date",
+    newDateISO: string
+  ) => void;
 }
 
 export function PmsBookingPopoverContent({
@@ -44,6 +60,7 @@ export function PmsBookingPopoverContent({
   unitName,
   onEdit,
   onStatusChanged,
+  onRequestDateChange,
 }: PmsBookingPopoverProps) {
   const [pending, startTransition] = useTransition();
   const statusMeta = BOOKING_STATUS_META[booking.status];
@@ -125,17 +142,35 @@ export function PmsBookingPopoverContent({
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <StayCard
+          <DateEditCard
             icon={<LogIn size={13} className="text-emerald-600 dark:text-emerald-400" />}
             label="Check-in"
+            valueISO={booking.check_in_date}
             value={formatDate(booking.check_in_date, "EEE d MMM")}
             sub={booking.check_in_time?.slice(0, 5) ?? "15:00"}
+            // Para check-in: el límite superior es check_out - 1 día
+            maxISO={subDaysISO(booking.check_out_date, 1)}
+            disabled={
+              booking.status === "cancelada" ||
+              booking.status === "no_show" ||
+              !onRequestDateChange
+            }
+            onPick={(iso) => onRequestDateChange?.("check_in_date", iso)}
           />
-          <StayCard
+          <DateEditCard
             icon={<LogOut size={13} className="text-rose-600 dark:text-rose-400" />}
             label="Check-out"
+            valueISO={booking.check_out_date}
             value={formatDate(booking.check_out_date, "EEE d MMM")}
             sub={booking.check_out_time?.slice(0, 5) ?? "11:00"}
+            // Para check-out: el límite inferior es check_in + 1 día
+            minISO={addDaysISO(booking.check_in_date, 1)}
+            disabled={
+              booking.status === "cancelada" ||
+              booking.status === "no_show" ||
+              !onRequestDateChange
+            }
+            onPick={(iso) => onRequestDateChange?.("check_out_date", iso)}
           />
         </div>
 
@@ -256,26 +291,119 @@ export function PmsBookingPopoverContent({
   );
 }
 
-function StayCard({
+// ─── Helpers de fecha ───────────────────────────────────────────────────────
+function addDaysISO(iso: string, days: number): string {
+  const d = new Date(iso + "T12:00:00");
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function subDaysISO(iso: string, days: number): string {
+  return addDaysISO(iso, -days);
+}
+function isoFromDate(d: Date): string {
+  // toISOString tira UTC; usamos local components para evitar off-by-one en DST
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function DateEditCard({
   icon,
   label,
+  valueISO,
   value,
   sub,
+  minISO,
+  maxISO,
+  disabled,
+  onPick,
 }: {
   icon: React.ReactNode;
   label: string;
+  valueISO: string;
   value: string;
   sub?: string;
+  minISO?: string;
+  maxISO?: string;
+  disabled?: boolean;
+  onPick: (iso: string) => void;
 }) {
-  return (
-    <div className="rounded-lg border bg-background p-2">
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-        {icon}
-        {label}
+  const [open, setOpen] = useState(false);
+  const selected = new Date(valueISO + "T12:00:00");
+  const minDate = minISO ? new Date(minISO + "T12:00:00") : undefined;
+  const maxDate = maxISO ? new Date(maxISO + "T12:00:00") : undefined;
+
+  if (disabled) {
+    return (
+      <div className="rounded-lg border bg-background p-2 opacity-90">
+        <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+          {icon}
+          {label}
+        </div>
+        <div className="font-semibold text-xs mt-1">{value}</div>
+        {sub && <div className="text-[10px] text-muted-foreground tabular-nums">{sub}</div>}
       </div>
-      <div className="font-semibold text-xs mt-1">{value}</div>
-      {sub && <div className="text-[10px] text-muted-foreground tabular-nums">{sub}</div>}
-    </div>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "group relative w-full rounded-lg border bg-background p-2 text-left transition-all",
+            "hover:bg-accent/40 hover:border-primary/40 hover:shadow-sm",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            open && "ring-2 ring-primary/40 border-primary/40"
+          )}
+          aria-label={`Cambiar ${label}`}
+        >
+          <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            {icon}
+            {label}
+            <PencilIcon
+              size={9}
+              className="ml-auto opacity-0 group-hover:opacity-60 transition-opacity"
+            />
+          </div>
+          <div className="font-semibold text-xs mt-1">{value}</div>
+          {sub && <div className="text-[10px] text-muted-foreground tabular-nums">{sub}</div>}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        side="bottom"
+        sideOffset={6}
+        className="w-auto p-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Calendar
+          mode="single"
+          selected={selected}
+          defaultMonth={selected}
+          disabled={(d) => {
+            if (minDate && d < minDate) return true;
+            if (maxDate && d > maxDate) return true;
+            return false;
+          }}
+          onSelect={(d) => {
+            if (!d) return;
+            const iso = isoFromDate(d);
+            if (iso === valueISO) {
+              setOpen(false);
+              return;
+            }
+            setOpen(false);
+            onPick(iso);
+          }}
+        />
+        <div className="border-t px-3 py-2 text-[10px] text-muted-foreground">
+          Vas a confirmar el cambio en el siguiente paso.
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
