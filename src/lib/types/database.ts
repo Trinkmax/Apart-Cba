@@ -302,6 +302,7 @@ export interface Booking {
   security_deposit: number | null;
   monthly_inflation_adjustment_pct: number | null;
   rent_billing_day: number | null;
+  lease_group_id: string | null;
   notes: string | null;
   internal_notes: string | null;
   checked_in_at: string | null;

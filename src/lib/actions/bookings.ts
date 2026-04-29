@@ -68,6 +68,72 @@ export type BookingInputWithAccount = BookingInput & {
   account_id?: string | null;
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// Lease groups: split de reservas mensuales largas en N períodos mensuales
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Suma 1 mes calendario clamping al fin de mes destino para evitar 31→3 mar. */
+function addOneCalendarMonth(iso: string): string {
+  const d = new Date(iso + "T12:00:00");
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + 1);
+  if (d.getDate() !== day) {
+    // El mes destino es más corto (ej. 31 ene → habría rolado a 3 mar)
+    d.setDate(0); // último día del mes anterior = último día del mes destino real
+  }
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+export interface LeaseSegment {
+  from: string;
+  to: string;
+  nights: number;
+  /** Es el último segmento (puede ser parcial) */
+  isLast: boolean;
+}
+
+/**
+ * Divide un rango de fechas en segmentos mensuales (1 mes calendario c/u).
+ * Si el último segmento es < 1 mes completo, queda como segmento parcial.
+ * Para rangos <= 30 días, retorna [] (no hay split).
+ *
+ * Ejemplo: 2026-05-15 → 2026-08-15
+ *   [{ from: 2026-05-15, to: 2026-06-15, nights: 31 },
+ *    { from: 2026-06-15, to: 2026-07-15, nights: 30 },
+ *    { from: 2026-07-15, to: 2026-08-15, nights: 31, isLast: true }]
+ */
+export function splitMonthlySegments(
+  checkIn: string,
+  checkOut: string
+): LeaseSegment[] {
+  const totalNights = nightsBetween(checkIn, checkOut);
+  if (totalNights <= 30) return [];
+
+  const segments: LeaseSegment[] = [];
+  let cursor = checkIn;
+  // Hard cap defensivo: 60 segmentos = 5 años. Si pasa, hay un bug arriba.
+  for (let i = 0; i < 60; i++) {
+    if (cursor >= checkOut) break;
+    let next = addOneCalendarMonth(cursor);
+    if (next > checkOut) next = checkOut;
+    segments.push({
+      from: cursor,
+      to: next,
+      nights: nightsBetween(cursor, next),
+      isLast: next === checkOut,
+    });
+    cursor = next;
+  }
+
+  // Si quedó un solo segmento (puede pasar si por algún edge addOneCalendarMonth
+  // lo dejó completo en el primer salto), abortamos el split.
+  if (segments.length < 2) return [];
+  return segments;
+}
+
 // Sincroniza `paid_amount` con caja: genera un cash_movement por el delta
 // (positivo = nuevo cobro, negativo = devolución). Si delta = 0 no hace nada.
 async function syncBookingPaymentToCash(params: {
@@ -190,9 +256,117 @@ export async function createBooking(
     validated.commission_pct = unit?.default_commission_pct ?? 20;
   }
 
+  const admin = createAdminClient();
+
+  // ─── ¿Es una mensual larga? Split automático en períodos mensuales ───
+  const shouldSplit =
+    validated.mode === "mensual" &&
+    nightsBetween(validated.check_in_date, validated.check_out_date) > 30;
+  const segments = shouldSplit
+    ? splitMonthlySegments(validated.check_in_date, validated.check_out_date)
+    : [];
+
+  if (segments.length >= 2) {
+    // Generamos lease_group_id en cliente (UUID v4 via crypto)
+    const leaseGroupId = crypto.randomUUID();
+    const totalNights = nightsBetween(
+      validated.check_in_date,
+      validated.check_out_date
+    );
+    const totalAmount = Number(validated.total_amount) || 0;
+    const commissionPctValue = validated.commission_pct ?? 0;
+
+    const created: Booking[] = [];
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
+      const segAmount = Math.round(totalAmount * segShare * 100) / 100;
+      const segCommission = Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
+      // El cobrado se aplica al primer período (representa la seña/anticipo).
+      const segPaid = i === 0 ? Number(validated.paid_amount) || 0 : 0;
+      // Cleaning fee solo en el último período (al cierre del contrato).
+      const segCleaningFee = i === segments.length - 1 ? validated.cleaning_fee : 0;
+
+      const { data, error } = await admin
+        .from("bookings")
+        .insert({
+          ...validated,
+          check_in_date: seg.from,
+          check_out_date: seg.to,
+          // Las horas del primer/último segmento usan las del input;
+          // los intermedios encadenan con check_out_time del anterior como
+          // check_in_time del siguiente. Mantenemos defaults razonables.
+          check_in_time:
+            i === 0 ? validated.check_in_time : "12:00",
+          check_out_time:
+            i === segments.length - 1 ? validated.check_out_time : "12:00",
+          total_amount: segAmount,
+          paid_amount: segPaid,
+          commission_amount: segCommission,
+          cleaning_fee: segCleaningFee,
+          lease_group_id: leaseGroupId,
+          external_id: validated.external_id || null,
+          notes:
+            i === 0
+              ? validated.notes
+              : `Período ${i + 1}/${segments.length} del contrato (mes ${i + 1}).`,
+          internal_notes:
+            i === 0 ? validated.internal_notes : validated.internal_notes,
+          organization_id: organization.id,
+          created_by: session.userId,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        // Rollback manual: borramos los segmentos creados antes del fallo.
+        if (created.length > 0) {
+          await admin
+            .from("bookings")
+            .delete()
+            .in("id", created.map((b) => b.id));
+        }
+        if (error.message.includes("bookings_no_overlap")) {
+          throw new Error(
+            `Conflicto en el período ${i + 1}/${segments.length} (${seg.from} → ${seg.to}): ya hay una reserva en esa unidad`
+          );
+        }
+        throw new Error(error.message);
+      }
+      created.push(data as Booking);
+    }
+
+    // Cash movement solo para el seña/anticipo del primer período.
+    if (
+      created.length > 0 &&
+      Number(validated.paid_amount) > 0 &&
+      accountId
+    ) {
+      try {
+        await syncBookingPaymentToCash({
+          bookingId: created[0].id,
+          organizationId: organization.id,
+          unitId: validated.unit_id,
+          currency: validated.currency,
+          delta: Number(validated.paid_amount),
+          accountId,
+        });
+      } catch (e) {
+        console.error("syncBookingPaymentToCash failed (lease)", e);
+        throw e;
+      }
+    }
+
+    revalidatePath("/dashboard/reservas");
+    revalidatePath("/dashboard/unidades/kanban");
+    revalidatePath("/dashboard/unidades/calendario/mensual");
+    revalidatePath("/dashboard/caja");
+    return created[0];
+  }
+
+  // ─── Single booking (caso normal) ───
   const commission_amount = validated.total_amount * (validated.commission_pct! / 100);
 
-  const admin = createAdminClient();
   const { data, error } = await admin
     .from("bookings")
     .insert({
@@ -223,8 +397,6 @@ export async function createBooking(
         accountId,
       });
     } catch (e) {
-      // Si falla el movement no abortamos la creación de la reserva, pero
-      // surfaceamos el error para que el usuario lo vea.
       console.error("syncBookingPaymentToCash failed", e);
       throw e;
     }

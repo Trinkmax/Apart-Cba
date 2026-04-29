@@ -472,6 +472,30 @@ export function PmsBoard({
     return m;
   }, [visibleBookings]);
 
+  // Lease groups: para cada booking que pertenece a un grupo, calculamos
+  // index (1..N) y total (N) ordenando por check_in_date. Lo computamos sobre
+  // TODO el array `bookings` (no sólo visibles) para no perder índices cuando
+  // el usuario filtra por status/canal/modo.
+  const leaseGroupIndex = useMemo(() => {
+    const groups = new Map<string, BookingWithRelations[]>();
+    bookings.forEach((b) => {
+      if (!b.lease_group_id) return;
+      const arr = groups.get(b.lease_group_id) ?? [];
+      arr.push(b);
+      groups.set(b.lease_group_id, arr);
+    });
+    const out = new Map<string, { index: number; total: number }>();
+    groups.forEach((arr) => {
+      const sorted = arr.slice().sort((a, b) =>
+        a.check_in_date < b.check_in_date ? -1 : 1
+      );
+      sorted.forEach((b, i) => {
+        out.set(b.id, { index: i + 1, total: sorted.length });
+      });
+    });
+    return out;
+  }, [bookings]);
+
   // ── Filtrado de unidades (filtros de búsqueda) ─────────────────────────────
   // Aplicado DESPUÉS del cálculo de bookingsByUnit para usar las reservas
   // existentes en el chequeo de disponibilidad por rango.
@@ -1591,6 +1615,7 @@ export function PmsBoard({
                       <BookingBar
                         key={b.id}
                         booking={b}
+                        leaseInfo={leaseGroupIndex.get(b.id) ?? null}
                         windowStart={windowStart}
                         windowDays={windowDays}
                         cellWidth={CELL}
@@ -1958,6 +1983,8 @@ function UnitCellHeader({
 
 interface BookingBarProps {
   booking: BookingWithRelations;
+  /** Posición del booking dentro de su lease group (null si no es lease) */
+  leaseInfo: { index: number; total: number } | null;
   windowStart: string;
   windowDays: number;
   cellWidth: number;
@@ -1987,6 +2014,7 @@ interface BookingBarProps {
 
 function BookingBar({
   booking,
+  leaseInfo,
   windowStart,
   windowDays,
   cellWidth,
@@ -2127,6 +2155,22 @@ function BookingBar({
                   >
                     M
                   </span>
+                )}
+                {/* Badge lease group: 1/N — agrupa mensuales del mismo contrato */}
+                {leaseInfo && leaseInfo.total > 1 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        aria-label={`Período ${leaseInfo.index} de ${leaseInfo.total} del contrato`}
+                        className="shrink-0 inline-flex items-center justify-center px-1 h-3.5 rounded-sm bg-violet-700/90 text-white text-[8px] font-bold tabular-nums tracking-tight"
+                      >
+                        {leaseInfo.index}/{leaseInfo.total}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Período {leaseInfo.index} de {leaseInfo.total} del contrato mensual
+                    </TooltipContent>
+                  </Tooltip>
                 )}
                 <span className="truncate">{booking.guest?.full_name ?? "Sin huésped"}</span>
                 {booking.internal_notes && (

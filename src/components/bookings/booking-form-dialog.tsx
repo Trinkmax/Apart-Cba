@@ -74,6 +74,32 @@ function nightsBetween(ciISO: string, coISO: string): number {
   return Math.round((b - a) / 86_400_000);
 }
 
+// Espejo cliente de splitMonthlySegments (server). Mantener sincronizado.
+function splitMonthlyPreview(
+  ci: string,
+  co: string
+): { from: string; to: string; nights: number }[] {
+  const total = nightsBetween(ci, co);
+  if (total <= 30) return [];
+  const segs: { from: string; to: string; nights: number }[] = [];
+  let cursor = ci;
+  for (let i = 0; i < 60; i++) {
+    if (cursor >= co) break;
+    const d = new Date(cursor + "T12:00:00");
+    const day = d.getDate();
+    d.setMonth(d.getMonth() + 1);
+    if (d.getDate() !== day) d.setDate(0);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    let next = `${y}-${m}-${dd}`;
+    if (next > co) next = co;
+    segs.push({ from: cursor, to: next, nights: nightsBetween(cursor, next) });
+    cursor = next;
+  }
+  return segs.length >= 2 ? segs : [];
+}
+
 type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
 
 type UnitForBookingForm = Pick<
@@ -282,6 +308,24 @@ export function BookingFormDialog({
     commissionPctNum !== null ? (totalNum * commissionPctNum) / 100 : 0;
   const ownerNet = totalNum - commissionAmount - cleaningNum;
 
+  // ─── Split preview: si la mensual va a partirse en N períodos ───
+  const splitSegments =
+    !isEdit &&
+    form.mode === "mensual" &&
+    form.check_in_date &&
+    form.check_out_date &&
+    form.check_out_date > form.check_in_date
+      ? splitMonthlyPreview(form.check_in_date, form.check_out_date)
+      : [];
+
+  // ─── Warning si la unidad tiene vocación distinta al modo elegido (excepto mixto) ───
+  const selectedUnit = units.find((u) => u.id === form.unit_id);
+  const unitVocation = (selectedUnit?.default_mode ?? "temporario") as UnitDefaultMode;
+  const modeMismatchWarning =
+    selectedUnit && unitVocation !== "mixto" && unitVocation !== form.mode
+      ? `La unidad ${selectedUnit.code} tiene vocación ${unitVocation === "temporario" ? "temporaria" : "mensual"}. Igual podés cargar la reserva, pero confirmá que es lo que querés.`
+      : null;
+
   // Filtrar cuentas por moneda elegida
   const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
 
@@ -363,12 +407,34 @@ export function BookingFormDialog({
               <Select value={form.unit_id} onValueChange={onSelectUnit} required>
                 <SelectTrigger><SelectValue placeholder="Elegí la unidad" /></SelectTrigger>
                 <SelectContent className="max-h-72">
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      <span className="font-mono text-xs mr-2">{u.code}</span>
-                      {u.name}
-                    </SelectItem>
-                  ))}
+                  {units.map((u) => {
+                    const dm: UnitDefaultMode = (u.default_mode ?? "temporario") as UnitDefaultMode;
+                    const dmLabel =
+                      dm === "mixto" ? "Mx" : dm === "mensual" ? "M" : "T";
+                    const dmTone =
+                      dm === "mixto"
+                        ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                        : dm === "mensual"
+                          ? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200"
+                          : "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-200";
+                    return (
+                      <SelectItem key={u.id} value={u.id}>
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "inline-flex items-center justify-center size-4 rounded-sm text-[9px] font-bold",
+                              dmTone
+                            )}
+                            title={`Vocación: ${dm}`}
+                          >
+                            {dmLabel}
+                          </span>
+                          <span className="font-mono text-xs">{u.code}</span>
+                          <span className="truncate">{u.name}</span>
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -584,6 +650,51 @@ export function BookingFormDialog({
                   </p>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Warning: vocación de la unidad distinta al modo elegido */}
+          {modeMismatchWarning && (
+            <div className="rounded-lg border border-amber-300/70 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+              <span aria-hidden className="mt-0.5">⚠</span>
+              <span>{modeMismatchWarning}</span>
+            </div>
+          )}
+
+          {/* Split preview: la reserva se va a dividir en N períodos mensuales */}
+          {splitSegments.length >= 2 && (
+            <div className="rounded-lg border border-violet-300/60 bg-violet-50 dark:bg-violet-950/30 dark:border-violet-800/40 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <House size={14} className="text-violet-700 dark:text-violet-300" />
+                <span className="text-xs font-semibold text-violet-900 dark:text-violet-100">
+                  Esta reserva se dividirá en {splitSegments.length} períodos mensuales
+                </span>
+              </div>
+              <p className="text-[11px] text-violet-800/80 dark:text-violet-300/80">
+                Cada período se factura, cobra y liquida de forma independiente.
+                Quedan agrupados en el mismo contrato (lease group) y se ven
+                consecutivos en el calendario.
+              </p>
+              <ol className="space-y-1 text-[11px]">
+                {splitSegments.map((seg, i) => (
+                  <li
+                    key={`${seg.from}-${seg.to}`}
+                    className="flex items-center justify-between gap-2 rounded bg-background/60 px-2 py-1"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-[10px] text-violet-700 dark:text-violet-300 tabular-nums">
+                        {i + 1}/{splitSegments.length}
+                      </span>
+                      <span className="truncate">
+                        {seg.from} → {seg.to}
+                      </span>
+                    </span>
+                    <span className="font-mono text-muted-foreground tabular-nums shrink-0">
+                      {seg.nights}n
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </div>
           )}
 
