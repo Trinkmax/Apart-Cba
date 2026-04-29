@@ -37,6 +37,7 @@ import {
   Moon,
   Plus,
   Search,
+  SlidersHorizontal,
   Wifi,
   X,
   ZoomIn,
@@ -73,7 +74,15 @@ import {
   Popover,
   PopoverAnchor,
   PopoverContent,
+  PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -204,6 +213,50 @@ export function PmsBoard({
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+
+  // ── Filtros de búsqueda de unidades ────────────────────────────────────────
+  // Pensado para ayudar a encontrar deptos: disponibilidad por fechas, cap.,
+  // precio por noche, dormitorios, etc. Un valor vacío/null significa "no filtrar".
+  interface UnitSearchFilters {
+    availableFrom: string;
+    availableTo: string;
+    minGuests: string; // string para inputs (vacío = sin filtro)
+    minPrice: string;
+    maxPrice: string;
+    minBedrooms: string;
+    minBathrooms: string;
+    neighborhood: string;
+    defaultMode: "temporario" | "mensual" | "mixto" | null;
+  }
+  const EMPTY_UNIT_FILTERS: UnitSearchFilters = {
+    availableFrom: "",
+    availableTo: "",
+    minGuests: "",
+    minPrice: "",
+    maxPrice: "",
+    minBedrooms: "",
+    minBathrooms: "",
+    neighborhood: "",
+    defaultMode: null,
+  };
+  const [unitFilters, setUnitFilters] = useState<UnitSearchFilters>(EMPTY_UNIT_FILTERS);
+
+  const activeUnitFilterCount = useMemo(() => {
+    let n = 0;
+    if (unitFilters.availableFrom && unitFilters.availableTo) n += 1;
+    if (unitFilters.minGuests) n += 1;
+    if (unitFilters.minPrice) n += 1;
+    if (unitFilters.maxPrice) n += 1;
+    if (unitFilters.minBedrooms) n += 1;
+    if (unitFilters.minBathrooms) n += 1;
+    if (unitFilters.neighborhood.trim()) n += 1;
+    if (unitFilters.defaultMode) n += 1;
+    return n;
+  }, [unitFilters]);
+
+  function clearUnitFilters() {
+    setUnitFilters(EMPTY_UNIT_FILTERS);
+  }
 
   // ── modo edición de orden
   const [editMode, setEditMode] = useState(false);
@@ -418,6 +471,49 @@ export function PmsBoard({
     });
     return m;
   }, [visibleBookings]);
+
+  // ── Filtrado de unidades (filtros de búsqueda) ─────────────────────────────
+  // Aplicado DESPUÉS del cálculo de bookingsByUnit para usar las reservas
+  // existentes en el chequeo de disponibilidad por rango.
+  const filteredUnits = useMemo(() => {
+    const f = unitFilters;
+    const minGuests = f.minGuests ? Number(f.minGuests) : null;
+    const minPrice = f.minPrice ? Number(f.minPrice) : null;
+    const maxPrice = f.maxPrice ? Number(f.maxPrice) : null;
+    const minBedrooms = f.minBedrooms ? Number(f.minBedrooms) : null;
+    const minBathrooms = f.minBathrooms ? Number(f.minBathrooms) : null;
+    const neighborhood = f.neighborhood.trim().toLowerCase();
+    const checkAvailability =
+      f.availableFrom && f.availableTo && f.availableTo > f.availableFrom;
+
+    return units.filter((u) => {
+      if (minGuests !== null && (u.max_guests ?? 0) < minGuests) return false;
+      if (minPrice !== null && (Number(u.base_price) || 0) < minPrice) return false;
+      if (maxPrice !== null && (Number(u.base_price) || 0) > maxPrice) return false;
+      if (minBedrooms !== null && (u.bedrooms ?? 0) < minBedrooms) return false;
+      if (minBathrooms !== null && (u.bathrooms ?? 0) < minBathrooms) return false;
+      if (neighborhood) {
+        const n = (u.neighborhood ?? "").toLowerCase();
+        const a = (u.address ?? "").toLowerCase();
+        if (!n.includes(neighborhood) && !a.includes(neighborhood)) return false;
+      }
+      if (f.defaultMode && u.default_mode !== f.defaultMode) return false;
+      if (checkAvailability) {
+        // Disponible si NINGUNA reserva activa overlapa con el rango pedido.
+        const unitBookings = bookings.filter(
+          (b) =>
+            b.unit_id === u.id &&
+            b.status !== "cancelada" &&
+            b.status !== "no_show"
+        );
+        const overlap = unitBookings.some(
+          (b) => b.check_in_date < f.availableTo && b.check_out_date > f.availableFrom
+        );
+        if (overlap) return false;
+      }
+      return true;
+    });
+  }, [units, unitFilters, bookings]);
 
   // ── stats por unidad dentro del rango visible (para el popover de unidad)
   const statsByUnit = useMemo(() => {
@@ -776,7 +872,10 @@ export function PmsBoard({
                   Vista PMS
                 </h1>
                 <p className="text-[10px] text-muted-foreground mt-0.5">
-                  {units.length} unidades · {visibleBookings.length} reservas
+                  {activeUnitFilterCount > 0
+                    ? `${filteredUnits.length} de ${units.length} unidades · `
+                    : `${units.length} unidades · `}
+                  {visibleBookings.length} reservas
                 </p>
               </div>
             </div>
@@ -828,6 +927,213 @@ export function PmsBoard({
 
               {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens) */}
               <ModeFilterToggle value={modeFilter} onChange={setModeFilter} />
+
+              {/* Buscar deptos: filtros por disponibilidad/cap/precio */}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={activeUnitFilterCount > 0 ? "default" : "outline"}
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                  >
+                    <SlidersHorizontal size={12} />
+                    Buscar dept
+                    {activeUnitFilterCount > 0 && (
+                      <Badge
+                        variant="secondary"
+                        className="h-4 text-[9px] bg-primary/20 text-primary-foreground/90"
+                      >
+                        {activeUnitFilterCount}
+                      </Badge>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent
+                  align="end"
+                  className="w-[360px] p-0"
+                  sideOffset={6}
+                >
+                  <div className="px-4 py-3 border-b flex items-center justify-between">
+                    <div>
+                      <div className="text-sm font-semibold">Buscar departamento</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        Filtrá por disponibilidad, capacidad y precio.
+                      </div>
+                    </div>
+                    {activeUnitFilterCount > 0 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-[11px]"
+                        onClick={clearUnitFilters}
+                      >
+                        Limpiar
+                      </Button>
+                    )}
+                  </div>
+                  <div className="px-4 py-3 space-y-3 max-h-[60vh] overflow-y-auto">
+                    {/* Disponibilidad por rango */}
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                        Disponible entre
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          type="date"
+                          value={unitFilters.availableFrom}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, availableFrom: e.target.value }))
+                          }
+                          className="h-8 text-xs"
+                          placeholder="Desde"
+                        />
+                        <Input
+                          type="date"
+                          value={unitFilters.availableTo}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, availableTo: e.target.value }))
+                          }
+                          className="h-8 text-xs"
+                          placeholder="Hasta"
+                          min={unitFilters.availableFrom || undefined}
+                        />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        Oculta unidades con reservas activas que solapan con ese rango.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                          Huéspedes mín.
+                        </div>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min="1"
+                          value={unitFilters.minGuests}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, minGuests: e.target.value }))
+                          }
+                          placeholder="2"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                          Modo de operación
+                        </div>
+                        <Select
+                          value={unitFilters.defaultMode ?? "any"}
+                          onValueChange={(v) =>
+                            setUnitFilters((f) => ({
+                              ...f,
+                              defaultMode: v === "any" ? null : (v as "temporario" | "mensual" | "mixto"),
+                            }))
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="any">Todos</SelectItem>
+                            <SelectItem value="temporario">Temporario</SelectItem>
+                            <SelectItem value="mensual">Mensual</SelectItem>
+                            <SelectItem value="mixto">Mixto</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                        Precio por noche ({orgCurrency})
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={unitFilters.minPrice}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, minPrice: e.target.value.replace(",", ".") }))
+                          }
+                          placeholder="Mín"
+                          className="h-8 text-xs"
+                        />
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          value={unitFilters.maxPrice}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, maxPrice: e.target.value.replace(",", ".") }))
+                          }
+                          placeholder="Máx"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                          Dormitorios mín.
+                        </div>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          value={unitFilters.minBedrooms}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, minBedrooms: e.target.value }))
+                          }
+                          placeholder="1"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                          Baños mín.
+                        </div>
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          min="0"
+                          value={unitFilters.minBathrooms}
+                          onChange={(e) =>
+                            setUnitFilters((f) => ({ ...f, minBathrooms: e.target.value }))
+                          }
+                          placeholder="1"
+                          className="h-8 text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                        Barrio / dirección
+                      </div>
+                      <Input
+                        type="text"
+                        value={unitFilters.neighborhood}
+                        onChange={(e) =>
+                          setUnitFilters((f) => ({ ...f, neighborhood: e.target.value }))
+                        }
+                        placeholder="Nueva Córdoba, Centro…"
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="border-t px-4 py-2 flex items-center justify-between bg-muted/30">
+                    <span className="text-[11px] text-muted-foreground">
+                      <span className="font-semibold tabular-nums text-foreground">
+                        {filteredUnits.length}
+                      </span>{" "}
+                      / {units.length} unidades
+                    </span>
+                  </div>
+                </PopoverContent>
+              </Popover>
 
               {/* Status/source filter */}
               <DropdownMenu>
@@ -1179,7 +1485,24 @@ export function PmsBoard({
             </div>
 
             {/* ─── Rows ─── */}
-            {units.map((unit, rowIdx) => {
+            {filteredUnits.length === 0 && units.length > 0 && (
+              <div className="px-6 py-12 text-center">
+                <Hotel className="size-10 mx-auto text-muted-foreground/40 mb-3" />
+                <h3 className="font-semibold">Ninguna unidad coincide con los filtros</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Probá relajar los criterios o limpiá los filtros para volver a ver todas las unidades.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3 h-8 text-xs"
+                  onClick={clearUnitFilters}
+                >
+                  Limpiar filtros
+                </Button>
+              </div>
+            )}
+            {filteredUnits.map((unit, rowIdx) => {
               const unitBookings = bookingsByUnit.get(unit.id) ?? [];
               const overlay = UNIT_OVERLAY_STYLE[unit.status];
               const stats = statsByUnit.get(unit.id);
