@@ -139,6 +139,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     cash: ["view"],
     settlements: ["view"],
     concierge: ["view", "create", "update"],
+    messaging: ["view", "create", "update"],
   },
   mantenimiento: {
     units: ["view"],

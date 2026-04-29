@@ -566,3 +566,234 @@ export interface OwnerMember {
   active: boolean;
   avatar_url: string | null;
 }
+
+// ─── Mensajería ─────────────────────────────────────────────────────────────
+
+export type MessagingChannelType = "whatsapp" | "instagram";
+
+export type MessagingChannelStatus = "connected" | "disconnected" | "error";
+
+export type MessagingConversationStatus = "open" | "snoozed" | "closed" | "archived";
+
+export type MessagingMessageDirection = "inbound" | "outbound";
+
+export type MessagingContentType =
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "document"
+  | "sticker"
+  | "location"
+  | "contacts"
+  | "template"
+  | "reaction"
+  | "system";
+
+export type MessagingMessageStatus = "queued" | "sent" | "delivered" | "read" | "failed";
+
+export type MessagingWorkflowTrigger =
+  | "booking_confirmed"
+  | "pre_check_in"
+  | "on_check_in"
+  | "during_stay"
+  | "pre_check_out"
+  | "on_check_out"
+  | "post_stay_review"
+  | "inbound_first_message";
+
+export type MessagingBroadcastStatus =
+  | "draft"
+  | "scheduled"
+  | "sending"
+  | "sent"
+  | "failed"
+  | "cancelled";
+
+export type MessagingBroadcastAudience =
+  | "all"
+  | "active_guests"
+  | "past_guests"
+  | "upcoming_arrivals"
+  | "custom_tag";
+
+export type MessagingAlertType =
+  | "unanswered"
+  | "vip"
+  | "negative_sentiment"
+  | "sla_breach"
+  | "workflow_failure"
+  | "channel_error";
+
+export type MessagingAlertSeverity = "info" | "warning" | "urgent";
+
+export interface MessagingChannel {
+  id: string;
+  organization_id: string;
+  channel_type: MessagingChannelType;
+  display_name: string | null;
+  access_token: string | null;
+  app_id: string | null;
+  app_secret: string | null;
+  business_account_id: string | null;
+  phone_number_id: string | null;
+  instagram_account_id: string | null;
+  webhook_verify_token: string;
+  graph_api_version: string;
+  status: MessagingChannelStatus;
+  status_detail: string | null;
+  last_verified_at: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessagingTag {
+  id: string;
+  organization_id: string;
+  label: string;
+  color: string;
+  description: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface MessagingContact {
+  id: string;
+  organization_id: string;
+  channel_type: MessagingChannelType;
+  external_id: string;
+  display_name: string | null;
+  profile_pic_url: string | null;
+  guest_id: string | null;
+  notes: string | null;
+  is_blocked: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessagingConversation {
+  id: string;
+  organization_id: string;
+  channel_id: string;
+  contact_id: string;
+  status: MessagingConversationStatus;
+  assigned_to: string | null;
+  tag_ids: string[];
+  related_booking_id: string | null;
+  related_unit_id: string | null;
+  unread_count: number;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  last_message_direction: MessagingMessageDirection | null;
+  snoozed_until: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessagingMessage {
+  id: string;
+  organization_id: string;
+  conversation_id: string;
+  channel_id: string;
+  direction: MessagingMessageDirection;
+  external_message_id: string | null;
+  content_type: MessagingContentType;
+  text: string | null;
+  media_url: string | null;
+  media_mime_type: string | null;
+  media_caption: string | null;
+  media_filename: string | null;
+  reply_to_message_id: string | null;
+  status: MessagingMessageStatus;
+  error_message: string | null;
+  sender_user_id: string | null;
+  sent_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+  raw: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface MessagingTemplate {
+  id: string;
+  organization_id: string;
+  shortcut: string;
+  title: string;
+  body: string;
+  category: string | null;
+  attachments: { url: string; mime: string; name?: string }[];
+  active: boolean;
+  usage_count: number;
+  last_used_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessagingWorkflow {
+  id: string;
+  organization_id: string;
+  name: string;
+  description: string | null;
+  trigger: MessagingWorkflowTrigger;
+  delay_minutes: number;
+  channel_type: MessagingChannelType;
+  message_body: string;
+  active: boolean;
+  filters: Record<string, unknown>;
+  last_run_at: string | null;
+  runs_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessagingBroadcast {
+  id: string;
+  organization_id: string;
+  name: string;
+  channel_id: string;
+  audience: MessagingBroadcastAudience;
+  audience_filter: Record<string, unknown>;
+  message_body: string;
+  attachments: { url: string; mime: string; name?: string }[];
+  status: MessagingBroadcastStatus;
+  scheduled_for: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  recipients_count: number;
+  delivered_count: number;
+  read_count: number;
+  failed_count: number;
+  last_error: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MessagingAlert {
+  id: string;
+  organization_id: string;
+  conversation_id: string | null;
+  alert_type: MessagingAlertType;
+  severity: MessagingAlertSeverity;
+  title: string;
+  body: string | null;
+  resolved_at: string | null;
+  resolved_by: string | null;
+  created_at: string;
+}
+
+// Tipos enriquecidos
+
+export interface MessagingConversationWithRelations extends MessagingConversation {
+  contact: MessagingContact;
+  channel: Pick<MessagingChannel, "id" | "channel_type" | "display_name" | "status">;
+  guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+  related_booking?: Pick<
+    Booking,
+    "id" | "check_in_date" | "check_out_date" | "status" | "unit_id"
+  > | null;
+}

@@ -17,6 +17,7 @@ import {
   Bell,
   Settings,
   ShieldCheck,
+  MessageSquare,
 } from "lucide-react";
 import {
   Sidebar,
@@ -63,6 +64,7 @@ const NAV: NavGroup[] = [
   {
     label: "Servicio",
     items: [
+      { label: "Mensajería", href: "/dashboard/mensajeria", icon: MessageSquare, resource: "messaging" },
       { label: "Mantenimiento", href: "/dashboard/mantenimiento", icon: Wrench, resource: "tickets" },
       { label: "Limpieza", href: "/dashboard/limpieza", icon: Sparkles, resource: "cleaning" },
       { label: "Conserjería", href: "/dashboard/conserjeria", icon: Bell, resource: "concierge" },
