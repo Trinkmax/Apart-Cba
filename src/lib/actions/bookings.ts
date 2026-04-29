@@ -87,7 +87,7 @@ function addOneCalendarMonth(iso: string): string {
   return `${y}-${m}-${dd}`;
 }
 
-export interface LeaseSegment {
+interface LeaseSegment {
   from: string;
   to: string;
   nights: number;
@@ -105,7 +105,7 @@ export interface LeaseSegment {
  *    { from: 2026-06-15, to: 2026-07-15, nights: 30 },
  *    { from: 2026-07-15, to: 2026-08-15, nights: 31, isLast: true }]
  */
-export function splitMonthlySegments(
+function splitMonthlySegments(
   checkIn: string,
   checkOut: string
 ): LeaseSegment[] {
