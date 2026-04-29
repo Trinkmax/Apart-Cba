@@ -7,6 +7,54 @@ import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import type { CleaningTask, CleaningStatus } from "@/lib/types/database";
 
+// Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
+// estaba en status='limpieza' y ya no le quedan tasks pendientes/en_progreso,
+// la liberamos a 'disponible'. Esto evita el bug de "unidad bloqueada en el
+// calendario aunque ya no haya tarea de limpieza".
+async function releaseUnitIfNoActiveCleaning(
+  unitId: string,
+  organizationId: string,
+  excludeTaskId?: string
+): Promise<void> {
+  const admin = createAdminClient();
+
+  // ¿La unidad está en status='limpieza'?
+  const { data: unit } = await admin
+    .from("units")
+    .select("id, status")
+    .eq("id", unitId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!unit || unit.status !== "limpieza") return;
+
+  // ¿Quedan tasks pendientes/en_progreso para esa unidad?
+  let q = admin
+    .from("cleaning_tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("unit_id", unitId)
+    .eq("organization_id", organizationId)
+    .in("status", ["pendiente", "en_progreso"]);
+  if (excludeTaskId) q = q.neq("id", excludeTaskId);
+  const { count } = await q;
+  if ((count ?? 0) > 0) return;
+
+  // Sin tasks activas → liberar unidad a 'disponible'.
+  await admin
+    .from("units")
+    .update({ status: "disponible" })
+    .eq("id", unitId)
+    .eq("organization_id", organizationId);
+
+  // El status_history queda registrado por el trigger tg_units_status_history.
+  // Marcamos la razón a posteriori si es posible.
+  await admin
+    .from("unit_status_history")
+    .update({ reason: "Auto: cleaning task finalizada/borrada" })
+    .eq("unit_id", unitId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+}
+
 const cleaningSchema = z.object({
   unit_id: z.string().uuid(),
   scheduled_for: z.string(),
@@ -85,8 +133,24 @@ export async function changeCleaningStatus(id: string, status: CleaningStatus) {
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  // Si la task pasa a un estado terminal, intentar liberar la unidad.
+  if (status === "completada" || status === "verificada" || status === "cancelada") {
+    const { data: task } = await admin
+      .from("cleaning_tasks")
+      .select("unit_id")
+      .eq("id", id)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (task?.unit_id) {
+      await releaseUnitIfNoActiveCleaning(task.unit_id, organization.id, id);
+    }
+  }
+
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/m/limpieza");
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades");
 }
 
 export async function assignCleaning(id: string, userId: string | null) {
@@ -136,11 +200,27 @@ export async function deleteCleaningTask(id: string) {
   await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  // Capturar unit_id antes de borrar para poder liberar la unidad.
+  const { data: task } = await admin
+    .from("cleaning_tasks")
+    .select("unit_id")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const { error } = await admin
     .from("cleaning_tasks")
     .delete()
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  if (task?.unit_id) {
+    await releaseUnitIfNoActiveCleaning(task.unit_id, organization.id, id);
+  }
+
   revalidatePath("/dashboard/limpieza");
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades");
 }
