@@ -497,7 +497,15 @@ export function PmsBoard({
         const a = (u.address ?? "").toLowerCase();
         if (!n.includes(neighborhood) && !a.includes(neighborhood)) return false;
       }
-      if (f.defaultMode && u.default_mode !== f.defaultMode) return false;
+      if (f.defaultMode) {
+        // Una unidad "mixto" acepta ambos modos, así que match contra
+        // temporario/mensual también la incluye. Match exacto solo si pediste "mixto".
+        if (f.defaultMode === "mixto") {
+          if (u.default_mode !== "mixto") return false;
+        } else {
+          if (u.default_mode !== f.defaultMode && u.default_mode !== "mixto") return false;
+        }
+      }
       if (checkAvailability) {
         // Disponible si NINGUNA reserva activa overlapa con el rango pedido.
         const unitBookings = bookings.filter(
@@ -1038,9 +1046,9 @@ export function PmsBoard({
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="any">Todos</SelectItem>
-                            <SelectItem value="temporario">Temporario</SelectItem>
-                            <SelectItem value="mensual">Mensual</SelectItem>
-                            <SelectItem value="mixto">Mixto</SelectItem>
+                            <SelectItem value="temporario">Temporario (incluye mixto)</SelectItem>
+                            <SelectItem value="mensual">Mensual (incluye mixto)</SelectItem>
+                            <SelectItem value="mixto">Solo mixto</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>

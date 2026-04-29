@@ -154,6 +154,36 @@ export async function createGuest(input: GuestInput): Promise<Guest> {
   return data as Guest;
 }
 
+/**
+ * Rename rápido de huésped — solo cambia full_name. Pensado para edición
+ * inline desde la lista (más rápido que abrir el profile completo).
+ */
+export async function renameGuest(id: string, fullName: string): Promise<Guest> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const trimmed = fullName.trim();
+  if (trimmed.length < 2) {
+    throw new Error("El nombre debe tener al menos 2 caracteres");
+  }
+  if (trimmed.length > 200) {
+    throw new Error("El nombre es demasiado largo");
+  }
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("guests")
+    .update({ full_name: trimmed })
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/huespedes");
+  revalidatePath(`/dashboard/huespedes/${id}`);
+  revalidatePath("/dashboard/reservas");
+  revalidatePath("/dashboard/unidades/kanban");
+  return data as Guest;
+}
+
 export async function updateGuest(id: string, input: GuestInput): Promise<Guest> {
   await requireSession();
   const { organization } = await getCurrentOrg();

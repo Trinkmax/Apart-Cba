@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { getInitials, formatTimeAgo } from "@/lib/format";
 import { GuestProfileDialog } from "@/components/guests/guest-profile-dialog";
+import { RenameGuestButton } from "@/components/guests/rename-guest-button";
 import type { Guest } from "@/lib/types/database";
 
 export function GuestsListClient({ guests }: { guests: Guest[] }) {
@@ -45,27 +46,28 @@ export function GuestsListClient({ guests }: { guests: Guest[] }) {
         <Card className="overflow-hidden">
           <div className="divide-y">
             {filtered.map((g) => (
-              <GuestProfileDialog key={g.id} guest={g}>
-                <button
-                  type="button"
-                  className="w-full flex items-center gap-3 p-3 hover:bg-accent/30 transition-colors group text-left"
-                >
-                  <Avatar className="size-10">
-                    <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-                      {getInitials(g.full_name)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-sm truncate group-hover:text-primary transition-colors">
-                        {g.full_name}
-                      </span>
-                      {g.blacklisted && (
-                        <Badge variant="destructive" className="gap-1 text-[10px]">
-                          <ShieldAlert size={10} /> Blacklist
-                        </Badge>
-                      )}
-                    </div>
+              <div key={g.id} className="flex items-stretch group hover:bg-accent/30 transition-colors">
+                <GuestProfileDialog guest={g}>
+                  <button
+                    type="button"
+                    className="flex-1 flex items-center gap-3 p-3 text-left"
+                  >
+                    <Avatar className="size-10">
+                      <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                        {getInitials(g.full_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm truncate group-hover:text-primary transition-colors">
+                          {g.full_name}
+                        </span>
+                        {g.blacklisted && (
+                          <Badge variant="destructive" className="gap-1 text-[10px]">
+                            <ShieldAlert size={10} /> Blacklist
+                          </Badge>
+                        )}
+                      </div>
                     <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                       {g.phone && (
                         <span className="flex items-center gap-1">
@@ -84,19 +86,23 @@ export function GuestsListClient({ guests }: { guests: Guest[] }) {
                       )}
                     </div>
                   </div>
-                  <div className="text-right text-xs">
-                    <div className="font-medium flex items-center gap-1">
-                      <BadgeCheck size={12} className="text-emerald-500" />
-                      {g.total_bookings}
-                    </div>
-                    {g.last_stay_at && (
-                      <div className="text-muted-foreground mt-0.5">
-                        {formatTimeAgo(g.last_stay_at)}
+                    <div className="text-right text-xs">
+                      <div className="font-medium flex items-center gap-1">
+                        <BadgeCheck size={12} className="text-emerald-500" />
+                        {g.total_bookings}
                       </div>
-                    )}
-                  </div>
-                </button>
-              </GuestProfileDialog>
+                      {g.last_stay_at && (
+                        <div className="text-muted-foreground mt-0.5">
+                          {formatTimeAgo(g.last_stay_at)}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                </GuestProfileDialog>
+                <div className="flex items-center pr-2">
+                  <RenameGuestButton guestId={g.id} currentName={g.full_name} />
+                </div>
+              </div>
             ))}
           </div>
         </Card>
