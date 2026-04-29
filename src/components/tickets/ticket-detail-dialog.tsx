@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import {
   AlertTriangle,
   Building2,
@@ -75,32 +75,36 @@ export function TicketDetailDialog({
   onUpdated,
   onDeleted,
 }: Props) {
+  // Inicialización derivada del prop `ticket` con patrón "previous value".
+  const buildForm = (t: typeof ticket): TicketInput | null =>
+    t
+      ? {
+          unit_id: t.unit_id,
+          title: t.title,
+          description: t.description ?? "",
+          category: t.category ?? "",
+          priority: t.priority,
+          status: t.status,
+          assigned_to: t.assigned_to ?? null,
+          estimated_cost: t.estimated_cost ?? null,
+          actual_cost: t.actual_cost ?? null,
+          cost_currency: t.cost_currency ?? "ARS",
+          billable_to: t.billable_to,
+          related_owner_id: t.related_owner_id ?? null,
+          notes: t.notes ?? "",
+        }
+      : null;
+  const [prevTicketId, setPrevTicketId] = useState<string | null>(ticket?.id ?? null);
   const [isEditing, setIsEditing] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [form, setForm] = useState<TicketInput | null>(null);
-
-  useEffect(() => {
-    if (ticket) {
-      setForm({
-        unit_id: ticket.unit_id,
-        title: ticket.title,
-        description: ticket.description ?? "",
-        category: ticket.category ?? "",
-        priority: ticket.priority,
-        status: ticket.status,
-        assigned_to: ticket.assigned_to ?? null,
-        estimated_cost: ticket.estimated_cost ?? null,
-        actual_cost: ticket.actual_cost ?? null,
-        cost_currency: ticket.cost_currency ?? "ARS",
-        billable_to: ticket.billable_to,
-        related_owner_id: ticket.related_owner_id ?? null,
-        notes: ticket.notes ?? "",
-      });
-      setIsEditing(false);
-      setConfirmDelete(false);
-    }
-  }, [ticket]);
+  const [form, setForm] = useState<TicketInput | null>(() => buildForm(ticket));
+  if (ticket && ticket.id !== prevTicketId) {
+    setPrevTicketId(ticket.id);
+    setForm(buildForm(ticket));
+    setIsEditing(false);
+    setConfirmDelete(false);
+  }
 
   if (!ticket || !form) return null;
 

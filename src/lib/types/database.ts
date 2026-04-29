@@ -91,6 +91,21 @@ export type ConciergeStatus =
   | "cancelada";
 export type ConciergePriority = "baja" | "normal" | "alta" | "urgente";
 
+// Modo de estadía: temporario (Airbnb-style) vs mensual (inquilino largo).
+export type BookingMode = "temporario" | "mensual";
+// Vocación de la unidad: una unidad puede ser exclusivamente temporaria,
+// exclusivamente mensual, o "mixto" (acepta ambos según el momento).
+export type UnitDefaultMode = "temporario" | "mensual" | "mixto";
+
+// Tipo de operación registrada en booking_extensions.
+export type BookingExtensionOperation =
+  | "move"
+  | "extend_right"
+  | "shorten_right"
+  | "extend_left"
+  | "shorten_left"
+  | "change_unit";
+
 // ─── Tablas ─────────────────────────────────────────────────────────────────
 
 export interface Organization {
@@ -202,6 +217,7 @@ export interface Unit {
   base_price: number | null;
   cleaning_fee: number | null;
   default_commission_pct: number | null;
+  default_mode: UnitDefaultMode;
   status: UnitStatus;
   status_changed_at: string;
   status_changed_by: string | null;
@@ -269,6 +285,7 @@ export interface Booking {
   external_id: string | null;
   external_url: string | null;
   status: BookingStatus;
+  mode: BookingMode;
   check_in_date: string;
   check_in_time: string;
   check_out_date: string;
@@ -280,6 +297,11 @@ export interface Booking {
   commission_pct: number | null;
   commission_amount: number | null;
   cleaning_fee: number | null;
+  monthly_rent: number | null;
+  monthly_expenses: number | null;
+  security_deposit: number | null;
+  monthly_inflation_adjustment_pct: number | null;
+  rent_billing_day: number | null;
   notes: string | null;
   internal_notes: string | null;
   checked_in_at: string | null;
@@ -438,7 +460,14 @@ export interface OwnerSettlement {
 export interface SettlementLine {
   id: string;
   settlement_id: string;
-  line_type: "booking_revenue" | "commission" | "maintenance_charge" | "cleaning_charge" | "adjustment";
+  line_type:
+    | "booking_revenue"
+    | "commission"
+    | "maintenance_charge"
+    | "cleaning_charge"
+    | "adjustment"
+    | "monthly_rent_fraction"
+    | "expenses_fraction";
   ref_type: string | null;
   ref_id: string | null;
   unit_id: string | null;
@@ -446,6 +475,25 @@ export interface SettlementLine {
   amount: number;
   sign: "+" | "-";
   display_order: number;
+  created_at: string;
+}
+
+export interface BookingExtension {
+  id: string;
+  organization_id: string;
+  booking_id: string;
+  operation: BookingExtensionOperation;
+  previous_unit_id: string;
+  new_unit_id: string;
+  previous_check_in_date: string;
+  new_check_in_date: string;
+  previous_check_out_date: string;
+  new_check_out_date: string;
+  delta_days: number;
+  previous_total_amount: number | null;
+  new_total_amount: number | null;
+  reason: string | null;
+  actor_user_id: string | null;
   created_at: string;
 }
 

@@ -19,6 +19,8 @@ const LINE_TYPE_LABELS: Record<SettlementLine["line_type"], string> = {
   cleaning_charge: "Limpieza",
   maintenance_charge: "Mantenimiento",
   adjustment: "Ajuste",
+  monthly_rent_fraction: "Renta mensual",
+  expenses_fraction: "Expensas",
 };
 
 export function generateSettlementPDF(settlement: SettlementDetail) {

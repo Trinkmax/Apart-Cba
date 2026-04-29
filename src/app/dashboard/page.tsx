@@ -1,13 +1,12 @@
 import Link from "next/link";
 import {
-  Building2, CalendarDays, Wrench, Sparkles, TrendingUp,
+  Wrench, Sparkles, TrendingUp,
   LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet,
 } from "lucide-react";
 import { getDashboardKPIs } from "@/lib/actions/kpis";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney } from "@/lib/format";

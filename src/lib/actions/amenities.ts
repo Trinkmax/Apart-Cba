@@ -85,9 +85,7 @@ export async function deleteAmenity(id: string) {
 
 // ─── Stock por unidad ──────────────────────────────────────────────────────
 
-export interface UnitAmenityRow extends UnitAmenity {
-  // lo dejamos plano; la UI compone la matriz
-}
+export type UnitAmenityRow = UnitAmenity;
 
 export async function listUnitAmenities(): Promise<UnitAmenity[]> {
   const { organization } = await getCurrentOrg();
@@ -99,7 +97,8 @@ export async function listUnitAmenities(): Promise<UnitAmenity[]> {
     .eq("units.organization_id", organization.id);
   if (error) throw new Error(error.message);
   return (data as (UnitAmenity & { units: unknown })[]).map((r) => {
-    const { units: _omit, ...rest } = r as UnitAmenity & { units?: unknown };
+    const rest = { ...r } as UnitAmenity & { units?: unknown };
+    delete rest.units;
     return rest as UnitAmenity;
   });
 }

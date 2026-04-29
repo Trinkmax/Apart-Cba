@@ -7,13 +7,9 @@ import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import type {
   Unit,
-  UnitOwner,
   UnitStatus,
   UnitWithRelations,
   Owner,
-  Booking,
-  Guest,
-  MaintenanceTicket,
 } from "@/lib/types/database";
 import { TICKET_PRIORITY_META } from "@/lib/constants";
 
@@ -34,6 +30,9 @@ const unitSchema = z.object({
   base_price_currency: z.string().default("ARS"),
   cleaning_fee: z.coerce.number().min(0).optional().nullable(),
   default_commission_pct: z.coerce.number().min(0).max(100).default(20),
+  default_mode: z
+    .enum(["temporario", "mensual", "mixto"])
+    .default("temporario"),
   status: z
     .enum(["disponible", "reservado", "ocupado", "limpieza", "mantenimiento", "bloqueado"])
     .default("disponible"),

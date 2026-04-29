@@ -19,7 +19,6 @@ import { changeTicketStatus, updateTicketCost } from "@/lib/actions/tickets";
 import { TICKET_STATUS_META } from "@/lib/constants";
 import { TicketPhotosSection } from "./ticket-photos-section";
 import type {
-  MaintenanceTicket,
   TicketAttachment,
   TicketStatus,
 } from "@/lib/types/database";

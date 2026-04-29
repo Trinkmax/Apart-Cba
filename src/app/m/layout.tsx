@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, Wrench, Bell, LogOut, Building2, User } from "lucide-react";
+import { Sparkles, Wrench, Bell, LogOut, Building2 } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { signOut } from "@/lib/actions/auth";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 export default async function MobileLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  const { organization, role } = await getCurrentOrg();
+  const { role } = await getCurrentOrg();
 
   return (
     <div className="min-h-screen bg-background flex flex-col">

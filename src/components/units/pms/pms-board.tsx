@@ -9,6 +9,7 @@ import {
   useState,
   useTransition,
 } from "react";
+// useTransition se mantiene únicamente para el reordenamiento de unidades.
 import {
   addDays,
   format,
@@ -21,12 +22,14 @@ import { es } from "date-fns/locale";
 import {
   ArrowDownUp,
   CalendarDays,
+  CalendarRange,
   Check,
   ChevronLeft,
   ChevronRight,
   Filter,
   GripVertical,
   Hotel,
+  House,
   Loader2,
   MessageSquareText,
   Moon,
@@ -83,21 +86,32 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { BOOKING_STATUS_META, BOOKING_SOURCE_META, UNIT_STATUS_META } from "@/lib/constants";
+import {
+  BOOKING_STATUS_META,
+  BOOKING_SOURCE_META,
+  UNIT_STATUS_META,
+} from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
-import { moveBooking } from "@/lib/actions/bookings";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { cn } from "@/lib/utils";
 import type {
+  BookingMode,
   BookingSource,
   BookingStatus,
   BookingWithRelations,
+  CashAccount,
   Unit,
   UnitWithRelations,
 } from "@/lib/types/database";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import {
+  MoveConfirmDialog,
+  type MoveOperation,
+  type PendingMove,
+} from "@/components/bookings/move-confirm-dialog";
+import {
   BOOKING_BAR_STYLE,
+  BOOKING_MODE_OVERLAY,
   SIDEBAR_WIDTH,
   SOURCE_ACCENT,
   UNIT_OVERLAY_STYLE,
@@ -112,6 +126,8 @@ import { PmsUnitPopoverContent } from "./pms-unit-popover";
 interface PmsBoardProps {
   initialUnits: UnitWithRelations[];
   initialBookings: BookingWithRelations[];
+  /** Cuentas de caja activas para el form de booking (cobro al crear/editar) */
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -150,6 +166,7 @@ interface DragState {
 export function PmsBoard({
   initialUnits,
   initialBookings,
+  accounts = [],
   organizationId,
   startISO,
   days,
@@ -157,7 +174,18 @@ export function PmsBoard({
 }: PmsBoardProps) {
   const router = useRouter();
   // ── estado base
+  // Sincronizamos units/bookings cuando llegan nuevos props (router.refresh tras
+  // crear/editar). Patrón "ajuste de state durante render" — reemplaza al
+  // useEffect+setState que la regla react-hooks/set-state-in-effect prohíbe.
+  // Para bookings preservamos las que están con mutaciones optimistas en curso
+  // (drag-and-drop). Para units pisamos directamente.
+  const [prevInitialUnits, setPrevInitialUnits] = useState(initialUnits);
   const [units, setUnits] = useState(initialUnits);
+  if (prevInitialUnits !== initialUnits) {
+    setPrevInitialUnits(initialUnits);
+    setUnits(initialUnits);
+  }
+  const [prevInitialBookings, setPrevInitialBookings] = useState(initialBookings);
   const [bookings, setBookings] = useState(initialBookings);
   const [windowStart, setWindowStart] = useState(startISO);
   const [windowDays, setWindowDays] = useState(days);
@@ -169,8 +197,11 @@ export function PmsBoard({
   const [sourceFilter, setSourceFilter] = useState<Set<BookingSource>>(
     () => new Set(Object.keys(BOOKING_SOURCE_META) as BookingSource[])
   );
+  // Filtro de modo: null = todos | "temporario" | "mensual"
+  const [modeFilter, setModeFilter] = useState<BookingMode | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
-  const [, startTransition] = useTransition();
+  // Estado del dialog de confirmación obligatoria
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
 
   // ── modo edición de orden
   const [editMode, setEditMode] = useState(false);
@@ -252,11 +283,11 @@ export function PmsBoard({
     setDragState(next ? { ...next } : null);
   }, []);
 
-  // Sincroniza con los datos del servidor cuando llega un nuevo prop
-  // (p. ej. router.refresh() tras crear/editar). Preserva las reservas con
-  // mutaciones optimistas en curso (drag-and-drop) — realtime se encarga
-  // de propagar esos cambios al resto de los clientes.
-  useEffect(() => {
+  // Reconciliación de bookings: si llegó un prop nuevo, fusionamos preservando
+  // las que están en mid-mutation optimistic (drag-drop) — realtime se encarga
+  // de propagar esos cambios cuando el server confirme.
+  if (prevInitialBookings !== initialBookings) {
+    setPrevInitialBookings(initialBookings);
     setBookings((prev) => {
       const pending = pendingMutateIds.current;
       if (pending.size === 0) return initialBookings;
@@ -265,10 +296,7 @@ export function PmsBoard({
         pending.has(b.id) && prevById.has(b.id) ? prevById.get(b.id)! : b
       );
     });
-  }, [initialBookings]);
-  useEffect(() => {
-    setUnits(initialUnits);
-  }, [initialUnits]);
+  }
 
   // ── constantes de zoom
   const { cellWidth: CELL, rowHeight: ROW } = ZOOM_CONFIG[zoom];
@@ -285,6 +313,7 @@ export function PmsBoard({
     return bookings.filter((b) => {
       if (!statusFilter.has(b.status)) return false;
       if (!sourceFilter.has(b.source)) return false;
+      if (modeFilter && (b.mode ?? "temporario") !== modeFilter) return false;
       if (!q) return true;
       return (
         b.guest?.full_name?.toLowerCase().includes(q) ||
@@ -294,7 +323,7 @@ export function PmsBoard({
         false
       );
     });
-  }, [bookings, statusFilter, sourceFilter, query]);
+  }, [bookings, statusFilter, sourceFilter, modeFilter, query]);
 
   const bookingsByUnit = useMemo(() => {
     const m = new Map<string, BookingWithRelations[]>();
@@ -457,7 +486,10 @@ export function PmsBoard({
     });
   }
 
-  async function onBarPointerUp(
+  // El pointerUp NO commitea: prepara el "ghost preview" (cambio en cliente,
+  // marcado como pending) y abre el modal de confirmación. El commit ocurre
+  // sólo si el usuario confirma. Si cancela, revertimos al snapshot original.
+  function onBarPointerUp(
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations
   ) {
@@ -477,6 +509,7 @@ export function PmsBoard({
     let newCheckIn = booking.check_in_date;
     let newCheckOut = booking.check_out_date;
     let newUnitId = booking.unit_id;
+    const operation: MoveOperation = d.mode;
 
     if (d.mode === "move") {
       newCheckIn = isoAddDays(d.originalCheckIn, d.dayDelta);
@@ -502,8 +535,10 @@ export function PmsBoard({
       return;
     }
 
-    // Optimistic update
-    const prevBookings = bookings;
+    // Ghost preview: actualizamos el booking en cliente + lo marcamos como
+    // pending (para que el realtime no nos pise). El servidor sólo se toca
+    // cuando el usuario confirma el modal.
+    const targetUnit = units.find((u) => u.id === newUnitId) ?? null;
     setBookings((bs) =>
       bs.map((b) =>
         b.id === booking.id
@@ -512,39 +547,61 @@ export function PmsBoard({
               unit_id: newUnitId,
               check_in_date: newCheckIn,
               check_out_date: newCheckOut,
-              unit: units.find((u) => u.id === newUnitId)
-                ? { id: newUnitId, code: units.find((u) => u.id === newUnitId)!.code, name: units.find((u) => u.id === newUnitId)!.name }
+              unit: targetUnit
+                ? {
+                    id: targetUnit.id,
+                    code: targetUnit.code,
+                    name: targetUnit.name,
+                  }
                 : b.unit,
             }
           : b
       )
     );
-
     pendingMutateIds.current.add(booking.id);
     updateDrag(null);
 
-    startTransition(async () => {
-      try {
-        await moveBooking({
-          id: booking.id,
-          unit_id: newUnitId,
-          check_in_date: newCheckIn,
-          check_out_date: newCheckOut,
-        });
-        const movedUnit = units.find((u) => u.id === newUnitId);
-        toast.success(
-          `Reserva actualizada${movedUnit ? ` · ${movedUnit.code}` : ""}`,
-          {
-            description: `${newCheckIn} → ${newCheckOut}`,
-          }
-        );
-      } catch (err) {
-        toast.error("No se pudo mover", { description: (err as Error).message });
-        setBookings(prevBookings); // rollback
-      } finally {
-        setTimeout(() => pendingMutateIds.current.delete(booking.id), 800);
-      }
+    setPendingMove({
+      booking,
+      operation,
+      targetUnitId: newUnitId,
+      targetUnitCode: targetUnit?.code ?? null,
+      targetUnitName: targetUnit?.name ?? null,
+      newCheckInDate: newCheckIn,
+      newCheckOutDate: newCheckOut,
     });
+  }
+
+  function handleConfirmMove() {
+    // El server ya respondió OK dentro del dialog; el ghost se vuelve permanente.
+    if (!pendingMove) return;
+    const id = pendingMove.booking.id;
+    setPendingMove(null);
+    // Liberamos el lock un poco después para no pisar con realtime
+    setTimeout(() => pendingMutateIds.current.delete(id), 800);
+    // router.refresh para recoger cualquier dato derivado (totals, status)
+    router.refresh();
+  }
+
+  function handleCancelMove() {
+    if (!pendingMove) return;
+    const original = pendingMove.booking;
+    // Rollback del ghost al snapshot original
+    setBookings((bs) =>
+      bs.map((b) =>
+        b.id === original.id
+          ? {
+              ...b,
+              unit_id: original.unit_id,
+              check_in_date: original.check_in_date,
+              check_out_date: original.check_out_date,
+              unit: original.unit,
+            }
+          : b
+      )
+    );
+    pendingMutateIds.current.delete(original.id);
+    setPendingMove(null);
   }
 
   // ── click en celda vacía → abrir quick-add
@@ -627,6 +684,9 @@ export function PmsBoard({
                   </button>
                 )}
               </div>
+
+              {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens) */}
+              <ModeFilterToggle value={modeFilter} onChange={setModeFilter} />
 
               {/* Status/source filter */}
               <DropdownMenu>
@@ -771,7 +831,7 @@ export function PmsBoard({
               </Tooltip>
 
               {/* Nueva reserva */}
-              <BookingFormDialog units={units}>
+              <BookingFormDialog units={units} accounts={accounts}>
                 <Button
                   size="sm"
                   className="h-8 gap-1.5 text-xs"
@@ -1124,6 +1184,7 @@ export function PmsBoard({
             key={editBooking.id}
             booking={editBooking}
             units={units}
+            accounts={accounts}
             open
             onOpenChange={(o) => { if (!o) setEditBooking(null); }}
           />
@@ -1133,14 +1194,78 @@ export function PmsBoard({
         {quickAdd && (
           <QuickAddBridge
             units={units}
+            accounts={accounts}
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
             checkOut={quickAdd.checkOut}
             onClose={() => setQuickAdd(null)}
           />
         )}
+
+        {/* Modal de confirmación obligatoria para mover/extender */}
+        <MoveConfirmDialog
+          pending={pendingMove}
+          onConfirmed={handleConfirmMove}
+          onCancel={handleCancelMove}
+        />
       </div>
     </TooltipProvider>
+  );
+}
+
+// ─── Subcomponentes top-level ───────────────────────────────────────────────
+
+interface ModeFilterToggleProps {
+  value: BookingMode | null;
+  onChange: (next: BookingMode | null) => void;
+}
+
+function ModeFilterToggle({ value, onChange }: ModeFilterToggleProps) {
+  const opts: { id: BookingMode | null; label: string; icon: typeof CalendarRange | null; tone: string }[] = [
+    { id: null, label: "Todos", icon: null, tone: "" },
+    {
+      id: "temporario",
+      label: "Temp",
+      icon: CalendarRange,
+      tone: "data-[active=true]:bg-sky-500/15 data-[active=true]:text-sky-700 dark:data-[active=true]:text-sky-300 data-[active=true]:ring-sky-500/30",
+    },
+    {
+      id: "mensual",
+      label: "Mens",
+      icon: House,
+      tone: "data-[active=true]:bg-violet-500/15 data-[active=true]:text-violet-700 dark:data-[active=true]:text-violet-300 data-[active=true]:ring-violet-500/30",
+    },
+  ];
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Filtro de modo"
+      className="flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5"
+    >
+      {opts.map((o) => {
+        const active = value === o.id;
+        const Icon = o.icon;
+        return (
+          <button
+            key={o.id ?? "todos"}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            data-active={active}
+            onClick={() => onChange(o.id)}
+            className={cn(
+              "h-7 px-2 rounded text-[11px] font-medium flex items-center gap-1 transition-colors",
+              "data-[active=false]:text-muted-foreground data-[active=false]:hover:text-foreground",
+              "data-[active=true]:bg-background data-[active=true]:shadow-sm data-[active=true]:ring-1",
+              o.tone
+            )}
+          >
+            {Icon && <Icon size={11} />}
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1409,6 +1534,8 @@ function BookingBar({
 
   const style = BOOKING_BAR_STYLE[booking.status];
   const sourceColor = SOURCE_ACCENT[booking.source];
+  const bookingMode: BookingMode = booking.mode ?? "temporario";
+  const modeOverlay = BOOKING_MODE_OVERLAY[bookingMode];
 
   // Check-in dot is at exact grid line (start of bar).
   // We'll render an angled corner (triangle notch) for visual elegance at checkout.
@@ -1470,11 +1597,34 @@ function BookingBar({
             style={{ backgroundColor: sourceColor, boxShadow: `0 0 6px ${sourceColor}` }}
           />
 
+          {/* Mode overlay (patrón sutil de líneas verticales para mensual) */}
+          {modeOverlay.stripePattern && (
+            <div
+              aria-hidden
+              className="absolute inset-0 pointer-events-none"
+              style={{ background: modeOverlay.stripePattern }}
+            />
+          )}
+
           {/* Content */}
-          <div className={cn("flex-1 min-w-0 px-2 flex items-center gap-1.5", style.text)}>
+          <div className={cn("relative flex-1 min-w-0 px-2 flex items-center gap-1.5", style.text)}>
             <GripVertical size={10} className="opacity-50 shrink-0 hidden sm:block" />
             <div className="min-w-0 flex-1 leading-tight">
               <div className="flex items-center gap-1 truncate text-[11px] font-semibold">
+                {/* Badge mensual — sólo visible cuando el modo es mensual */}
+                {bookingMode === "mensual" && (
+                  <span
+                    aria-label="Reserva mensual"
+                    className={cn(
+                      "shrink-0 inline-flex items-center justify-center size-3.5 rounded-sm ring-1 text-[8px] font-bold tracking-tighter",
+                      modeOverlay.badgeBg,
+                      modeOverlay.badgeText,
+                      modeOverlay.badgeRing
+                    )}
+                  >
+                    M
+                  </span>
+                )}
                 <span className="truncate">{booking.guest?.full_name ?? "Sin huésped"}</span>
                 {booking.internal_notes && (
                   <Tooltip>
@@ -1624,12 +1774,14 @@ function SortableUnitOrderRow({
 
 function QuickAddBridge({
   units,
+  accounts,
   unitId,
   checkIn,
   checkOut,
   onClose,
 }: {
   units: Unit[];
+  accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   unitId: string;
   checkIn: string;
   checkOut: string;
@@ -1638,6 +1790,7 @@ function QuickAddBridge({
   return (
     <BookingFormDialog
       units={units}
+      accounts={accounts}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
       defaultCheckOut={checkOut}

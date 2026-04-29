@@ -1,17 +1,24 @@
-import { Plus, ArrowDownToLine, ArrowUpFromLine, Wallet } from "lucide-react";
+import { Plus, Wallet } from "lucide-react";
 import { listAccounts, listMovements, getAccountBalance } from "@/lib/actions/cash";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { AccountFormDialog } from "@/components/cash/account-form-dialog";
+import { AccountCardActions } from "@/components/cash/account-card-actions";
 import { MovementFormDialog } from "@/components/cash/movement-form-dialog";
 import { TransferFormDialog } from "@/components/cash/transfer-form-dialog";
 import { MovementsList } from "@/components/cash/movements-list";
 import { formatMoney } from "@/lib/format";
 
 export default async function CajaPage() {
-  const accounts = await listAccounts();
+  const [accounts, movements, { role }] = await Promise.all([
+    listAccounts(),
+    listMovements({ limit: 100 }),
+    getCurrentOrg(),
+  ]);
   const balances = await Promise.all(accounts.map((a) => getAccountBalance(a.id)));
-  const movements = await listMovements({ limit: 100 });
+  const canManageAccounts = can(role, "cash", "update") && can(role, "cash", "delete");
 
   // Agrupar saldos por moneda
   const totalsByCurrency = accounts.reduce<Record<string, number>>((acc, a, i) => {
@@ -81,6 +88,7 @@ export default async function CajaPage() {
                       <div className="text-xs text-muted-foreground capitalize">{acc.type} · {acc.currency}</div>
                     </div>
                   </div>
+                  {canManageAccounts && <AccountCardActions account={acc} />}
                 </div>
                 <div className="mt-3 text-2xl font-semibold tabular-nums">
                   {formatMoney(balances[i], acc.currency)}

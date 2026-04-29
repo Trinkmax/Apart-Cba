@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { can } from "@/lib/permissions";
 import type { CashAccount, CashMovement } from "@/lib/types/database";
 
 const accountSchema = z.object({
@@ -90,7 +91,10 @@ export async function listMovements(filters?: {
 
 export async function createAccount(input: AccountInput) {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "create")) {
+    throw new Error("No tenés permiso para crear cuentas de caja.");
+  }
   const validated = accountSchema.parse(input);
   const admin = createAdminClient();
   const { data, error } = await admin
@@ -101,6 +105,42 @@ export async function createAccount(input: AccountInput) {
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/caja");
   return data as CashAccount;
+}
+
+export async function updateAccount(id: string, input: AccountInput) {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "update")) {
+    throw new Error("No tenés permiso para editar cuentas de caja.");
+  }
+  const validated = accountSchema.parse(input);
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("cash_accounts")
+    .update(validated)
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/caja");
+  return data as CashAccount;
+}
+
+export async function deleteAccount(id: string) {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "delete")) {
+    throw new Error("No tenés permiso para eliminar cuentas de caja.");
+  }
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("cash_accounts")
+    .update({ active: false })
+    .eq("id", id)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+  revalidatePath("/dashboard/caja");
 }
 
 export async function createMovement(input: MovementInput) {

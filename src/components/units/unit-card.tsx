@@ -4,7 +4,6 @@ import { CSS } from "@dnd-kit/utilities";
 import { useSortable } from "@dnd-kit/sortable";
 import {
   GripVertical,
-  Building2,
   Bed,
   Bath,
   Users,
@@ -13,7 +12,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { UNIT_STATUS_META, TICKET_PRIORITY_META } from "@/lib/constants";
 import { formatDate, formatNights, getInitials } from "@/lib/format";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import {
   BadgeCheck,
   Building2,
@@ -57,20 +57,22 @@ interface Props {
 
 export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDeleted }: Props) {
   const [isPending, startTransition] = useTransition();
+  // Inicialización derivada del prop `task` con el patrón "previous value" —
+  // re-sincroniza cuando llega una task distinta sin recurrir a useEffect+setState.
+  const [prevTaskId, setPrevTaskId] = useState<string | null>(task?.id ?? null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [checklist, setChecklist] = useState<ChecklistItem[]>([]);
-  const [notes, setNotes] = useState("");
-  const [cost, setCost] = useState<string>("");
-
-  useEffect(() => {
-    if (task) {
-      const cl = (task.checklist as ChecklistItem[]) ?? [];
-      setChecklist(cl);
-      setNotes(task.notes ?? "");
-      setCost(task.cost?.toString() ?? "");
-      setConfirmDelete(false);
-    }
-  }, [task]);
+  const [checklist, setChecklist] = useState<ChecklistItem[]>(
+    () => (task?.checklist as ChecklistItem[]) ?? []
+  );
+  const [notes, setNotes] = useState(task?.notes ?? "");
+  const [cost, setCost] = useState<string>(task?.cost?.toString() ?? "");
+  if (task && task.id !== prevTaskId) {
+    setPrevTaskId(task.id);
+    setChecklist((task.checklist as ChecklistItem[]) ?? []);
+    setNotes(task.notes ?? "");
+    setCost(task.cost?.toString() ?? "");
+    setConfirmDelete(false);
+  }
 
   if (!task) return null;
 

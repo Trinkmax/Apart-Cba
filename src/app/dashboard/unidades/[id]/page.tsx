@@ -7,21 +7,16 @@ import {
   Bath,
   Users,
   Square,
-  CalendarRange,
-  Wrench,
-  ShieldCheck,
 } from "lucide-react";
 import { getUnit } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditUnitButton } from "@/components/units/edit-unit-button";
 import { UnitOwnersManager } from "@/components/units/unit-owners-manager";
 import { UNIT_STATUS_META } from "@/lib/constants";
-import { formatMoney, getInitials } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import type { Unit, UnitOwner, Owner } from "@/lib/types/database";
 
 type UnitDetail = Unit & {

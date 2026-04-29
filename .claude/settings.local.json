@@ -14,7 +14,11 @@
       "Bash(echo \"exit=$?\")",
       "Bash(git stash *)",
       "Bash(git fetch *)",
-      "Bash(git merge *)"
+      "Bash(git merge *)",
+      "mcp__supabase-textos__list_migrations",
+      "mcp__supabase-textos__list_tables",
+      "mcp__supabase-textos__apply_migration",
+      "Bash(npx eslint *)"
     ]
   }
 }

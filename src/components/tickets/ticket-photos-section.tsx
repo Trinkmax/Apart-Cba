@@ -35,13 +35,14 @@ export function TicketPhotosSection({
   const [uploading, setUploading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  const [_isPending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Cuando cambia el ticketId remontamos la fetch sin tocar setLoading dentro
+  // del effect (loading inicial = true cuando no hay attachments precargados).
   useEffect(() => {
     if (initialAttachments !== undefined) return;
     let cancelled = false;
-    setLoading(true);
     listTicketAttachments(ticketId)
       .then((data) => {
         if (!cancelled) setAttachments(data);
@@ -207,10 +208,13 @@ export function TicketPhotosSection({
           >
             <X size={18} />
           </button>
-          <img
+          <Image
             src={previewUrl}
             alt="Foto del trabajo"
-            className="max-h-full max-w-full object-contain rounded-md"
+            width={1600}
+            height={1200}
+            unoptimized
+            className="max-h-full max-w-full w-auto h-auto object-contain rounded-md"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

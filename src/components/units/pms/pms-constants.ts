@@ -1,4 +1,4 @@
-import type { BookingStatus, BookingSource, UnitStatus } from "@/lib/types/database";
+import type { BookingMode, BookingStatus, BookingSource, UnitStatus } from "@/lib/types/database";
 
 export type ZoomLevel = "compacto" | "confort" | "amplio";
 
@@ -110,6 +110,31 @@ export const UNIT_OVERLAY_STYLE: Partial<
       "repeating-linear-gradient(135deg, rgba(100,116,139,0.25) 0 8px, rgba(100,116,139,0.08) 8px 16px)",
     label: "Bloqueado",
     hex: "#64748b",
+  },
+};
+
+// Overlay extra cuando el booking es mensual: patrón de líneas verticales sutil
+// (representa visualmente los billing cycles) + leve oscurecido. El badge "M"
+// se renderiza dentro de la barra en BookingBar.
+export const BOOKING_MODE_OVERLAY: Record<
+  BookingMode,
+  { stripePattern: string | null; sideAccent: string | null; badgeBg: string; badgeText: string; badgeRing: string }
+> = {
+  temporario: {
+    stripePattern: null,
+    sideAccent: null,
+    badgeBg: "bg-sky-100 dark:bg-sky-900/60",
+    badgeText: "text-sky-700 dark:text-sky-200",
+    badgeRing: "ring-sky-300/60 dark:ring-sky-700/60",
+  },
+  mensual: {
+    // Pattern sutil: líneas verticales tenues cada ~20px
+    stripePattern:
+      "repeating-linear-gradient(0deg, transparent 0 19px, rgba(255,255,255,0.16) 19px 20px)",
+    sideAccent: "#7c3aed", // violeta — borde izquierdo finito
+    badgeBg: "bg-violet-100 dark:bg-violet-900/60",
+    badgeText: "text-violet-700 dark:text-violet-100",
+    badgeRing: "ring-violet-300/60 dark:ring-violet-700/60",
   },
 };
 

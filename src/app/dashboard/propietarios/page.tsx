@@ -1,13 +1,8 @@
-import { Plus, Search, ShieldCheck, Building2, Phone, Mail } from "lucide-react";
-import Link from "next/link";
+import { Plus } from "lucide-react";
 import { listOwners } from "@/lib/actions/owners";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { OwnerFormDialog } from "@/components/owners/owner-form-dialog";
 import { OwnersListClient } from "@/components/owners/owners-list-client";
-import { getInitials } from "@/lib/format";
 
 export default async function PropietariosPage() {
   const owners = await listOwners();

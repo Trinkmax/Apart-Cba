@@ -1,11 +1,9 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, FileText, Send, CheckCircle2, Download, RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { getSettlement } from "@/lib/actions/settlements";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SettlementActions } from "@/components/settlements/settlement-actions";
 import { formatMoney, getInitials } from "@/lib/format";
@@ -28,6 +26,8 @@ const LINE_TYPE_LABELS: Record<SettlementLine["line_type"], { label: string; col
   cleaning_charge: { label: "Limpieza", color: "#06b6d4" },
   maintenance_charge: { label: "Mantenimiento", color: "#f97316" },
   adjustment: { label: "Ajuste", color: "#64748b" },
+  monthly_rent_fraction: { label: "Renta mensual", color: "#7c3aed" },
+  expenses_fraction: { label: "Expensas", color: "#a78bfa" },
 };
 
 type SettlementDetail = OwnerSettlement & {

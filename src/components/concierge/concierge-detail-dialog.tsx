@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import {
-  Bell,
   Building2,
   CheckCircle2,
   Clock,
@@ -92,23 +91,27 @@ export function ConciergeDetailDialog({
 }: Props) {
   const [isPending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [form, setForm] = useState<Partial<ConciergeInput>>({});
-
-  useEffect(() => {
-    if (request) {
-      setForm({
-        description: request.description,
-        request_type: request.request_type ?? "",
-        priority: request.priority,
-        unit_id: request.unit_id,
-        cost: request.cost,
-        cost_currency: request.cost_currency ?? "ARS",
-        charge_to_guest: request.charge_to_guest,
-        notes: request.notes ?? "",
-      });
-      setConfirmDelete(false);
-    }
-  }, [request]);
+  // Inicialización derivada del prop `request` con el patrón "previous value".
+  const buildForm = (r: typeof request): Partial<ConciergeInput> =>
+    r
+      ? {
+          description: r.description,
+          request_type: r.request_type ?? "",
+          priority: r.priority,
+          unit_id: r.unit_id,
+          cost: r.cost,
+          cost_currency: r.cost_currency ?? "ARS",
+          charge_to_guest: r.charge_to_guest,
+          notes: r.notes ?? "",
+        }
+      : {};
+  const [prevRequestId, setPrevRequestId] = useState<string | null>(request?.id ?? null);
+  const [form, setForm] = useState<Partial<ConciergeInput>>(() => buildForm(request));
+  if (request && request.id !== prevRequestId) {
+    setPrevRequestId(request.id);
+    setForm(buildForm(request));
+    setConfirmDelete(false);
+  }
 
   if (!request) return null;
 

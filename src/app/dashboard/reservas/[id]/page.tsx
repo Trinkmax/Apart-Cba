@@ -1,14 +1,16 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, CalendarDays, MapPin, User, Phone, Mail, ExternalLink, Edit, LogIn, LogOut, X } from "lucide-react";
-import { getBooking, changeBookingStatus } from "@/lib/actions/bookings";
+import { ArrowLeft, MapPin, User, Phone, Mail, Edit } from "lucide-react";
+import { getBooking } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
+import { listAccounts } from "@/lib/actions/cash";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingActions } from "@/components/bookings/booking-actions";
+import { ExtensionHistory } from "@/components/bookings/extension-history";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
@@ -21,7 +23,11 @@ type BookingDetail = Booking & {
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [booking, units] = await Promise.all([getBooking(id), listUnitsEnriched()]);
+  const [booking, units, accounts] = await Promise.all([
+    getBooking(id),
+    listUnitsEnriched(),
+    listAccounts(),
+  ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
   const sm = BOOKING_STATUS_META[b.status];
@@ -55,7 +61,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
         </div>
         <div className="flex items-center gap-2">
           <BookingActions booking={b} />
-          <BookingFormDialog booking={b} units={units}>
+          <BookingFormDialog booking={b} units={units} accounts={accounts}>
             <Button variant="outline" className="gap-2"><Edit size={14} /> Editar</Button>
           </BookingFormDialog>
         </div>
@@ -141,6 +147,9 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               </div>
             </>
           )}
+
+          <Separator />
+          <ExtensionHistory bookingId={b.id} />
         </Card>
 
         <Card className="p-5 space-y-4 h-fit">

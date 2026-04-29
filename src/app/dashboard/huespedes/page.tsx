@@ -1,5 +1,4 @@
 import { Plus } from "lucide-react";
-import Link from "next/link";
 import { listGuests } from "@/lib/actions/guests";
 import { Button } from "@/components/ui/button";
 import { GuestFormDialog } from "@/components/guests/guest-form-dialog";

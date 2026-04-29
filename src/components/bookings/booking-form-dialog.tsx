@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
-import { Loader2, UserPlus, Search } from "lucide-react";
+import { CalendarRange, Loader2, UserPlus, Search, House, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -35,17 +35,64 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { GuestFormDialog } from "@/components/guests/guest-form-dialog";
 import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/bookings";
 import { searchGuests } from "@/lib/actions/guests";
-import { BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
+import { BOOKING_MODE_META, BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
 import { formatNights } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Booking, BookingWithRelations, Guest, Unit } from "@/lib/types/database";
+import type {
+  Booking,
+  BookingMode,
+  BookingWithRelations,
+  CashAccount,
+  Guest,
+  Unit,
+  UnitDefaultMode,
+} from "@/lib/types/database";
+
+// ─── Helpers para inputs monetarios ─────────────────────────────────────────
+// Aceptan tanto `.` como `,` como separador decimal. Vacío → null.
+function parseMoneyInput(v: string): number | null {
+  const trimmed = v.trim();
+  if (trimmed === "") return null;
+  const normalized = trimmed.replace(/\./g, "").replace(",", ".");
+  // Si tenía un solo punto (input internacional), revertir el primer reemplazo.
+  // Heurística: si normalized no parsea, probamos el original con punto.
+  const direct = Number(trimmed.replace(",", "."));
+  const n = Number.isFinite(direct) ? direct : Number(normalized);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatMoneyValue(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "";
+  // Mostrar con punto decimal (consistente con type="text" + inputMode decimal)
+  return Number.isInteger(n) ? String(n) : String(n);
+}
+
+function nightsBetween(ciISO: string, coISO: string): number {
+  if (!ciISO || !coISO || coISO <= ciISO) return 0;
+  const a = new Date(ciISO + "T12:00:00").getTime();
+  const b = new Date(coISO + "T12:00:00").getTime();
+  return Math.round((b - a) / 86_400_000);
+}
 
 type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
+
+type UnitForBookingForm = Pick<
+  Unit,
+  | "id"
+  | "code"
+  | "name"
+  | "default_commission_pct"
+  | "base_price"
+  | "base_price_currency"
+  | "cleaning_fee"
+> & { default_mode?: UnitDefaultMode };
 
 interface BookingFormDialogProps {
   children?: React.ReactNode;
   booking?: Booking | BookingWithRelations;
-  units: Pick<Unit, "id" | "code" | "name" | "default_commission_pct" | "base_price" | "base_price_currency" | "cleaning_fee">[];
+  units: UnitForBookingForm[];
+  /** Cuentas de caja activas — para registrar el cobro al crear/actualizar la reserva */
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   defaultUnitId?: string;
   defaultCheckIn?: string;
   defaultCheckOut?: string;
@@ -62,6 +109,7 @@ export function BookingFormDialog({
   children,
   booking,
   units,
+  accounts = [],
   defaultUnitId,
   defaultCheckIn,
   defaultCheckOut,
@@ -88,28 +136,106 @@ export function BookingFormDialog({
   const [guestQuery, setGuestQuery] = useState("");
   const [guestResults, setGuestResults] = useState<Guest[]>([]);
 
-  const [form, setForm] = useState<BookingInput>({
+  // ─── State del form ────────────────────────────────────────────────────────
+  // Campos monetarios y porcentajes los manejamos como STRING en el form (vacío
+  // = "no cargado") para que el placeholder se vea limpio. Al submit los
+  // parseamos con parseMoneyInput. Esto resuelve el problema de "0 que no se
+  // borra" y permite ingreso con `.` o `,` como separador decimal.
+  type FormShape = Omit<
+    BookingInput,
+    | "total_amount"
+    | "paid_amount"
+    | "commission_pct"
+    | "cleaning_fee"
+    | "monthly_rent"
+    | "monthly_expenses"
+    | "security_deposit"
+    | "monthly_inflation_adjustment_pct"
+  > & {
+    total_amount: string;
+    paid_amount: string;
+    commission_pct: string;
+    cleaning_fee: string;
+    monthly_rent: string;
+    monthly_expenses: string;
+    security_deposit: string;
+    monthly_inflation_adjustment_pct: string;
+    /** Cuenta de caja a la que se imputa el `paid_amount` (no se persiste en bookings) */
+    account_id: string | null;
+  };
+
+  const [form, setForm] = useState<FormShape>({
     unit_id: booking?.unit_id ?? defaultUnitId ?? "",
     guest_id: booking?.guest_id ?? null,
     source: booking?.source ?? "directo",
     external_id: booking?.external_id ?? "",
     status: booking?.status ?? "confirmada",
+    mode: booking?.mode ?? "temporario",
     check_in_date: booking?.check_in_date ?? defaultCheckIn ?? "",
     check_in_time: booking?.check_in_time ?? "15:00",
     check_out_date: booking?.check_out_date ?? defaultCheckOut ?? "",
     check_out_time: booking?.check_out_time ?? "11:00",
     guests_count: booking?.guests_count ?? 2,
     currency: booking?.currency ?? "ARS",
-    total_amount: booking?.total_amount ?? 0,
-    paid_amount: booking?.paid_amount ?? 0,
-    commission_pct: booking?.commission_pct ?? null,
-    cleaning_fee: booking?.cleaning_fee ?? null,
+    total_amount: formatMoneyValue(booking?.total_amount),
+    paid_amount: formatMoneyValue(booking?.paid_amount),
+    commission_pct: formatMoneyValue(booking?.commission_pct),
+    cleaning_fee: formatMoneyValue(booking?.cleaning_fee),
+    monthly_rent: formatMoneyValue(booking?.monthly_rent),
+    monthly_expenses: formatMoneyValue(booking?.monthly_expenses),
+    security_deposit: formatMoneyValue(booking?.security_deposit),
+    monthly_inflation_adjustment_pct: formatMoneyValue(booking?.monthly_inflation_adjustment_pct),
+    rent_billing_day: booking?.rent_billing_day ?? null,
     notes: booking?.notes ?? "",
     internal_notes: booking?.internal_notes ?? "",
+    account_id: null,
   });
 
-  function set<K extends keyof BookingInput>(k: K, v: BookingInput[K]) {
+  // Tracking del input "tocado" — si el usuario editó manualmente el total,
+  // dejamos de auto-calcularlo desde base_price.
+  const [totalTouched, setTotalTouched] = useState(isEdit);
+
+  function set<K extends keyof FormShape>(k: K, v: FormShape[K]) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  function setMode(next: BookingMode) {
+    setForm((f) => {
+      // Defaults razonables al pasar a mensual: billing_day = 1
+      if (next === "mensual" && f.mode !== "mensual") {
+        return {
+          ...f,
+          mode: next,
+          rent_billing_day: f.rent_billing_day ?? 1,
+        };
+      }
+      return { ...f, mode: next };
+    });
+  }
+
+  // ─── Auto-cálculo de Total ───────────────────────────────────────────────
+  // Cuando cambia unit/check_in/check_out y el usuario NO tocó el total,
+  // calculamos total = base_price × noches (modo temporario) o monthly_rent ×
+  // (días/30) (modo mensual). Patrón "ajuste de state durante render" para no
+  // violar la regla react-hooks/set-state-in-effect.
+  const autoKey = `${form.unit_id}|${form.check_in_date}|${form.check_out_date}|${form.mode}|${form.monthly_rent}`;
+  const [prevAutoKey, setPrevAutoKey] = useState(autoKey);
+  if (prevAutoKey !== autoKey) {
+    setPrevAutoKey(autoKey);
+    if (!totalTouched) {
+      const u = units.find((x) => x.id === form.unit_id);
+      const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
+      let computed: number | null = null;
+      if (form.mode === "mensual") {
+        const rent = parseMoneyInput(form.monthly_rent);
+        if (rent && nightsCount > 0) computed = Math.round((rent / 30) * nightsCount * 100) / 100;
+      } else if (u?.base_price && nightsCount > 0) {
+        computed = Math.round(Number(u.base_price) * nightsCount * 100) / 100;
+      }
+      if (computed !== null) {
+        setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
+      }
+    }
   }
 
   // Buscar guests al tipear
@@ -126,15 +252,21 @@ export function BookingFormDialog({
     return () => clearTimeout(t);
   }, [guestQuery, guestSearchOpen]);
 
-  // Auto-fill currency + cleaning_fee + commission cuando elige unit
+  // Auto-fill currency + cleaning_fee + commission + mode cuando elige unit
   function onSelectUnit(unitId: string) {
     set("unit_id", unitId);
     const u = units.find((x) => x.id === unitId);
     if (!u) return;
     if (u.base_price_currency && !isEdit) set("currency", u.base_price_currency);
-    if (u.cleaning_fee && !form.cleaning_fee) set("cleaning_fee", u.cleaning_fee);
+    if (u.cleaning_fee && !form.cleaning_fee) {
+      set("cleaning_fee", formatMoneyValue(u.cleaning_fee));
+    }
     if (u.default_commission_pct !== null && u.default_commission_pct !== undefined && !isEdit) {
-      set("commission_pct", u.default_commission_pct);
+      set("commission_pct", formatMoneyValue(u.default_commission_pct));
+    }
+    // Sugerencia de modo si la unidad tiene vocación clara y no estamos editando
+    if (!isEdit && u.default_mode && u.default_mode !== "mixto") {
+      setMode(u.default_mode);
     }
   }
 
@@ -143,21 +275,59 @@ export function BookingFormDialog({
       ? formatNights(form.check_in_date, form.check_out_date)
       : 0;
 
+  const totalNum = parseMoneyInput(form.total_amount) ?? 0;
+  const cleaningNum = parseMoneyInput(form.cleaning_fee) ?? 0;
+  const commissionPctNum = parseMoneyInput(form.commission_pct);
   const commissionAmount =
-    form.commission_pct !== null && form.commission_pct !== undefined
-      ? (Number(form.total_amount) * Number(form.commission_pct)) / 100
-      : 0;
-  const ownerNet = Number(form.total_amount) - commissionAmount - Number(form.cleaning_fee ?? 0);
+    commissionPctNum !== null ? (totalNum * commissionPctNum) / 100 : 0;
+  const ownerNet = totalNum - commissionAmount - cleaningNum;
+
+  // Filtrar cuentas por moneda elegida
+  const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Construir el payload con tipos numéricos
+    const paidAmount = parseMoneyInput(form.paid_amount) ?? 0;
+    const payload: BookingInput & { account_id?: string | null } = {
+      unit_id: form.unit_id,
+      guest_id: form.guest_id,
+      source: form.source,
+      external_id: form.external_id,
+      status: form.status,
+      mode: form.mode,
+      check_in_date: form.check_in_date,
+      check_in_time: form.check_in_time,
+      check_out_date: form.check_out_date,
+      check_out_time: form.check_out_time,
+      guests_count: form.guests_count,
+      currency: form.currency,
+      total_amount: parseMoneyInput(form.total_amount) ?? 0,
+      paid_amount: paidAmount,
+      commission_pct: commissionPctNum,
+      cleaning_fee: parseMoneyInput(form.cleaning_fee),
+      monthly_rent: parseMoneyInput(form.monthly_rent),
+      monthly_expenses: parseMoneyInput(form.monthly_expenses),
+      security_deposit: parseMoneyInput(form.security_deposit),
+      monthly_inflation_adjustment_pct: parseMoneyInput(form.monthly_inflation_adjustment_pct),
+      rent_billing_day: form.rent_billing_day ?? null,
+      notes: form.notes,
+      internal_notes: form.internal_notes,
+      account_id: paidAmount > 0 ? form.account_id : null,
+    };
+    if (paidAmount > 0 && !payload.account_id && accountsForCurrency.length > 0) {
+      toast.error("Falta seleccionar cuenta de cobro", {
+        description: `Elegí en qué cuenta querés registrar el cobro de ${form.currency}`,
+      });
+      return;
+    }
     startTransition(async () => {
       try {
         if (isEdit && booking) {
-          await updateBooking(booking.id, form);
+          await updateBooking(booking.id, payload);
           toast.success("Reserva actualizada");
         } else {
-          await createBooking(form);
+          await createBooking(payload);
           toast.success("Reserva creada");
         }
         setOpen(false);
@@ -183,6 +353,9 @@ export function BookingFormDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
+          {/* Modo de estadía: switch tipo segmented control en top de jerarquía */}
+          <ModeSwitch mode={form.mode} onChange={setMode} disabled={isEdit && booking?.status === "check_out"} />
+
           {/* Unit */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5 sm:col-span-2">
@@ -317,6 +490,103 @@ export function BookingFormDialog({
             </div>
           </div>
 
+          {/* Campos específicos de mensual */}
+          {form.mode === "mensual" && (
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <House size={14} className="text-violet-600 dark:text-violet-400" />
+                <span className="text-xs font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300">
+                  Términos del alquiler mensual
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="monthly_rent">Renta mensual *</Label>
+                  <Input
+                    id="monthly_rent"
+                    type="text"
+                    inputMode="decimal"
+                    required
+                    value={form.monthly_rent}
+                    onChange={(e) => set("monthly_rent", e.target.value)}
+                    placeholder="350000"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="monthly_expenses">Expensas / mes</Label>
+                  <Input
+                    id="monthly_expenses"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.monthly_expenses}
+                    onChange={(e) => set("monthly_expenses", e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="security_deposit">Depósito en garantía</Label>
+                  <Input
+                    id="security_deposit"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.security_deposit}
+                    onChange={(e) => set("security_deposit", e.target.value)}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="rent_billing_day">Día de cobro</Label>
+                  <Input
+                    id="rent_billing_day"
+                    type="number"
+                    min="1"
+                    max="28"
+                    value={form.rent_billing_day ?? ""}
+                    onChange={(e) => set("rent_billing_day", e.target.value === "" ? null : Number(e.target.value))}
+                    placeholder="1"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="monthly_inflation_adjustment_pct">Ajuste por inflación %</Label>
+                  <Input
+                    id="monthly_inflation_adjustment_pct"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.monthly_inflation_adjustment_pct}
+                    onChange={(e) => set("monthly_inflation_adjustment_pct", e.target.value)}
+                    placeholder="Opcional"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Informativo. El ajuste se aplica manualmente al editar la renta.
+                  </p>
+                </div>
+                <div className="space-y-1.5 rounded-md bg-violet-50 dark:bg-violet-950/30 p-3 text-xs">
+                  <span className="text-[10px] uppercase tracking-wider text-violet-700 dark:text-violet-300 font-semibold">
+                    Total estimado del período
+                  </span>
+                  <div className="font-mono text-base font-semibold text-violet-900 dark:text-violet-100">
+                    {(() => {
+                      if (!form.check_in_date || !form.check_out_date) return "—";
+                      const days = nightsBetween(form.check_in_date, form.check_out_date);
+                      const months = days / 30;
+                      const rent = parseMoneyInput(form.monthly_rent) ?? 0;
+                      const exp = parseMoneyInput(form.monthly_expenses) ?? 0;
+                      const total = (rent + exp) * months;
+                      return total > 0 ? total.toLocaleString("es-AR", { maximumFractionDigits: 0 }) : "—";
+                    })()}
+                  </div>
+                  <p className="text-[10px] text-violet-700/80 dark:text-violet-300/80">
+                    {parseMoneyInput(form.monthly_rent) ?? 0 > 0
+                      ? `Renta + expensas × meses ocupados`
+                      : "Cargá la renta para ver el total"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Money */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t pt-4">
             <div className="space-y-1.5">
@@ -332,24 +602,109 @@ export function BookingFormDialog({
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Total</Label>
-              <Input type="number" min="0" step="0.01" value={form.total_amount} onChange={(e) => set("total_amount", Number(e.target.value))} />
+              <Label htmlFor="total_amount">{form.mode === "mensual" ? "Total del período" : "Total"}</Label>
+              <Input
+                id="total_amount"
+                type="text"
+                inputMode="decimal"
+                value={form.total_amount}
+                onChange={(e) => {
+                  setTotalTouched(true);
+                  set("total_amount", e.target.value);
+                }}
+                placeholder={(() => {
+                  // Placeholder dinámico mostrando el total que se calcularía
+                  const u = units.find((x) => x.id === form.unit_id);
+                  if (form.mode === "mensual") {
+                    const rent = parseMoneyInput(form.monthly_rent);
+                    if (rent && nights > 0) {
+                      return formatMoneyValue(Math.round((rent / 30) * nights * 100) / 100);
+                    }
+                  } else if (u?.base_price && nights > 0) {
+                    return formatMoneyValue(Math.round(Number(u.base_price) * nights * 100) / 100);
+                  }
+                  return "0";
+                })()}
+              />
+              {form.mode === "mensual" && (
+                <p className="text-[10px] text-muted-foreground">
+                  Total cobrado del período.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
-              <Label>Cobrado</Label>
-              <Input type="number" min="0" step="0.01" value={form.paid_amount} onChange={(e) => set("paid_amount", Number(e.target.value))} />
+              <Label htmlFor="paid_amount">Cobrado</Label>
+              <Input
+                id="paid_amount"
+                type="text"
+                inputMode="decimal"
+                value={form.paid_amount}
+                onChange={(e) => set("paid_amount", e.target.value)}
+                placeholder="0"
+              />
             </div>
             <div className="space-y-1.5">
-              <Label>Comisión %</Label>
-              <Input type="number" min="0" max="100" step="0.01" value={form.commission_pct ?? ""} onChange={(e) => set("commission_pct", e.target.value === "" ? null : Number(e.target.value))} />
+              <Label htmlFor="commission_pct">Comisión %</Label>
+              <Input
+                id="commission_pct"
+                type="text"
+                inputMode="decimal"
+                value={form.commission_pct}
+                onChange={(e) => set("commission_pct", e.target.value)}
+                placeholder="20"
+              />
             </div>
             <div className="space-y-1.5 col-span-2 sm:col-span-1">
-              <Label>Fee limpieza</Label>
-              <Input type="number" min="0" step="0.01" value={form.cleaning_fee ?? ""} onChange={(e) => set("cleaning_fee", e.target.value === "" ? null : Number(e.target.value))} />
+              <Label htmlFor="cleaning_fee">Fee limpieza</Label>
+              <Input
+                id="cleaning_fee"
+                type="text"
+                inputMode="decimal"
+                value={form.cleaning_fee}
+                onChange={(e) => set("cleaning_fee", e.target.value)}
+                placeholder="0"
+              />
             </div>
           </div>
 
-          {form.total_amount > 0 && (
+          {/* Cuenta de caja para imputar el cobro — sólo si hay paid_amount > 0 */}
+          {(parseMoneyInput(form.paid_amount) ?? 0) > 0 && (
+            <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-1.5">
+              <Label htmlFor="account_id" className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200">
+                <Wallet size={13} /> Cobrar en cuenta *
+              </Label>
+              {accountsForCurrency.length === 0 ? (
+                <p className="text-xs text-amber-800 dark:text-amber-300">
+                  No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
+                </p>
+              ) : (
+                <Select
+                  value={form.account_id ?? undefined}
+                  onValueChange={(v) => set("account_id", v)}
+                >
+                  <SelectTrigger id="account_id">
+                    <SelectValue placeholder={`Elegí cuenta en ${form.currency}…`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accountsForCurrency.map((a) => (
+                      <SelectItem key={a.id} value={a.id}>
+                        {a.name} <span className="text-[10px] text-muted-foreground ml-1">· {a.type}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <p className="text-[10px] text-emerald-800/80 dark:text-emerald-300/80">
+                Se generará un movimiento en caja por {form.currency}{" "}
+                {(parseMoneyInput(form.paid_amount) ?? 0).toLocaleString("es-AR", {
+                  maximumFractionDigits: 2,
+                })}{" "}
+                al guardar.
+              </p>
+            </div>
+          )}
+
+          {totalNum > 0 && (
             <div className="grid grid-cols-3 gap-3 p-3 bg-muted/40 rounded-lg text-xs">
               <div>
                 <div className="text-muted-foreground">Comisión Apart Cba</div>
@@ -357,7 +712,7 @@ export function BookingFormDialog({
               </div>
               <div>
                 <div className="text-muted-foreground">Fee limpieza</div>
-                <div className="font-medium font-mono">{Number(form.cleaning_fee ?? 0).toFixed(2)}</div>
+                <div className="font-medium font-mono">{cleaningNum.toFixed(2)}</div>
               </div>
               <div>
                 <div className="text-muted-foreground">Neto al propietario</div>
@@ -385,5 +740,75 @@ export function BookingFormDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── Subcomponentes (nivel de módulo, NO inline para evitar re-mount) ──────
+interface ModeSwitchProps {
+  mode: BookingMode;
+  onChange: (next: BookingMode) => void;
+  disabled?: boolean;
+}
+
+/**
+ * Segmented control para elegir modo de estadía. Visualmente "premium":
+ * el bloque seleccionado eleva un fondo color con glow y el contenido cambia
+ * de tipografía. Bloquea cambios cuando la reserva está en check_out (post-mortem).
+ */
+function ModeSwitch({ mode, onChange, disabled = false }: ModeSwitchProps) {
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Modo de estadía"
+      className={cn(
+        "grid grid-cols-2 gap-1 rounded-xl border bg-muted/40 p-1",
+        disabled && "opacity-60 pointer-events-none"
+      )}
+    >
+      {(["temporario", "mensual"] as const).map((m) => {
+        const meta = BOOKING_MODE_META[m];
+        const active = mode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(m)}
+            className={cn(
+              "relative flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-all",
+              "ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              active
+                ? cn("bg-background shadow-sm ring-1", meta.ringClass)
+                : "hover:bg-background/60 text-muted-foreground"
+            )}
+          >
+            <div
+              className={cn(
+                "flex size-8 items-center justify-center rounded-md text-sm font-bold transition-colors",
+                active ? cn(meta.badgeBgClass, meta.textClass) : "bg-muted text-muted-foreground"
+              )}
+            >
+              {m === "temporario" ? <CalendarRange size={15} /> : <House size={15} />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className={cn("text-sm font-semibold", active && meta.textClass)}>
+                {meta.label}
+              </div>
+              <div className="text-[10px] leading-tight text-muted-foreground line-clamp-2">
+                {meta.description}
+              </div>
+            </div>
+            {active && (
+              <span
+                aria-hidden
+                className="absolute right-2 top-2 size-1.5 rounded-full"
+                style={{ backgroundColor: meta.color }}
+              />
+            )}
+          </button>
+        );
+      })}
+    </div>
   );
 }

@@ -13,24 +13,44 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { createAccount, type AccountInput } from "@/lib/actions/cash";
+import { createAccount, updateAccount, type AccountInput } from "@/lib/actions/cash";
+import type { CashAccount } from "@/lib/types/database";
 
 const COLORS = ["#0F766E", "#3B82F6", "#A855F7", "#EC4899", "#F59E0B", "#10B981", "#EF4444", "#64748B"];
 
-export function AccountFormDialog({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
+interface AccountFormDialogProps {
+  children?: React.ReactNode;
+  account?: CashAccount;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}
+
+export function AccountFormDialog({
+  children,
+  account,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+}: AccountFormDialogProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (o: boolean) => {
+    if (!isControlled) setInternalOpen(o);
+    controlledOnOpenChange?.(o);
+  };
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
+  const isEdit = !!account;
   const [form, setForm] = useState<AccountInput>({
-    name: "",
-    type: "efectivo",
-    currency: "ARS",
-    opening_balance: 0,
-    account_number: "",
-    bank_name: "",
-    notes: "",
-    color: "#0F766E",
-    icon: "wallet",
+    name: account?.name ?? "",
+    type: account?.type ?? "efectivo",
+    currency: account?.currency ?? "ARS",
+    opening_balance: account?.opening_balance ?? 0,
+    account_number: account?.account_number ?? "",
+    bank_name: account?.bank_name ?? "",
+    notes: account?.notes ?? "",
+    color: account?.color ?? "#0F766E",
+    icon: account?.icon ?? "wallet",
   });
 
   function set<K extends keyof AccountInput>(k: K, v: AccountInput[K]) {
@@ -41,8 +61,13 @@ export function AccountFormDialog({ children }: { children: React.ReactNode }) {
     e.preventDefault();
     startTransition(async () => {
       try {
-        await createAccount(form);
-        toast.success("Cuenta creada");
+        if (isEdit && account) {
+          await updateAccount(account.id, form);
+          toast.success("Cuenta actualizada");
+        } else {
+          await createAccount(form);
+          toast.success("Cuenta creada");
+        }
         setOpen(false);
         router.refresh();
       } catch (e) {
@@ -53,9 +78,9 @@ export function AccountFormDialog({ children }: { children: React.ReactNode }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{children}</DialogTrigger>
+      {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Nueva cuenta</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{isEdit ? "Editar cuenta" : "Nueva cuenta"}</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label>Nombre *</Label>
@@ -128,7 +153,7 @@ export function AccountFormDialog({ children }: { children: React.ReactNode }) {
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isPending}>
               {isPending && <Loader2 className="animate-spin" />}
-              Crear
+              {isEdit ? "Guardar" : "Crear"}
             </Button>
           </DialogFooter>
         </form>

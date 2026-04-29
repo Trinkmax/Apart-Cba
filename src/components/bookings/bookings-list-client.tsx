@@ -28,15 +28,17 @@ interface Props {
 }
 
 export function BookingsListClient({ bookings: initialBookings, organizationId }: Props) {
+  // Sync con server data cuando llega nuevo prop (router.refresh tras crear/editar).
+  // Patrón "ajuste de state durante render" — reemplaza al useEffect+setState.
+  const [prevInitial, setPrevInitial] = useState(initialBookings);
   const [bookings, setBookings] = useState(initialBookings);
+  if (prevInitial !== initialBookings) {
+    setPrevInitial(initialBookings);
+    setBookings(initialBookings);
+  }
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<BookingStatus | "all">("all");
   const [realtimeConnected, setRealtimeConnected] = useState(false);
-
-  // Sync con server data cuando llega nuevo prop (router.refresh tras crear/editar).
-  useEffect(() => {
-    setBookings(initialBookings);
-  }, [initialBookings]);
 
   // Realtime — refresca la lista cuando otros usuarios crean/editan reservas.
   useEffect(() => {

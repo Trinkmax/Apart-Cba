@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Plus, Building2, Users, Globe, Calendar } from "lucide-react";
 import { listAllOrganizations } from "@/lib/actions/superadmin";
 import { Button } from "@/components/ui/button";

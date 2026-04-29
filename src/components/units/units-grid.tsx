@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useTransition, useEffect } from "react";
+import { useState, useMemo, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -65,15 +65,18 @@ export function UnitsGrid({
   const router = useRouter();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<UnitStatus | "all">("all");
+  // Patrón "ajuste de state durante render": cuando llega un prop nuevo desde
+  // el server, descartamos el state local de drag para sincronizarnos. Esto
+  // reemplaza al useEffect(setState) (ver react.dev/learn/you-might-not-need-an-effect).
+  const [previousUnits, setPreviousUnits] = useState(units);
   const [orderedUnits, setOrderedUnits] = useState<UnitWithRelations[]>(units);
+  if (previousUnits !== units) {
+    setPreviousUnits(units);
+    setOrderedUnits(units);
+  }
   const [pendingOrder, setPendingOrder] = useState<UnitWithRelations[] | null>(null);
   const [movedUnit, setMovedUnit] = useState<UnitWithRelations | null>(null);
   const [isPending, startTransition] = useTransition();
-
-  // Mantener el state local sincronizado cuando cambian las units desde el server
-  useEffect(() => {
-    setOrderedUnits(units);
-  }, [units]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })

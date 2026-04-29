@@ -79,13 +79,26 @@ export function GuestProfileDialog({ guest, children }: GuestProfileDialogProps)
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
-  useEffect(() => {
+  // Trackeo "previous value": al cambiar `open` o `guest.id` reseteamos el state
+  // local durante render — evita los setState dentro de useEffect (regla
+  // react-hooks/set-state-in-effect).
+  const fetchKey = open ? guest.id : "__closed";
+  const [prevFetchKey, setPrevFetchKey] = useState(fetchKey);
+  if (prevFetchKey !== fetchKey) {
+    setPrevFetchKey(fetchKey);
     if (!open) {
       setEditing(false);
-      return;
+    } else {
+      setLoading(true);
+      setProfile(null);
     }
+  }
+
+  // El effect ahora sólo dispara la petición — no toca state sincrónicamente,
+  // sólo cuando llega la respuesta async (lo que es válido bajo la regla).
+  useEffect(() => {
+    if (!open) return;
     let cancelled = false;
-    setLoading(true);
     getGuestProfile(guest.id)
       .then((data) => {
         if (!cancelled) setProfile(data);
@@ -429,11 +442,15 @@ function DatosTab({
   onCancel: () => void;
   onSave: (input: GuestInput) => void;
 }) {
-  const [form, setForm] = useState<GuestInput>(toFormState(guest));
-
-  useEffect(() => {
+  // Re-inicialización del form ante cambios de guest o ante entrar/salir de
+  // edición — patrón "ajuste de state durante render" sin useEffect+setState.
+  const [prevKey, setPrevKey] = useState(`${guest.id}|${editing}`);
+  const [form, setForm] = useState<GuestInput>(() => toFormState(guest));
+  const nextKey = `${guest.id}|${editing}`;
+  if (prevKey !== nextKey) {
+    setPrevKey(nextKey);
     setForm(toFormState(guest));
-  }, [guest, editing]);
+  }
 
   if (!editing) {
     return (

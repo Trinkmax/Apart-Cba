@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { createElement, useMemo, useState, useTransition } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -8,12 +8,9 @@ import {
   Bell,
   Boxes,
   Check,
-  ChevronDown,
-  Filter,
   History,
   Layers,
   Loader2,
-  Minus,
   Package,
   Pencil,
   Plus,
@@ -21,7 +18,6 @@ import {
   Sparkles,
   TrendingDown,
   TrendingUp,
-  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -39,7 +35,6 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -81,6 +76,9 @@ interface Props {
   movements: MovementWithRefs[];
 }
 
+// Renderiza el icono via React.createElement para evitar el anti-pattern
+// "asignar un componente dinámico a una variable durante render" que dispara
+// la regla react-hooks/static-components.
 function AmenityIcon({
   name,
   className,
@@ -90,8 +88,11 @@ function AmenityIcon({
   className?: string;
   size?: number;
 }) {
-  const Icon = resolveAmenityIcon(name);
-  return <Icon size={size} className={className} aria-hidden />;
+  return createElement(resolveAmenityIcon(name), {
+    size,
+    className,
+    "aria-hidden": true,
+  });
 }
 
 export function InventoryWorkspace({
@@ -303,7 +304,7 @@ function StockMatrix({
         <Package className="size-10 mx-auto text-muted-foreground/40 mb-3" />
         <p className="text-sm font-medium">No hay items consumibles</p>
         <p className="text-xs text-muted-foreground mt-1">
-          Agregá items al catálogo y marcalos como "Consumible" para llevar stock por unidad.
+          Agregá items al catálogo y marcalos como &ldquo;Consumible&rdquo; para llevar stock por unidad.
         </p>
       </div>
     );

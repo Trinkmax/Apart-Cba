@@ -61,15 +61,19 @@ export async function generateSettlement(
   const periodStart = new Date(year, month - 1, 1).toISOString().slice(0, 10);
   const periodEnd = new Date(year, month, 0).toISOString().slice(0, 10);
 
-  // Bookings que cierran en el período (check_out_date dentro del mes)
+  // Bookings relevantes al período:
+  //   • Temporarias: las que CIERRAN en el mes (check_out_date dentro del mes).
+  //   • Mensuales: las que SE SOLAPAN con el mes (start <= periodEnd && end >= periodStart),
+  //     porque se prorratean por días ocupados del mes.
+  // Hacemos UN solo query (overlap) y luego filtramos por mode al iterar.
   const { data: bookings } = await admin
     .from("bookings")
     .select("*")
     .in("unit_id", unitIds)
     .eq("currency", currency)
     .in("status", ["check_out", "check_in", "confirmada"])
-    .gte("check_out_date", periodStart)
-    .lte("check_out_date", periodEnd);
+    .lte("check_in_date", periodEnd)
+    .gte("check_out_date", periodStart);
 
   // Tickets cargables al owner aún no liquidados
   const { data: tickets } = await admin
@@ -87,12 +91,74 @@ export async function generateSettlement(
   let totalCommission = 0;
   let totalDeductions = 0;
 
+  const daysInMonth = new Date(year, month, 0).getDate();
+
   for (const b of bookings ?? []) {
     const uo = unitOwners.find((x) => x.unit_id === b.unit_id);
     const ownerShare = Number(uo?.ownership_pct ?? 100) / 100;
-    const grossOwner = Number(b.total_amount) * ownerShare;
     const commissionPct = uo?.commission_pct_override ??
       (uo?.unit as unknown as { default_commission_pct?: number })?.default_commission_pct ?? 20;
+    const unitCode = (uo as unknown as { unit?: { code?: string } })?.unit?.code ?? "—";
+    const bookingMode = (b.mode as "temporario" | "mensual" | undefined) ?? "temporario";
+
+    if (bookingMode === "mensual") {
+      // ─── Mensual: prorratear renta + expensas por días ocupados del mes ───
+      // Solo liquidamos si esta booking se solapa con el período.
+      const overlapStart = b.check_in_date > periodStart ? b.check_in_date : periodStart;
+      const overlapEnd = b.check_out_date < periodEnd ? b.check_out_date : periodEnd;
+      // Días ocupados (date diff inclusivo si el inquilino llega antes del fin del mes)
+      const startMs = new Date(overlapStart + "T12:00:00").getTime();
+      const endMs = new Date(overlapEnd + "T12:00:00").getTime();
+      const occupiedDays = Math.max(0, Math.round((endMs - startMs) / 86_400_000));
+      if (occupiedDays === 0) continue;
+
+      const monthlyRent = Number(b.monthly_rent ?? 0);
+      const monthlyExpenses = Number(b.monthly_expenses ?? 0);
+      if (monthlyRent <= 0) continue;
+
+      const proratedRent = (monthlyRent / daysInMonth) * occupiedDays * ownerShare;
+      const proratedExpenses = (monthlyExpenses / daysInMonth) * occupiedDays * ownerShare;
+      const commission = proratedRent * (Number(commissionPct) / 100);
+
+      gross += proratedRent;
+      totalCommission += commission;
+
+      lines.push({
+        line_type: "monthly_rent_fraction",
+        ref_type: "booking",
+        ref_id: b.id,
+        unit_id: b.unit_id,
+        description: `Renta mensual ${overlapStart} → ${overlapEnd} (${occupiedDays}/${daysInMonth} días) — ${unitCode}`,
+        amount: proratedRent,
+        sign: "+",
+      });
+      lines.push({
+        line_type: "commission",
+        ref_type: "booking",
+        ref_id: b.id,
+        unit_id: b.unit_id,
+        description: `Comisión Apart Cba ${commissionPct}% (mensual prorrateada)`,
+        amount: commission,
+        sign: "-",
+      });
+      if (proratedExpenses > 0) {
+        lines.push({
+          line_type: "expenses_fraction",
+          ref_type: "booking",
+          ref_id: b.id,
+          unit_id: b.unit_id,
+          description: `Expensas prorrateadas (${occupiedDays}/${daysInMonth} días)`,
+          amount: proratedExpenses,
+          sign: "-",
+        });
+        totalDeductions += proratedExpenses;
+      }
+      continue;
+    }
+
+    // ─── Temporario: liquida en el mes del check_out (como antes) ───
+    if (b.check_out_date < periodStart || b.check_out_date > periodEnd) continue;
+    const grossOwner = Number(b.total_amount) * ownerShare;
     const commission = grossOwner * (Number(commissionPct) / 100);
 
     gross += grossOwner;
@@ -103,7 +169,7 @@ export async function generateSettlement(
       ref_type: "booking",
       ref_id: b.id,
       unit_id: b.unit_id,
-      description: `Reserva ${b.check_in_date} → ${b.check_out_date} (${(uo as unknown as { unit?: { code?: string } })?.unit?.code ?? "—"})`,
+      description: `Reserva ${b.check_in_date} → ${b.check_out_date} (${unitCode})`,
       amount: grossOwner,
       sign: "+",
     });

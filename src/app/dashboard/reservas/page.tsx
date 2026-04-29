@@ -1,15 +1,17 @@
 import { Plus } from "lucide-react";
 import { listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
+import { listAccounts } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingsListClient } from "@/components/bookings/bookings-list-client";
 
 export default async function ReservasPage() {
-  const [bookings, units, { organization }] = await Promise.all([
+  const [bookings, units, accounts, { organization }] = await Promise.all([
     listBookings(),
     listUnitsEnriched(),
+    listAccounts(),
     getCurrentOrg(),
   ]);
 
@@ -23,7 +25,7 @@ export default async function ReservasPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <BookingFormDialog units={units}>
+          <BookingFormDialog units={units} accounts={accounts}>
             <Button className="gap-2"><Plus size={16} /> Nueva reserva</Button>
           </BookingFormDialog>
         </div>

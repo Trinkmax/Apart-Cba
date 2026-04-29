@@ -6,6 +6,8 @@ import type {
   CleaningStatus,
   UserRole,
   BookingSource,
+  BookingMode,
+  UnitDefaultMode,
 } from "./types/database";
 
 // ─── Estados de unidad (Kanban) ─────────────────────────────────────────────
@@ -79,6 +81,57 @@ export const BOOKING_STATUS_META: Record<BookingStatus, { label: string; color: 
   check_out: { label: "Check-out", color: "#06b6d4" },
   cancelada: { label: "Cancelada", color: "#ef4444" },
   no_show: { label: "No-show", color: "#7c3aed" },
+};
+
+// Modo de estadía (temporario vs mensual). El acento violeta en mensual está
+// pensado para coexistir con la paleta de status sin generar choque cromático.
+export const BOOKING_MODE_META: Record<
+  BookingMode,
+  { label: string; shortLabel: string; description: string; color: string; bgClass: string; textClass: string; ringClass: string; badgeBgClass: string; iconLetter: string }
+> = {
+  temporario: {
+    label: "Temporario",
+    shortLabel: "Temp",
+    description: "Estadía corta tipo Airbnb (tarifa por noche).",
+    color: "#0ea5e9",
+    bgClass: "bg-sky-500/10",
+    textClass: "text-sky-700 dark:text-sky-300",
+    ringClass: "ring-sky-500/40",
+    badgeBgClass: "bg-sky-500/15",
+    iconLetter: "T",
+  },
+  mensual: {
+    label: "Mensual",
+    shortLabel: "Mens",
+    description: "Inquilino largo con renta mensual + expensas.",
+    color: "#7c3aed",
+    bgClass: "bg-violet-500/10",
+    textClass: "text-violet-700 dark:text-violet-300",
+    ringClass: "ring-violet-500/40",
+    badgeBgClass: "bg-violet-500/15",
+    iconLetter: "M",
+  },
+};
+
+export const UNIT_DEFAULT_MODE_META: Record<
+  UnitDefaultMode,
+  { label: string; description: string; color: string }
+> = {
+  temporario: {
+    label: "Temporario",
+    description: "La unidad se opera como alquiler temporario (Airbnb-style).",
+    color: "#0ea5e9",
+  },
+  mensual: {
+    label: "Mensual",
+    description: "La unidad se alquila mensualmente a inquilinos largos.",
+    color: "#7c3aed",
+  },
+  mixto: {
+    label: "Mixto",
+    description: "La unidad acepta ambos modos según la temporada.",
+    color: "#94a3b8",
+  },
 };
 
 export const BOOKING_SOURCE_META: Record<BookingSource, { label: string; icon?: string; color: string }> = {

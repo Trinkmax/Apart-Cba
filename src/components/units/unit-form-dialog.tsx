@@ -26,8 +26,8 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createUnit, updateUnit, type UnitInput } from "@/lib/actions/units";
-import { UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
-import type { Unit, Owner } from "@/lib/types/database";
+import { UNIT_DEFAULT_MODE_META, UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
+import type { Owner, Unit, UnitDefaultMode } from "@/lib/types/database";
 
 interface UnitFormDialogProps {
   children?: React.ReactNode;
@@ -72,6 +72,7 @@ export function UnitFormDialog({
     base_price_currency: unit?.base_price_currency ?? "ARS",
     cleaning_fee: unit?.cleaning_fee ?? null,
     default_commission_pct: unit?.default_commission_pct ?? 20,
+    default_mode: (unit?.default_mode as UnitDefaultMode | undefined) ?? "temporario",
     status: unit?.status ?? "disponible",
     description: unit?.description ?? "",
     notes: unit?.notes ?? "",
@@ -196,21 +197,45 @@ export function UnitFormDialog({
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="status">Estado inicial</Label>
-                <Select value={form.status} onValueChange={(v) => set("status", v as UnitInput["status"])}>
-                  <SelectTrigger id="status"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {UNIT_STATUSES.map((s) => (
-                      <SelectItem key={s} value={s}>
-                        <span className="flex items-center gap-2">
-                          <span className="status-dot" style={{ backgroundColor: UNIT_STATUS_META[s].color }} />
-                          {UNIT_STATUS_META[s].label}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="status">Estado inicial</Label>
+                  <Select value={form.status} onValueChange={(v) => set("status", v as UnitInput["status"])}>
+                    <SelectTrigger id="status"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {UNIT_STATUSES.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          <span className="flex items-center gap-2">
+                            <span className="status-dot" style={{ backgroundColor: UNIT_STATUS_META[s].color }} />
+                            {UNIT_STATUS_META[s].label}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="default_mode">Vocación</Label>
+                  <Select
+                    value={form.default_mode}
+                    onValueChange={(v) => set("default_mode", v as UnitInput["default_mode"])}
+                  >
+                    <SelectTrigger id="default_mode"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {(["temporario", "mensual", "mixto"] as const).map((m) => (
+                        <SelectItem key={m} value={m}>
+                          <span className="flex items-center gap-2">
+                            <span className="status-dot" style={{ backgroundColor: UNIT_DEFAULT_MODE_META[m].color }} />
+                            {UNIT_DEFAULT_MODE_META[m].label}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground leading-snug">
+                    {UNIT_DEFAULT_MODE_META[form.default_mode].description}
+                  </p>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -314,34 +339,50 @@ export function UnitFormDialog({
                   <Label htmlFor="base_price">Precio por noche</Label>
                   <Input
                     id="base_price"
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
+                    inputMode="decimal"
                     value={form.base_price ?? ""}
-                    onChange={(e) => set("base_price", e.target.value === "" ? null : Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "") set("base_price", null);
+                      else {
+                        const n = Number(v.replace(",", "."));
+                        if (Number.isFinite(n)) set("base_price", n);
+                      }
+                    }}
+                    placeholder="0"
                   />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="cleaning_fee">Fee limpieza</Label>
                   <Input
                     id="cleaning_fee"
-                    type="number"
-                    min="0"
-                    step="0.01"
+                    type="text"
+                    inputMode="decimal"
                     value={form.cleaning_fee ?? ""}
-                    onChange={(e) => set("cleaning_fee", e.target.value === "" ? null : Number(e.target.value))}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === "") set("cleaning_fee", null);
+                      else {
+                        const n = Number(v.replace(",", "."));
+                        if (Number.isFinite(n)) set("cleaning_fee", n);
+                      }
+                    }}
+                    placeholder="0"
                   />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="default_commission_pct">Comisión Apart Cba (%)</Label>
                   <Input
                     id="default_commission_pct"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
+                    type="text"
+                    inputMode="decimal"
                     value={form.default_commission_pct}
-                    onChange={(e) => set("default_commission_pct", Number(e.target.value))}
+                    onChange={(e) => {
+                      const n = Number(e.target.value.replace(",", "."));
+                      if (Number.isFinite(n)) set("default_commission_pct", n);
+                    }}
+                    placeholder="20"
                   />
                 </div>
               </div>

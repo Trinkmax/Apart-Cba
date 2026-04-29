@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, useTransition } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -21,7 +21,15 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { toast } from "sonner";
-import { Building2, Plus, Wifi } from "lucide-react";
+import { ArrowRight, Building2, CheckCircle2, Loader2, Plus, Wifi } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
@@ -39,10 +47,23 @@ interface KanbanBoardProps {
   organizationId: string;
 }
 
+interface PendingStatusChange {
+  unitId: string;
+  unitCode: string;
+  unitName: string;
+  fromStatus: UnitStatus;
+  toStatus: UnitStatus;
+  reorderedIds: string[];
+  /** Snapshot del array completo para rollback si cancela */
+  snapshotUnits: UnitWithRelations[];
+}
+
 export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoardProps) {
   const [units, setUnits] = useState(initialUnits);
   const [activeUnit, setActiveUnit] = useState<UnitWithRelations | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [pendingChange, setPendingChange] = useState<PendingStatusChange | null>(null);
+  const [isApplying, startApply] = useTransition();
   const draggingIdRef = useRef<string | null>(null);
 
   // Suscripción Realtime — refresca cuando otros usuarios cambian unidades
@@ -144,7 +165,13 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
 
     const overUnit = !overIsColumn ? units.find((u) => u.id === overId) : null;
 
-    // Reorder dentro de columna
+    // Snapshot ANTES de aplicar el ghost (para rollback si cancela)
+    const snapshot = units;
+    const movedUnit = units.find((u) => u.id === activeId);
+    const previousStatus = movedUnit?.status;
+    if (!movedUnit || !previousStatus) return;
+
+    // Reorder dentro de columna (cliente: aplicamos como ghost)
     const itemsInTarget = units.filter((u) => u.status === newStatus);
     const oldIdx = itemsInTarget.findIndex((u) => u.id === activeId);
     let newIdx = overIsColumn || !overUnit ? itemsInTarget.length - 1 : itemsInTarget.findIndex((u) => u.id === overId);
@@ -154,30 +181,58 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
 
     setUnits((prev) => {
       const others = prev.filter((u) => u.status !== newStatus);
-      return [...others, ...reordered.map((u, i) => ({ ...u, position: i }))];
+      return [...others, ...reordered.map((u, i) => ({ ...u, position: i, status: newStatus }))];
     });
 
-    const movedUnit = units.find((u) => u.id === activeId);
-    const previousStatus = movedUnit?.status;
-
-    try {
-      // Si cambió de columna, hacer el changeStatus (incluye reorder al final)
-      if (previousStatus !== newStatus) {
-        await changeUnitStatus(activeId, newStatus, "Movido en Kanban");
-        toast.success(`${movedUnit?.code} → ${UNIT_STATUS_META[newStatus].label}`, {
-          description: "Estado actualizado",
-        });
+    // Si SOLO se reordenó dentro de la misma columna → commit directo (es rutina y reversible)
+    if (previousStatus === newStatus) {
+      try {
+        await reorderUnits(newStatus, reordered.map((u) => u.id));
+      } catch (err) {
+        toast.error("No se pudo reordenar", { description: (err as Error).message });
+        setUnits(snapshot);
       }
-      // Y persistir el orden
-      await reorderUnits(
-        newStatus,
-        reordered.map((u) => u.id)
-      );
-    } catch (err) {
-      toast.error("No se pudo mover", { description: (err as Error).message });
-      // Revertir
-      setUnits(initialUnits);
+      return;
     }
+
+    // Cambio de columna → confirmar antes de persistir.
+    setPendingChange({
+      unitId: activeId,
+      unitCode: movedUnit.code,
+      unitName: movedUnit.name,
+      fromStatus: previousStatus,
+      toStatus: newStatus,
+      reorderedIds: reordered.map((u) => u.id),
+      snapshotUnits: snapshot,
+    });
+  }
+
+  function confirmStatusChange() {
+    if (!pendingChange) return;
+    const change = pendingChange;
+    startApply(async () => {
+      try {
+        await changeUnitStatus(change.unitId, change.toStatus, "Movido en Kanban");
+        await reorderUnits(change.toStatus, change.reorderedIds);
+        toast.success(
+          `${change.unitCode} → ${UNIT_STATUS_META[change.toStatus].label}`,
+          { description: "Estado actualizado", icon: <CheckCircle2 size={14} /> }
+        );
+        setPendingChange(null);
+      } catch (err) {
+        toast.error("No se pudo cambiar el estado", {
+          description: (err as Error).message,
+        });
+        setUnits(change.snapshotUnits);
+        setPendingChange(null);
+      }
+    });
+  }
+
+  function cancelStatusChange() {
+    if (!pendingChange) return;
+    setUnits(pendingChange.snapshotUnits);
+    setPendingChange(null);
   }
 
   return (
@@ -237,6 +292,91 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
         </DndContext>
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
+
+      {/* Confirmación obligatoria al cambiar de columna */}
+      <Dialog
+        open={!!pendingChange}
+        onOpenChange={(o) => {
+          if (!o && !isApplying) cancelStatusChange();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          {pendingChange && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  Cambiar estado de unidad
+                </DialogTitle>
+                <DialogDescription>
+                  {pendingChange.unitCode} · {pendingChange.unitName}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="rounded-lg border bg-card p-4 flex items-center justify-center gap-3 my-2">
+                <StatusPill status={pendingChange.fromStatus} />
+                <ArrowRight size={18} className="text-muted-foreground" />
+                <StatusPill status={pendingChange.toStatus} highlight />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Confirmá para aplicar el cambio. Este movimiento queda registrado en el historial de la unidad.
+              </p>
+              <DialogFooter className="gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={cancelStatusChange}
+                  disabled={isApplying}
+                  autoFocus
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="button"
+                  onClick={confirmStatusChange}
+                  disabled={isApplying}
+                >
+                  {isApplying ? (
+                    <Loader2 className="animate-spin" size={14} />
+                  ) : (
+                    <CheckCircle2 size={14} />
+                  )}
+                  Confirmar y mover
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function StatusPill({
+  status,
+  highlight = false,
+}: {
+  status: UnitStatus;
+  highlight?: boolean;
+}) {
+  const meta = UNIT_STATUS_META[status];
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 px-3 py-1.5 rounded-full ring-1 transition-all",
+        highlight
+          ? "ring-2 shadow-sm scale-105 font-semibold"
+          : "ring-border/60 font-normal text-muted-foreground"
+      )}
+      style={{
+        backgroundColor: highlight ? meta.color + "20" : undefined,
+        color: highlight ? meta.color : undefined,
+        borderColor: highlight ? meta.color + "60" : undefined,
+      }}
+    >
+      <span
+        className="size-2 rounded-full shrink-0"
+        style={{ backgroundColor: meta.color }}
+      />
+      <span className="text-sm">{meta.label}</span>
     </div>
   );
 }
