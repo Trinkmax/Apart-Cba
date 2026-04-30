@@ -188,6 +188,11 @@ export function BookingFormDialog({
     monthly_inflation_adjustment_pct: string;
     /** Cuenta de caja a la que se imputa el `paid_amount` (no se persiste en bookings) */
     account_id: string | null;
+    /**
+     * En modo edición: importe a SUMAR al `paid_amount` actual (no lo
+     * sobrescribe). En modo creación se ignora — usá `paid_amount` directo.
+     */
+    add_payment: string;
   };
 
   const [form, setForm] = useState<FormShape>({
@@ -215,7 +220,12 @@ export function BookingFormDialog({
     notes: booking?.notes ?? "",
     internal_notes: booking?.internal_notes ?? "",
     account_id: null,
+    add_payment: "",
   });
+
+  // Importe ya cobrado al abrir el form (snapshot — no muta cuando el usuario
+  // tipea "Agregar pago"). Sólo aplica en modo edición.
+  const previousPaid = Number(booking?.paid_amount ?? 0);
 
   // Tracking del input "tocado" — si el usuario editó manualmente el total,
   // dejamos de auto-calcularlo desde base_price.
@@ -331,8 +341,15 @@ export function BookingFormDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    // Construir el payload con tipos numéricos
-    const paidAmount = parseMoneyInput(form.paid_amount) ?? 0;
+    // En edición, el delta a cobrar viene de "Agregar pago" y se SUMA al
+    // paid_amount existente. En creación se usa el paid_amount tipeado.
+    const addPayment = isEdit ? parseMoneyInput(form.add_payment) ?? 0 : 0;
+    const paidAmount = isEdit
+      ? previousPaid + addPayment
+      : parseMoneyInput(form.paid_amount) ?? 0;
+    // El "delta" (lo que va a generar movimiento de caja) es lo nuevo: en
+    // edición, sólo el `add_payment`; en creación, el `paid_amount` inicial.
+    const cashDelta = isEdit ? addPayment : paidAmount;
     const payload: BookingInput & { account_id?: string | null } = {
       unit_id: form.unit_id,
       guest_id: form.guest_id,
@@ -357,9 +374,9 @@ export function BookingFormDialog({
       rent_billing_day: form.rent_billing_day ?? null,
       notes: form.notes,
       internal_notes: form.internal_notes,
-      account_id: paidAmount > 0 ? form.account_id : null,
+      account_id: cashDelta > 0 ? form.account_id : null,
     };
-    if (paidAmount > 0 && !payload.account_id && accountsForCurrency.length > 0) {
+    if (cashDelta > 0 && !payload.account_id && accountsForCurrency.length > 0) {
       toast.error("Falta seleccionar cuenta de cobro", {
         description: `Elegí en qué cuenta querés registrar el cobro de ${form.currency}`,
       });
@@ -749,10 +766,18 @@ export function BookingFormDialog({
                 id="paid_amount"
                 type="text"
                 inputMode="decimal"
-                value={form.paid_amount}
+                value={isEdit ? formatMoneyValue(previousPaid) : form.paid_amount}
                 onChange={(e) => set("paid_amount", e.target.value)}
                 placeholder="0"
+                readOnly={isEdit}
+                disabled={isEdit}
+                className={isEdit ? "bg-muted/40 cursor-not-allowed" : undefined}
               />
+              {isEdit && (
+                <p className="text-[10px] text-muted-foreground">
+                  Total ya cobrado. Usá &quot;Agregar pago&quot; abajo para sumar más.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="commission_pct">Comisión %</Label>
@@ -778,8 +803,99 @@ export function BookingFormDialog({
             </div>
           </div>
 
-          {/* Cuenta de caja para imputar el cobro — sólo si hay paid_amount > 0 */}
-          {(parseMoneyInput(form.paid_amount) ?? 0) > 0 && (
+          {/* Agregar pago (sólo edición): suma al paid_amount existente */}
+          {isEdit && (() => {
+            const totalNumLocal = parseMoneyInput(form.total_amount) ?? 0;
+            const pendingBefore = Math.max(0, totalNumLocal - previousPaid);
+            const addNum = parseMoneyInput(form.add_payment) ?? 0;
+            const pendingAfter = Math.max(0, totalNumLocal - previousPaid - addNum);
+            return (
+              <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="add_payment" className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200">
+                    <Wallet size={13} /> Agregar pago
+                  </Label>
+                  <div className="text-[10px] text-emerald-900/80 dark:text-emerald-200/80 tabular-nums">
+                    Saldo pendiente:{" "}
+                    <span className="font-semibold">
+                      {form.currency}{" "}
+                      {pendingBefore.toLocaleString("es-AR", { maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[1fr_auto] gap-2">
+                  <Input
+                    id="add_payment"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.add_payment}
+                    onChange={(e) => set("add_payment", e.target.value)}
+                    placeholder="0"
+                  />
+                  {pendingBefore > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs"
+                      onClick={() => set("add_payment", formatMoneyValue(pendingBefore))}
+                    >
+                      Saldar todo
+                    </Button>
+                  )}
+                </div>
+                {addNum > 0 && (
+                  <>
+                    {accountsForCurrency.length === 0 ? (
+                      <p className="text-xs text-amber-800 dark:text-amber-300">
+                        No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        <Label htmlFor="account_id" className="text-[11px] text-emerald-900 dark:text-emerald-200">
+                          Cobrar en cuenta *
+                        </Label>
+                        <Select
+                          value={form.account_id ?? undefined}
+                          onValueChange={(v) => set("account_id", v)}
+                        >
+                          <SelectTrigger id="account_id">
+                            <SelectValue placeholder={`Elegí cuenta en ${form.currency}…`} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {accountsForCurrency.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>
+                                {a.name} <span className="text-[10px] text-muted-foreground ml-1">· {a.type}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between text-[10px] text-emerald-800/80 dark:text-emerald-300/80 pt-1 border-t border-emerald-300/40 dark:border-emerald-800/40">
+                      <span>
+                        Cobrado tras pago:{" "}
+                        <span className="font-semibold tabular-nums">
+                          {form.currency}{" "}
+                          {(previousPaid + addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}
+                        </span>
+                      </span>
+                      <span>
+                        Saldo restante:{" "}
+                        <span className="font-semibold tabular-nums">
+                          {form.currency}{" "}
+                          {pendingAfter.toLocaleString("es-AR", { maximumFractionDigits: 2 })}
+                        </span>
+                      </span>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Cuenta de caja al CREAR — sólo si hay paid_amount > 0 */}
+          {!isEdit && (parseMoneyInput(form.paid_amount) ?? 0) > 0 && (
             <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-1.5">
               <Label htmlFor="account_id" className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200">
                 <Wallet size={13} /> Cobrar en cuenta *
