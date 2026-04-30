@@ -472,6 +472,64 @@ export async function updateBooking(
   return data as Booking;
 }
 
+/**
+ * Registra un pago adicional sobre una reserva existente. Suma `amount` al
+ * `paid_amount` actual y crea un cash_movement por ese delta. Usado desde el
+ * popover de la grilla PMS para cobrar saldos pendientes sin re-editar toda
+ * la reserva.
+ */
+export async function addBookingPayment(
+  bookingId: string,
+  amount: number,
+  accountId: string
+): Promise<Booking> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("El importe del pago debe ser mayor a 0");
+  }
+  if (!accountId) {
+    throw new Error("Tenés que elegir una cuenta de caja");
+  }
+  const admin = createAdminClient();
+  const { data: current, error: readErr } = await admin
+    .from("bookings")
+    .select("id, paid_amount, total_amount, currency, unit_id")
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (readErr) throw new Error(readErr.message);
+  if (!current) throw new Error("Reserva no encontrada");
+
+  const previousPaid = Number(current.paid_amount ?? 0);
+  const newPaid = Number((previousPaid + Number(amount)).toFixed(2));
+
+  const { data, error } = await admin
+    .from("bookings")
+    .update({ paid_amount: newPaid })
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+
+  await syncBookingPaymentToCash({
+    bookingId,
+    organizationId: organization.id,
+    unitId: current.unit_id,
+    currency: current.currency,
+    delta: Number(amount),
+    accountId,
+  });
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${bookingId}`);
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/caja");
+  return data as Booking;
+}
+
 export async function changeBookingStatus(id: string, newStatus: BookingStatus, reason?: string) {
   await requireSession();
   const { organization } = await getCurrentOrg();

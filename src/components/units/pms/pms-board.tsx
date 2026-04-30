@@ -1633,6 +1633,7 @@ export function PmsBoard({
                         onRequestDateChange={requestDateChangeFromPopover}
                         unitCode={unit.code}
                         unitName={unit.name}
+                        accounts={accounts}
                       />
                     ))}
                   </div>
@@ -2010,6 +2011,7 @@ interface BookingBarProps {
   ) => void;
   unitCode: string;
   unitName: string;
+  accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
 }
 
 function BookingBar({
@@ -2029,6 +2031,7 @@ function BookingBar({
   onRequestDateChange,
   unitCode,
   unitName,
+  accounts,
 }: BookingBarProps) {
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
   // (15:00 → +0.625 del día; 11:00 → +0.458 del día). Esto hace que la barra "pise"
@@ -2226,6 +2229,7 @@ function BookingBar({
           booking={booking}
           unitCode={unitCode}
           unitName={unitName}
+          accounts={accounts}
           onEdit={onEdit}
           onStatusChanged={() => onOpenChange(false)}
           onRequestDateChange={(field, iso) => {

@@ -10,6 +10,7 @@ import {
   Users,
   DollarSign,
   ExternalLink,
+  Loader2,
   Pencil,
   Phone,
   Mail,
@@ -18,11 +19,14 @@ import {
   LogIn,
   LogOut,
   Ban,
+  Plus,
   StickyNote,
   Pencil as PencilIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Calendar } from "@/components/ui/calendar";
@@ -31,18 +35,33 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatNights, getInitials } from "@/lib/format";
-import { changeBookingStatus } from "@/lib/actions/bookings";
-import type { BookingWithRelations, BookingStatus } from "@/lib/types/database";
+import { addBookingPayment, changeBookingStatus } from "@/lib/actions/bookings";
+import type {
+  BookingWithRelations,
+  BookingStatus,
+  CashAccount,
+} from "@/lib/types/database";
 import { cn } from "@/lib/utils";
+
+type AccountLite = Pick<CashAccount, "id" | "name" | "currency" | "type">;
 
 interface PmsBookingPopoverProps {
   booking: BookingWithRelations;
   unitCode: string;
   unitName: string;
+  accounts?: AccountLite[];
   onEdit: () => void;
   onStatusChanged?: (nextStatus: BookingStatus) => void;
+  onPaymentAdded?: (newPaid: number) => void;
   /**
    * Callback al pedir cambio de fecha desde las cards check-in/check-out.
    * El parent (PmsBoard) abre el flujo MoveConfirmDialog con el preview
@@ -58,8 +77,10 @@ export function PmsBookingPopoverContent({
   booking,
   unitCode,
   unitName,
+  accounts = [],
   onEdit,
   onStatusChanged,
+  onPaymentAdded,
   onRequestDateChange,
 }: PmsBookingPopoverProps) {
   const [pending, startTransition] = useTransition();
@@ -67,6 +88,43 @@ export function PmsBookingPopoverContent({
   const sourceMeta = BOOKING_SOURCE_META[booking.source];
   const nights = formatNights(booking.check_in_date, booking.check_out_date);
   const pendingAmount = Math.max(0, Number(booking.total_amount) - Number(booking.paid_amount));
+
+  const matchingAccounts = accounts.filter((a) => a.currency === booking.currency);
+  const [showPayForm, setShowPayForm] = useState(false);
+  const [payAmount, setPayAmount] = useState<string>("");
+  const [payAccountId, setPayAccountId] = useState<string>("");
+  const [paying, startPaying] = useTransition();
+
+  function openPayForm() {
+    setPayAmount(pendingAmount > 0 ? String(pendingAmount) : "");
+    setPayAccountId(matchingAccounts[0]?.id ?? "");
+    setShowPayForm(true);
+  }
+
+  function submitPayment() {
+    const amount = Number(payAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Ingresá un importe válido");
+      return;
+    }
+    if (!payAccountId) {
+      toast.error("Elegí una cuenta de caja");
+      return;
+    }
+    startPaying(async () => {
+      try {
+        const updated = await addBookingPayment(booking.id, amount, payAccountId);
+        toast.success(`Pago de ${formatMoney(amount, booking.currency)} registrado`);
+        setShowPayForm(false);
+        setPayAmount("");
+        onPaymentAdded?.(Number(updated.paid_amount));
+      } catch (e) {
+        toast.error("No se pudo registrar el pago", {
+          description: (e as Error).message,
+        });
+      }
+    });
+  }
 
   function applyStatus(next: BookingStatus, confirmMsg?: string) {
     if (confirmMsg && !window.confirm(confirmMsg)) return;
@@ -204,6 +262,94 @@ export function PmsBookingPopoverContent({
             value={formatMoney(Number(booking.cleaning_fee), booking.currency)}
             subtle
           />
+        )}
+
+        {/* Registrar pago */}
+        {pendingAmount > 0 && booking.status !== "cancelada" && (
+          <div className="pt-2">
+            {!showPayForm ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 w-full gap-1.5 text-xs"
+                onClick={openPayForm}
+              >
+                <Plus size={12} /> Registrar pago
+              </Button>
+            ) : (
+              <div className="rounded-lg border bg-muted/30 p-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                    Nuevo pago
+                  </span>
+                  <button
+                    type="button"
+                    className="text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPayForm(false)}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+                <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Importe ({booking.currency})</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={payAmount}
+                      onChange={(e) => setPayAmount(e.target.value)}
+                      className="h-8 text-xs"
+                      autoFocus
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1 text-xs"
+                    disabled={paying}
+                    onClick={submitPayment}
+                  >
+                    {paying && <Loader2 className="animate-spin" size={12} />}
+                    Cobrar
+                  </Button>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px]">Cuenta de caja</Label>
+                  {matchingAccounts.length === 0 ? (
+                    <div className="text-[10px] text-amber-600 dark:text-amber-400">
+                      No hay cuentas en {booking.currency}. Creá una en{" "}
+                      <Link href="/dashboard/caja" className="underline">
+                        Caja
+                      </Link>
+                      .
+                    </div>
+                  ) : (
+                    <Select value={payAccountId} onValueChange={setPayAccountId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Elegí cuenta" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {matchingAccounts.map((a) => (
+                          <SelectItem key={a.id} value={a.id} className="text-xs">
+                            {a.name} · {a.currency}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <button
+                    type="button"
+                    className="hover:text-foreground underline-offset-2 hover:underline"
+                    onClick={() => setPayAmount(String(pendingAmount))}
+                  >
+                    Saldar {formatMoney(pendingAmount, booking.currency)}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
