@@ -632,8 +632,8 @@ export function PmsBoard({
     if (!el) return;
     const todayOff = dayOffset(windowStart, new Date().toISOString().slice(0, 10));
     if (todayOff < 0 || todayOff >= windowDays) return;
-    // centrar hoy
-    const target = todayOff * CELL - el.clientWidth / 2 + CELL / 2;
+    // hoy cerca del borde izquierdo (2 días de pasado visibles)
+    const target = (todayOff - 2) * CELL;
     el.scrollLeft = Math.max(0, target);
     // solo la primera vez
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -653,7 +653,7 @@ export function PmsBoard({
       const el = scrollRef.current;
       if (el) {
         const todayOff = 7;
-        el.scrollLeft = Math.max(0, todayOff * CELL - el.clientWidth / 2 + CELL / 2);
+        el.scrollLeft = Math.max(0, (todayOff - 2) * CELL);
       }
     });
   }, [CELL]);
