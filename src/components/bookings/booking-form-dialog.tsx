@@ -803,105 +803,105 @@ export function BookingFormDialog({
             </div>
           </div>
 
-          {/* Cuenta de caja — en CREACIÓN aparece si paid_amount>0, en EDICIÓN siempre (con botón "Agregar pago" inline) */}
+          {/* Cobrar en cuenta — siempre visible en creación y edición */}
           {(() => {
             const totalNumLocal = parseMoneyInput(form.total_amount) ?? 0;
-            const pendingBefore = Math.max(0, totalNumLocal - previousPaid);
-            const addNum = parseMoneyInput(form.add_payment) ?? 0;
-            const createPaid = parseMoneyInput(form.paid_amount) ?? 0;
-            const showCreate = !isEdit && createPaid > 0;
-            const showEdit = isEdit;
-            if (!showCreate && !showEdit) return null;
+            const pendingBefore = isEdit
+              ? Math.max(0, totalNumLocal - previousPaid)
+              : Math.max(0, totalNumLocal - (parseMoneyInput(form.paid_amount) ?? 0));
+            const addNum = isEdit
+              ? parseMoneyInput(form.add_payment) ?? 0
+              : parseMoneyInput(form.paid_amount) ?? 0;
+            const requireAccount = addNum > 0;
             return (
               <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <Label htmlFor="account_id" className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200">
-                    <Wallet size={13} /> Cobrar en cuenta {(showCreate || addNum > 0) && "*"}
+                    <Wallet size={13} /> Cobrar en cuenta {requireAccount && "*"}
                   </Label>
-                  {showEdit && (
-                    <div className="text-[10px] text-emerald-900/80 dark:text-emerald-200/80 tabular-nums">
-                      Saldo pendiente:{" "}
-                      <span className="font-semibold">
-                        {form.currency}{" "}
-                        {pendingBefore.toLocaleString("es-AR", { maximumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  )}
+                  <div className="text-[10px] text-emerald-900/80 dark:text-emerald-200/80 tabular-nums">
+                    Saldo pendiente:{" "}
+                    <span className="font-semibold">
+                      {form.currency}{" "}
+                      {pendingBefore.toLocaleString("es-AR", { maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-2 items-end">
-                  {accountsForCurrency.length === 0 ? (
-                    <p className="text-xs text-amber-800 dark:text-amber-300 sm:col-span-3">
-                      No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
-                    </p>
-                  ) : (
-                    <Select
-                      value={form.account_id ?? undefined}
-                      onValueChange={(v) => set("account_id", v)}
-                    >
-                      <SelectTrigger id="account_id">
-                        <SelectValue placeholder={`Elegí cuenta en ${form.currency}…`} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {accountsForCurrency.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name} <span className="text-[10px] text-muted-foreground ml-1">· {a.type}</span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                  {showEdit && (
-                    <>
-                      <Input
-                        id="add_payment"
-                        type="text"
-                        inputMode="decimal"
-                        value={form.add_payment}
-                        onChange={(e) => set("add_payment", e.target.value)}
-                        placeholder={pendingBefore > 0 ? formatMoneyValue(pendingBefore) : "0"}
-                        className="sm:w-32"
-                        aria-label="Importe a agregar"
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        className="h-10 gap-1.5"
-                        disabled={pendingBefore <= 0 && addNum === 0}
-                        onClick={() => {
-                          if (addNum === 0 && pendingBefore > 0) {
-                            set("add_payment", formatMoneyValue(pendingBefore));
-                          }
-                        }}
-                      >
-                        <Plus size={14} /> Agregar pago
-                      </Button>
-                    </>
-                  )}
+                {accountsForCurrency.length === 0 ? (
+                  <p className="text-xs text-amber-800 dark:text-amber-300">
+                    No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
+                  </p>
+                ) : (
+                  <Select
+                    value={form.account_id ?? undefined}
+                    onValueChange={(v) => set("account_id", v)}
+                  >
+                    <SelectTrigger id="account_id">
+                      <SelectValue placeholder={`Elegí cuenta en ${form.currency}…`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {accountsForCurrency.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name} <span className="text-[10px] text-muted-foreground ml-1">· {a.type}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                  <div className="space-y-1">
+                    <Label htmlFor={isEdit ? "add_payment" : "create_paid_amount"} className="text-[10px] text-emerald-900/80 dark:text-emerald-200/80">
+                      Importe ({form.currency})
+                    </Label>
+                    <Input
+                      id={isEdit ? "add_payment" : "create_paid_amount"}
+                      type="text"
+                      inputMode="decimal"
+                      value={isEdit ? form.add_payment : form.paid_amount}
+                      onChange={(e) => set(isEdit ? "add_payment" : "paid_amount", e.target.value)}
+                      placeholder={pendingBefore > 0 ? formatMoneyValue(pendingBefore) : "0"}
+                      aria-label="Importe del pago"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-10 gap-1.5 shrink-0"
+                    disabled={pendingBefore <= 0 && addNum === 0}
+                    onClick={() => {
+                      if (pendingBefore > 0) {
+                        set(
+                          isEdit ? "add_payment" : "paid_amount",
+                          formatMoneyValue(
+                            isEdit ? pendingBefore : (parseMoneyInput(form.paid_amount) ?? 0) + pendingBefore
+                          )
+                        );
+                      }
+                    }}
+                  >
+                    <Plus size={14} /> Agregar pago
+                  </Button>
                 </div>
                 <p className="text-[10px] text-emerald-800/80 dark:text-emerald-300/80">
-                  {showCreate && (
+                  {!isEdit && addNum > 0 && (
                     <>
                       Se generará un movimiento en caja por {form.currency}{" "}
-                      {createPaid.toLocaleString("es-AR", { maximumFractionDigits: 2 })} al guardar.
+                      {addNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })} al guardar.
                     </>
                   )}
-                  {showEdit && addNum > 0 && (
+                  {isEdit && addNum > 0 && (
                     <>
                       Se agregará un pago de {form.currency}{" "}
-                      {addNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })}. Cobrado total
-                      pasará a {form.currency}{" "}
-                      {(previousPaid + addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}
-                      {" "}· Saldo restante: {form.currency}{" "}
-                      {Math.max(0, totalNumLocal - previousPaid - addNum).toLocaleString("es-AR", {
-                        maximumFractionDigits: 2,
-                      })}
-                      .
+                      {addNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })}. Cobrado total pasará a {form.currency}{" "}
+                      {(previousPaid + addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}{" "}
+                      · Saldo restante: {form.currency}{" "}
+                      {Math.max(0, totalNumLocal - previousPaid - addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}.
                     </>
                   )}
-                  {showEdit && addNum === 0 && pendingBefore > 0 && (
+                  {addNum === 0 && pendingBefore > 0 && (
                     <>Tocá &quot;Agregar pago&quot; para saldar todo, o tipeá un importe parcial.</>
                   )}
-                  {showEdit && addNum === 0 && pendingBefore === 0 && (
+                  {addNum === 0 && pendingBefore === 0 && totalNumLocal > 0 && (
                     <>La reserva ya está saldada.</>
                   )}
                 </p>
