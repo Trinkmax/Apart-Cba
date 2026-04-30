@@ -67,14 +67,14 @@ export default async function MobileHome() {
           </Card>
         </Link>
 
-        <Link href="/m/conserjeria">
+        <Link href="/m/tareas">
           <Card className="p-4 hover:shadow-md transition-shadow flex items-center gap-3">
             <div className="size-12 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center">
               <Bell size={20} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-semibold">Pedidos huéspedes</div>
-              <div className="text-xs text-muted-foreground">{pendingConcierge} sin atender</div>
+              <div className="font-semibold">Tareas</div>
+              <div className="text-xs text-muted-foreground">{pendingConcierge} pendientes</div>
             </div>
             {pendingConcierge > 0 && (
               <Badge className="bg-purple-500 text-white">{pendingConcierge}</Badge>

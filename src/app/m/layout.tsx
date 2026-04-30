@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, Wrench, Bell, LogOut, Building2 } from "lucide-react";
+import { Sparkles, Wrench, ListTodo, LogOut, Building2 } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { signOut } from "@/lib/actions/auth";
@@ -36,7 +36,7 @@ export default async function MobileLayout({ children }: { children: React.React
             { href: "/m", icon: Building2, label: "Inicio" },
             { href: "/m/limpieza", icon: Sparkles, label: "Limpieza", roles: ["admin", "limpieza", "recepcion"] },
             { href: "/m/mantenimiento", icon: Wrench, label: "Tickets", roles: ["admin", "mantenimiento", "recepcion"] },
-            { href: "/m/conserjeria", icon: Bell, label: "Pedidos", roles: ["admin", "recepcion"] },
+            { href: "/m/tareas", icon: ListTodo, label: "Tareas", roles: ["admin", "recepcion"] },
           ].filter((it) => !it.roles || it.roles.includes(role)).map((it) => {
             const Icon = it.icon;
             return (

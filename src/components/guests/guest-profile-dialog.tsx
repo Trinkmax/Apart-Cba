@@ -149,7 +149,7 @@ export function GuestProfileDialog({ guest, children }: GuestProfileDialogProps)
               )}
             </TabsTrigger>
             <TabsTrigger value="conserjeria" className="gap-1.5">
-              Conserjería
+              Tareas
               {profile && profile.concierge_requests.length > 0 && (
                 <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
                   {profile.concierge_requests.length}
@@ -745,7 +745,7 @@ function ConserjeriaTab({
   if (requests.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-        Sin pedidos de conserjería para este huésped.
+        Sin tareas para este huésped.
       </div>
     );
   }

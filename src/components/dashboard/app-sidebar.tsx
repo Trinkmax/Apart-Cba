@@ -15,7 +15,7 @@ import {
   FileText,
   Cable,
   Boxes,
-  Bell,
+  ListTodo,
   Settings,
   ShieldCheck,
 } from "lucide-react";
@@ -67,7 +67,7 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Mantenimiento", href: "/dashboard/mantenimiento", icon: Wrench, resource: "tickets" },
       { label: "Limpieza", href: "/dashboard/limpieza", icon: Sparkles, resource: "cleaning" },
-      { label: "Conserjería", href: "/dashboard/conserjeria", icon: Bell, resource: "concierge" },
+      { label: "Tareas", href: "/dashboard/tareas", icon: ListTodo, resource: "concierge" },
       { label: "Inventario", href: "/dashboard/inventario", icon: Boxes, resource: "amenities" },
     ],
   },

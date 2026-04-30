@@ -18,7 +18,17 @@ import {
 import { createConciergeRequest, type ConciergeInput } from "@/lib/actions/concierge";
 import type { Unit } from "@/lib/types/database";
 
-export function ConciergeFormDialog({ children, units }: { children: React.ReactNode; units: Pick<Unit, "id" | "code" | "name">[] }) {
+type Member = { user_id: string; full_name: string | null };
+
+export function ConciergeFormDialog({
+  children,
+  units,
+  members = [],
+}: {
+  children: React.ReactNode;
+  units: Pick<Unit, "id" | "code" | "name">[];
+  members?: Member[];
+}) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -31,12 +41,15 @@ export function ConciergeFormDialog({ children, units }: { children: React.React
     description: "",
     status: "pendiente",
     priority: "normal",
+    assigned_to: null,
     cost: null,
     cost_currency: "ARS",
     charge_to_guest: false,
     scheduled_for: null,
     notes: "",
   });
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [scheduledTime, setScheduledTime] = useState("");
 
   function set<K extends keyof ConciergeInput>(k: K, v: ConciergeInput[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -44,10 +57,18 @@ export function ConciergeFormDialog({ children, units }: { children: React.React
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    let scheduled_for: string | null = null;
+    if (scheduledDate) {
+      const time = scheduledTime || "09:00";
+      // Local time → ISO. El timestamptz se almacena en UTC pero respetando tz local.
+      const localIso = new Date(`${scheduledDate}T${time}:00`).toISOString();
+      scheduled_for = localIso;
+    }
+    const payload = { ...form, scheduled_for };
     startTransition(async () => {
       try {
-        await createConciergeRequest(form);
-        toast.success("Pedido creado");
+        await createConciergeRequest(payload);
+        toast.success("Tarea creada");
         setOpen(false);
         router.refresh();
       } catch (e) {
@@ -59,12 +80,12 @@ export function ConciergeFormDialog({ children, units }: { children: React.React
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Nuevo pedido</DialogTitle></DialogHeader>
+      <DialogContent className="max-w-md max-h-[92vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Nueva tarea</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label>Descripción *</Label>
-            <Textarea required autoFocus rows={2} value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="Late check-out hasta las 14, transfer al aeropuerto..." />
+            <Textarea required autoFocus rows={2} value={form.description} onChange={(e) => set("description", e.target.value)} placeholder="Hacer contrato Perón, transfer al aeropuerto..." />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -72,6 +93,7 @@ export function ConciergeFormDialog({ children, units }: { children: React.React
               <Select value={form.request_type ?? ""} onValueChange={(v) => set("request_type", v)}>
                 <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="contrato">Contrato</SelectItem>
                   <SelectItem value="late_checkout">Late check-out</SelectItem>
                   <SelectItem value="early_checkin">Early check-in</SelectItem>
                   <SelectItem value="extra_towels">Toallas extra</SelectItem>
@@ -94,6 +116,29 @@ export function ConciergeFormDialog({ children, units }: { children: React.React
                   <SelectItem value="urgente">Urgente</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Asignar a</Label>
+            <Select value={form.assigned_to ?? ""} onValueChange={(v) => set("assigned_to", v || null)}>
+              <SelectTrigger><SelectValue placeholder="Sin asignar" /></SelectTrigger>
+              <SelectContent>
+                {members.map((m) => (
+                  <SelectItem key={m.user_id} value={m.user_id}>
+                    {m.full_name ?? "Usuario sin nombre"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Día</Label>
+              <Input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Hora</Label>
+              <Input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} disabled={!scheduledDate} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -123,7 +168,7 @@ export function ConciergeFormDialog({ children, units }: { children: React.React
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isPending}>
               {isPending && <Loader2 className="animate-spin" />}
-              Crear pedido
+              Crear tarea
             </Button>
           </DialogFooter>
         </form>

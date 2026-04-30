@@ -116,10 +116,10 @@ export default async function DashboardHome() {
               </div>
               <Badge variant="secondary">{kpis.service.cleaning_pending}</Badge>
             </Link>
-            <Link href="/dashboard/conserjeria" className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/30 transition-colors">
+            <Link href="/dashboard/tareas" className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/30 transition-colors">
               <div className="flex items-center gap-2">
                 <Bell size={16} className="text-purple-500" />
-                <span className="text-sm">Conserjería pendiente</span>
+                <span className="text-sm">Tareas pendientes</span>
               </div>
               <Badge variant="secondary">{kpis.service.concierge_pending}</Badge>
             </Link>

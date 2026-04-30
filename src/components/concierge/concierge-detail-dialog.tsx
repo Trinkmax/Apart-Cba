@@ -3,12 +3,14 @@
 import { useState, useTransition } from "react";
 import {
   Building2,
+  CalendarClock,
   CheckCircle2,
   Clock,
   Loader2,
   Sparkles,
   Trash2,
   User,
+  User2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -49,10 +51,24 @@ import type {
   Unit,
 } from "@/lib/types/database";
 
+type Member = { user_id: string; full_name: string | null };
+
 type CR = ConciergeRequest & {
   unit: Pick<Unit, "id" | "code" | "name"> | null;
   guest: Pick<Guest, "id" | "full_name"> | null;
+  assignee?: Member | null;
 };
+
+function isoToLocalParts(iso: string | null): { date: string; time: string } {
+  if (!iso) return { date: "", time: "" };
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+  };
+}
 
 const STATUS_META: Record<
   ConciergeStatus,
@@ -75,6 +91,7 @@ const PRIORITY_META: Record<ConciergePriority, { label: string; color: string }>
 interface Props {
   request: CR | null;
   units: Pick<Unit, "id" | "code" | "name">[];
+  members?: Member[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpdated?: (req: CR) => void;
@@ -84,6 +101,7 @@ interface Props {
 export function ConciergeDetailDialog({
   request,
   units,
+  members = [],
   open,
   onOpenChange,
   onUpdated,
@@ -98,18 +116,26 @@ export function ConciergeDetailDialog({
           description: r.description,
           request_type: r.request_type ?? "",
           priority: r.priority,
+          assigned_to: r.assigned_to,
           unit_id: r.unit_id,
           cost: r.cost,
           cost_currency: r.cost_currency ?? "ARS",
           charge_to_guest: r.charge_to_guest,
+          scheduled_for: r.scheduled_for,
           notes: r.notes ?? "",
         }
       : {};
   const [prevRequestId, setPrevRequestId] = useState<string | null>(request?.id ?? null);
   const [form, setForm] = useState<Partial<ConciergeInput>>(() => buildForm(request));
+  const initialParts = isoToLocalParts(request?.scheduled_for ?? null);
+  const [scheduledDate, setScheduledDate] = useState(initialParts.date);
+  const [scheduledTime, setScheduledTime] = useState(initialParts.time);
   if (request && request.id !== prevRequestId) {
     setPrevRequestId(request.id);
     setForm(buildForm(request));
+    const p = isoToLocalParts(request.scheduled_for ?? null);
+    setScheduledDate(p.date);
+    setScheduledTime(p.time);
     setConfirmDelete(false);
   }
 
@@ -135,16 +161,27 @@ export function ConciergeDetailDialog({
     });
   }
 
-  function saveDetails() {
+  function saveDetails(extra?: Partial<ConciergeInput>) {
+    const payload = { ...form, ...(extra ?? {}) };
     startTransition(async () => {
       try {
-        const updated = await updateConciergeRequest(request!.id, form);
+        const updated = await updateConciergeRequest(request!.id, payload);
         onUpdated?.({ ...request!, ...updated });
         toast.success("Cambios guardados");
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
     });
+  }
+
+  function commitSchedule(date: string, time: string) {
+    let scheduled_for: string | null = null;
+    if (date) {
+      const t = time || "09:00";
+      scheduled_for = new Date(`${date}T${t}:00`).toISOString();
+    }
+    set("scheduled_for", scheduled_for);
+    saveDetails({ scheduled_for });
   }
 
   function handleDelete() {
@@ -176,7 +213,7 @@ export function ConciergeDetailDialog({
                 <Textarea
                   value={form.description ?? ""}
                   onChange={(e) => set("description", e.target.value)}
-                  onBlur={saveDetails}
+                  onBlur={() => saveDetails()}
                   rows={2}
                   className="resize-none border-0 px-0 py-0 shadow-none focus-visible:ring-0 text-base font-semibold"
                 />
@@ -302,6 +339,60 @@ export function ConciergeDetailDialog({
             </div>
           </div>
 
+          {/* Asignación */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <User2 size={12} /> Asignada a
+            </Label>
+            <Select
+              value={form.assigned_to ?? ""}
+              onValueChange={(v) => {
+                const next = v || null;
+                set("assigned_to", next);
+                saveDetails({ assigned_to: next });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Sin asignar" />
+              </SelectTrigger>
+              <SelectContent>
+                {members.map((m) => (
+                  <SelectItem key={m.user_id} value={m.user_id}>
+                    {m.full_name ?? "Usuario sin nombre"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Schedule */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+              <CalendarClock size={12} /> Programada para
+            </Label>
+            <div className="grid grid-cols-2 gap-3">
+              <Input
+                type="date"
+                value={scheduledDate}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setScheduledDate(v);
+                  commitSchedule(v, scheduledTime);
+                }}
+              />
+              <Input
+                type="time"
+                value={scheduledTime}
+                disabled={!scheduledDate}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setScheduledTime(v);
+                  commitSchedule(scheduledDate, v);
+                }}
+              />
+            </div>
+          </div>
+
           {/* Unit */}
           <div className="space-y-1.5">
             <Label className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -344,7 +435,7 @@ export function ConciergeDetailDialog({
                   onChange={(e) =>
                     set("cost", e.target.value === "" ? null : Number(e.target.value))
                   }
-                  onBlur={saveDetails}
+                  onBlur={() => saveDetails()}
                 />
               </div>
               <div className="flex items-center justify-between rounded-lg border px-3 h-10 bg-background">
@@ -374,7 +465,7 @@ export function ConciergeDetailDialog({
               rows={2}
               value={form.notes ?? ""}
               onChange={(e) => set("notes", e.target.value)}
-              onBlur={saveDetails}
+              onBlur={() => saveDetails()}
             />
           </div>
         </div>
