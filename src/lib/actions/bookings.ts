@@ -224,6 +224,61 @@ export async function listBookingsInRange(
   return (data as BookingWithRelations[]) ?? [];
 }
 
+/**
+ * Devuelve un mapa unit_id → ocupación actual (si la hay).
+ * "Actual" = today está dentro de [check_in_date, check_out_date) y la reserva
+ * NO está cancelada / no_show. Útil para mostrar "Ocupado por X" en formularios
+ * que necesitan coordinar visitas con el huésped/inquilino (ej. mantenimiento).
+ */
+export type CurrentOccupancy = {
+  guest_id: string | null;
+  guest_name: string | null;
+  guest_phone: string | null;
+  mode: "temporario" | "mensual";
+  check_in_date: string;
+  check_out_date: string;
+  status: BookingStatus;
+};
+
+export async function listCurrentOccupancyByUnit(): Promise<
+  Record<string, CurrentOccupancy>
+> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await admin
+    .from("bookings")
+    .select(
+      "unit_id, mode, status, check_in_date, check_out_date, guest:guests(id, full_name, phone)"
+    )
+    .eq("organization_id", organization.id)
+    .lte("check_in_date", today)
+    .gt("check_out_date", today)
+    .in("status", ["confirmada", "check_in"])
+    .order("check_in_date", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  const map: Record<string, CurrentOccupancy> = {};
+  (data ?? []).forEach((b) => {
+    if (map[b.unit_id]) return;
+    const g = b.guest as unknown as {
+      id?: string;
+      full_name?: string | null;
+      phone?: string | null;
+    } | null;
+    map[b.unit_id] = {
+      guest_id: g?.id ?? null,
+      guest_name: g?.full_name ?? null,
+      guest_phone: g?.phone ?? null,
+      mode: b.mode as "temporario" | "mensual",
+      check_in_date: b.check_in_date,
+      check_out_date: b.check_out_date,
+      status: b.status as BookingStatus,
+    };
+  });
+  return map;
+}
+
 export async function getBooking(id: string) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();

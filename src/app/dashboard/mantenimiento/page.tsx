@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { listTickets } from "@/lib/actions/tickets";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
+import { listCurrentOccupancyByUnit } from "@/lib/actions/bookings";
 import { Button } from "@/components/ui/button";
 import { TicketFormDialog } from "@/components/tickets/ticket-form-dialog";
 import { TicketsBoard } from "@/components/tickets/tickets-board";
@@ -10,10 +11,11 @@ import type { MaintenanceTicket, Unit } from "@/lib/types/database";
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
 
 export default async function MantenimientoPage() {
-  const [tickets, units, owners] = await Promise.all([
+  const [tickets, units, owners, occupancyByUnit] = await Promise.all([
     listTickets(),
     listUnitsEnriched(),
     listOwners(),
+    listCurrentOccupancyByUnit(),
   ]);
 
   const open = tickets.filter(
@@ -29,7 +31,7 @@ export default async function MantenimientoPage() {
             {tickets.length} tickets · {open} abiertos · arrastrá las cards entre columnas para cambiar el estado
           </p>
         </div>
-        <TicketFormDialog units={units} owners={owners}>
+        <TicketFormDialog units={units} owners={owners} occupancyByUnit={occupancyByUnit}>
           <Button className="gap-2 justify-self-start sm:justify-self-end shrink-0">
             <Plus size={16} /> Nuevo ticket
           </Button>
@@ -40,6 +42,7 @@ export default async function MantenimientoPage() {
         initialTickets={tickets as TicketWithUnit[]}
         units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}
         owners={owners}
+        occupancyByUnit={occupancyByUnit}
       />
     </div>
   );

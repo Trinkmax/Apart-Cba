@@ -33,7 +33,8 @@
       "Bash(awk '/^\\\\/\\\\/ ─── Mensajería ─/{exit} {print}' /Users/ignaciobaldovino/Apart-Cba/src/lib/types/database.ts)",
       "Bash(mv /tmp/database.ts.new /Users/ignaciobaldovino/Apart-Cba/src/lib/types/database.ts)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(echo \"exit:$?\")"
     ]
   }
 }
