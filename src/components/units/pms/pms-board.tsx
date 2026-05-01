@@ -1334,7 +1334,7 @@ export function PmsBoard({
               </Tooltip>
 
               {/* Nueva reserva */}
-              <BookingFormDialog units={units} accounts={accounts}>
+              <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
                 <Button
                   size="sm"
                   className="h-8 gap-1.5 text-xs"
@@ -1708,6 +1708,7 @@ export function PmsBoard({
             booking={editBooking}
             units={units}
             accounts={accounts}
+            existingBookings={bookings}
             open
             onOpenChange={(o) => { if (!o) setEditBooking(null); }}
           />
@@ -1718,6 +1719,7 @@ export function PmsBoard({
           <QuickAddBridge
             units={units}
             accounts={accounts}
+            existingBookings={bookings}
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
             checkOut={quickAdd.checkOut}
@@ -2330,6 +2332,7 @@ function SortableUnitOrderRow({
 function QuickAddBridge({
   units,
   accounts,
+  existingBookings,
   unitId,
   checkIn,
   checkOut,
@@ -2337,6 +2340,7 @@ function QuickAddBridge({
 }: {
   units: Unit[];
   accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  existingBookings: BookingWithRelations[];
   unitId: string;
   checkIn: string;
   checkOut: string;
@@ -2346,6 +2350,7 @@ function QuickAddBridge({
     <BookingFormDialog
       units={units}
       accounts={accounts}
+      existingBookings={existingBookings}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
       defaultCheckOut={checkOut}

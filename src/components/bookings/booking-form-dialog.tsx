@@ -113,12 +113,22 @@ type UnitForBookingForm = Pick<
   | "cleaning_fee"
 > & { default_mode?: UnitDefaultMode };
 
+type ExistingBookingForOverlap = {
+  id: string;
+  unit_id: string;
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+};
+
 interface BookingFormDialogProps {
   children?: React.ReactNode;
   booking?: Booking | BookingWithRelations;
   units: UnitForBookingForm[];
   /** Cuentas de caja activas — para registrar el cobro al crear/actualizar la reserva */
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  /** Reservas ya existentes — usadas para detectar overlaps antes de enviar al server */
+  existingBookings?: ExistingBookingForOverlap[];
   defaultUnitId?: string;
   defaultCheckIn?: string;
   defaultCheckOut?: string;
@@ -136,6 +146,7 @@ export function BookingFormDialog({
   booking,
   units,
   accounts = [],
+  existingBookings,
   defaultUnitId,
   defaultCheckIn,
   defaultCheckOut,
@@ -210,7 +221,10 @@ export function BookingFormDialog({
     currency: booking?.currency ?? "ARS",
     total_amount: formatMoneyValue(booking?.total_amount),
     paid_amount: formatMoneyValue(booking?.paid_amount),
-    commission_pct: formatMoneyValue(booking?.commission_pct),
+    commission_pct:
+      booking?.commission_pct !== null && booking?.commission_pct !== undefined
+        ? formatMoneyValue(booking.commission_pct)
+        : "20",
     cleaning_fee: formatMoneyValue(booking?.cleaning_fee),
     monthly_rent: formatMoneyValue(booking?.monthly_rent),
     monthly_expenses: formatMoneyValue(booking?.monthly_expenses),
@@ -381,6 +395,28 @@ export function BookingFormDialog({
         description: `Elegí en qué cuenta querés registrar el cobro de ${form.currency}`,
       });
       return;
+    }
+    // Pre-check de overlap (mismo unit, status confirmada/check_in, rangos
+    // [in, out) que se solapan). Replica el constraint bookings_no_overlap
+    // del Postgres para dar un mensaje claro antes de pegarle al server,
+    // donde Next.js enmascara el Error.message en producción.
+    if (existingBookings && form.unit_id && form.check_in_date && form.check_out_date) {
+      const conflict = existingBookings.find((b) => {
+        if (b.unit_id !== form.unit_id) return false;
+        if (booking && b.id === booking.id) return false;
+        if (b.status !== "confirmada" && b.status !== "check_in") return false;
+        return (
+          b.check_in_date < form.check_out_date &&
+          b.check_out_date > form.check_in_date
+        );
+      });
+      if (conflict) {
+        const u = units.find((x) => x.id === form.unit_id);
+        toast.error("Ya existe una reserva en esa unidad", {
+          description: `${u?.name ?? "La unidad"} está ocupada del ${conflict.check_in_date} al ${conflict.check_out_date}. Editá esa reserva en lugar de crear una nueva.`,
+        });
+        return;
+      }
     }
     startTransition(async () => {
       try {
@@ -736,6 +772,12 @@ export function BookingFormDialog({
                 type="text"
                 inputMode="decimal"
                 value={form.total_amount}
+                onFocus={(e) => {
+                  if (e.target.value === "0") {
+                    setTotalTouched(true);
+                    set("total_amount", "");
+                  }
+                }}
                 onChange={(e) => {
                   setTotalTouched(true);
                   set("total_amount", e.target.value);
@@ -767,6 +809,9 @@ export function BookingFormDialog({
                 type="text"
                 inputMode="decimal"
                 value={isEdit ? formatMoneyValue(previousPaid) : form.paid_amount}
+                onFocus={(e) => {
+                  if (!isEdit && e.target.value === "0") set("paid_amount", "");
+                }}
                 onChange={(e) => set("paid_amount", e.target.value)}
                 placeholder="0"
                 readOnly={isEdit}

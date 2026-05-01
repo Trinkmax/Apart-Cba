@@ -434,8 +434,17 @@ export async function createBooking(
     .select()
     .single();
   if (error) {
-    if (error.message.includes("bookings_no_overlap")) {
+    if (
+      error.code === "23P01" ||
+      error.message.includes("bookings_no_overlap")
+    ) {
       throw new Error("Ya hay una reserva en esa unidad para esas fechas");
+    }
+    if (
+      error.code === "23514" ||
+      error.message.includes("bookings_dates_valid")
+    ) {
+      throw new Error("La fecha de check-out debe ser posterior al check-in");
     }
     throw new Error(error.message);
   }

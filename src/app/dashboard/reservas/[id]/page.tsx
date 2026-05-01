@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, MapPin, User, Phone, Mail, Edit } from "lucide-react";
-import { getBooking } from "@/lib/actions/bookings";
+import { getBooking, listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listAccounts } from "@/lib/actions/cash";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
+  const unitBookings = await listBookings({ unitId: b.unit_id });
   const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
@@ -61,7 +62,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
         </div>
         <div className="flex items-center gap-2">
           <BookingActions booking={b} />
-          <BookingFormDialog booking={b} units={units} accounts={accounts}>
+          <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
             <Button variant="outline" className="gap-2"><Edit size={14} /> Editar</Button>
           </BookingFormDialog>
         </div>

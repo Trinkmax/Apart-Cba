@@ -25,7 +25,7 @@ export default async function ReservasPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <BookingFormDialog units={units} accounts={accounts}>
+          <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
             <Button className="gap-2"><Plus size={16} /> Nueva reserva</Button>
           </BookingFormDialog>
         </div>
