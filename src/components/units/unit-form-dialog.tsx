@@ -85,6 +85,7 @@ export function UnitFormDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
     startTransition(async () => {
       try {
         if (isEdit && unit) {
@@ -97,6 +98,11 @@ export function UnitFormDialog({
         }
         setOpen(false);
         router.refresh();
+        if (typeof window !== "undefined") {
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "instant" as ScrollBehavior }))
+          );
+        }
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -106,7 +112,10 @@ export function UnitFormDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent
+        className="max-w-2xl max-h-[90vh] overflow-y-auto"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar unidad" : "Nueva unidad"}</DialogTitle>
           <DialogDescription>
