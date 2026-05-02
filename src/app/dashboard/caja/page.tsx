@@ -1,5 +1,6 @@
 import { Plus, Wallet } from "lucide-react";
 import { listAccounts, listMovements, getAccountBalance } from "@/lib/actions/cash";
+import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
@@ -12,12 +13,14 @@ import { MovementsList } from "@/components/cash/movements-list";
 import { formatMoney } from "@/lib/format";
 
 export default async function CajaPage() {
-  const [accounts, movements, { role }] = await Promise.all([
+  const [accounts, movements, units, { role }] = await Promise.all([
     listAccounts(),
     listMovements({ limit: 100 }),
+    listUnitsEnriched(),
     getCurrentOrg(),
   ]);
   const balances = await Promise.all(accounts.map((a) => getAccountBalance(a.id)));
+  const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
   const canManageAccounts = can(role, "cash", "update") && can(role, "cash", "delete");
 
   // Agrupar saldos por moneda
@@ -41,7 +44,7 @@ export default async function CajaPage() {
           <TransferFormDialog accounts={accounts}>
             <Button variant="outline" className="gap-2">⇄ Transferir</Button>
           </TransferFormDialog>
-          <MovementFormDialog accounts={accounts}>
+          <MovementFormDialog accounts={accounts} units={unitsForMovement}>
             <Button className="gap-2"><Plus size={16} /> Movimiento</Button>
           </MovementFormDialog>
         </div>

@@ -1,7 +1,15 @@
 "use client";
 
 import { useState, useTransition, useMemo } from "react";
-import { Loader2, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import {
+  Loader2,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Building2,
+  ChevronsUpDown,
+  Check,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -14,9 +22,20 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createMovement, type MovementInput } from "@/lib/actions/cash";
 import { cn } from "@/lib/utils";
-import type { CashAccount } from "@/lib/types/database";
+import type { CashAccount, Unit } from "@/lib/types/database";
+
+type UnitForMovement = Pick<Unit, "id" | "code" | "name">;
 
 const CATEGORY_LABELS: Record<MovementInput["category"], string> = {
   booking_payment: "Cobro de reserva",
@@ -37,9 +56,11 @@ const CATEGORY_LABELS: Record<MovementInput["category"], string> = {
 interface Props {
   children: React.ReactNode;
   accounts: CashAccount[];
+  /** Unidades disponibles para imputar el movimiento (opcional). */
+  units?: UnitForMovement[];
 }
 
-export function MovementFormDialog({ children, accounts }: Props) {
+export function MovementFormDialog({ children, accounts, units = [] }: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -54,6 +75,12 @@ export function MovementFormDialog({ children, accounts }: Props) {
     owner_id: null,
     description: "",
   });
+
+  const [unitPickerOpen, setUnitPickerOpen] = useState(false);
+  const selectedUnit = useMemo(
+    () => units.find((u) => u.id === form.unit_id) ?? null,
+    [units, form.unit_id]
+  );
 
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.id === form.account_id),
@@ -151,6 +178,100 @@ export function MovementFormDialog({ children, accounts }: Props) {
               </Select>
             </div>
           </div>
+
+          {/* Unidad — opcional. Permite imputar el movimiento a una unidad puntual
+              (ej.: pintura para Independencia 369). Aparece después en filtros y
+              en la liquidación al propietario si la unidad está vinculada. */}
+          {units.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <Building2 size={13} className="text-muted-foreground" />
+                Unidad
+                <span className="text-[10px] font-normal text-muted-foreground ml-0.5">
+                  (opcional)
+                </span>
+              </Label>
+              <div className="flex gap-1.5">
+                <Popover open={unitPickerOpen} onOpenChange={setUnitPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={unitPickerOpen}
+                      className={cn(
+                        "flex-1 justify-between font-normal",
+                        !selectedUnit && "text-muted-foreground"
+                      )}
+                    >
+                      {selectedUnit ? (
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-xs shrink-0 px-1.5 py-0.5 rounded bg-muted">
+                            {selectedUnit.code}
+                          </span>
+                          <span className="truncate">{selectedUnit.name}</span>
+                        </span>
+                      ) : (
+                        "Sin unidad asignada"
+                      )}
+                      <ChevronsUpDown size={14} className="opacity-50 shrink-0" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-[var(--radix-popover-trigger-width)] p-0"
+                    align="start"
+                  >
+                    <Command>
+                      <CommandInput placeholder="Buscar por código o nombre…" />
+                      <CommandList>
+                        <CommandEmpty>Sin coincidencias</CommandEmpty>
+                        <CommandGroup>
+                          {units.map((u) => {
+                            const active = form.unit_id === u.id;
+                            return (
+                              <CommandItem
+                                key={u.id}
+                                value={`${u.code} ${u.name}`}
+                                onSelect={() => {
+                                  set("unit_id", u.id);
+                                  setUnitPickerOpen(false);
+                                }}
+                                className="flex items-center gap-2"
+                              >
+                                <Check
+                                  size={13}
+                                  className={cn(
+                                    "shrink-0",
+                                    active ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                <span className="font-mono text-xs shrink-0 px-1.5 py-0.5 rounded bg-muted">
+                                  {u.code}
+                                </span>
+                                <span className="truncate">{u.name}</span>
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {selectedUnit && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Quitar unidad"
+                    onClick={() => set("unit_id", null)}
+                    className="shrink-0"
+                  >
+                    <X size={14} />
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label>Descripción</Label>

@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingActions } from "@/components/bookings/booking-actions";
 import { ExtensionHistory } from "@/components/bookings/extension-history";
+import { QuickPayCard } from "@/components/bookings/quick-pay-card";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
@@ -171,6 +172,19 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                   <span className="font-semibold">{formatMoney(b.total_amount - b.paid_amount, b.currency)}</span>
                 </div>
               )}
+
+              {/* Pago rápido — visible salvo que la reserva esté cancelada/no_show */}
+              <div className="pt-1">
+                <QuickPayCard
+                  bookingId={b.id}
+                  currency={b.currency}
+                  totalAmount={Number(b.total_amount)}
+                  paidAmount={Number(b.paid_amount)}
+                  accounts={accounts}
+                  disabled={b.status === "cancelada" || b.status === "no_show"}
+                />
+              </div>
+
               <Separator />
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Comisión Apart Cba</span>

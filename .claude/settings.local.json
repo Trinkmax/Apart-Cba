@@ -35,7 +35,8 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(echo \"exit:$?\")",
-      "Bash(echo \"EXIT=$?\")"
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(grep -E \"^\\(tsc|eslint|next\\)$\")"
     ]
   }
 }

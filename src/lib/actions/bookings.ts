@@ -13,51 +13,41 @@ import type {
   BookingStatus,
 } from "@/lib/types/database";
 
-const bookingSchema = z
-  .object({
-    unit_id: z.string().uuid("Unidad requerida"),
-    guest_id: z.string().uuid().optional().nullable(),
-    source: z.enum([
-      "directo", "airbnb", "booking", "expedia", "vrbo", "whatsapp", "instagram", "otro",
-    ]).default("directo"),
-    external_id: z.string().optional().nullable(),
-    status: z.enum(["pendiente","confirmada","check_in","check_out","cancelada","no_show"]).default("confirmada"),
-    mode: z.enum(["temporario", "mensual"]).default("temporario"),
-    check_in_date: z.string().min(10, "Fecha check-in requerida"),
-    check_in_time: z.string().default("14:00"),
-    check_out_date: z.string().min(10, "Fecha check-out requerida"),
-    check_out_time: z.string().default("10:00"),
-    guests_count: z.coerce.number().int().min(1).default(1),
-    currency: z.string().default("ARS"),
-    total_amount: z.coerce.number().min(0).default(0),
-    paid_amount: z.coerce.number().min(0).default(0),
-    commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
-    cleaning_fee: z.coerce.number().min(0).optional().nullable(),
-    // Mensual
-    monthly_rent: z.coerce.number().min(0).optional().nullable(),
-    monthly_expenses: z.coerce.number().min(0).optional().nullable(),
-    security_deposit: z.coerce.number().min(0).optional().nullable(),
-    monthly_inflation_adjustment_pct: z.coerce
-      .number()
-      .min(0)
-      .max(100)
-      .optional()
-      .nullable(),
-    rent_billing_day: z.coerce.number().int().min(1).max(28).optional().nullable(),
-    notes: z.string().optional().nullable(),
-    internal_notes: z.string().optional().nullable(),
-  })
-  .refine(
-    (data) =>
-      data.mode !== "mensual" ||
-      (data.monthly_rent !== null &&
-        data.monthly_rent !== undefined &&
-        data.monthly_rent > 0),
-    {
-      message: "Las reservas mensuales requieren una renta mensual mayor a 0",
-      path: ["monthly_rent"],
-    }
-  );
+const bookingSchema = z.object({
+  unit_id: z.string().uuid("Unidad requerida"),
+  guest_id: z.string().uuid().optional().nullable(),
+  source: z.enum([
+    "directo", "airbnb", "booking", "expedia", "vrbo", "whatsapp", "instagram", "otro",
+  ]).default("directo"),
+  external_id: z.string().optional().nullable(),
+  status: z.enum(["pendiente","confirmada","check_in","check_out","cancelada","no_show"]).default("confirmada"),
+  mode: z.enum(["temporario", "mensual"]).default("temporario"),
+  check_in_date: z.string().min(10, "Fecha check-in requerida"),
+  check_in_time: z.string().default("14:00"),
+  check_out_date: z.string().min(10, "Fecha check-out requerida"),
+  check_out_time: z.string().default("10:00"),
+  guests_count: z.coerce.number().int().min(1).default(1),
+  currency: z.string().default("ARS"),
+  total_amount: z.coerce.number().min(0).default(0),
+  paid_amount: z.coerce.number().min(0).default(0),
+  commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
+  cleaning_fee: z.coerce.number().min(0).optional().nullable(),
+  // Mensual — todos opcionales: la renta puede cargarse después o ajustarse
+  // por cuota; el form no debe forzar al usuario a tipear un monto si todavía
+  // no lo tiene definido.
+  monthly_rent: z.coerce.number().min(0).optional().nullable(),
+  monthly_expenses: z.coerce.number().min(0).optional().nullable(),
+  security_deposit: z.coerce.number().min(0).optional().nullable(),
+  monthly_inflation_adjustment_pct: z.coerce
+    .number()
+    .min(0)
+    .max(100)
+    .optional()
+    .nullable(),
+  rent_billing_day: z.coerce.number().int().min(1).max(28).optional().nullable(),
+  notes: z.string().optional().nullable(),
+  internal_notes: z.string().optional().nullable(),
+});
 
 export type BookingInput = z.infer<typeof bookingSchema>;
 

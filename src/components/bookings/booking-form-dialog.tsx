@@ -620,15 +620,14 @@ export function BookingFormDialog({
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="monthly_rent">Renta mensual *</Label>
+                  <Label htmlFor="monthly_rent">Renta mensual</Label>
                   <Input
                     id="monthly_rent"
                     type="text"
                     inputMode="decimal"
-                    required
                     value={form.monthly_rent}
                     onChange={(e) => set("monthly_rent", e.target.value)}
-                    placeholder="350000"
+                    placeholder="Opcional — definí después"
                   />
                 </div>
                 <div className="space-y-1.5">
