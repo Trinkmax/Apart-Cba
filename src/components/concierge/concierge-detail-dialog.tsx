@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
+  Bell,
+  BellOff,
   Building2,
   CalendarClock,
   CheckCircle2,
@@ -38,6 +40,7 @@ import {
 import {
   changeConciergeStatus,
   deleteConciergeRequest,
+  getTaskAlertSnapshot,
   updateConciergeRequest,
   type ConciergeInput,
 } from "@/lib/actions/concierge";
@@ -88,6 +91,15 @@ const PRIORITY_META: Record<ConciergePriority, { label: string; color: string }>
   urgente: { label: "Urgente", color: "#ef4444" },
 };
 
+const ALERT_OFFSETS = [
+  { value: 0, label: "Justo en el momento" },
+  { value: 1, label: "1 hora antes" },
+  { value: 3, label: "3 horas antes" },
+  { value: 24, label: "1 día antes" },
+  { value: 72, label: "3 días antes" },
+  { value: 168, label: "1 semana antes" },
+];
+
 interface Props {
   request: CR | null;
   units: Pick<Unit, "id" | "code" | "name">[];
@@ -130,6 +142,12 @@ export function ConciergeDetailDialog({
   const initialParts = isoToLocalParts(request?.scheduled_for ?? null);
   const [scheduledDate, setScheduledDate] = useState(initialParts.date);
   const [scheduledTime, setScheduledTime] = useState(initialParts.time);
+  const [alertEnabled, setAlertEnabled] = useState(false);
+  const [alertSeverity, setAlertSeverity] = useState<
+    "info" | "warning" | "critical"
+  >("info");
+  const [alertOffsetHours, setAlertOffsetHours] = useState(24);
+  const [alertLoaded, setAlertLoaded] = useState(false);
   if (request && request.id !== prevRequestId) {
     setPrevRequestId(request.id);
     setForm(buildForm(request));
@@ -137,7 +155,35 @@ export function ConciergeDetailDialog({
     setScheduledDate(p.date);
     setScheduledTime(p.time);
     setConfirmDelete(false);
+    setAlertLoaded(false);
+    setAlertEnabled(false);
   }
+
+  // Hidratar el estado de la alerta al abrir esta tarea (snapshot del notification).
+  useEffect(() => {
+    if (!request || alertLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getTaskAlertSnapshot(request.id);
+        if (cancelled) return;
+        if (snap) {
+          setAlertEnabled(snap.enabled);
+          setAlertSeverity(snap.severity);
+          setAlertOffsetHours(snap.offsetHours);
+        } else {
+          setAlertEnabled(false);
+        }
+      } catch {
+        if (!cancelled) setAlertEnabled(false);
+      } finally {
+        if (!cancelled) setAlertLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [request, alertLoaded]);
 
   if (!request) return null;
 
@@ -181,7 +227,34 @@ export function ConciergeDetailDialog({
       scheduled_for = new Date(`${date}T${t}:00`).toISOString();
     }
     set("scheduled_for", scheduled_for);
-    saveDetails({ scheduled_for });
+    saveDetails({
+      scheduled_for,
+      alert_enabled: alertEnabled,
+      alert_severity: alertSeverity,
+      alert_offset_hours: alertOffsetHours,
+    });
+  }
+
+  function commitAlert(next: {
+    enabled?: boolean;
+    severity?: "info" | "warning" | "critical";
+    offsetHours?: number;
+  }) {
+    const enabled = next.enabled ?? alertEnabled;
+    const severity = next.severity ?? alertSeverity;
+    const offsetHours = next.offsetHours ?? alertOffsetHours;
+    if (enabled && !form.scheduled_for) {
+      toast.error("Cargá día y hora antes de activar la alerta");
+      return;
+    }
+    setAlertEnabled(enabled);
+    setAlertSeverity(severity);
+    setAlertOffsetHours(offsetHours);
+    saveDetails({
+      alert_enabled: enabled,
+      alert_severity: severity,
+      alert_offset_hours: offsetHours,
+    });
   }
 
   function handleDelete() {
@@ -452,6 +525,117 @@ export function ConciergeDetailDialog({
             {request.cost !== null && request.cost !== undefined && (
               <div className="text-sm font-semibold tabular-nums text-right">
                 {formatMoney(request.cost, request.cost_currency ?? "ARS")}
+              </div>
+            )}
+          </div>
+
+          {/* Alerta */}
+          <div
+            className={cn(
+              "rounded-lg border p-3 space-y-3 transition-colors",
+              alertEnabled
+                ? "border-primary/40 bg-primary/5"
+                : "border-border bg-muted/20"
+            )}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2 min-w-0">
+                <div
+                  className={cn(
+                    "flex size-7 items-center justify-center rounded-md shrink-0",
+                    alertEnabled
+                      ? "bg-primary/15 text-primary"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                >
+                  {alertEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+                </div>
+                <div className="min-w-0">
+                  <Label className="cursor-pointer text-sm font-medium">
+                    Alerta vinculada
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {alertEnabled
+                      ? "Aparece en el centro de alertas y la campanita."
+                      : "Activala para recibir un recordatorio antes de que la tarea ocurra."}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                checked={alertEnabled}
+                disabled={!alertLoaded || isPending}
+                onCheckedChange={(v) => commitAlert({ enabled: v })}
+              />
+            </div>
+
+            {alertEnabled && (
+              <div className="space-y-2 pl-9">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Cuándo avisar
+                    </Label>
+                    <Select
+                      value={String(alertOffsetHours)}
+                      onValueChange={(v) =>
+                        commitAlert({ offsetHours: Number(v) })
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ALERT_OFFSETS.map((o) => (
+                          <SelectItem key={o.value} value={String(o.value)}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Severidad
+                    </Label>
+                    <Select
+                      value={alertSeverity}
+                      onValueChange={(v) =>
+                        commitAlert({
+                          severity: v as "info" | "warning" | "critical",
+                        })
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="info">
+                          <span className="flex items-center gap-2">
+                            <span className="size-2 rounded-full bg-sky-500" />
+                            Informativa
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="warning">
+                          <span className="flex items-center gap-2">
+                            <span className="size-2 rounded-full bg-amber-500" />
+                            Atención
+                          </span>
+                        </SelectItem>
+                        <SelectItem value="critical">
+                          <span className="flex items-center gap-2">
+                            <span className="size-2 rounded-full bg-rose-500" />
+                            Crítica
+                          </span>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {!form.scheduled_for && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                    La alerta queda silenciada hasta que cargues día y hora.
+                  </p>
+                )}
               </div>
             )}
           </div>

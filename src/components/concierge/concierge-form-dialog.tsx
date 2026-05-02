@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Loader2 } from "lucide-react";
+import { useState, useTransition, useMemo } from "react";
+import { Loader2, Bell, BellOff } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -16,7 +16,23 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { createConciergeRequest, type ConciergeInput } from "@/lib/actions/concierge";
+import { cn } from "@/lib/utils";
 import type { Unit } from "@/lib/types/database";
+
+const ALERT_OFFSETS = [
+  { value: 0, label: "Justo en el momento" },
+  { value: 1, label: "1 hora antes" },
+  { value: 3, label: "3 horas antes" },
+  { value: 24, label: "1 día antes" },
+  { value: 72, label: "3 días antes" },
+  { value: 168, label: "1 semana antes" },
+];
+
+const SEVERITY_META = {
+  info: { label: "Informativa", color: "text-sky-600 dark:text-sky-400", bg: "bg-sky-500/10 border-sky-500/30" },
+  warning: { label: "Atención", color: "text-amber-600 dark:text-amber-400", bg: "bg-amber-500/10 border-amber-500/30" },
+  critical: { label: "Crítica", color: "text-rose-600 dark:text-rose-400", bg: "bg-rose-500/10 border-rose-500/30" },
+} as const;
 
 type Member = { user_id: string; full_name: string | null };
 
@@ -47,6 +63,9 @@ export function ConciergeFormDialog({
     charge_to_guest: false,
     scheduled_for: null,
     notes: "",
+    alert_enabled: false,
+    alert_severity: "info",
+    alert_offset_hours: 24,
   });
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("");
@@ -54,6 +73,23 @@ export function ConciergeFormDialog({
   function set<K extends keyof ConciergeInput>(k: K, v: ConciergeInput[K]) {
     setForm((f) => ({ ...f, [k]: v }));
   }
+
+  // Preview en tiempo real de cuándo va a saltar la alerta.
+  const alertPreview = useMemo(() => {
+    if (!form.alert_enabled || !scheduledDate) return null;
+    const time = scheduledTime || "09:00";
+    const sched = new Date(`${scheduledDate}T${time}:00`);
+    if (Number.isNaN(sched.getTime())) return null;
+    const fire = new Date(sched);
+    fire.setHours(fire.getHours() - (form.alert_offset_hours ?? 0));
+    return fire.toLocaleString("es-AR", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }, [form.alert_enabled, form.alert_offset_hours, scheduledDate, scheduledTime]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -63,6 +99,12 @@ export function ConciergeFormDialog({
       // Local time → ISO. El timestamptz se almacena en UTC pero respetando tz local.
       const localIso = new Date(`${scheduledDate}T${time}:00`).toISOString();
       scheduled_for = localIso;
+    }
+    if (form.alert_enabled && !scheduled_for) {
+      toast.error("Para usar la alerta necesitás definir día y hora", {
+        description: "Cargá la fecha programada o desactivá la alerta.",
+      });
+      return;
     }
     const payload = { ...form, scheduled_for };
     startTransition(async () => {
@@ -164,6 +206,120 @@ export function ConciergeFormDialog({
               <Switch id="charge" checked={form.charge_to_guest} onCheckedChange={(v) => set("charge_to_guest", v)} />
             </div>
           </div>
+
+          {/* Alerta vinculada a la tarea — se materializa como una notificación
+              en el centro de alertas y la campanita. Al completar la tarea se
+              auto-dismissea. */}
+          <div
+            className={cn(
+              "rounded-lg border p-3 space-y-3 transition-colors",
+              form.alert_enabled
+                ? "border-primary/40 bg-primary/5"
+                : "border-border"
+            )}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2 min-w-0">
+                <div
+                  className={cn(
+                    "flex size-7 items-center justify-center rounded-md shrink-0 transition-colors",
+                    form.alert_enabled
+                      ? "bg-primary/15 text-primary"
+                      : "bg-muted text-muted-foreground"
+                  )}
+                >
+                  {form.alert_enabled ? <Bell size={14} /> : <BellOff size={14} />}
+                </div>
+                <div className="min-w-0">
+                  <Label
+                    htmlFor="alert_enabled"
+                    className="cursor-pointer text-sm font-medium"
+                  >
+                    Generar alerta
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Aparece en el centro de alertas y la campanita.
+                    {form.assigned_to && " Se manda al miembro asignado."}
+                  </p>
+                </div>
+              </div>
+              <Switch
+                id="alert_enabled"
+                checked={form.alert_enabled}
+                onCheckedChange={(v) => set("alert_enabled", v)}
+              />
+            </div>
+
+            {form.alert_enabled && (
+              <div className="space-y-2 pl-9">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Cuándo avisar
+                    </Label>
+                    <Select
+                      value={String(form.alert_offset_hours)}
+                      onValueChange={(v) => set("alert_offset_hours", Number(v))}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {ALERT_OFFSETS.map((o) => (
+                          <SelectItem key={o.value} value={String(o.value)}>
+                            {o.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      Severidad
+                    </Label>
+                    <Select
+                      value={form.alert_severity}
+                      onValueChange={(v) =>
+                        set("alert_severity", v as ConciergeInput["alert_severity"])
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(Object.keys(SEVERITY_META) as Array<keyof typeof SEVERITY_META>).map((k) => (
+                          <SelectItem key={k} value={k}>
+                            <span className="flex items-center gap-2">
+                              <span
+                                className={cn(
+                                  "size-2 rounded-full",
+                                  k === "info" && "bg-sky-500",
+                                  k === "warning" && "bg-amber-500",
+                                  k === "critical" && "bg-rose-500"
+                                )}
+                              />
+                              {SEVERITY_META[k].label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {alertPreview ? (
+                  <p className="text-[11px] text-primary tabular-nums">
+                    Vas a recibir la alerta el{" "}
+                    <span className="font-semibold">{alertPreview}</span>.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                    Definí día y hora arriba para que la alerta tenga cuándo dispararse.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isPending}>

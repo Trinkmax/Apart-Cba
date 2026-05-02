@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarClock, CheckCircle2, Clock, Sparkles, User2, X } from "lucide-react";
+import {
+  Bell,
+  CalendarClock,
+  CheckCircle2,
+  Clock,
+  Sparkles,
+  User2,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { changeConciergeStatus } from "@/lib/actions/concierge";
 import { formatMoney, formatTimeAgo } from "@/lib/format";
@@ -22,6 +30,7 @@ type CR = ConciergeRequest & {
   unit: Pick<Unit, "id" | "code" | "name"> | null;
   guest: Pick<Guest, "id" | "full_name"> | null;
   assignee?: Member | null;
+  has_alert?: boolean;
 };
 
 function formatScheduled(iso: string): string {
@@ -136,8 +145,19 @@ function ConciergeCard({ request, dragging }: { request: CR; dragging: boolean }
         style={{ backgroundColor: pm.color }}
         aria-hidden
       />
+      {request.has_alert && (
+        <span
+          className="absolute right-2 top-2 flex items-center justify-center size-5 rounded-full bg-primary/15 text-primary shadow-sm"
+          title="Esta tarea tiene una alerta activa"
+        >
+          <Bell size={11} />
+        </span>
+      )}
       <div className="p-3 pl-4">
-        <div className="font-medium text-sm leading-snug line-clamp-2">{request.description}</div>
+        <div className={cn(
+          "font-medium text-sm leading-snug line-clamp-2",
+          request.has_alert && "pr-7"
+        )}>{request.description}</div>
         {(request.unit || request.guest) && (
           <div className="flex items-center gap-2 mt-2 text-[11px] text-muted-foreground">
             {request.unit && <span className="font-mono font-medium">{request.unit.code}</span>}

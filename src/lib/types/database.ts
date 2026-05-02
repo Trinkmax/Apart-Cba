@@ -121,6 +121,7 @@ export type NotificationType =
   | "payment_received"
   | "lease_ending_soon"
   | "lease_split_created"
+  | "task_reminder"
   | "manual"
   | "other";
 
