@@ -186,10 +186,16 @@ export function PmsMonthlyBoard({
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex flex-col h-[calc(100vh-4rem)] bg-background">
+      <div className="flex flex-col h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)] bg-background">
+        {/* Banner mobile */}
+        <div className="md:hidden shrink-0 border-b bg-violet-50 dark:bg-violet-500/10 px-3 py-2 text-[11px] text-violet-900 dark:text-violet-200 flex items-center gap-2">
+          <House size={14} className="shrink-0" />
+          <span className="leading-tight">Vista pensada para pantalla ancha. Desplazá lateralmente para ver más meses.</span>
+        </div>
+
         {/* Toolbar */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
-          <div className="flex items-center gap-2 px-4 py-2.5 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
             <div className="flex items-center gap-2">
               <div className="size-8 rounded-lg bg-gradient-to-br from-violet-500/20 to-violet-500/5 flex items-center justify-center ring-1 ring-violet-500/20">
                 <House size={15} className="text-violet-700 dark:text-violet-300" />
@@ -243,7 +249,7 @@ export function PmsMonthlyBoard({
                   placeholder="Buscar unidad…"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  className="pl-7 h-8 w-56 text-xs"
+                  className="pl-7 h-8 w-36 sm:w-56 text-xs"
                 />
                 {query && (
                   <button

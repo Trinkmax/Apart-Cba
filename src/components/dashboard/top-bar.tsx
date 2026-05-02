@@ -59,26 +59,26 @@ export function TopBar({
   };
 
   return (
-    <header className="sticky top-0 z-30 h-16 flex items-center gap-3 px-4 lg:px-6 bg-background/80 backdrop-blur-xl border-b border-border">
-      <SidebarTrigger />
-      <Separator orientation="vertical" className="h-6 mr-1" />
+    <header className="sticky top-0 z-30 h-14 md:h-16 flex items-center gap-1.5 sm:gap-3 px-2 sm:px-4 lg:px-6 bg-background/85 backdrop-blur-xl border-b border-border safe-top safe-x">
+      <SidebarTrigger className="size-9 tap" />
+      <Separator orientation="vertical" className="h-6 mr-0 sm:mr-1 hidden sm:block" />
 
-      {/* Org switcher */}
+      {/* Org switcher — en mobile mostramos solo el avatar con iniciales */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             variant="ghost"
-            className="gap-2 px-2 h-9 font-medium text-sm hover:bg-accent/60"
+            className="gap-2 px-1.5 sm:px-2 h-9 font-medium text-sm hover:bg-accent/60 min-w-0"
             disabled={isPending}
           >
             <div
-              className="size-6 rounded-md flex items-center justify-center text-[10px] font-bold text-white shadow-sm"
+              className="size-7 sm:size-6 rounded-md flex items-center justify-center text-[10px] font-bold text-white shadow-sm shrink-0"
               style={{ background: currentOrg.primary_color ?? "var(--brand-teal)" }}
             >
               {currentOrg.name.slice(0, 2).toUpperCase()}
             </div>
-            <span className="max-w-[180px] truncate">{currentOrg.name}</span>
-            <ChevronsUpDown size={14} className="text-muted-foreground" />
+            <span className="hidden sm:inline max-w-[120px] md:max-w-[180px] truncate">{currentOrg.name}</span>
+            <ChevronsUpDown size={14} className="text-muted-foreground hidden sm:inline" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">
@@ -129,12 +129,12 @@ export function TopBar({
         initialUnreadCount={unreadCount}
       />
 
-      {/* Theme toggle */}
+      {/* Theme toggle — escondido en pantallas muy chicas para ganar espacio */}
       <Button
         size="icon"
         variant="ghost"
         onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-        className="size-9"
+        className="size-9 hidden sm:inline-flex"
       >
         <Sun className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
         <Moon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />

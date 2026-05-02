@@ -44,7 +44,7 @@ export default async function DashboardLayout({
           notifications={notifications}
           unreadCount={unreadCount}
         />
-        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 safe-bottom">
           {children}
         </main>
       </SidebarInset>

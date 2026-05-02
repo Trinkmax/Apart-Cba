@@ -38,7 +38,12 @@
       "Bash(echo \"EXIT=$?\")",
       "Bash(grep -E \"^\\(tsc|eslint|next\\)$\")",
       "mcp__supabase-msb__list_migrations",
-      "mcp__supabase-msb__apply_migration"
+      "mcp__supabase-msb__apply_migration",
+      "Bash(curl -sf -I http://localhost:3001/login -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/m -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/m -m 5)"
     ]
   }
 }

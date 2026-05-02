@@ -20,19 +20,20 @@ export default async function TareasPage() {
   const isEmpty = requests.length === 0;
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+    <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">
             <ListTodo className="size-5 text-primary" />
             Tareas
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {requests.length} tareas · {pendientes} pendientes · arrastrá las cards entre columnas
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
+            {requests.length} tareas · {pendientes} pendientes
+            <span className="hidden sm:inline"> · arrastrá las cards entre columnas</span>
           </p>
         </div>
         <ConciergeFormDialog units={unitsLite} members={members}>
-          <Button size="lg" className="gap-2 shadow-md">
+          <Button className="gap-2 shadow-md sm:h-10 sm:text-base sm:px-6">
             <Plus size={18} /> Nueva tarea
           </Button>
         </ConciergeFormDialog>

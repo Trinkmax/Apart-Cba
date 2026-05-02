@@ -30,32 +30,32 @@ export default async function CajaPage() {
   }, {});
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+    <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Wallet className="size-5 text-primary" /> Caja
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {accounts.length} cuentas · {movements.length} movimientos recientes
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
+            {accounts.length} cuentas · {movements.length} movimientos
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <TransferFormDialog accounts={accounts}>
-            <Button variant="outline" className="gap-2">⇄ Transferir</Button>
+            <Button variant="outline" className="gap-1.5 sm:gap-2 flex-1 sm:flex-none">⇄ <span className="hidden xs:inline sm:inline">Transferir</span></Button>
           </TransferFormDialog>
           <MovementFormDialog accounts={accounts} units={unitsForMovement}>
-            <Button className="gap-2"><Plus size={16} /> Movimiento</Button>
+            <Button className="gap-1.5 sm:gap-2 flex-1 sm:flex-none"><Plus size={16} /> Movimiento</Button>
           </MovementFormDialog>
         </div>
       </div>
 
       {/* Totals por moneda */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
         {Object.entries(totalsByCurrency).map(([currency, total]) => (
-          <Card key={currency} className="p-4">
-            <div className="text-xs text-muted-foreground uppercase tracking-wider">Total {currency}</div>
-            <div className="text-2xl font-semibold mt-1 tabular-nums">
+          <Card key={currency} className="p-3 sm:p-4">
+            <div className="text-[10px] sm:text-xs text-muted-foreground uppercase tracking-wider">Total {currency}</div>
+            <div className="text-lg sm:text-2xl font-semibold mt-1 tabular-nums truncate">
               {formatMoney(total, currency)}
             </div>
           </Card>

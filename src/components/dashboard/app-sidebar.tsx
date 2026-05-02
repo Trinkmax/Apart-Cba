@@ -109,7 +109,7 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b border-sidebar-border h-16 flex items-center px-4">
+      <SidebarHeader className="border-b border-sidebar-border h-14 md:h-16 flex items-center px-3 md:px-4">
         <Link href="/dashboard" className="flex items-center gap-2 group">
           <Logo size="sm" showWordmark />
         </Link>
@@ -136,7 +136,7 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
                           tooltip={item.label}
                           isActive={active}
                           className={cn(
-                            "transition-all duration-150",
+                            "transition-all duration-150 group-data-[mobile=true]:h-11 group-data-[mobile=true]:text-[15px]",
                             active && "font-medium"
                           )}
                         >

@@ -16,15 +16,15 @@ export default async function InventarioPage() {
   ]);
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+    <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Boxes className="size-5 text-primary" />
             Inventario
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {amenities.length} ítems en el catálogo · {units.length} unidades
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
+            {amenities.length} ítems · {units.length} unidades
           </p>
         </div>
       </div>

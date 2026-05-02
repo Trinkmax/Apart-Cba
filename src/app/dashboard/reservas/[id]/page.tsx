@@ -37,15 +37,15 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   const nights = formatNights(b.check_in_date, b.check_out_date);
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
       <Link href="/dashboard/reservas" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft size={14} /> Volver
       </Link>
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-semibold tracking-tight">Reserva</h1>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Reserva</h1>
             <Badge className="gap-1.5 font-normal" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
               <span className="status-dot" style={{ backgroundColor: sm.color }} />
               {sm.label}
@@ -57,20 +57,20 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               <span className="text-xs text-muted-foreground font-mono">#{b.external_id}</span>
             )}
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             Creada el {formatDate(b.created_at, "dd 'de' MMM yyyy")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
           <BookingActions booking={b} />
           <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
-            <Button variant="outline" className="gap-2"><Edit size={14} /> Editar</Button>
+            <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
           </BookingFormDialog>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="p-5 lg:col-span-2 space-y-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 md:gap-6">
+        <Card className="p-4 sm:p-5 lg:col-span-2 space-y-4 sm:space-y-5">
           <div>
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Estadía</h2>
             <div className="mt-2 grid grid-cols-2 gap-4">
@@ -154,7 +154,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           <ExtensionHistory bookingId={b.id} />
         </Card>
 
-        <Card className="p-5 space-y-4 h-fit">
+        <Card className="p-4 sm:p-5 space-y-4 h-fit">
           <div>
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Pago</h2>
             <div className="mt-2 space-y-2 text-sm">

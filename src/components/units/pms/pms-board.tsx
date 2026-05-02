@@ -919,7 +919,7 @@ export function PmsBoard({
           "flex flex-col bg-background",
           zenActive
             ? "fixed z-[60] shadow-2xl ring-1 ring-border/40 transition-[top,left,width,height] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[top,left,width,height]"
-            : "h-[calc(100vh-4rem)]"
+            : "h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)]"
         )}
         style={
           zenActive
@@ -927,9 +927,15 @@ export function PmsBoard({
             : undefined
         }
       >
+        {/* Banner mobile: el PMS está pensado para pantallas anchas */}
+        <div className="md:hidden shrink-0 border-b bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200 flex items-center gap-2">
+          <CalendarRange size={14} className="shrink-0" />
+          <span className="leading-tight">Para mejor experiencia, rotá el celular o usá una tablet/desktop. Podés desplazar el calendario con el dedo.</span>
+        </div>
+
         {/* ═══════ Toolbar superior ═══════ */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
-          <div className="flex items-center gap-2 px-4 py-2.5 flex-wrap">
+          <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
             <div className="flex items-center gap-2 mr-1">
               <div className="size-8 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center ring-1 ring-primary/20">
                 <Hotel size={15} className="text-primary" />

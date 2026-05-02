@@ -28,8 +28,8 @@ export async function DashboardGreeting() {
   const datePretty = dateLong.charAt(0).toUpperCase() + dateLong.slice(1);
 
   return (
-    <div className="space-y-1.5">
-      <h1 className="text-3xl font-semibold tracking-tight">
+    <div className="space-y-1 sm:space-y-1.5 min-w-0">
+      <h1 className="text-xl sm:text-2xl md:text-3xl font-semibold tracking-tight">
         {greeting},{" "}
         <span className="brand-text-gradient">{firstName}</span>
       </h1>
@@ -37,7 +37,7 @@ export async function DashboardGreeting() {
         firstName={firstName}
         userId={session?.userId ?? "anon"}
       />
-      <p className="text-xs text-muted-foreground/80">
+      <p className="text-[10px] sm:text-xs text-muted-foreground/80">
         {datePretty} · Rol: {role}
       </p>
     </div>

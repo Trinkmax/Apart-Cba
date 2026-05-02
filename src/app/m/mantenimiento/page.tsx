@@ -35,19 +35,19 @@ export default async function MobileTicketsPage() {
             const pm = TICKET_PRIORITY_META[t.priority];
             const sm = TICKET_STATUS_META[t.status];
             return (
-              <Link key={t.id} href={`/m/mantenimiento/${t.id}`}>
-                <Card className="p-4 hover:shadow-md transition-shadow">
+              <Link key={t.id} href={`/m/mantenimiento/${t.id}`} className="block">
+                <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="font-semibold leading-snug">{t.title}</div>
+                    <div className="font-semibold leading-snug min-w-0">{t.title}</div>
                     <Badge className="text-[10px] gap-1 font-normal shrink-0" style={{ color: pm.color, backgroundColor: pm.color + "15", borderColor: pm.color + "30" }}>
                       <AlertTriangle size={9} />
                       {pm.label}
                     </Badge>
                   </div>
-                  <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                    <Building2 size={11} />
-                    <span className="font-mono">{t.unit.code}</span>
-                    <span>· {t.unit.name}</span>
+                  <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground min-w-0">
+                    <Building2 size={11} className="shrink-0" />
+                    <span className="font-mono shrink-0">{t.unit.code}</span>
+                    <span className="truncate">· {t.unit.name}</span>
                   </div>
                   <div className="flex items-center justify-between mt-3 pt-3 border-t">
                     <span className="text-[11px] text-muted-foreground flex items-center gap-1">

@@ -35,7 +35,7 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
   const totalOwnership = owner.unit_owners.reduce((acc, uo) => acc + Number(uo.ownership_pct), 0);
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
       <Link
         href="/dashboard/propietarios"
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
@@ -43,34 +43,33 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
         <ArrowLeft size={14} /> Volver
       </Link>
 
-      <div className="flex items-start gap-5">
-        <Avatar className="size-20">
-          <AvatarFallback className="bg-primary/10 text-primary text-2xl font-semibold">
+      <div className="flex items-start gap-3 sm:gap-5 flex-wrap">
+        <Avatar className="size-14 sm:size-20 shrink-0">
+          <AvatarFallback className="bg-primary/10 text-primary text-lg sm:text-2xl font-semibold">
             {getInitials(owner.full_name)}
           </AvatarFallback>
         </Avatar>
-        <div className="flex-1">
-          <h1 className="text-2xl font-semibold">{owner.full_name}</h1>
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold truncate">{owner.full_name}</h1>
           {owner.document_number && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-xs sm:text-sm text-muted-foreground">
               {owner.document_type ?? "Doc"}: {owner.document_number}
             </p>
           )}
-          <div className="flex flex-wrap gap-3 mt-3 text-sm">
+          <div className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2 sm:mt-3 text-xs sm:text-sm">
             {owner.email && (
-              <a href={`mailto:${owner.email}`} className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
-                <Mail size={13} /> {owner.email}
+              <a href={`mailto:${owner.email}`} className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground tap min-w-0">
+                <Mail size={13} className="shrink-0" /> <span className="truncate">{owner.email}</span>
               </a>
             )}
             {owner.phone && (
-              <a href={`tel:${owner.phone}`} className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
+              <a href={`tel:${owner.phone}`} className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground tap">
                 <Phone size={13} /> {owner.phone}
               </a>
             )}
             {owner.address && (
-              <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                <MapPin size={13} /> {owner.address}
-                {owner.city ? `, ${owner.city}` : ""}
+              <span className="inline-flex items-center gap-1.5 text-muted-foreground min-w-0">
+                <MapPin size={13} className="shrink-0" /> <span className="truncate">{owner.address}{owner.city ? `, ${owner.city}` : ""}</span>
               </span>
             )}
           </div>
