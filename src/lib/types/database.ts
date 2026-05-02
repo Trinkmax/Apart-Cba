@@ -287,6 +287,7 @@ export interface Guest {
   email: string | null;
   phone: string | null;
   country: string | null;
+  state_or_province: string | null;
   city: string | null;
   birth_date: string | null;
   notes: string | null;

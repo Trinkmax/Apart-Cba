@@ -263,9 +263,12 @@ function ProfileHeader({
               <Mail size={11} /> {guest.email}
             </span>
           )}
-          {(guest.city || guest.country) && (
+          {(guest.city || guest.state_or_province || guest.country) && (
             <span className="flex items-center gap-1">
-              <MapPin size={11} /> {[guest.city, guest.country].filter(Boolean).join(", ")}
+              <MapPin size={11} />{" "}
+              {[guest.city, guest.state_or_province, guest.country]
+                .filter(Boolean)
+                .join(", ")}
             </span>
           )}
         </div>
@@ -467,7 +470,9 @@ function DatosTab({
           {guest.phone ? formatPhone(guest.phone) : "—"}
         </ReadField>
         <ReadField icon={<MapPin size={13} />} label="Ubicación">
-          {[guest.city, guest.country].filter(Boolean).join(", ") || "—"}
+          {[guest.city, guest.state_or_province, guest.country]
+            .filter(Boolean)
+            .join(", ") || "—"}
         </ReadField>
         <ReadField icon={<Calendar size={13} />} label="Fecha de nacimiento">
           {guest.birth_date ? formatDateLong(guest.birth_date) : "—"}
@@ -547,19 +552,30 @@ function DatosTab({
           />
         </div>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <div className="space-y-1.5">
           <Label>País</Label>
           <Input
-            value={form.country ?? "AR"}
-            maxLength={3}
+            value={form.country ?? ""}
+            placeholder="Argentina"
             onChange={(e) => setForm({ ...form, country: e.target.value })}
           />
         </div>
-        <div className="space-y-1.5 col-span-2">
+        <div className="space-y-1.5">
+          <Label>Provincia / Estado</Label>
+          <Input
+            value={form.state_or_province ?? ""}
+            placeholder="San Juan"
+            onChange={(e) =>
+              setForm({ ...form, state_or_province: e.target.value })
+            }
+          />
+        </div>
+        <div className="space-y-1.5">
           <Label>Ciudad</Label>
           <Input
             value={form.city ?? ""}
+            placeholder="San Juan Capital"
             onChange={(e) => setForm({ ...form, city: e.target.value })}
           />
         </div>
@@ -602,7 +618,8 @@ function toFormState(guest: Guest): GuestInput {
     document_number: guest.document_number ?? "",
     email: guest.email ?? "",
     phone: guest.phone ?? "",
-    country: guest.country ?? "AR",
+    country: guest.country ?? "Argentina",
+    state_or_province: guest.state_or_province ?? "",
     city: guest.city ?? "",
     birth_date: guest.birth_date ?? "",
     notes: guest.notes ?? "",

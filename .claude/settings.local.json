@@ -36,7 +36,9 @@
       "Bash(git commit -m ' *)",
       "Bash(echo \"exit:$?\")",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(grep -E \"^\\(tsc|eslint|next\\)$\")"
+      "Bash(grep -E \"^\\(tsc|eslint|next\\)$\")",
+      "mcp__supabase-msb__list_migrations",
+      "mcp__supabase-msb__apply_migration"
     ]
   }
 }
