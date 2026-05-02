@@ -211,3 +211,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
 
 export const APP_NAME = "Apart Cba";
 export const APP_TAGLINE = "Gestión de departamentos temporales";
+
+// Coordenadas default para clima/contexto (Córdoba Capital).
+// TODO: a futuro mover esto a `organizations` para multi-ciudad.
+export const DEFAULT_COORDS = {
+  latitude: -31.42,
+  longitude: -64.19,
+  timezone: "America/Argentina/Cordoba",
+} as const;

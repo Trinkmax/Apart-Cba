@@ -4,29 +4,22 @@ import {
   LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet,
 } from "lucide-react";
 import { getDashboardKPIs } from "@/lib/actions/kpis";
-import { getCurrentOrg } from "@/lib/actions/org";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import { DashboardGreeting } from "@/components/dashboard/dashboard-greeting";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default async function DashboardHome() {
-  const [{ organization, role }, kpis] = await Promise.all([getCurrentOrg(), getDashboardKPIs()]);
+  const kpis = await getDashboardKPIs();
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
       {/* Hero */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Hola, <span className="brand-text-gradient">{organization.name}</span>
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {formatDate(new Date(), "EEEE d 'de' MMMM, yyyy")} · Rol: {role}
-          </p>
-        </div>
+        <DashboardGreeting />
         <Card className="px-5 py-3 flex items-center gap-3">
           <div className="size-10 rounded-lg bg-primary/15 text-primary flex items-center justify-center">
             <TrendingUp size={18} />
