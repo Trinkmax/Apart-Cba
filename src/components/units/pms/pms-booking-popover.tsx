@@ -205,7 +205,7 @@ export function PmsBookingPopoverContent({
             label="Check-in"
             valueISO={booking.check_in_date}
             value={formatDate(booking.check_in_date, "EEE d MMM")}
-            sub={booking.check_in_time?.slice(0, 5) ?? "15:00"}
+            sub={booking.check_in_time?.slice(0, 5) ?? "14:00"}
             // Para check-in: el límite superior es check_out - 1 día
             maxISO={subDaysISO(booking.check_out_date, 1)}
             disabled={
@@ -220,7 +220,7 @@ export function PmsBookingPopoverContent({
             label="Check-out"
             valueISO={booking.check_out_date}
             value={formatDate(booking.check_out_date, "EEE d MMM")}
-            sub={booking.check_out_time?.slice(0, 5) ?? "11:00"}
+            sub={booking.check_out_time?.slice(0, 5) ?? "10:00"}
             // Para check-out: el límite inferior es check_in + 1 día
             minISO={addDaysISO(booking.check_in_date, 1)}
             disabled={

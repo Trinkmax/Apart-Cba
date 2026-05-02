@@ -2111,11 +2111,11 @@ function BookingBar({
   unitName,
 }: BookingBarProps) {
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
-  // (15:00 → +0.625 del día; 11:00 → +0.458 del día). Esto hace que la barra "pise"
+  // (14:00 → +0.583 del día; 10:00 → +0.416 del día). Esto hace que la barra "pise"
   // visualmente el día de salida hasta la hora real de check-out, y deja espacio
   // para una nueva reserva el mismo día por la tarde.
-  const ciFrac = timeToDayFraction(booking.check_in_time, 15 / 24);
-  const coFrac = timeToDayFraction(booking.check_out_time, 11 / 24);
+  const ciFrac = timeToDayFraction(booking.check_in_time, 14 / 24);
+  const coFrac = timeToDayFraction(booking.check_out_time, 10 / 24);
   let ciOffset = dayOffset(windowStart, booking.check_in_date) + ciFrac;
   let coOffset = dayOffset(windowStart, booking.check_out_date) + coFrac;
   let rowOffsetPx = 0;
