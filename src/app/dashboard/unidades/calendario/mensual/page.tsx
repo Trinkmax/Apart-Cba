@@ -20,7 +20,7 @@ export default async function PmsMonthlyPage() {
 
   const [cells, schedule, accounts, { organization }] = await Promise.all([
     listBookingsMonthlyView(fromYear, fromMonth, toYear, toMonth),
-    listScheduleInRange(fromISO, toISO),
+    listScheduleInRange(fromISO, toISO).catch(() => []),
     listAccounts(),
     getCurrentOrg(),
   ]);

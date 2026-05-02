@@ -21,9 +21,10 @@ export default async function DashboardLayout({
 
   const { organization, role } = await getCurrentOrg();
 
+  // Notificaciones: si fallan no rompemos el dashboard. La campana queda vacía.
   const [notifications, unreadCount] = await Promise.all([
-    listNotifications("active", 30),
-    getUnreadCount(),
+    listNotifications("active", 30).catch(() => []),
+    getUnreadCount().catch(() => 0),
   ]);
 
   return (

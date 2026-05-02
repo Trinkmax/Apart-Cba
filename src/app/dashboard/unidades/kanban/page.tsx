@@ -20,7 +20,7 @@ export default async function PmsGridPage() {
     listUnitsEnriched(),
     listBookingsInRange(startISO, endISO),
     listAccounts(),
-    listScheduleInRange(startISO, endISO),
+    listScheduleInRange(startISO, endISO).catch(() => []),
     getCurrentOrg(),
   ]);
 
