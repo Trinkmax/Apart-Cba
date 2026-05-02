@@ -18,6 +18,7 @@ import {
   ListTodo,
   Settings,
   ShieldCheck,
+  Bell,
 } from "lucide-react";
 import {
   Sidebar,
@@ -60,6 +61,7 @@ const NAV: NavGroup[] = [
       { label: "Unidades", href: "/dashboard/unidades", icon: Building2, resource: "units" },
       { label: "Reservas", href: "/dashboard/reservas", icon: CalendarDays, resource: "bookings" },
       { label: "Huéspedes", href: "/dashboard/huespedes", icon: Users, resource: "guests" },
+      { label: "Alertas", href: "/dashboard/alertas", icon: Bell, resource: "*" },
     ],
   },
   {

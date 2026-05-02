@@ -21,16 +21,32 @@ import { setCurrentOrg } from "@/lib/actions/org";
 import { ROLE_META } from "@/lib/constants";
 import { getInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Organization, OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
+import { NotificationsBell } from "@/components/notifications/notifications-bell";
+import type {
+  Notification,
+  Organization,
+  OrganizationMember,
+  UserProfile,
+  UserRole,
+} from "@/lib/types/database";
 
 interface TopBarProps {
   currentOrg: Organization;
   currentRole: UserRole;
   memberships: (OrganizationMember & { organization: Organization })[];
   profile: UserProfile;
+  notifications?: Notification[];
+  unreadCount?: number;
 }
 
-export function TopBar({ currentOrg, currentRole, memberships, profile }: TopBarProps) {
+export function TopBar({
+  currentOrg,
+  currentRole,
+  memberships,
+  profile,
+  notifications = [],
+  unreadCount = 0,
+}: TopBarProps) {
   const { theme, setTheme } = useTheme();
   const [isPending, startTransition] = useTransition();
   const roleMeta = ROLE_META[currentRole];
@@ -106,6 +122,12 @@ export function TopBar({ currentOrg, currentRole, memberships, profile }: TopBar
       </Badge>
 
       <div className="flex-1" />
+
+      {/* Notifications bell */}
+      <NotificationsBell
+        initialNotifications={notifications}
+        initialUnreadCount={unreadCount}
+      />
 
       {/* Theme toggle */}
       <Button

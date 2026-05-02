@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import {
+  AlertCircle,
   CalendarRange,
   ChevronLeft,
   ChevronRight,
@@ -23,10 +24,17 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { BOOKING_MODE_META } from "@/lib/constants";
+import { CuotaBadge } from "@/components/payment-schedule/cuota-badge";
 import type { MonthlyViewCell } from "@/lib/actions/bookings";
+import type {
+  BookingPaymentSchedule,
+  CashAccount,
+} from "@/lib/types/database";
 
 interface PmsMonthlyBoardProps {
   cells: MonthlyViewCell[];
+  schedule?: BookingPaymentSchedule[];
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   fromYear: number;
   fromMonth: number; // 1..12
   monthsCount: number; // cuántos meses mostrar
@@ -56,12 +64,37 @@ function formatCurrency(amount: number, currency: string): string {
  */
 export function PmsMonthlyBoard({
   cells,
+  schedule = [],
+  accounts = [],
   fromYear,
   fromMonth,
   monthsCount,
   orgCurrency,
 }: PmsMonthlyBoardProps) {
   const [query, setQuery] = useState("");
+  const [overdueOnly, setOverdueOnly] = useState(false);
+
+  // Indexar cuotas por (booking_id, year-month) para overlay rápido en cells
+  const scheduleByKey = useMemo(() => {
+    const m = new Map<string, BookingPaymentSchedule[]>();
+    schedule.forEach((s) => {
+      const y = parseInt(s.due_date.slice(0, 4), 10);
+      const mo = parseInt(s.due_date.slice(5, 7), 10);
+      const key = `${s.booking_id}|${y}-${mo}`;
+      const arr = m.get(key) ?? [];
+      arr.push(s);
+      m.set(key, arr);
+    });
+    return m;
+  }, [schedule]);
+
+  const bookingsWithOverdue = useMemo(() => {
+    const set = new Set<string>();
+    schedule.forEach((s) => {
+      if (s.status === "overdue") set.add(s.booking_id);
+    });
+    return set;
+  }, [schedule]);
   // Scroll horizontal: los botones < / Hoy / > navegan visualmente entre meses
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const monthColRef = useRef<HTMLTableCellElement | null>(null);
@@ -222,6 +255,35 @@ export function PmsMonthlyBoard({
                   </button>
                 )}
               </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={overdueOnly ? "default" : "outline"}
+                    onClick={() => setOverdueOnly((v) => !v)}
+                    className={cn(
+                      "h-8 gap-1 text-xs",
+                      bookingsWithOverdue.size > 0 && !overdueOnly &&
+                        "border-rose-300/70 dark:border-rose-700/60 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    )}
+                    aria-pressed={overdueOnly}
+                  >
+                    <AlertCircle size={12} />
+                    Cuotas vencidas
+                    {bookingsWithOverdue.size > 0 && (
+                      <span className="ml-0.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold tabular-nums">
+                        {bookingsWithOverdue.size}
+                      </span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {bookingsWithOverdue.size === 0
+                    ? "No hay cuotas vencidas"
+                    : `${bookingsWithOverdue.size} reserva${bookingsWithOverdue.size === 1 ? "" : "s"} con cuota vencida`}
+                </TooltipContent>
+              </Tooltip>
               <Button asChild variant="outline" size="sm" className="h-8 text-xs">
                 <Link href="/dashboard/unidades/kanban">
                   <CalendarRange size={12} /> Vista diaria
@@ -308,12 +370,39 @@ export function PmsMonthlyBoard({
                   </th>
                   {months.map((m) => {
                     const cell = u.cellsByYM.get(`${m.year}-${m.month}`);
+                    // Recolectar cuotas que aplican a este (unidad, mes) — buscamos
+                    // por las bookings de la celda. Si overdueOnly está activo y no
+                    // hay vencida, ocultamos la celda visualmente.
+                    const cellSchedule: BookingPaymentSchedule[] = [];
+                    if (cell) {
+                      cell.bookings.forEach((b) => {
+                        const key = `${b.id}|${m.year}-${m.month}`;
+                        const arr = scheduleByKey.get(key);
+                        if (arr) cellSchedule.push(...arr);
+                      });
+                    }
+                    const hasOverdue = cellSchedule.some(
+                      (s) => s.status === "overdue"
+                    );
+                    if (overdueOnly && !hasOverdue) {
+                      return (
+                        <td
+                          key={`${u.unit_id}-${m.year}-${m.month}`}
+                          className="border-b border-r p-2 align-top min-w-[180px] opacity-30"
+                        />
+                      );
+                    }
                     return (
                       <td
                         key={`${u.unit_id}-${m.year}-${m.month}`}
                         className="border-b border-r p-2 align-top min-w-[180px]"
                       >
-                        <MonthCell cell={cell} currency={orgCurrency} />
+                        <MonthCell
+                          cell={cell}
+                          currency={orgCurrency}
+                          cellSchedule={cellSchedule}
+                          accounts={accounts}
+                        />
                       </td>
                     );
                   })}
@@ -365,9 +454,16 @@ export function PmsMonthlyBoard({
 interface MonthCellProps {
   cell: MonthlyViewCell | undefined;
   currency: string;
+  cellSchedule?: BookingPaymentSchedule[];
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
 }
 
-function MonthCell({ cell, currency }: MonthCellProps) {
+function MonthCell({
+  cell,
+  currency,
+  cellSchedule = [],
+  accounts = [],
+}: MonthCellProps) {
   if (!cell || cell.bookings.length === 0) {
     return (
       <div className="text-[10px] text-muted-foreground/60 italic">Vacío</div>
@@ -457,6 +553,27 @@ function MonthCell({ cell, currency }: MonthCellProps) {
         <span className="text-[9px] text-muted-foreground">
           +{cell.bookings.length - 1} más
         </span>
+      )}
+      {cellSchedule.length > 0 && (
+        <div className="flex items-center gap-1 flex-wrap mt-0.5">
+          {cellSchedule.map((s) => (
+            <span
+              key={s.id}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              className="contents"
+            >
+              <CuotaBadge
+                schedule={s}
+                bookingId={s.booking_id}
+                accounts={accounts}
+                size="sm"
+              />
+            </span>
+          ))}
+        </div>
       )}
     </Link>
   );

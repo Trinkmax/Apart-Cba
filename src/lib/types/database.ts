@@ -106,6 +106,30 @@ export type BookingExtensionOperation =
   | "shorten_left"
   | "change_unit";
 
+// Estado de una cuota mensual (booking_payment_schedule).
+export type PaymentScheduleStatus =
+  | "pending"
+  | "partial"
+  | "paid"
+  | "overdue"
+  | "cancelled";
+
+// Tipo de notificación in-app.
+export type NotificationType =
+  | "payment_due"
+  | "payment_overdue"
+  | "payment_received"
+  | "lease_ending_soon"
+  | "lease_split_created"
+  | "manual"
+  | "other";
+
+export type NotificationSeverity =
+  | "info"
+  | "warning"
+  | "critical"
+  | "success";
+
 // ─── Tablas ─────────────────────────────────────────────────────────────────
 
 export interface Organization {
@@ -605,6 +629,66 @@ export interface UnitWithRelations extends Unit {
 export interface BookingWithRelations extends Booking {
   unit?: Pick<Unit, "id" | "code" | "name"> | null;
   guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+}
+
+export interface BookingPaymentSchedule {
+  id: string;
+  organization_id: string;
+  booking_id: string;
+  lease_group_id: string | null;
+  sequence_number: number;
+  total_count: number;
+  due_date: string;
+  expected_amount: number;
+  paid_amount: number;
+  currency: string;
+  status: PaymentScheduleStatus;
+  paid_at: string | null;
+  cash_movement_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookingPaymentScheduleWithBooking extends BookingPaymentSchedule {
+  booking?:
+    | (Pick<
+        Booking,
+        | "id"
+        | "unit_id"
+        | "mode"
+        | "status"
+        | "currency"
+        | "monthly_rent"
+        | "monthly_expenses"
+        | "total_amount"
+        | "paid_amount"
+        | "lease_group_id"
+      > & {
+        guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+        unit?: Pick<Unit, "id" | "code" | "name"> | null;
+      })
+    | null;
+}
+
+export interface Notification {
+  id: string;
+  organization_id: string;
+  type: NotificationType;
+  severity: NotificationSeverity;
+  title: string;
+  body: string | null;
+  ref_type: string | null;
+  ref_id: string | null;
+  target_user_id: string | null;
+  target_role: UserRole | null;
+  action_url: string | null;
+  due_at: string | null;
+  read_at: string | null;
+  dismissed_at: string | null;
+  dedup_key: string | null;
+  created_at: string;
+  created_by: string | null;
 }
 
 export interface OwnerMember {

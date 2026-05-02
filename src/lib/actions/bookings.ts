@@ -412,10 +412,24 @@ export async function createBooking(
       }
     }
 
+    // Generar payment schedule (1 cuota por segmento del lease group)
+    if (validated.mode === "mensual") {
+      for (const seg of created) {
+        const { error: scheduleErr } = await admin.rpc(
+          "generate_payment_schedule_for_booking",
+          { p_booking_id: seg.id }
+        );
+        if (scheduleErr) {
+          console.error("generate_payment_schedule_for_booking failed", scheduleErr);
+        }
+      }
+    }
+
     revalidatePath("/dashboard/reservas");
     revalidatePath("/dashboard/unidades/kanban");
     revalidatePath("/dashboard/unidades/calendario/mensual");
     revalidatePath("/dashboard/caja");
+    revalidatePath("/dashboard/alertas");
     return created[0];
   }
 
@@ -466,10 +480,22 @@ export async function createBooking(
     }
   }
 
+  // Generar payment schedule si es mensual standalone
+  if (validated.mode === "mensual") {
+    const { error: scheduleErr } = await admin.rpc(
+      "generate_payment_schedule_for_booking",
+      { p_booking_id: (data as Booking).id }
+    );
+    if (scheduleErr) {
+      console.error("generate_payment_schedule_for_booking failed", scheduleErr);
+    }
+  }
+
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
   return data as Booking;
 }
 
@@ -487,10 +513,13 @@ export async function updateBooking(
       : null;
 
   const admin = createAdminClient();
-  // Leemos paid_amount actual para calcular delta antes de update
+  // Leemos paid_amount actual + campos que afectan al schedule para detectar
+  // si hay que regenerar las cuotas.
   const { data: current } = await admin
     .from("bookings")
-    .select("paid_amount, currency, unit_id")
+    .select(
+      "paid_amount, currency, unit_id, mode, monthly_rent, monthly_expenses, rent_billing_day, check_in_date, check_out_date"
+    )
     .eq("id", id)
     .eq("organization_id", organization.id)
     .maybeSingle();
@@ -528,11 +557,45 @@ export async function updateBooking(
     }
   }
 
+  // Regenerar schedule si: cambió mode→mensual, o cambió cualquier campo
+  // que afecte cuotas (renta/expensas/billing_day/fechas).
+  const becameMonthly =
+    validated.mode === "mensual" && current?.mode !== "mensual";
+  const scheduleAffected =
+    validated.mode === "mensual" &&
+    (becameMonthly ||
+      Number(current?.monthly_rent ?? 0) !== Number(validated.monthly_rent ?? 0) ||
+      Number(current?.monthly_expenses ?? 0) !==
+        Number(validated.monthly_expenses ?? 0) ||
+      (current?.rent_billing_day ?? null) !==
+        (validated.rent_billing_day ?? null) ||
+      current?.check_in_date !== validated.check_in_date ||
+      current?.check_out_date !== validated.check_out_date);
+  if (scheduleAffected) {
+    const { error: scheduleErr } = await admin.rpc(
+      "generate_payment_schedule_for_booking",
+      { p_booking_id: id }
+    );
+    if (scheduleErr) {
+      console.error("generate_payment_schedule_for_booking failed", scheduleErr);
+    }
+  }
+  // Si cambió a temporario, anular cuotas pending/overdue (no las paid)
+  if (current?.mode === "mensual" && validated.mode === "temporario") {
+    await admin
+      .from("booking_payment_schedule")
+      .update({ status: "cancelled" })
+      .eq("booking_id", id)
+      .eq("organization_id", organization.id)
+      .in("status", ["pending", "overdue", "partial"]);
+  }
+
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
   return data as Booking;
 }
 

@@ -1,6 +1,7 @@
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listBookingsInRange } from "@/lib/actions/bookings";
 import { listAccounts } from "@/lib/actions/cash";
+import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { PmsBoard } from "@/components/units/pms/pms-board";
 
@@ -15,10 +16,11 @@ export default async function PmsGridPage() {
   const startISO = start.toISOString().slice(0, 10);
   const endISO = end.toISOString().slice(0, 10);
 
-  const [units, bookings, accounts, { organization }] = await Promise.all([
+  const [units, bookings, accounts, schedule, { organization }] = await Promise.all([
     listUnitsEnriched(),
     listBookingsInRange(startISO, endISO),
     listAccounts(),
+    listScheduleInRange(startISO, endISO),
     getCurrentOrg(),
   ]);
 
@@ -27,6 +29,7 @@ export default async function PmsGridPage() {
       initialUnits={units}
       initialBookings={bookings}
       accounts={accounts}
+      initialSchedule={schedule}
       organizationId={organization.id}
       startISO={startISO}
       days={90}

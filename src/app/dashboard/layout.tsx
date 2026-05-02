@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
+import {
+  getUnreadCount,
+  listNotifications,
+} from "@/lib/actions/notifications";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/app-sidebar";
 import { TopBar } from "@/components/dashboard/top-bar";
@@ -17,6 +21,11 @@ export default async function DashboardLayout({
 
   const { organization, role } = await getCurrentOrg();
 
+  const [notifications, unreadCount] = await Promise.all([
+    listNotifications("active", 30),
+    getUnreadCount(),
+  ]);
+
   return (
     <SidebarProvider defaultOpen>
       <AppSidebar
@@ -31,6 +40,8 @@ export default async function DashboardLayout({
           currentRole={role}
           memberships={session.memberships}
           profile={session.profile}
+          notifications={notifications}
+          unreadCount={unreadCount}
         />
         <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0">
           {children}

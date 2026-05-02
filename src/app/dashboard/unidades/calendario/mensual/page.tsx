@@ -1,4 +1,6 @@
 import { listBookingsMonthlyView } from "@/lib/actions/bookings";
+import { listScheduleInRange } from "@/lib/actions/payment-schedule";
+import { listAccounts } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { PmsMonthlyBoard } from "@/components/units/pms/pms-monthly-board";
 
@@ -12,14 +14,22 @@ export default async function PmsMonthlyPage() {
   const toYear = fromYear + Math.floor((totalMonths - 1) / 12);
   const toMonth = ((totalMonths - 1) % 12) + 1;
 
-  const [cells, { organization }] = await Promise.all([
+  const fromISO = `${fromYear}-${String(fromMonth).padStart(2, "0")}-01`;
+  const lastDay = new Date(toYear, toMonth, 0).getDate();
+  const toISO = `${toYear}-${String(toMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  const [cells, schedule, accounts, { organization }] = await Promise.all([
     listBookingsMonthlyView(fromYear, fromMonth, toYear, toMonth),
+    listScheduleInRange(fromISO, toISO),
+    listAccounts(),
     getCurrentOrg(),
   ]);
 
   return (
     <PmsMonthlyBoard
       cells={cells}
+      schedule={schedule}
+      accounts={accounts}
       fromYear={fromYear}
       fromMonth={fromMonth}
       monthsCount={6}

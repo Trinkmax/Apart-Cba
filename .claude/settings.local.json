@@ -34,7 +34,8 @@
       "Bash(mv /tmp/database.ts.new /Users/ignaciobaldovino/Apart-Cba/src/lib/types/database.ts)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(echo \"exit:$?\")"
+      "Bash(echo \"exit:$?\")",
+      "Bash(echo \"EXIT=$?\")"
     ]
   }
 }

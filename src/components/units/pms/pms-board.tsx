@@ -107,6 +107,7 @@ import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { cn } from "@/lib/utils";
 import type {
   BookingMode,
+  BookingPaymentSchedule,
   BookingSource,
   BookingStatus,
   BookingWithRelations,
@@ -114,6 +115,7 @@ import type {
   Unit,
   UnitWithRelations,
 } from "@/lib/types/database";
+import { CuotaBadge } from "@/components/payment-schedule/cuota-badge";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import {
   MoveConfirmDialog,
@@ -139,6 +141,8 @@ interface PmsBoardProps {
   initialBookings: BookingWithRelations[];
   /** Cuentas de caja activas para el form de booking (cobro al crear/editar) */
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  /** Cuotas mensuales — para badges 1/N flotantes sobre las barras */
+  initialSchedule?: BookingPaymentSchedule[];
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -178,6 +182,7 @@ export function PmsBoard({
   initialUnits,
   initialBookings,
   accounts = [],
+  initialSchedule = [],
   organizationId,
   startISO,
   days,
@@ -210,6 +215,15 @@ export function PmsBoard({
   );
   // Filtro de modo: null = todos | "temporario" | "mensual"
   const [modeFilter, setModeFilter] = useState<BookingMode | null>(null);
+  // Filtro: mostrar sólo bookings con cuotas vencidas
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  // Schedule (cuotas) — sincronizado con prop
+  const [prevInitialSchedule, setPrevInitialSchedule] = useState(initialSchedule);
+  const [schedule, setSchedule] = useState(initialSchedule);
+  if (prevInitialSchedule !== initialSchedule) {
+    setPrevInitialSchedule(initialSchedule);
+    setSchedule(initialSchedule);
+  }
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
@@ -444,6 +458,26 @@ export function PmsBoard({
     return Array.from({ length: windowDays }).map((_, i) => addDays(start, i));
   }, [windowStart, windowDays]);
 
+  // ── schedule indexado por booking_id (para badges flotantes)
+  const scheduleByBooking = useMemo(() => {
+    const m = new Map<string, BookingPaymentSchedule[]>();
+    schedule.forEach((s) => {
+      const arr = m.get(s.booking_id) ?? [];
+      arr.push(s);
+      m.set(s.booking_id, arr);
+    });
+    return m;
+  }, [schedule]);
+
+  // Booking IDs con al menos una cuota vencida
+  const bookingsWithOverdue = useMemo(() => {
+    const set = new Set<string>();
+    schedule.forEach((s) => {
+      if (s.status === "overdue") set.add(s.booking_id);
+    });
+    return set;
+  }, [schedule]);
+
   // ── filtrado
   const visibleBookings = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -451,6 +485,7 @@ export function PmsBoard({
       if (!statusFilter.has(b.status)) return false;
       if (!sourceFilter.has(b.source)) return false;
       if (modeFilter && (b.mode ?? "temporario") !== modeFilter) return false;
+      if (overdueOnly && !bookingsWithOverdue.has(b.id)) return false;
       if (!q) return true;
       return (
         b.guest?.full_name?.toLowerCase().includes(q) ||
@@ -460,7 +495,7 @@ export function PmsBoard({
         false
       );
     });
-  }, [bookings, statusFilter, sourceFilter, modeFilter, query]);
+  }, [bookings, statusFilter, sourceFilter, modeFilter, query, overdueOnly, bookingsWithOverdue]);
 
   const bookingsByUnit = useMemo(() => {
     const m = new Map<string, BookingWithRelations[]>();
@@ -959,6 +994,42 @@ export function PmsBoard({
 
               {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens) */}
               <ModeFilterToggle value={modeFilter} onChange={setModeFilter} />
+
+              {/* Cuotas vencidas: chip toggle. Muestra el contador si hay vencidas */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={overdueOnly ? "default" : "outline"}
+                    onClick={() => setOverdueOnly((v) => !v)}
+                    className={cn(
+                      "h-8 gap-1 text-xs",
+                      bookingsWithOverdue.size > 0 && !overdueOnly &&
+                        "border-rose-300/70 dark:border-rose-700/60 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    )}
+                    aria-pressed={overdueOnly}
+                  >
+                    <span className={cn(
+                      "size-1.5 rounded-full",
+                      bookingsWithOverdue.size > 0
+                        ? "bg-rose-500 animate-pulse"
+                        : "bg-muted-foreground/40"
+                    )} />
+                    Cuotas vencidas
+                    {bookingsWithOverdue.size > 0 && (
+                      <span className="ml-0.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold tabular-nums">
+                        {bookingsWithOverdue.size}
+                      </span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {bookingsWithOverdue.size === 0
+                    ? "No hay cuotas vencidas"
+                    : `${bookingsWithOverdue.size} reserva${bookingsWithOverdue.size === 1 ? "" : "s"} con cuota vencida`}
+                </TooltipContent>
+              </Tooltip>
 
               {/* Buscar deptos: filtros por disponibilidad/cap/precio */}
               <Popover>
@@ -1616,6 +1687,8 @@ export function PmsBoard({
                         key={b.id}
                         booking={b}
                         leaseInfo={leaseGroupIndex.get(b.id) ?? null}
+                        scheduleForBooking={scheduleByBooking.get(b.id) ?? []}
+                        accounts={accounts}
                         windowStart={windowStart}
                         windowDays={windowDays}
                         cellWidth={CELL}
@@ -1633,7 +1706,6 @@ export function PmsBoard({
                         onRequestDateChange={requestDateChangeFromPopover}
                         unitCode={unit.code}
                         unitName={unit.name}
-                        accounts={accounts}
                       />
                     ))}
                   </div>
@@ -1988,6 +2060,9 @@ interface BookingBarProps {
   booking: BookingWithRelations;
   /** Posición del booking dentro de su lease group (null si no es lease) */
   leaseInfo: { index: number; total: number } | null;
+  /** Cuotas mensuales de esta booking (para badges 1/N flotantes) */
+  scheduleForBooking?: BookingPaymentSchedule[];
+  accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   windowStart: string;
   windowDays: number;
   cellWidth: number;
@@ -2013,12 +2088,13 @@ interface BookingBarProps {
   ) => void;
   unitCode: string;
   unitName: string;
-  accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
 }
 
 function BookingBar({
   booking,
   leaseInfo,
+  scheduleForBooking = [],
+  accounts,
   windowStart,
   windowDays,
   cellWidth,
@@ -2033,7 +2109,6 @@ function BookingBar({
   onRequestDateChange,
   unitCode,
   unitName,
-  accounts,
 }: BookingBarProps) {
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
   // (15:00 → +0.625 del día; 11:00 → +0.458 del día). Esto hace que la barra "pise"
@@ -2222,6 +2297,39 @@ function BookingBar({
               onPointerUp={(e) => onPointerUp(e, booking)}
             >
               <div className="h-full w-px bg-white/40 mx-auto opacity-0 group-hover/handle:opacity-100" />
+            </div>
+          )}
+
+          {/* Cuota badges flotantes — posicionadas en el due_date exacto */}
+          {bookingMode === "mensual" && scheduleForBooking.length > 0 && (
+            <div
+              aria-hidden={false}
+              className="absolute inset-x-0 -top-2 pointer-events-none"
+            >
+              {scheduleForBooking.map((s) => {
+                // Posición relativa al inicio de la barra (clippedStart en grid coords)
+                const dueOff = dayOffset(windowStart, s.due_date) + 0.5;
+                if (dueOff < clippedStart || dueOff > clippedEnd) return null;
+                const leftPx = (dueOff - clippedStart) * cellWidth;
+                return (
+                  <div
+                    key={s.id}
+                    className="absolute pointer-events-auto"
+                    style={{
+                      left: leftPx,
+                      transform: "translate(-50%, 0)",
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <CuotaBadge
+                      schedule={s}
+                      bookingId={booking.id}
+                      accounts={accounts}
+                      size="sm"
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
