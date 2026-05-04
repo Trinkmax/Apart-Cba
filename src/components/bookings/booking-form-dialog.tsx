@@ -37,6 +37,11 @@ import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/b
 import { searchGuests } from "@/lib/actions/guests";
 import { BOOKING_MODE_META, BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
 import { formatNights } from "@/lib/format";
+import {
+  MAX_BOOKING_NIGHTS,
+  nightsBetween,
+  splitBookingSegments,
+} from "@/lib/booking-split";
 import { cn } from "@/lib/utils";
 import type {
   Booking,
@@ -67,38 +72,8 @@ function formatMoneyValue(n: number | null | undefined): string {
   return Number.isInteger(n) ? String(n) : String(n);
 }
 
-function nightsBetween(ciISO: string, coISO: string): number {
-  if (!ciISO || !coISO || coISO <= ciISO) return 0;
-  const a = new Date(ciISO + "T12:00:00").getTime();
-  const b = new Date(coISO + "T12:00:00").getTime();
-  return Math.round((b - a) / 86_400_000);
-}
-
-// Espejo cliente de splitMonthlySegments (server). Mantener sincronizado.
-function splitMonthlyPreview(
-  ci: string,
-  co: string
-): { from: string; to: string; nights: number }[] {
-  const total = nightsBetween(ci, co);
-  if (total <= 30) return [];
-  const segs: { from: string; to: string; nights: number }[] = [];
-  let cursor = ci;
-  for (let i = 0; i < 60; i++) {
-    if (cursor >= co) break;
-    const d = new Date(cursor + "T12:00:00");
-    const day = d.getDate();
-    d.setMonth(d.getMonth() + 1);
-    if (d.getDate() !== day) d.setDate(0);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    let next = `${y}-${m}-${dd}`;
-    if (next > co) next = co;
-    segs.push({ from: cursor, to: next, nights: nightsBetween(cursor, next) });
-    cursor = next;
-  }
-  return segs.length >= 2 ? segs : [];
-}
+// Util compartido (mismo módulo que usa el server action) — mantiene cliente y
+// servidor en sync por construcción. NO duplicar la lógica acá.
 
 type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
 
@@ -332,14 +307,17 @@ export function BookingFormDialog({
     commissionPctNum !== null ? (totalNum * commissionPctNum) / 100 : 0;
   const ownerNet = totalNum - commissionAmount - cleaningNum;
 
-  // ─── Split preview: si la mensual va a partirse en N períodos ───
+  // ─── Split preview: cualquier reserva > MAX_BOOKING_NIGHTS se divide ───
   const splitSegments =
     !isEdit &&
-    form.mode === "mensual" &&
     form.check_in_date &&
     form.check_out_date &&
     form.check_out_date > form.check_in_date
-      ? splitMonthlyPreview(form.check_in_date, form.check_out_date)
+      ? splitBookingSegments(
+          form.check_in_date,
+          form.check_out_date,
+          MAX_BOOKING_NIGHTS
+        )
       : [];
 
   // ─── Warning si la unidad tiene vocación distinta al modo elegido (excepto mixto) ───
@@ -564,7 +542,14 @@ export function BookingFormDialog({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="space-y-1.5">
               <Label>Check-in *</Label>
-              <Input type="date" required value={form.check_in_date} onChange={(e) => set("check_in_date", e.target.value)} />
+              <Input
+                type="date"
+                required
+                min="2020-01-01"
+                max="2100-12-31"
+                value={form.check_in_date}
+                onChange={(e) => set("check_in_date", e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Hora</Label>
@@ -572,7 +557,14 @@ export function BookingFormDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Check-out *</Label>
-              <Input type="date" required value={form.check_out_date} onChange={(e) => set("check_out_date", e.target.value)} />
+              <Input
+                type="date"
+                required
+                min={form.check_in_date || "2020-01-01"}
+                max="2100-12-31"
+                value={form.check_out_date}
+                onChange={(e) => set("check_out_date", e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Hora</Label>
@@ -713,17 +705,18 @@ export function BookingFormDialog({
             </div>
           )}
 
-          {/* Split preview: la reserva se va a dividir en N períodos mensuales */}
+          {/* Split preview: la reserva se va a dividir en N períodos */}
           {splitSegments.length >= 2 && (
             <div className="rounded-lg border border-violet-300/60 bg-violet-50 dark:bg-violet-950/30 dark:border-violet-800/40 p-3 space-y-2">
               <div className="flex items-center gap-2">
                 <House size={14} className="text-violet-700 dark:text-violet-300" />
                 <span className="text-xs font-semibold text-violet-900 dark:text-violet-100">
-                  Esta reserva se dividirá en {splitSegments.length} períodos mensuales
+                  Esta reserva se dividirá en {splitSegments.length} períodos de hasta {MAX_BOOKING_NIGHTS} noches
                 </span>
               </div>
               <p className="text-[11px] text-violet-800/80 dark:text-violet-300/80">
-                Cada período se factura, cobra y liquida de forma independiente.
+                Una reserva no puede exceder {MAX_BOOKING_NIGHTS} noches. Cada
+                período se factura, cobra y liquida de forma independiente.
                 Quedan agrupados en el mismo contrato (lease group) y se ven
                 consecutivos en el calendario.
               </p>

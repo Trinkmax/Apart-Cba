@@ -6,12 +6,27 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
+import {
+  MAX_BOOKING_NIGHTS,
+  nightsBetween,
+  splitBookingSegments,
+} from "@/lib/booking-split";
 import type {
   Booking,
   BookingExtension,
   BookingWithRelations,
   BookingStatus,
 } from "@/lib/types/database";
+
+// Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
+// en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
+// un error de tipeo y no una reserva real.
+const sanitizedDate = z
+  .string()
+  .regex(
+    /^(20[2-9]\d|2100)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
+    "Fecha inválida"
+  );
 
 const bookingSchema = z.object({
   unit_id: z.string().uuid("Unidad requerida"),
@@ -22,9 +37,9 @@ const bookingSchema = z.object({
   external_id: z.string().optional().nullable(),
   status: z.enum(["pendiente","confirmada","check_in","check_out","cancelada","no_show"]).default("confirmada"),
   mode: z.enum(["temporario", "mensual"]).default("temporario"),
-  check_in_date: z.string().min(10, "Fecha check-in requerida"),
+  check_in_date: sanitizedDate,
   check_in_time: z.string().default("14:00"),
-  check_out_date: z.string().min(10, "Fecha check-out requerida"),
+  check_out_date: sanitizedDate,
   check_out_time: z.string().default("10:00"),
   guests_count: z.coerce.number().int().min(1).default(1),
   currency: z.string().default("ARS"),
@@ -57,72 +72,6 @@ export type BookingInput = z.infer<typeof bookingSchema>;
 export type BookingInputWithAccount = BookingInput & {
   account_id?: string | null;
 };
-
-// ════════════════════════════════════════════════════════════════════════════
-// Lease groups: split de reservas mensuales largas en N períodos mensuales
-// ════════════════════════════════════════════════════════════════════════════
-
-/** Suma 1 mes calendario clamping al fin de mes destino para evitar 31→3 mar. */
-function addOneCalendarMonth(iso: string): string {
-  const d = new Date(iso + "T12:00:00");
-  const day = d.getDate();
-  d.setMonth(d.getMonth() + 1);
-  if (d.getDate() !== day) {
-    // El mes destino es más corto (ej. 31 ene → habría rolado a 3 mar)
-    d.setDate(0); // último día del mes anterior = último día del mes destino real
-  }
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${dd}`;
-}
-
-interface LeaseSegment {
-  from: string;
-  to: string;
-  nights: number;
-  /** Es el último segmento (puede ser parcial) */
-  isLast: boolean;
-}
-
-/**
- * Divide un rango de fechas en segmentos mensuales (1 mes calendario c/u).
- * Si el último segmento es < 1 mes completo, queda como segmento parcial.
- * Para rangos <= 30 días, retorna [] (no hay split).
- *
- * Ejemplo: 2026-05-15 → 2026-08-15
- *   [{ from: 2026-05-15, to: 2026-06-15, nights: 31 },
- *    { from: 2026-06-15, to: 2026-07-15, nights: 30 },
- *    { from: 2026-07-15, to: 2026-08-15, nights: 31, isLast: true }]
- */
-function splitMonthlySegments(
-  checkIn: string,
-  checkOut: string
-): LeaseSegment[] {
-  const totalNights = nightsBetween(checkIn, checkOut);
-  if (totalNights <= 30) return [];
-
-  const segments: LeaseSegment[] = [];
-  let cursor = checkIn;
-  // Hard cap defensivo: 60 segmentos = 5 años. Si pasa, hay un bug arriba.
-  for (let i = 0; i < 60; i++) {
-    if (cursor >= checkOut) break;
-    let next = addOneCalendarMonth(cursor);
-    if (next > checkOut) next = checkOut;
-    segments.push({
-      from: cursor,
-      to: next,
-      nights: nightsBetween(cursor, next),
-      isLast: next === checkOut,
-    });
-    cursor = next;
-  }
-
-  // Si quedó un solo segmento (puede pasar si por algún edge addOneCalendarMonth
-  // lo dejó completo en el primer salto), abortamos el split.
-  if (segments.length < 2) return [];
-  return segments;
-}
 
 // Sincroniza `paid_amount` con caja: genera un cash_movement por el delta
 // (positivo = nuevo cobro, negativo = devolución). Si delta = 0 no hace nada.
@@ -169,6 +118,175 @@ async function syncBookingPaymentToCash(params: {
     occurred_at: new Date().toISOString(),
   });
   if (error) throw new Error(`Error al registrar movimiento de caja: ${error.message}`);
+}
+
+/**
+ * Si una reserva existente quedó con > MAX_BOOKING_NIGHTS (típicamente porque
+ * se la extendió con moveBookingTransaction o updateBooking), la "materializa"
+ * en N reservas back-to-back:
+ *   - La fila original se RECORTA al primer segmento (mismo id, se preserva
+ *     historial de extensiones, payments, etc).
+ *   - Se INSERTAN N-1 filas nuevas con los segmentos restantes.
+ *   - Si ninguna estaba en un lease_group, se crea uno nuevo y todas quedan
+ *     bajo el mismo grupo.
+ *   - total_amount, commission_amount y cleaning_fee se prorratean igual que
+ *     en createBooking (cleaning sólo en el último; paid en el primero).
+ *
+ * Idempotente: si la reserva ya cabe en el cap, no hace nada.
+ *
+ * NO maneja conflictos con otras reservas en la unidad — si el rango chocaba,
+ * la operación previa (UPDATE) ya hubiera fallado por bookings_no_overlap.
+ * Igual capturamos ese error al insertar nuevos segmentos por si el delta
+ * agregó un solapamiento.
+ */
+async function enforceLeaseSplitOnExisting(params: {
+  bookingId: string;
+  organizationId: string;
+  userId: string;
+}): Promise<void> {
+  const admin = createAdminClient();
+  const { data: original, error } = await admin
+    .from("bookings")
+    .select("*")
+    .eq("id", params.bookingId)
+    .eq("organization_id", params.organizationId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!original) return;
+
+  const segments = splitBookingSegments(
+    original.check_in_date,
+    original.check_out_date,
+    MAX_BOOKING_NIGHTS
+  );
+  if (segments.length < 2) return; // ya cabe en el cap
+
+  const totalNights = nightsBetween(
+    original.check_in_date,
+    original.check_out_date
+  );
+  const totalAmount = Number(original.total_amount) || 0;
+  const commissionPctValue = Number(original.commission_pct) || 0;
+  const cleaningFeeOriginal = Number(original.cleaning_fee) || 0;
+  const leaseGroupId = original.lease_group_id ?? crypto.randomUUID();
+
+  // Segmento 0: UPDATE de la fila original (recorte + prorrateo).
+  const seg0 = segments[0];
+  const seg0Share = totalNights > 0 ? seg0.nights / totalNights : 0;
+  const seg0Amount = Math.round(totalAmount * seg0Share * 100) / 100;
+  const seg0Commission =
+    Math.round((seg0Amount * commissionPctValue) / 100 * 100) / 100;
+  // Cleaning fee va al último segmento — la fila original deja de tenerlo
+  // (salvo que originalmente ya fuera el último, lo cual no aplica acá).
+  const { error: errUpd } = await admin
+    .from("bookings")
+    .update({
+      check_out_date: seg0.to,
+      check_out_time: "12:00",
+      total_amount: seg0Amount,
+      commission_amount: seg0Commission,
+      cleaning_fee: 0,
+      lease_group_id: leaseGroupId,
+    })
+    .eq("id", original.id)
+    .eq("organization_id", params.organizationId);
+  if (errUpd) {
+    if (errUpd.message.includes("bookings_no_overlap")) {
+      throw new Error(
+        "Conflicto al recortar la reserva al primer período: ya hay otra reserva en esa unidad"
+      );
+    }
+    throw new Error(errUpd.message);
+  }
+
+  // Segmentos 1..N-1: INSERT de filas nuevas. Si algún insert falla, hacemos
+  // rollback: borramos los nuevos y restauramos check_out_date/montos en la
+  // fila original.
+  const inserted: string[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i];
+    const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
+    const segAmount = Math.round(totalAmount * segShare * 100) / 100;
+    const segCommission =
+      Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
+    const isLast = i === segments.length - 1;
+    const segCleaningFee = isLast ? cleaningFeeOriginal : 0;
+
+    const { data: ins, error: errIns } = await admin
+      .from("bookings")
+      .insert({
+        organization_id: params.organizationId,
+        unit_id: original.unit_id,
+        guest_id: original.guest_id,
+        source: original.source,
+        external_id: null,
+        status: original.status,
+        mode: original.mode,
+        check_in_date: seg.from,
+        check_in_time: "12:00",
+        check_out_date: seg.to,
+        check_out_time: isLast ? original.check_out_time : "12:00",
+        guests_count: original.guests_count,
+        currency: original.currency,
+        total_amount: segAmount,
+        paid_amount: 0,
+        commission_pct: original.commission_pct,
+        commission_amount: segCommission,
+        cleaning_fee: segCleaningFee,
+        monthly_rent: original.monthly_rent,
+        monthly_expenses: original.monthly_expenses,
+        security_deposit: original.security_deposit,
+        monthly_inflation_adjustment_pct:
+          original.monthly_inflation_adjustment_pct,
+        rent_billing_day: original.rent_billing_day,
+        notes: `Período ${i + 1}/${segments.length} del contrato.`,
+        internal_notes: original.internal_notes,
+        lease_group_id: leaseGroupId,
+        created_by: params.userId,
+      })
+      .select("id")
+      .single();
+
+    if (errIns) {
+      // Rollback: borrar los insertados y restaurar la fila original.
+      if (inserted.length > 0) {
+        await admin.from("bookings").delete().in("id", inserted);
+      }
+      await admin
+        .from("bookings")
+        .update({
+          check_out_date: original.check_out_date,
+          check_out_time: original.check_out_time,
+          total_amount: original.total_amount,
+          commission_amount: original.commission_amount,
+          cleaning_fee: original.cleaning_fee,
+          lease_group_id: original.lease_group_id,
+        })
+        .eq("id", original.id)
+        .eq("organization_id", params.organizationId);
+      if (errIns.message.includes("bookings_no_overlap")) {
+        throw new Error(
+          `Conflicto al crear el período ${i + 1}/${segments.length} (${seg.from} → ${seg.to}): ya hay una reserva en esa unidad`
+        );
+      }
+      throw new Error(errIns.message);
+    }
+    inserted.push(ins.id);
+  }
+
+  // Si la original era mensual, regenerar payment_schedule por cada segmento.
+  if (original.mode === "mensual") {
+    const allIds = [original.id, ...inserted];
+    for (const id of allIds) {
+      const { error: schErr } = await admin.rpc(
+        "generate_payment_schedule_for_booking",
+        { p_booking_id: id }
+      );
+      if (schErr) {
+        console.error("generate_payment_schedule_for_booking failed", schErr);
+      }
+    }
+  }
 }
 
 export async function listBookings(filters?: {
@@ -304,13 +422,14 @@ export async function createBooking(
 
   const admin = createAdminClient();
 
-  // ─── ¿Es una mensual larga? Split automático en períodos mensuales ───
-  const shouldSplit =
-    validated.mode === "mensual" &&
-    nightsBetween(validated.check_in_date, validated.check_out_date) > 30;
-  const segments = shouldSplit
-    ? splitMonthlySegments(validated.check_in_date, validated.check_out_date)
-    : [];
+  // ─── Split universal: ninguna reserva puede exceder MAX_BOOKING_NIGHTS ───
+  // Aplica a cualquier modo (temporario, mensual, etc). Si excede el cap, se
+  // divide en chunks consecutivos de MAX noches + remanente.
+  const segments = splitBookingSegments(
+    validated.check_in_date,
+    validated.check_out_date,
+    MAX_BOOKING_NIGHTS
+  );
 
   if (segments.length >= 2) {
     // Generamos lease_group_id en cliente (UUID v4 via crypto)
@@ -355,9 +474,8 @@ export async function createBooking(
           notes:
             i === 0
               ? validated.notes
-              : `Período ${i + 1}/${segments.length} del contrato (mes ${i + 1}).`,
-          internal_notes:
-            i === 0 ? validated.internal_notes : validated.internal_notes,
+              : `Período ${i + 1}/${segments.length} del contrato.`,
+          internal_notes: validated.internal_notes,
           organization_id: organization.id,
           created_by: session.userId,
         })
@@ -494,7 +612,7 @@ export async function updateBooking(
   id: string,
   input: BookingInputWithAccount
 ): Promise<Booking> {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const { account_id: accountId, ...rest } = input;
   const validated = bookingSchema.parse(rest);
@@ -580,6 +698,14 @@ export async function updateBooking(
       .eq("organization_id", organization.id)
       .in("status", ["pending", "overdue", "partial"]);
   }
+
+  // Si la edición dejó la reserva con > MAX_BOOKING_NIGHTS, partirla en
+  // segmentos consecutivos. Idempotente: si ya cabe, no hace nada.
+  await enforceLeaseSplitOnExisting({
+    bookingId: id,
+    organizationId: organization.id,
+    userId: session.userId,
+  });
 
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${id}`);
@@ -918,12 +1044,6 @@ export async function previewBookingChange(input: {
   };
 }
 
-function nightsBetween(ciISO: string, coISO: string): number {
-  const ci = new Date(ciISO + "T12:00:00");
-  const co = new Date(coISO + "T12:00:00");
-  return Math.round((co.getTime() - ci.getTime()) / 86_400_000);
-}
-
 /**
  * Aplica un cambio de fechas/unit a una reserva tras pasar por el modal de
  * confirmación. A diferencia de la versión legacy `moveBooking`, ésta:
@@ -939,7 +1059,7 @@ export async function moveBookingTransaction(input: {
   total_amount?: number | null;
   reason?: string | null;
 }): Promise<Booking> {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "bookings", "update")) {
     throw new Error("No tenés permisos para mover reservas");
@@ -1025,6 +1145,14 @@ export async function moveBookingTransaction(input: {
         .eq("id", lastExt.id);
     }
   }
+
+  // Si el move/extend dejó la reserva con > MAX_BOOKING_NIGHTS, partirla.
+  // Idempotente: si ya cabe, no hace nada.
+  await enforceLeaseSplitOnExisting({
+    bookingId: input.id,
+    organizationId: organization.id,
+    userId: session.userId,
+  });
 
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${input.id}`);
