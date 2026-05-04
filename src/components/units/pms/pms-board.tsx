@@ -465,24 +465,27 @@ export function PmsBoard({
     const node = dragNodeRef.current;
     const orig = dragOriginRef.current;
     if (node) {
-      // Activamos transición inline para que el siguiente cambio de
-      // left/width/top se anime suavemente hasta el target (≈220ms, easing
-      // tipo "spring suave"). Incluimos transform/box-shadow para que la
-      // barra desescale suave del 1.02 al 1.0 cuando se quita la clase
-      // `isDragging` simultáneamente. Esta transición sobrescribe la del
-      // className por unos 280ms y después se limpia.
+      // Activamos transición inline para animar suavemente el snap-back.
+      // Como el drag escribe `transform` (translate3d + scale 1.02), la
+      // animación principal de retorno usa también `transform` — GPU,
+      // smooth. `width` se transiciona para resize. `left/top` por si en
+      // el futuro algún cambio en React-state mueve la barra durante la
+      // animación. ~220ms ease-out estilo "spring suave".
       node.style.transition =
-        "left 220ms cubic-bezier(0.22,1,0.36,1), top 220ms cubic-bezier(0.22,1,0.36,1), width 220ms cubic-bezier(0.22,1,0.36,1), transform 200ms ease-out, box-shadow 200ms ease-out";
+        "transform 220ms cubic-bezier(0.22,1,0.36,1), width 220ms cubic-bezier(0.22,1,0.36,1), left 220ms cubic-bezier(0.22,1,0.36,1), top 220ms cubic-bezier(0.22,1,0.36,1), box-shadow 200ms ease-out";
+      // Limpiamos siempre el transform (la barra deja de estar "elevada" y
+      // vuelve al flow del layout — su posición final la define el `style`
+      // de React). Si `commitToOrigin`, reseteamos también el width.
+      node.style.transform = "";
       if (commitToOrigin && orig) {
-        node.style.left = `${orig.left}px`;
         node.style.width = `${orig.width}px`;
-        node.style.top = `${orig.top}px`;
       }
-      // Cleanup: liberar la inline-transition tras la animación para que
-      // futuros cambios (hover, drag) usen la transición del className.
+      // Cleanup: liberar la inline-transition + transform tras la animación
+      // para que futuros cambios (hover, drag) usen la transición del className.
       const target = node;
       window.setTimeout(() => {
         target.style.transition = "";
+        target.style.transform = "";
       }, 280);
     }
     dragNodeRef.current = null;
@@ -1003,22 +1006,31 @@ export function PmsBoard({
       return;
     }
     // 1) Posición pixel-perfect en el DOM (sin React) — sigue al puntero.
+    //    Usamos `transform: translate3d()` en vez de `left/top` porque React
+    //    reconcilia `style.left/top` cada re-render (Radix `<PopoverAnchor
+    //    asChild>` re-mergea el style del hijo, sobrescribiendo nuestros
+    //    inline writes). `transform` no aparece en el `style` prop de
+    //    BookingBar, así que React nunca lo toca → el DOM write persiste.
+    //    Bonus: transform es GPU-accelerated → 60fps incluso en mobile lento.
+    //    Incluimos `scale(1.02)` para preservar el "lift" visual del drag
+    //    (reemplaza la clase `scale-[1.02]` que el className activaría).
     const node = dragNodeRef.current;
     const orig = dragOriginRef.current;
     if (node && orig) {
       if (d.mode === "move") {
-        node.style.left = `${orig.left + rawDx}px`;
-        node.style.top = `${orig.top + rawDy}px`;
+        node.style.transform = `translate3d(${rawDx}px, ${rawDy}px, 0) scale(1.02)`;
       } else if (d.mode === "resize-left") {
-        // resize-left: el lado derecho queda fijo. Limitamos a 1 día mínimo
-        // (CELL px de ancho) para que nunca se invierta visualmente.
+        // resize-left: el lado derecho queda fijo. Trasladamos la barra y
+        // achicamos el ancho proporcionalmente. minWidth = 1 día.
         const minWidth = CELL - 4;
         const dx = Math.min(rawDx, orig.width - minWidth);
-        node.style.left = `${orig.left + dx}px`;
+        node.style.transform = `translate3d(${dx}px, 0, 0) scale(1.02)`;
         node.style.width = `${orig.width - dx}px`;
       } else if (d.mode === "resize-right") {
+        // resize-right: lado izquierdo fijo, sólo crece/decrece el ancho.
         const minWidth = CELL - 4;
         const dx = Math.max(rawDx, minWidth - orig.width);
+        node.style.transform = `scale(1.02)`;
         node.style.width = `${orig.width + dx}px`;
       }
     }
@@ -2849,7 +2861,11 @@ function BookingBar({
             // breve window post-drag, así no interfiere con navegación o
             // shift de windowStart.
             "transition-[transform,box-shadow] duration-150",
-            isDragging && "ring-2 ring-primary z-20 shadow-xl scale-[1.02] cursor-grabbing",
+            // El "scale-[1.02]" durante el drag lo aplicamos via inline
+            // `style.transform` desde syncDragFromPointer (que también
+            // contiene la translate del puntero). Si lo agregamos acá
+            // colisiona con el inline transform.
+            isDragging && "ring-2 ring-primary z-20 shadow-xl cursor-grabbing",
             !isDragging && "cursor-grab",
             booking.status === "cancelada" && "opacity-55"
           )}
