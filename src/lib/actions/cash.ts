@@ -1002,6 +1002,149 @@ export async function listLatestAuditByAccount(
   return map;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Exportación de movimientos
+// ════════════════════════════════════════════════════════════════════════════
+
+const EXPORT_CAP = 50000;
+
+const exportFiltersSchema = z.object({
+  fromDate: z.string().min(1, "Fecha inicial requerida"),
+  toDate: z.string().min(1, "Fecha final requerida"),
+  accountIds: z.array(z.string().uuid()).optional(),
+  categories: z
+    .array(
+      z.enum([
+        "booking_payment", "maintenance", "cleaning", "owner_settlement", "transfer",
+        "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other",
+      ])
+    )
+    .optional(),
+  direction: z.enum(["in", "out", "all"]).default("all"),
+  billableTo: z.enum(["apartcba", "owner", "guest", "all"]).default("all"),
+});
+
+export type ExportMovementsFilters = z.input<typeof exportFiltersSchema>;
+
+export type ExportMovementRow = {
+  id: string;
+  occurred_at: string;
+  account_id: string;
+  account_name: string;
+  currency: string;
+  direction: MovementDirection;
+  category: MovementCategory;
+  amount: number;
+  unit_code: string | null;
+  unit_name: string | null;
+  owner_name: string | null;
+  description: string | null;
+  billable_to: "apartcba" | "owner" | "guest";
+  created_by_name: string | null;
+  running_balance: number;
+};
+
+export async function exportMovements(input: ExportMovementsFilters): Promise<ExportMovementRow[]> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const validated = exportFiltersSchema.parse(input);
+  const admin = createAdminClient();
+
+  let q = admin
+    .from("v_cash_movements_enriched")
+    .select(
+      `id, occurred_at, account_id, account_name, currency, direction, category, amount, unit_id, owner_id, description, billable_to, created_by, running_balance`
+    )
+    .eq("organization_id", organization.id)
+    .gte("occurred_at", validated.fromDate)
+    .lte("occurred_at", validated.toDate);
+
+  if (validated.accountIds?.length) q = q.in("account_id", validated.accountIds);
+  if (validated.categories?.length) q = q.in("category", validated.categories);
+  if (validated.direction !== "all") q = q.eq("direction", validated.direction);
+  if (validated.billableTo !== "all") q = q.eq("billable_to", validated.billableTo);
+
+  const { data, error } = await q
+    .order("occurred_at", { ascending: true })
+    .order("created_at", { ascending: true })
+    .limit(EXPORT_CAP + 1);
+  if (error) throw new Error(error.message);
+
+  if ((data?.length ?? 0) > EXPORT_CAP) {
+    throw new Error(
+      `La exportación excede el límite de ${EXPORT_CAP.toLocaleString("es-AR")} movimientos. Reducí el rango de fechas o ajustá los filtros.`
+    );
+  }
+
+  const rows = (data ?? []) as Array<{
+    id: string;
+    occurred_at: string;
+    account_id: string;
+    account_name: string;
+    currency: string;
+    direction: MovementDirection;
+    category: MovementCategory;
+    amount: number;
+    unit_id: string | null;
+    owner_id: string | null;
+    description: string | null;
+    billable_to: "apartcba" | "owner" | "guest";
+    created_by: string | null;
+    running_balance: number;
+  }>;
+
+  if (rows.length === 0) return [];
+
+  const unitIds = Array.from(new Set(rows.map((r) => r.unit_id).filter(Boolean) as string[]));
+  const ownerIds = Array.from(new Set(rows.map((r) => r.owner_id).filter(Boolean) as string[]));
+  const userIds = Array.from(new Set(rows.map((r) => r.created_by).filter(Boolean) as string[]));
+
+  const [{ data: units }, { data: owners }, { data: profiles }] = await Promise.all([
+    unitIds.length
+      ? admin
+          .from("units")
+          .select("id, code, name")
+          .in("id", unitIds)
+          .eq("organization_id", organization.id)
+      : Promise.resolve({ data: [] as Array<{ id: string; code: string; name: string }> }),
+    ownerIds.length
+      ? admin
+          .from("owners")
+          .select("id, full_name")
+          .in("id", ownerIds)
+          .eq("organization_id", organization.id)
+      : Promise.resolve({ data: [] as Array<{ id: string; full_name: string }> }),
+    userIds.length
+      ? admin.from("user_profiles").select("user_id, full_name").in("user_id", userIds)
+      : Promise.resolve({ data: [] as Array<{ user_id: string; full_name: string }> }),
+  ]);
+
+  const unitMap = new Map((units ?? []).map((u) => [u.id, u]));
+  const ownerMap = new Map((owners ?? []).map((o) => [o.id, o.full_name]));
+  const userMap = new Map((profiles ?? []).map((p) => [p.user_id, p.full_name]));
+
+  return rows.map((r) => {
+    const u = r.unit_id ? unitMap.get(r.unit_id) ?? null : null;
+    return {
+      id: r.id,
+      occurred_at: r.occurred_at,
+      account_id: r.account_id,
+      account_name: r.account_name,
+      currency: r.currency,
+      direction: r.direction,
+      category: r.category,
+      amount: Number(r.amount),
+      unit_code: u?.code ?? null,
+      unit_name: u?.name ?? null,
+      owner_name: r.owner_id ? ownerMap.get(r.owner_id) ?? null : null,
+      description: r.description,
+      billable_to: r.billable_to,
+      created_by_name: r.created_by ? userMap.get(r.created_by) ?? null : null,
+      running_balance: Number(r.running_balance),
+    };
+  });
+}
+
 function mapRpcErrorToSpanish(raw: string): string {
   if (raw.includes("TRANSFER_REQUIRES_CONFIRM"))
     return "Esta es una transferencia: confirmá que querés eliminar ambos movimientos.";

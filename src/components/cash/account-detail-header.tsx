@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, ArrowDownToLine, ArrowUpFromLine, Wallet } from "lucide-react";
+import { ArrowLeft, ArrowDownToLine, ArrowUpFromLine, Download, Wallet } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +7,7 @@ import { formatMoney } from "@/lib/format";
 import { RunningBalanceSparkline } from "./running-balance-sparkline";
 import { MovementFormDialog } from "./movement-form-dialog";
 import { TransferFormDialog } from "./transfer-form-dialog";
+import { ExportMovementsDialog } from "./export-movements-dialog";
 import type { CashAccount, Unit } from "@/lib/types/database";
 import type { AccountStats } from "@/lib/actions/cash";
 
@@ -40,6 +41,15 @@ export function AccountDetailHeader({ account, balance, stats, accounts, units }
           <ArrowLeft size={14} /> Caja
         </Link>
         <div className="flex items-center gap-2 flex-wrap">
+          <ExportMovementsDialog
+            accounts={accounts}
+            accountId={account.id}
+            trigger={
+              <Button variant="outline" size="sm" className="gap-1.5">
+                <Download size={14} /> <span className="hidden sm:inline">Exportar</span>
+              </Button>
+            }
+          />
           <TransferFormDialog accounts={accounts}>
             <Button variant="outline" size="sm" className="gap-1.5">
               ⇄ <span className="hidden sm:inline">Transferir</span>

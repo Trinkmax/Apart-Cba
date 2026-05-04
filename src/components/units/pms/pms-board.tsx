@@ -104,6 +104,7 @@ import {
 } from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
+import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/format";
 import type {
@@ -181,6 +182,42 @@ interface DragState {
   moved: boolean;
 }
 
+// Calcula el resultado real de aplicar el drag actual a una booking. Lógica
+// compartida entre el commit (`onBarPointerUp`), el chip flotante (`DragChip`)
+// y el highlight visual del target (`<DragTargetHighlight>`). Mantener una
+// sola fuente de verdad acá evita que el feedback visual y la mutación final
+// se desincronicen.
+function computeDragTarget(
+  drag: DragState,
+  booking: BookingWithRelations,
+  units: UnitWithRelations[]
+): {
+  newCheckIn: string;
+  newCheckOut: string;
+  newUnitId: string;
+} {
+  let newCheckIn = booking.check_in_date;
+  let newCheckOut = booking.check_out_date;
+  let newUnitId = booking.unit_id;
+  if (drag.mode === "move") {
+    newCheckIn = isoAddDays(drag.originalCheckIn, drag.dayDelta);
+    newCheckOut = isoAddDays(drag.originalCheckOut, drag.dayDelta);
+    const curRow = units.findIndex((u) => u.id === drag.originalUnitId);
+    const newRow = Math.max(
+      0,
+      Math.min(units.length - 1, curRow + drag.rowDelta)
+    );
+    newUnitId = units[newRow]?.id ?? newUnitId;
+  } else if (drag.mode === "resize-left") {
+    newCheckIn = isoAddDays(drag.originalCheckIn, drag.dayDelta);
+    if (newCheckIn >= newCheckOut) newCheckIn = isoAddDays(newCheckOut, -1);
+  } else if (drag.mode === "resize-right") {
+    newCheckOut = isoAddDays(drag.originalCheckOut, drag.dayDelta);
+    if (newCheckOut <= newCheckIn) newCheckOut = isoAddDays(newCheckIn, 1);
+  }
+  return { newCheckIn, newCheckOut, newUnitId };
+}
+
 // ─── Componente principal ───────────────────────────────────────────────────
 export function PmsBoard({
   initialUnits,
@@ -193,6 +230,7 @@ export function PmsBoard({
   orgCurrency = "ARS",
 }: PmsBoardProps) {
   const router = useRouter();
+  const statusColors = useBookingStatusColors();
   // ── estado base
   // Sincronizamos units/bookings cuando llegan nuevos props (router.refresh tras
   // crear/editar). Patrón "ajuste de state durante render" — reemplaza al
@@ -342,11 +380,24 @@ export function PmsBoard({
   } | null>(null);
 
   // ── refs + drag state
-  // `drag` state se lee en render. `dragRef` se lee desde los handlers de
-  // pointer (síncrono, sin stale-closures). Ambos se mantienen en sync.
+  // Arquitectura del drag (clave para fluidez):
+  //  • `dragRef`      — lectura síncrona desde los handlers de pointer/rAF
+  //                     (sin stale-closures). Se muta directamente.
+  //  • `drag` state   — sólo se actualiza cuando cambia el SNAP (día/fila),
+  //                     no en cada pixel. Dispara re-render del chip flotante,
+  //                     tick háptico y resaltado del target. **No** mueve la
+  //                     barra: la barra se posiciona via DOM directo abajo.
+  //  • `dragNodeRef`  — referencia al DOM de la barra activa, para escribir
+  //                     `style.left/top/width` en cada pointer-move sin pasar
+  //                     por React (cero re-renders durante movimiento libre).
+  //  • `dragOriginRef`— left/width/top originales (en grid-coords) capturados
+  //                     al arrancar el drag. Sirven como base para los offsets
+  //                     y para resetear si la mutación se cancela.
   const gridRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const dragNodeRef = useRef<HTMLDivElement | null>(null);
+  const dragOriginRef = useRef<{ left: number; width: number; top: number } | null>(null);
   const [drag, setDragState] = useState<DragState | null>(null);
   const pendingMutateIds = useRef<Set<string>>(new Set());
 
@@ -356,6 +407,8 @@ export function PmsBoard({
   // que dispare el timer, cancelamos y el browser hace pan natural.
   const LONG_PRESS_MS = 600;
   const LONG_PRESS_TOLERANCE_PX = 8;
+  // Mínimo de pixels que debe moverse el puntero para considerarse drag (no tap).
+  const DRAG_THRESHOLD_PX = 5;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressArmRef = useRef<{
     pointerId: number;
@@ -381,6 +434,10 @@ export function PmsBoard({
   const dragInitialScrollRef = useRef<{ left: number; top: number } | null>(null);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const autoScrollRafRef = useRef<number | null>(null);
+  // Auto-scroll: timestamp del último frame para velocidad time-based (px/seg
+  // en vez de px/frame — independiente del refresh-rate del display: 60Hz vs
+  // 120Hz daban velocidades distintas con la implementación anterior).
+  const autoScrollLastTsRef = useRef<number>(0);
   const lockGridScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || scrollLockRef.current) return;
@@ -393,11 +450,43 @@ export function PmsBoard({
     el.style.touchAction = "none";
     el.style.overscrollBehavior = "none";
   }, []);
-  const unlockGridScroll = useCallback(() => {
+  // `commitToOrigin`: si true, reseteamos las inline-styles de la barra a los
+  // valores capturados al inicio del drag — usado cuando soltamos sin que
+  // React vaya a aplicar una nueva posición (drag cancelado / sin cambio real).
+  // Si false, dejamos que React re-renderice con la posición nueva (post
+  // setBookings) y la transición inline anima desde "donde quedó el dedo"
+  // hasta la posición autoritativa.
+  const unlockGridScroll = useCallback((commitToOrigin: boolean = true) => {
     if (autoScrollRafRef.current !== null) {
       cancelAnimationFrame(autoScrollRafRef.current);
       autoScrollRafRef.current = null;
     }
+    autoScrollLastTsRef.current = 0;
+    const node = dragNodeRef.current;
+    const orig = dragOriginRef.current;
+    if (node) {
+      // Activamos transición inline para que el siguiente cambio de
+      // left/width/top se anime suavemente hasta el target (≈220ms, easing
+      // tipo "spring suave"). Incluimos transform/box-shadow para que la
+      // barra desescale suave del 1.02 al 1.0 cuando se quita la clase
+      // `isDragging` simultáneamente. Esta transición sobrescribe la del
+      // className por unos 280ms y después se limpia.
+      node.style.transition =
+        "left 220ms cubic-bezier(0.22,1,0.36,1), top 220ms cubic-bezier(0.22,1,0.36,1), width 220ms cubic-bezier(0.22,1,0.36,1), transform 200ms ease-out, box-shadow 200ms ease-out";
+      if (commitToOrigin && orig) {
+        node.style.left = `${orig.left}px`;
+        node.style.width = `${orig.width}px`;
+        node.style.top = `${orig.top}px`;
+      }
+      // Cleanup: liberar la inline-transition tras la animación para que
+      // futuros cambios (hover, drag) usen la transición del className.
+      const target = node;
+      window.setTimeout(() => {
+        target.style.transition = "";
+      }, 280);
+    }
+    dragNodeRef.current = null;
+    dragOriginRef.current = null;
     dragInitialScrollRef.current = null;
     lastPointerRef.current = null;
     const el = scrollRef.current;
@@ -767,15 +856,73 @@ export function PmsBoard({
   );
   const jumpToday = useCallback(() => {
     const today = new Date().toISOString().slice(0, 10);
+    const el = scrollRef.current;
+    const todayOffCurrent = dayOffset(windowStart, today);
+    // Si "hoy" ya cae dentro de la ventana → smooth-scroll horizontal sin
+    // recargar contenido. Si no → cambiamos windowStart y re-anclamos el
+    // scroll en el frame siguiente para evitar el flash de "vuelve a 0".
+    if (el && todayOffCurrent >= 2 && todayOffCurrent < windowDays - 2) {
+      el.scrollTo({
+        left: Math.max(0, (todayOffCurrent - 2) * CELL),
+        behavior: "smooth",
+      });
+      return;
+    }
     setWindowStart(isoAddDays(today, -7));
     requestAnimationFrame(() => {
-      const el = scrollRef.current;
-      if (el) {
+      const node = scrollRef.current;
+      if (node) {
         const todayOff = 7;
-        el.scrollLeft = Math.max(0, (todayOff - 2) * CELL);
+        node.scrollTo({
+          left: Math.max(0, (todayOff - 2) * CELL),
+          behavior: "smooth",
+        });
       }
     });
-  }, [CELL]);
+  }, [CELL, windowStart, windowDays]);
+
+  // Helper: scroll horizontal suave dentro de la ventana actual (no toca
+  // windowStart, sólo desplaza la vista). Usado por las flechas del teclado.
+  const scrollByDays = useCallback(
+    (delta: number) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      el.scrollBy({ left: delta * CELL, behavior: "smooth" });
+    },
+    [CELL]
+  );
+
+  // Atajos de teclado para navegación rápida (desktop). Skipeamos cuando el
+  // foco está en un input/textarea/contenteditable para no robar tecleo.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      const tag = t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (t.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // No interferir mientras hay un drag activo (los handlers del bar
+      // pueden necesitar el evento, y el usuario no debería navegar a la
+      // vez que mueve una reserva).
+      if (dragRef.current) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (e.shiftKey) shiftDays(-7);
+        else scrollByDays(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (e.shiftKey) shiftDays(7);
+        else scrollByDays(1);
+      } else if (e.key === "t" || e.key === "T" || e.key === "Home") {
+        e.preventDefault();
+        jumpToday();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shiftDays, scrollByDays, jumpToday]);
 
   // ── drag handlers
   // Helper: arranca el drag activo (con captura de puntero)
@@ -791,6 +938,24 @@ export function PmsBoard({
       target.setPointerCapture(pointerId);
     } catch {
       // ignorable: el puntero ya fue liberado (e.g. scroll)
+    }
+    // Resolvemos el nodo raíz de la barra (puede no ser `target`, ya que las
+    // resize-handles son hijos de la barra). Necesitamos el root para escribir
+    // left/width/top directos durante el move.
+    const barNode = (target.closest("[data-bar-root]") as HTMLDivElement | null);
+    dragNodeRef.current = barNode;
+    if (barNode) {
+      // Origen en grid-coords: leemos los inline styles que React ya escribió
+      // en el render previo (ciOffset*CELL+2, etc). parseFloat es robusto al
+      // sufijo "px" que React inserta automáticamente.
+      const left = parseFloat(barNode.style.left) || 0;
+      const width = parseFloat(barNode.style.width) || 0;
+      const top = parseFloat(barNode.style.top) || 0;
+      dragOriginRef.current = { left, width, top };
+      // Apagamos transiciones CSS durante el drag para que cada escritura DOM
+      // sea instantánea. Al soltar, restauramos (vacío = default del className)
+      // y la transición animará el snap final.
+      barNode.style.transition = "none";
     }
     // Capturamos el scroll del grid en este instante: cuando el auto-scroll
     // mueva el contenedor, el delta de scroll se sumará al delta del puntero
@@ -817,8 +982,12 @@ export function PmsBoard({
     startAutoScroll();
   }
 
-  // Recalcula los deltas a partir del último puntero conocido, sumando el
-  // desplazamiento que el grid scrolleó automáticamente.
+  // ▶ Movimiento pixel-perfect sin re-render. El bar se posiciona escribiendo
+  //   `style.left/width/top` directos al DOM (clave para que el dragging se
+  //   sienta nativo: 60+ fps en mobile, sin reconciliación de React por pixel).
+  //   El estado React (`drag`) sólo se actualiza cuando el SNAP redondeado
+  //   (día / fila) cambia — eso dispara el chip flotante, el resaltado de
+  //   target y el tick háptico de iOS/Android.
   function syncDragFromPointer() {
     const d = dragRef.current;
     const p = lastPointerRef.current;
@@ -829,52 +998,109 @@ export function PmsBoard({
     const scrollDY = el.scrollTop - init.top;
     const rawDx = (p.x - d.pointerStartX) + scrollDX;
     const rawDy = (p.y - d.pointerStartY) + scrollDY;
-    const moved = d.moved || Math.abs(rawDx) >= 5 || Math.abs(rawDy) >= 5;
-    if (!moved) return;
-    updateDrag({
-      ...d,
-      moved,
-      dayDelta: Math.round(rawDx / CELL),
-      rowDelta: d.mode === "move" ? Math.round(rawDy / ROW) : 0,
-    });
+    // Threshold inicial: filtra micro-jitter del trackpad/dedo.
+    if (!d.moved && Math.abs(rawDx) < DRAG_THRESHOLD_PX && Math.abs(rawDy) < DRAG_THRESHOLD_PX) {
+      return;
+    }
+    // 1) Posición pixel-perfect en el DOM (sin React) — sigue al puntero.
+    const node = dragNodeRef.current;
+    const orig = dragOriginRef.current;
+    if (node && orig) {
+      if (d.mode === "move") {
+        node.style.left = `${orig.left + rawDx}px`;
+        node.style.top = `${orig.top + rawDy}px`;
+      } else if (d.mode === "resize-left") {
+        // resize-left: el lado derecho queda fijo. Limitamos a 1 día mínimo
+        // (CELL px de ancho) para que nunca se invierta visualmente.
+        const minWidth = CELL - 4;
+        const dx = Math.min(rawDx, orig.width - minWidth);
+        node.style.left = `${orig.left + dx}px`;
+        node.style.width = `${orig.width - dx}px`;
+      } else if (d.mode === "resize-right") {
+        const minWidth = CELL - 4;
+        const dx = Math.max(rawDx, minWidth - orig.width);
+        node.style.width = `${orig.width + dx}px`;
+      }
+    }
+    // 2) Snap discreto a celdas (días/filas). Sólo actualizamos React si el
+    //    snap cambia → re-render mínimo del chip flotante + tick háptico.
+    const newDayDelta = Math.round(rawDx / CELL);
+    const newRowDelta = d.mode === "move" ? Math.round(rawDy / ROW) : 0;
+    const snapChanged =
+      !d.moved || d.dayDelta !== newDayDelta || d.rowDelta !== newRowDelta;
+    if (snapChanged) {
+      d.moved = true;
+      d.dayDelta = newDayDelta;
+      d.rowDelta = newRowDelta;
+      // Clone para que React detecte el cambio (identity).
+      setDragState({ ...d });
+      // Tick háptico — sólo en cambio de snap, no en cada pixel. iOS/Android
+      // lo expone como `navigator.vibrate`; Safari iOS lo ignora silenciosamente
+      // (no tira error). Es sentido como un "click" mínimo bajo el dedo.
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        try {
+          (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean })
+            .vibrate?.(3);
+        } catch {
+          // best-effort
+        }
+      }
+    } else if (!d.moved) {
+      // Pasamos el threshold pero sin cambio de snap todavía → marcamos como
+      // moved sin re-render (evita que pointerUp lo trate como click).
+      d.moved = true;
+    }
   }
 
-  // Auto-scroll: si el dedo se acerca a un borde del grid, scrolleamos en esa
-  // dirección a una velocidad proporcional a la cercanía. Corre en rAF para
-  // ser suave y sólo mientras hay drag activo.
+  // Auto-scroll del grid mientras el puntero está cerca de un borde durante el
+  // drag. La velocidad es time-based (px/segundo) y no frame-based, para que
+  // se comporte igual en displays a 60Hz y a 120Hz (en frame-based los iPhones
+  // recientes scrolleaban al doble de velocidad). Curva ease-in (t²) hacia el
+  // borde para que sea suave cerca de la zona de auto-scroll y rápida cuando
+  // el dedo está pegado contra el límite.
   function startAutoScroll() {
     if (autoScrollRafRef.current !== null) return;
-    const tick = () => {
+    autoScrollLastTsRef.current = 0;
+    const EDGE_X = 80; // px de banda en horizontal donde arranca el auto-scroll
+    const EDGE_Y = 56; // banda más angosta en vertical (la lista no es tan larga)
+    const MAX_SPEED_PX_PER_SEC = 1400; // ≈ 23 px/frame a 60Hz, 11.5 a 120Hz
+    const tick = (now: number) => {
       const el = scrollRef.current;
       const p = lastPointerRef.current;
       if (!el || !p || !dragRef.current) {
         autoScrollRafRef.current = null;
+        autoScrollLastTsRef.current = 0;
         return;
       }
+      // Δt en segundos desde el frame anterior. En el primer frame, asumimos
+      // 16ms (≈ un frame a 60Hz) para evitar saltos cuando arranca.
+      const dt = autoScrollLastTsRef.current
+        ? Math.min((now - autoScrollLastTsRef.current) / 1000, 1 / 30)
+        : 1 / 60;
+      autoScrollLastTsRef.current = now;
       const r = el.getBoundingClientRect();
-      const EDGE = 64; // px desde el borde donde arranca el auto-scroll
-      const MAX_SPEED = 18; // px por frame en el borde más extremo
       let vx = 0;
       let vy = 0;
-      if (p.x < r.left + EDGE) {
-        const t = Math.max(0, (r.left + EDGE - p.x) / EDGE);
-        vx = -MAX_SPEED * t;
-      } else if (p.x > r.right - EDGE) {
-        const t = Math.max(0, (p.x - (r.right - EDGE)) / EDGE);
-        vx = MAX_SPEED * t;
+      if (p.x < r.left + EDGE_X) {
+        const t = Math.min(1, (r.left + EDGE_X - p.x) / EDGE_X);
+        vx = -MAX_SPEED_PX_PER_SEC * t * t; // ease-in (t²)
+      } else if (p.x > r.right - EDGE_X) {
+        const t = Math.min(1, (p.x - (r.right - EDGE_X)) / EDGE_X);
+        vx = MAX_SPEED_PX_PER_SEC * t * t;
       }
-      if (p.y < r.top + EDGE) {
-        const t = Math.max(0, (r.top + EDGE - p.y) / EDGE);
-        vy = -MAX_SPEED * t;
-      } else if (p.y > r.bottom - EDGE) {
-        const t = Math.max(0, (p.y - (r.bottom - EDGE)) / EDGE);
-        vy = MAX_SPEED * t;
+      if (p.y < r.top + EDGE_Y) {
+        const t = Math.min(1, (r.top + EDGE_Y - p.y) / EDGE_Y);
+        vy = -MAX_SPEED_PX_PER_SEC * t * t;
+      } else if (p.y > r.bottom - EDGE_Y) {
+        const t = Math.min(1, (p.y - (r.bottom - EDGE_Y)) / EDGE_Y);
+        vy = MAX_SPEED_PX_PER_SEC * t * t;
       }
       if (vx !== 0 || vy !== 0) {
         const before = { left: el.scrollLeft, top: el.scrollTop };
-        el.scrollBy({ left: vx, top: vy, behavior: "auto" });
-        // Sólo recalculamos si el scroll efectivamente cambió (útil cuando
-        // estamos contra el final del contenido, así no metemos delta extra).
+        el.scrollLeft += vx * dt;
+        el.scrollTop += vy * dt;
+        // Si el contenedor llegó al límite, no recalculamos (evita acumular
+        // delta fantasma cuando ya no se mueve).
         if (el.scrollLeft !== before.left || el.scrollTop !== before.top) {
           syncDragFromPointer();
         }
@@ -1014,25 +1240,15 @@ export function PmsBoard({
       return;
     }
 
-    // Calcular target
-    let newCheckIn = booking.check_in_date;
-    let newCheckOut = booking.check_out_date;
-    let newUnitId = booking.unit_id;
+    // Calcular target — misma lógica que el chip flotante y el highlight,
+    // de modo que lo que el usuario ve durante el drag es exactamente lo que
+    // se commitea al soltar.
     const operation: MoveOperation = d.mode;
-
-    if (d.mode === "move") {
-      newCheckIn = isoAddDays(d.originalCheckIn, d.dayDelta);
-      newCheckOut = isoAddDays(d.originalCheckOut, d.dayDelta);
-      const curRow = units.findIndex((u) => u.id === d.originalUnitId);
-      const newRow = Math.max(0, Math.min(units.length - 1, curRow + d.rowDelta));
-      newUnitId = units[newRow]?.id ?? newUnitId;
-    } else if (d.mode === "resize-left") {
-      newCheckIn = isoAddDays(d.originalCheckIn, d.dayDelta);
-      if (newCheckIn >= newCheckOut) newCheckIn = isoAddDays(newCheckOut, -1);
-    } else if (d.mode === "resize-right") {
-      newCheckOut = isoAddDays(d.originalCheckOut, d.dayDelta);
-      if (newCheckOut <= newCheckIn) newCheckOut = isoAddDays(newCheckIn, 1);
-    }
+    const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
+      d,
+      booking,
+      units
+    );
 
     // Sin cambio real
     if (
@@ -1070,7 +1286,10 @@ export function PmsBoard({
     );
     pendingMutateIds.current.add(booking.id);
     updateDrag(null);
-    unlockGridScroll();
+    // commitToOrigin=false: React acaba de re-renderizar la barra en su nueva
+    // posición (post setBookings). La transición inline animará suavemente
+    // desde "donde quedó el dedo" hasta el target snap final.
+    unlockGridScroll(false);
 
     setPendingMove({
       booking,
@@ -1589,7 +1808,7 @@ export function PmsBoard({
                     >
                       <span
                         className="size-2 rounded-full mr-2"
-                        style={{ backgroundColor: BOOKING_STATUS_META[s].color }}
+                        style={{ backgroundColor: statusColors[s] }}
                       />
                       {BOOKING_STATUS_META[s].label}
                     </DropdownMenuCheckboxItem>
@@ -1716,13 +1935,13 @@ export function PmsBoard({
           <div className="hidden lg:flex items-center gap-3 px-4 pb-2 text-[10px] text-muted-foreground flex-wrap">
             <span className="uppercase tracking-wider text-[9px] font-semibold text-foreground/60 mr-1">Leyenda</span>
             {(Object.keys(BOOKING_BAR_STYLE) as BookingStatus[]).map((s) => {
-              const st = BOOKING_BAR_STYLE[s];
+              const hex = statusColors[s];
               return (
                 <span key={s} className="flex items-center gap-1.5">
                   <span
                     className="inline-block h-2 w-5 rounded-sm bg-gradient-to-r"
                     style={{
-                      backgroundImage: `linear-gradient(to right, ${st.hex}, ${st.hex}CC)`,
+                      backgroundImage: `linear-gradient(to right, ${hex}, ${hex}CC)`,
                     }}
                   />
                   {BOOKING_STATUS_META[s].label}
@@ -2004,12 +2223,69 @@ export function PmsBoard({
                         onRequestDateChange={requestDateChangeFromPopover}
                         unitCode={unit.code}
                         unitName={unit.name}
+                        customStatusHex={
+                          statusColors[b.status] !==
+                          BOOKING_STATUS_META[b.status].color
+                            ? statusColors[b.status]
+                            : null
+                        }
                       />
                     ))}
                   </div>
                 </div>
               );
             })}
+
+            {/* Highlight del target durante drag activo: columna de días
+                destino + ring de fila destino. Sólo se muestra una vez que el
+                usuario cruzó el umbral (drag.moved=true) y el componente
+                vive dentro del gridRef, así scrollea con el contenido. */}
+            {drag && drag.moved && (() => {
+              const draggedBooking = bookings.find((b) => b.id === drag.bookingId);
+              if (!draggedBooking) return null;
+              const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
+                drag,
+                draggedBooking,
+                units
+              );
+              const ciOff = dayOffset(windowStart, newCheckIn);
+              const coOff = dayOffset(windowStart, newCheckOut);
+              const ciClipped = Math.max(0, ciOff);
+              const coClipped = Math.min(windowDays, coOff);
+              if (coClipped <= ciClipped) return null;
+              const targetRowIdx = filteredUnits.findIndex((u) => u.id === newUnitId);
+              const originRowIdx = filteredUnits.findIndex(
+                (u) => u.id === drag.originalUnitId
+              );
+              const rowChanged = targetRowIdx >= 0 && targetRowIdx !== originRowIdx;
+              const HEADER_H = isMobile ? 44 : 52;
+              return (
+                <>
+                  {/* Columna destino — abarca todas las filas, debajo del header */}
+                  <div
+                    className="absolute pointer-events-none z-[4] bg-primary/[0.05] dark:bg-primary/[0.08] border-x border-dashed border-primary/40 rounded-sm"
+                    style={{
+                      top: HEADER_H,
+                      left: SIDEBAR + ciClipped * CELL,
+                      width: (coClipped - ciClipped) * CELL,
+                      bottom: 0,
+                    }}
+                  />
+                  {/* Fila destino — sólo si cambió por arrastre vertical */}
+                  {rowChanged && (
+                    <div
+                      className="absolute pointer-events-none z-[4] bg-primary/[0.07] ring-1 ring-primary/30 rounded-sm"
+                      style={{
+                        top: HEADER_H + targetRowIdx * ROW,
+                        left: SIDEBAR,
+                        width: windowDays * CELL,
+                        height: ROW,
+                      }}
+                    />
+                  )}
+                </>
+              );
+            })()}
 
             {/* Today vertical line (over all rows) */}
             {todayOff >= 0 && todayOff < windowDays && (
@@ -2095,6 +2371,14 @@ export function PmsBoard({
             checkOut={quickAdd.checkOut}
             onClose={() => setQuickAdd(null)}
           />
+        )}
+
+        {/* Chip flotante con feedback de drag (target dates + unit + nights).
+            Sólo se muestra una vez que el usuario cruzó el umbral de movimiento
+            para no aparecer en taps. Posicionado fixed bottom-center; escala
+            limpia tanto en mobile como en desktop. */}
+        {drag && drag.moved && (
+          <DragChip drag={drag} bookings={bookings} units={units} />
         )}
 
         {/* Modal de confirmación obligatoria para mover/extender */}
@@ -2409,6 +2693,8 @@ interface BookingBarProps {
   ) => void;
   unitCode: string;
   unitName: string;
+  /** Override del color hex para el status de esta booking (si la org lo configuró). */
+  customStatusHex: string | null;
 }
 
 function BookingBar({
@@ -2431,6 +2717,7 @@ function BookingBar({
   onRequestDateChange,
   unitCode,
   unitName,
+  customStatusHex,
 }: BookingBarProps) {
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
   // (14:00 → +0.583 del día; 10:00 → +0.416 del día). Esto hace que la barra "pise"
@@ -2438,23 +2725,13 @@ function BookingBar({
   // para una nueva reserva el mismo día por la tarde.
   const ciFrac = timeToDayFraction(booking.check_in_time, 14 / 24);
   const coFrac = timeToDayFraction(booking.check_out_time, 10 / 24);
-  let ciOffset = dayOffset(windowStart, booking.check_in_date) + ciFrac;
-  let coOffset = dayOffset(windowStart, booking.check_out_date) + coFrac;
-  let rowOffsetPx = 0;
-
-  if (dragState) {
-    if (dragState.mode === "move") {
-      ciOffset += dragState.dayDelta;
-      coOffset += dragState.dayDelta;
-      rowOffsetPx = dragState.rowDelta * rowHeight;
-    } else if (dragState.mode === "resize-left") {
-      ciOffset += dragState.dayDelta;
-      if (ciOffset >= coOffset - 0.25) ciOffset = coOffset - 0.5;
-    } else if (dragState.mode === "resize-right") {
-      coOffset += dragState.dayDelta;
-      if (coOffset <= ciOffset + 0.25) coOffset = ciOffset + 0.5;
-    }
-  }
+  const ciOffset = dayOffset(windowStart, booking.check_in_date) + ciFrac;
+  const coOffset = dayOffset(windowStart, booking.check_out_date) + coFrac;
+  // Durante un drag activo NO aplicamos el offset del snap acá: la barra se
+  // posiciona pixel-perfect via `style.left/top/width` directos al DOM (escritos
+  // en `syncDragFromPointer` del parent). React sólo re-renderiza la barra
+  // cuando el drag se suelta — ahí la nueva posición del booking ya está en
+  // el state y se aplica naturalmente. Esto da movimiento sin re-renders.
 
   // recorte a ventana visible
   if (coOffset <= 0 || ciOffset >= windowDays) return null;
@@ -2466,6 +2743,15 @@ function BookingBar({
   const rightOverflow = coOffset > windowDays;
 
   const style = BOOKING_BAR_STYLE[booking.status];
+  // Si la org override-eó el color de este status, ignoramos el gradient/border
+  // de Tailwind y derivamos los inline-styles del hex configurado. Mantiene
+  // resto del look (ring, text) inalterado.
+  const customGradientStyle = customStatusHex
+    ? {
+        backgroundImage: `linear-gradient(to right, ${customStatusHex}, ${customStatusHex}CC)`,
+        borderColor: `${customStatusHex}99`,
+      }
+    : null;
   const sourceColor = SOURCE_ACCENT[booking.source];
   const bookingMode: BookingMode = booking.mode ?? "temporario";
   const modeOverlay = BOOKING_MODE_OVERLAY[bookingMode];
@@ -2478,6 +2764,7 @@ function BookingBar({
     <Popover open={isOpen} onOpenChange={onOpenChange}>
       <PopoverAnchor asChild>
         <div
+          data-bar-root
           className={cn(
             // En mobile dejamos pasar el scroll del contenedor (touch-pan-x/y)
             // hasta que el long-press dispara y entramos en modo drag. En desktop
@@ -2486,17 +2773,22 @@ function BookingBar({
             "absolute rounded-md border flex items-stretch overflow-hidden select-none",
             isDragging ? "touch-none" : "touch-pan-x touch-pan-y md:touch-none",
             "bg-gradient-to-r shadow-sm",
-            style.gradient,
-            style.border,
+            !customGradientStyle && style.gradient,
+            !customGradientStyle && style.border,
             style.ring,
             "hover:ring-2 hover:shadow-md hover:z-10",
+            // Transición de la barra: sólo transform/box-shadow por default
+            // (hover, ring, scale). La animación de snap-back de left/top/width
+            // se aplica via inline-style en `unlockGridScroll` durante un
+            // breve window post-drag, así no interfiere con navegación o
+            // shift de windowStart.
             "transition-[transform,box-shadow] duration-150",
             isDragging && "ring-2 ring-primary z-20 shadow-xl scale-[1.02] cursor-grabbing",
             !isDragging && "cursor-grab",
             booking.status === "cancelada" && "opacity-55"
           )}
           style={{
-            top: rowHeight * 0.14 + rowOffsetPx,
+            top: rowHeight * 0.14,
             height: rowHeight * 0.72,
             left: clippedStart * cellWidth + 2,
             width: width - 4,
@@ -2504,6 +2796,7 @@ function BookingBar({
             borderBottomLeftRadius: leftOverflow ? 0 : undefined,
             borderTopRightRadius: rightOverflow ? 0 : undefined,
             borderBottomRightRadius: rightOverflow ? 0 : undefined,
+            ...(customGradientStyle ?? {}),
           }}
           role="button"
           aria-label={`Reserva de ${booking.guest?.full_name ?? "huésped"} — ${booking.check_in_date} a ${booking.check_out_date}`}
@@ -2817,5 +3110,90 @@ function QuickAddBridge({
       open
       onOpenChange={(o) => { if (!o) onClose(); }}
     />
+  );
+}
+
+// Chip flotante (fixed bottom-center) que muestra el resultado en vivo del
+// drag: nuevo check-in / check-out, unidad destino y duración. Sólo aparece
+// cuando el usuario ya cruzó el umbral de movimiento (`drag.moved`). Da el
+// "feedback inmediato" del cambio de día/hora antes de soltar — clave para
+// que la operación se sienta predecible y nativa.
+function DragChip({
+  drag,
+  bookings,
+  units,
+}: {
+  drag: DragState;
+  bookings: BookingWithRelations[];
+  units: UnitWithRelations[];
+}) {
+  const booking = bookings.find((b) => b.id === drag.bookingId);
+  if (!booking) return null;
+
+  const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
+    drag,
+    booking,
+    units
+  );
+  const newUnit = units.find((u) => u.id === newUnitId);
+  const unitChanged = newUnitId !== drag.originalUnitId;
+  const datesChanged =
+    newCheckIn !== drag.originalCheckIn || newCheckOut !== drag.originalCheckOut;
+  const noChange = !unitChanged && !datesChanged;
+  const nights = dayOffset(newCheckIn, newCheckOut);
+
+  const modeLabel =
+    drag.mode === "move"
+      ? unitChanged
+        ? "Mover y reasignar"
+        : "Mover"
+      : drag.mode === "resize-left"
+        ? "Cambiar check-in"
+        : "Cambiar check-out";
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] pointer-events-none select-none",
+        "rounded-2xl border bg-card/95 backdrop-blur-md shadow-2xl",
+        "px-4 py-2 sm:py-2.5 flex items-center gap-3 sm:gap-4",
+        "ring-1 max-w-[calc(100vw-32px)]",
+        noChange ? "ring-muted-foreground/20 opacity-80" : "ring-primary/40",
+        // micro-animation: aparece con un pequeño zoom/fade
+        "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150"
+      )}
+    >
+      <div className="flex flex-col items-start min-w-0">
+        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/80 font-semibold">
+          {modeLabel}
+        </span>
+        <span className="text-[13px] sm:text-sm font-semibold tabular-nums whitespace-nowrap">
+          {format(parseISO(newCheckIn), "d MMM", { locale: es })}
+          <span className="opacity-60 mx-1.5">→</span>
+          {format(parseISO(newCheckOut), "d MMM", { locale: es })}
+        </span>
+      </div>
+      <div className="h-7 w-px bg-border shrink-0" />
+      <div className="flex flex-col items-start min-w-0">
+        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/80 font-semibold">
+          {nights} {nights === 1 ? "noche" : "noches"}
+        </span>
+        {unitChanged && newUnit ? (
+          <span className="text-[12px] sm:text-xs font-mono font-semibold text-primary truncate max-w-[140px]">
+            → {newUnit.code}
+          </span>
+        ) : noChange ? (
+          <span className="text-[11px] text-muted-foreground/80">
+            sin cambios
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/80">
+            misma unidad
+          </span>
+        )}
+      </div>
+    </div>
   );
 }

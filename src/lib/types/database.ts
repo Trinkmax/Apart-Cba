@@ -133,6 +133,8 @@ export type NotificationSeverity =
 
 // ─── Tablas ─────────────────────────────────────────────────────────────────
 
+export type BookingStatusColors = Partial<Record<BookingStatus, string>>;
+
 export interface Organization {
   id: string;
   name: string;
@@ -144,6 +146,8 @@ export interface Organization {
   default_commission_pct: number | null;
   logo_url: string | null;
   primary_color: string | null;
+  /** Override de colores por status de reserva (hex). Si null o falta una clave, se usa el default. */
+  booking_status_colors: BookingStatusColors | null;
   active: boolean;
   created_at: string;
   updated_at: string;

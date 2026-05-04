@@ -16,6 +16,7 @@ import {
   Boxes,
   ListTodo,
   Settings,
+  Palette,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -168,6 +169,14 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
                     <Link href="/dashboard/configuracion/equipo">
                       <Users size={18} />
                       <span>Equipo y permisos</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild tooltip="Colores de reservas" isActive={isActive("/dashboard/configuracion/colores")}>
+                    <Link href="/dashboard/configuracion/colores">
+                      <Palette size={18} />
+                      <span>Colores</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
