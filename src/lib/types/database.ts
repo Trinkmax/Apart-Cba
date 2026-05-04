@@ -381,6 +381,26 @@ export interface MaintenanceTicket {
   updated_at: string;
 }
 
+export type TicketEventType =
+  | "created"
+  | "status_changed"
+  | "updated"
+  | "cost_updated"
+  | "assigned"
+  | "note_added";
+
+export interface TicketEvent {
+  id: string;
+  ticket_id: string;
+  organization_id: string;
+  actor_id: string | null;
+  event_type: TicketEventType;
+  from_status: TicketStatus | null;
+  to_status: TicketStatus | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface TicketAttachment {
   id: string;
   ticket_id: string;

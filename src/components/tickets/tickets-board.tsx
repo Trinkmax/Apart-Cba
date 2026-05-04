@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
@@ -21,6 +21,7 @@ const COLUMNS: KanbanColumn<TicketStatus>[] = [
   { key: "en_progreso", label: TICKET_STATUS_META.en_progreso.label, color: TICKET_STATUS_META.en_progreso.color, icon: Wrench, emptyText: "Soltá tickets aquí" },
   { key: "esperando_repuesto", label: TICKET_STATUS_META.esperando_repuesto.label, color: TICKET_STATUS_META.esperando_repuesto.color, icon: Package, emptyText: "Soltá tickets aquí" },
   { key: "resuelto", label: TICKET_STATUS_META.resuelto.label, color: TICKET_STATUS_META.resuelto.color, icon: CheckCircle2, emptyText: "Soltá tickets aquí" },
+  { key: "cerrado", label: TICKET_STATUS_META.cerrado.label, color: TICKET_STATUS_META.cerrado.color, icon: Archive, emptyText: "Archivados" },
 ];
 
 interface Props {
@@ -55,6 +56,7 @@ export function TicketsBoard({ initialTickets, units, owners, occupancyByUnit }:
           if (wA !== wB) return wB - wA;
           return new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime();
         }}
+        xlCols={5}
       />
 
       <TicketDetailDialog

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import type { MaintenanceTicket, TicketStatus } from "@/lib/types/database";
+import type { MaintenanceTicket, TicketEvent, TicketStatus } from "@/lib/types/database";
 
 const ticketSchema = z.object({
   unit_id: z.string().uuid("Unidad requerida"),
@@ -72,16 +72,35 @@ export async function createTicket(input: TicketInput) {
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  await admin.from("ticket_events").insert({
+    ticket_id: (data as MaintenanceTicket).id,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "created",
+    to_status: validated.status,
+    metadata: { title: validated.title, priority: validated.priority },
+  });
+
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath("/dashboard/unidades/kanban");
   return data as MaintenanceTicket;
 }
 
 export async function updateTicket(id: string, input: TicketInput) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = ticketSchema.parse(input);
   const admin = createAdminClient();
+
+  // Capturamos el estado previo para detectar transiciones y registrarlas en el historial
+  const { data: prev } = await admin
+    .from("maintenance_tickets")
+    .select("status, assigned_to, actual_cost")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const { data, error } = await admin
     .from("maintenance_tickets")
     .update(validated)
@@ -90,6 +109,29 @@ export async function updateTicket(id: string, input: TicketInput) {
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  if (prev) {
+    if (prev.status !== validated.status) {
+      await admin.from("ticket_events").insert({
+        ticket_id: id,
+        organization_id: organization.id,
+        actor_id: session.userId,
+        event_type: "status_changed",
+        from_status: prev.status,
+        to_status: validated.status,
+        metadata: { source: "edit_form" },
+      });
+    } else {
+      await admin.from("ticket_events").insert({
+        ticket_id: id,
+        organization_id: organization.id,
+        actor_id: session.userId,
+        event_type: "updated",
+        metadata: { source: "edit_form" },
+      });
+    }
+  }
+
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath(`/dashboard/mantenimiento/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
@@ -105,7 +147,7 @@ export async function updateTicketCost(
   actualCost: number | null,
   costCurrency: string
 ) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
   const { data, error } = await admin
@@ -119,6 +161,15 @@ export async function updateTicketCost(
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  await admin.from("ticket_events").insert({
+    ticket_id: id,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "cost_updated",
+    metadata: { actual_cost: actualCost, cost_currency: costCurrency },
+  });
+
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath(`/dashboard/mantenimiento/${id}`);
   revalidatePath(`/m/mantenimiento/${id}`);
@@ -127,9 +178,17 @@ export async function updateTicketCost(
 }
 
 export async function changeTicketStatus(id: string, status: TicketStatus) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  const { data: prev } = await admin
+    .from("maintenance_tickets")
+    .select("status")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const update: Record<string, unknown> = { status };
   if (status === "resuelto") update.resolved_at = new Date().toISOString();
   if (status === "cerrado") update.closed_at = new Date().toISOString();
@@ -139,8 +198,59 @@ export async function changeTicketStatus(id: string, status: TicketStatus) {
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  if (prev && prev.status !== status) {
+    await admin.from("ticket_events").insert({
+      ticket_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "status_changed",
+      from_status: prev.status,
+      to_status: status,
+      metadata: { source: "kanban_or_chip" },
+    });
+  }
+
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath(`/dashboard/mantenimiento/${id}`);
+}
+
+export async function listTicketEvents(ticketId: string): Promise<
+  (TicketEvent & { actor: { full_name: string | null } | null })[]
+> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("ticket_events")
+    .select("*")
+    .eq("ticket_id", ticketId)
+    .eq("organization_id", organization.id)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  const events = (data ?? []) as TicketEvent[];
+
+  // Hidratamos los actor_id con full_name desde user_profiles (un solo fetch).
+  const actorIds = Array.from(
+    new Set(events.map((e) => e.actor_id).filter((v): v is string => !!v))
+  );
+  let byId = new Map<string, { full_name: string | null }>();
+  if (actorIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("user_profiles")
+      .select("user_id, full_name")
+      .in("user_id", actorIds);
+    byId = new Map(
+      (profiles ?? []).map((p) => [
+        p.user_id as string,
+        { full_name: (p.full_name as string | null) ?? null },
+      ])
+    );
+  }
+
+  return events.map((e) => ({
+    ...e,
+    actor: e.actor_id ? byId.get(e.actor_id) ?? { full_name: null } : null,
+  }));
 }
 
 export async function deleteTicket(id: string) {

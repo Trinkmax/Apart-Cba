@@ -38,7 +38,6 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
-  Wifi,
   X,
   ZoomIn,
 } from "lucide-react";
@@ -227,7 +226,6 @@ export function PmsBoard({
     setPrevInitialSchedule(initialSchedule);
     setSchedule(initialSchedule);
   }
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
 
@@ -739,7 +737,7 @@ export function PmsBoard({
           });
         }
       )
-      .subscribe((status) => setRealtimeConnected(status === "SUBSCRIBED"));
+      .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
@@ -1654,30 +1652,6 @@ export function PmsBoard({
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
-
-              {/* Realtime pill */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "flex items-center gap-1 text-[10px] font-medium px-2 h-8 rounded-md",
-                      realtimeConnected
-                        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                        : "bg-muted text-muted-foreground"
-                    )}
-                  >
-                    <Wifi size={11} className={cn(realtimeConnected && "animate-pulse")} />
-                    <span className="hidden md:inline">
-                      {realtimeConnected ? "En vivo" : "Sin conexión"}
-                    </span>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {realtimeConnected
-                    ? "Actualizaciones en tiempo real activas"
-                    : "Realtime desconectado"}
-                </TooltipContent>
-              </Tooltip>
 
               {/* Zen mode (pantalla completa) */}
               <Tooltip>

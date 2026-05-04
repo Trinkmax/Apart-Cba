@@ -56,8 +56,8 @@ export function KanbanBoard<T extends { id: string }, S extends string>({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  // sync external changes (when parent re-fetches)
-  useStableSync(initialItems, setItems);
+  // sync external changes (when parent re-fetches o cuando se cambia el status fuera del board)
+  useStableSync(initialItems, getStatus, setItems);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -227,16 +227,19 @@ function DraggableCard({
 }
 
 // ─── Hook helper ───────────────────────────────────────────────────────────
-function useStableSync<T extends { id: string }>(
+// La firma incluye id+status para que cambios de estado externos (p.ej. desde
+// el detail dialog) se reflejen en la grilla aunque la lista tenga el mismo largo.
+function useStableSync<T extends { id: string }, S extends string>(
   externalItems: T[],
+  getStatus: (item: T) => S,
   setItems: React.Dispatch<React.SetStateAction<T[]>>
 ) {
   const stamp = useRef<string>("");
   useEffect(() => {
-    const sig = externalItems.map((x) => x.id).join("|") + ":" + externalItems.length;
+    const sig = externalItems.map((x) => `${x.id}:${getStatus(x)}`).join("|");
     if (sig !== stamp.current) {
       stamp.current = sig;
       setItems(externalItems);
     }
-  }, [externalItems, setItems]);
+  }, [externalItems, getStatus, setItems]);
 }
