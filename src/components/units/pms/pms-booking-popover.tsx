@@ -127,6 +127,23 @@ export function PmsBookingPopoverContent({
   }
 
   function applyStatus(next: BookingStatus, confirmMsg?: string) {
+    // Atajo de UX: si vamos a check_out con saldo pendiente, redirigimos a la
+    // página de detalle (donde está el dialog completo con "Cobrar saldo" o
+    // "Forzar"). El server igual valida si alguien evita este atajo.
+    if (next === "check_out") {
+      const total = Number(booking.total_amount ?? 0);
+      const paid = Number(booking.paid_amount ?? 0);
+      if (total - paid > 0.01) {
+        toast.error("La reserva tiene saldo pendiente", {
+          description: "Te llevamos al detalle para cobrar antes de hacer check-out.",
+        });
+        // Pequeña espera para que el toast sea visible antes del navigate
+        setTimeout(() => {
+          window.location.href = `/dashboard/reservas/${booking.id}`;
+        }, 600);
+        return;
+      }
+    }
     if (confirmMsg && !window.confirm(confirmMsg)) return;
     startTransition(async () => {
       try {
@@ -134,7 +151,14 @@ export function PmsBookingPopoverContent({
         toast.success(`Reserva marcada como ${BOOKING_STATUS_META[next].label}`);
         onStatusChanged?.(next);
       } catch (err) {
-        toast.error("No se pudo actualizar", { description: (err as Error).message });
+        const msg = (err as Error).message;
+        if (msg.startsWith("CHECKOUT_PENDING_BALANCE:")) {
+          toast.error("La reserva tiene saldo pendiente", {
+            description: msg.replace("CHECKOUT_PENDING_BALANCE: ", ""),
+          });
+        } else {
+          toast.error("No se pudo actualizar", { description: msg });
+        }
       }
     });
   }

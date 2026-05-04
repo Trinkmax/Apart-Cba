@@ -19,7 +19,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
   dismissNotification,
@@ -129,18 +128,23 @@ export function NotificationsBell({
         align="end"
         side="bottom"
         sideOffset={8}
-        className="w-[380px] p-0"
+        collisionPadding={16}
+        style={{
+          maxHeight:
+            "min(32rem, calc(var(--radix-popover-content-available-height, 32rem) - 1rem))",
+        }}
+        className="w-[min(22rem,calc(100vw-1rem))] p-0 flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between px-3 py-2 border-b">
-          <div className="flex items-center gap-2">
-            <span className="size-7 rounded-md bg-primary/15 text-primary flex items-center justify-center">
-              <Bell size={14} />
+        <div className="flex items-center justify-between gap-2 px-4 py-3 border-b shrink-0 bg-muted/30">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="size-8 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
+              <Bell size={15} />
             </span>
-            <div>
+            <div className="min-w-0">
               <div className="text-sm font-semibold leading-tight">
                 Notificaciones
               </div>
-              <div className="text-[10px] text-muted-foreground">
+              <div className="text-[11px] text-muted-foreground leading-tight mt-0.5">
                 {unread > 0 ? `${unread} sin leer` : "Todo al día"}
               </div>
             </div>
@@ -150,7 +154,7 @@ export function NotificationsBell({
               type="button"
               size="sm"
               variant="ghost"
-              className="h-7 gap-1 text-[11px]"
+              className="h-7 gap-1 text-[11px] shrink-0"
               onClick={handleMarkAllRead}
               disabled={isPending}
             >
@@ -163,19 +167,19 @@ export function NotificationsBell({
             </Button>
           )}
         </div>
-        <ScrollArea className="max-h-[60vh]">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
           {items.length === 0 ? (
-            <div className="py-10 px-4 text-center">
-              <div className="mx-auto size-12 rounded-full bg-muted flex items-center justify-center mb-2">
+            <div className="py-12 px-4 text-center">
+              <div className="mx-auto size-12 rounded-full bg-muted flex items-center justify-center mb-3">
                 <Bell size={20} className="text-muted-foreground" />
               </div>
               <p className="text-sm font-medium">Sin notificaciones</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
+              <p className="text-[11px] text-muted-foreground mt-1">
                 Las alertas y recordatorios van a aparecer acá
               </p>
             </div>
           ) : (
-            <ul className="divide-y">
+            <ul className="divide-y divide-border/60">
               {items.map((n) => (
                 <NotificationRow
                   key={n.id}
@@ -186,14 +190,14 @@ export function NotificationsBell({
               ))}
             </ul>
           )}
-        </ScrollArea>
-        <div className="border-t p-2">
+        </div>
+        <div className="border-t shrink-0 bg-muted/30">
           <Button
             asChild
             type="button"
             variant="ghost"
             size="sm"
-            className="w-full justify-center text-[11px] h-7"
+            className="w-full justify-center text-[11px] h-9 rounded-none"
           >
             <Link href="/dashboard/alertas">
               Ver todas las alertas
@@ -219,54 +223,62 @@ function NotificationRow({
 }: NotificationRowProps) {
   const tone = SEVERITY_TONE[n.severity];
   return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
+    <li
+      className={cn(
+        "relative group transition-colors hover:bg-muted/40",
+        !n.read_at && "bg-primary/[0.035]"
+      )}
+    >
+      <span
         className={cn(
-          "w-full text-left px-3 py-2.5 hover:bg-muted/40 transition-colors group flex gap-2 items-start",
-          !n.read_at && "bg-primary/[0.04]"
+          "absolute left-0 top-0 bottom-0 w-[3px]",
+          tone.bar,
+          n.read_at && "opacity-40"
         )}
+        aria-hidden
+      />
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+        className="w-full cursor-pointer text-left pl-4 pr-2 py-3 flex gap-3 items-start outline-none focus-visible:bg-muted/50"
       >
-        <span
-          className={cn(
-            "shrink-0 size-7 rounded-md ring-1 flex items-center justify-center mt-0.5",
-            tone.bg,
-            tone.ring
-          )}
-          aria-hidden
-        >
-          <span
-            className={cn("size-1.5 rounded-full", tone.dot)}
-          />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-center gap-1.5">
             <span
               className={cn(
-                "text-[12px] font-semibold leading-tight truncate",
-                !n.read_at && "font-bold"
+                "text-[13px] leading-tight truncate",
+                !n.read_at ? "font-semibold text-foreground" : "font-medium text-foreground/90"
               )}
             >
               {n.title}
             </span>
             {!n.read_at && (
-              <span className="size-1.5 rounded-full bg-primary shrink-0" />
+              <span className="size-1.5 rounded-full bg-primary shrink-0" aria-hidden />
             )}
           </div>
           {n.body && (
-            <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
+            <p className="text-[11.5px] text-muted-foreground leading-snug line-clamp-2">
               {n.body}
             </p>
           )}
-          <div className="flex items-center gap-1.5 mt-1">
-            <span className="text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 pt-0.5">
+            <span className="text-[10.5px] text-muted-foreground/80 tabular-nums">
               {formatRelative(n.created_at)}
             </span>
             {n.due_at && (
-              <span className="text-[10px] text-muted-foreground">
-                · vence {n.due_at.slice(0, 10)}
-              </span>
+              <>
+                <span className="size-0.5 rounded-full bg-muted-foreground/40" aria-hidden />
+                <span className="text-[10.5px] text-muted-foreground/80 tabular-nums">
+                  vence {n.due_at.slice(0, 10)}
+                </span>
+              </>
             )}
           </div>
         </div>
@@ -274,11 +286,11 @@ function NotificationRow({
           type="button"
           onClick={onDismiss}
           aria-label="Descartar"
-          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 size-6 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground flex items-center justify-center"
+          className="shrink-0 size-7 rounded-md text-muted-foreground/60 hover:bg-muted hover:text-foreground flex items-center justify-center transition-all md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
         >
-          <X size={12} />
+          <X size={13} />
         </button>
-      </button>
+      </div>
     </li>
   );
 }
@@ -294,28 +306,9 @@ function formatRelative(iso: string): string {
   }
 }
 
-const SEVERITY_TONE: Record<
-  string,
-  { bg: string; ring: string; dot: string }
-> = {
-  info: {
-    bg: "bg-sky-100 dark:bg-sky-950",
-    ring: "ring-sky-300/60 dark:ring-sky-700/40",
-    dot: "bg-sky-500",
-  },
-  warning: {
-    bg: "bg-amber-100 dark:bg-amber-950",
-    ring: "ring-amber-300/60 dark:ring-amber-700/40",
-    dot: "bg-amber-500",
-  },
-  critical: {
-    bg: "bg-rose-100 dark:bg-rose-950",
-    ring: "ring-rose-300/60 dark:ring-rose-700/40",
-    dot: "bg-rose-500",
-  },
-  success: {
-    bg: "bg-emerald-100 dark:bg-emerald-950",
-    ring: "ring-emerald-300/60 dark:ring-emerald-700/40",
-    dot: "bg-emerald-500",
-  },
+const SEVERITY_TONE: Record<string, { bar: string }> = {
+  info: { bar: "bg-sky-500" },
+  warning: { bar: "bg-amber-500" },
+  critical: { bar: "bg-rose-500" },
+  success: { bar: "bg-emerald-500" },
 };

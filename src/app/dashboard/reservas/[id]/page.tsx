@@ -4,6 +4,7 @@ import { ArrowLeft, MapPin, User, Phone, Mail, Edit } from "lucide-react";
 import { getBooking, listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -25,11 +26,12 @@ type BookingDetail = Booking & {
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [booking, units, accounts, movements] = await Promise.all([
+  const [booking, units, accounts, movements, { role }] = await Promise.all([
     getBooking(id),
     listUnitsEnriched(),
     listAccounts(),
     listMovementsForBooking(id),
+    getCurrentOrg(),
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
@@ -69,7 +71,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           </p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          <BookingActions booking={b} />
+          <BookingActions booking={b} role={role} />
           <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
             <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
           </BookingFormDialog>

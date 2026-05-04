@@ -648,10 +648,62 @@ export async function addBookingPayment(
   return data as Booking;
 }
 
-export async function changeBookingStatus(id: string, newStatus: BookingStatus, reason?: string) {
+export async function changeBookingStatus(
+  id: string,
+  newStatus: BookingStatus,
+  reason?: string,
+  options?: { force_checkout?: boolean }
+) {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  // ── Bloqueo de check-out con saldo pendiente ──────────────────────────────
+  // Regla de negocio: no se puede dar check_out sin antes haber cobrado todo.
+  // Excepción: admin puede forzar (force_checkout=true) sólo si pasa una razón
+  // explícita; queda registrada en `internal_notes` para auditoría posterior.
+  if (newStatus === "check_out") {
+    const { data: bk, error: bkErr } = await admin
+      .from("bookings")
+      .select("id, total_amount, paid_amount, currency, internal_notes")
+      .eq("id", id)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (bkErr) throw new Error(bkErr.message);
+    if (!bk) throw new Error("Reserva no encontrada");
+
+    const total = Number(bk.total_amount ?? 0);
+    const paid = Number(bk.paid_amount ?? 0);
+    const pending = Number((total - paid).toFixed(2));
+
+    if (pending > 0.01) {
+      if (!options?.force_checkout) {
+        // Mensaje cierra con un código machine-readable que la UI usa para
+        // ofrecer la opción de cobrar el saldo o forzar (sólo admin).
+        throw new Error(
+          `CHECKOUT_PENDING_BALANCE: La reserva tiene un saldo pendiente de ${pending.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${bk.currency}. Cobrá el saldo antes de hacer check-out.`
+        );
+      }
+      // Forzado: requiere razón explícita y rol admin
+      if (role !== "admin") {
+        throw new Error("Solo un administrador puede forzar un check-out con saldo pendiente.");
+      }
+      const trimmedReason = reason?.trim();
+      if (!trimmedReason || trimmedReason.length < 5) {
+        throw new Error("Necesitamos una razón (mínimo 5 caracteres) para forzar el check-out con saldo.");
+      }
+      // Anotar en internal_notes (append) para que quede el rastro
+      const stamp = new Date().toISOString();
+      const note = `[${stamp}] Check-out forzado con saldo pendiente de ${pending} ${bk.currency}. Razón: ${trimmedReason}`;
+      const newNotes = bk.internal_notes ? `${bk.internal_notes}\n${note}` : note;
+      await admin
+        .from("bookings")
+        .update({ internal_notes: newNotes })
+        .eq("id", id)
+        .eq("organization_id", organization.id);
+    }
+  }
+
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "cancelada" && reason) update.cancelled_reason = reason;
   if (newStatus === "check_in") update.checked_in_at = new Date().toISOString();
