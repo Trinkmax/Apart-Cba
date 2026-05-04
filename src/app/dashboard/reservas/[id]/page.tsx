@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowLeft, MapPin, User, Phone, Mail, Edit } from "lucide-react";
 import { getBooking, listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
-import { listAccounts } from "@/lib/actions/cash";
+import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingActions } from "@/components/bookings/booking-actions";
 import { ExtensionHistory } from "@/components/bookings/extension-history";
 import { QuickPayCard } from "@/components/bookings/quick-pay-card";
+import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
@@ -24,14 +25,20 @@ type BookingDetail = Booking & {
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [booking, units, accounts] = await Promise.all([
+  const [booking, units, accounts, movements] = await Promise.all([
     getBooking(id),
     listUnitsEnriched(),
     listAccounts(),
+    listMovementsForBooking(id),
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
   const unitBookings = await listBookings({ unitId: b.unit_id });
+  const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
+  const latestAuditByMovement = await listLatestAuditByAccount(
+    "",
+    movements.map((m) => m.id)
+  );
   const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
@@ -182,6 +189,16 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                   paidAmount={Number(b.paid_amount)}
                   accounts={accounts}
                   disabled={b.status === "cancelada" || b.status === "no_show"}
+                />
+              </div>
+
+              {/* Movimientos vinculados a esta reserva (incluye cuotas) */}
+              <div className="pt-1">
+                <BookingPaymentsSection
+                  movements={movements}
+                  accounts={accounts}
+                  units={unitsForMovement}
+                  latestAudit={latestAuditByMovement}
                 />
               </div>
 

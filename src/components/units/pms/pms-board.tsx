@@ -369,30 +369,39 @@ export function PmsBoard({
     mode: DragMode;
   } | null>(null);
   // Cuando el long-press dispara y entramos en modo drag, congelamos el scroll
-  // del contenedor para que la barra no "vuele" con el inertial scroll de iOS
-  // ni se desplace al moverse el dedo. Guardamos las clases originales para
-  // restaurar al terminar.
+  // *user-driven* del contenedor (touch-action: none) pero dejamos `overflow`
+  // intacto para poder hacer auto-scroll programático cuando el dedo se acerca
+  // a los bordes. Guardamos los estilos originales para restaurar.
   const scrollLockRef = useRef<{
-    overflow: string;
     touchAction: string;
     overscrollBehavior: string;
   } | null>(null);
+  // Posición de scroll y de puntero al iniciar el drag — para que el dayDelta
+  // tenga en cuenta tanto el movimiento del dedo como el auto-scroll del grid.
+  const dragInitialScrollRef = useRef<{ left: number; top: number } | null>(null);
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const autoScrollRafRef = useRef<number | null>(null);
   const lockGridScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || scrollLockRef.current) return;
     scrollLockRef.current = {
-      overflow: el.style.overflow,
       touchAction: el.style.touchAction,
       overscrollBehavior: el.style.overscrollBehavior,
     };
-    el.style.overflow = "hidden";
+    // touch-action:none corta cualquier pan/zoom táctil pero no `overflow`,
+    // así podemos seguir scrolleando programáticamente con scrollBy/scrollLeft.
     el.style.touchAction = "none";
     el.style.overscrollBehavior = "none";
   }, []);
   const unlockGridScroll = useCallback(() => {
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+    dragInitialScrollRef.current = null;
+    lastPointerRef.current = null;
     const el = scrollRef.current;
     if (!el || !scrollLockRef.current) return;
-    el.style.overflow = scrollLockRef.current.overflow;
     el.style.touchAction = scrollLockRef.current.touchAction;
     el.style.overscrollBehavior = scrollLockRef.current.overscrollBehavior;
     scrollLockRef.current = null;
@@ -783,6 +792,16 @@ export function PmsBoard({
     } catch {
       // ignorable: el puntero ya fue liberado (e.g. scroll)
     }
+    // Capturamos el scroll del grid en este instante: cuando el auto-scroll
+    // mueva el contenedor, el delta de scroll se sumará al delta del puntero
+    // para mantener la barra pegada al dedo y abrir paso a más días/unidades.
+    if (scrollRef.current) {
+      dragInitialScrollRef.current = {
+        left: scrollRef.current.scrollLeft,
+        top: scrollRef.current.scrollTop,
+      };
+    }
+    lastPointerRef.current = { x: clientX, y: clientY };
     updateDrag({
       bookingId: booking.id,
       mode,
@@ -795,6 +814,74 @@ export function PmsBoard({
       rowDelta: 0,
       moved: false,
     });
+    startAutoScroll();
+  }
+
+  // Recalcula los deltas a partir del último puntero conocido, sumando el
+  // desplazamiento que el grid scrolleó automáticamente.
+  function syncDragFromPointer() {
+    const d = dragRef.current;
+    const p = lastPointerRef.current;
+    const init = dragInitialScrollRef.current;
+    const el = scrollRef.current;
+    if (!d || !p || !init || !el) return;
+    const scrollDX = el.scrollLeft - init.left;
+    const scrollDY = el.scrollTop - init.top;
+    const rawDx = (p.x - d.pointerStartX) + scrollDX;
+    const rawDy = (p.y - d.pointerStartY) + scrollDY;
+    const moved = d.moved || Math.abs(rawDx) >= 5 || Math.abs(rawDy) >= 5;
+    if (!moved) return;
+    updateDrag({
+      ...d,
+      moved,
+      dayDelta: Math.round(rawDx / CELL),
+      rowDelta: d.mode === "move" ? Math.round(rawDy / ROW) : 0,
+    });
+  }
+
+  // Auto-scroll: si el dedo se acerca a un borde del grid, scrolleamos en esa
+  // dirección a una velocidad proporcional a la cercanía. Corre en rAF para
+  // ser suave y sólo mientras hay drag activo.
+  function startAutoScroll() {
+    if (autoScrollRafRef.current !== null) return;
+    const tick = () => {
+      const el = scrollRef.current;
+      const p = lastPointerRef.current;
+      if (!el || !p || !dragRef.current) {
+        autoScrollRafRef.current = null;
+        return;
+      }
+      const r = el.getBoundingClientRect();
+      const EDGE = 64; // px desde el borde donde arranca el auto-scroll
+      const MAX_SPEED = 18; // px por frame en el borde más extremo
+      let vx = 0;
+      let vy = 0;
+      if (p.x < r.left + EDGE) {
+        const t = Math.max(0, (r.left + EDGE - p.x) / EDGE);
+        vx = -MAX_SPEED * t;
+      } else if (p.x > r.right - EDGE) {
+        const t = Math.max(0, (p.x - (r.right - EDGE)) / EDGE);
+        vx = MAX_SPEED * t;
+      }
+      if (p.y < r.top + EDGE) {
+        const t = Math.max(0, (r.top + EDGE - p.y) / EDGE);
+        vy = -MAX_SPEED * t;
+      } else if (p.y > r.bottom - EDGE) {
+        const t = Math.max(0, (p.y - (r.bottom - EDGE)) / EDGE);
+        vy = MAX_SPEED * t;
+      }
+      if (vx !== 0 || vy !== 0) {
+        const before = { left: el.scrollLeft, top: el.scrollTop };
+        el.scrollBy({ left: vx, top: vy, behavior: "auto" });
+        // Sólo recalculamos si el scroll efectivamente cambió (útil cuando
+        // estamos contra el final del contenido, así no metemos delta extra).
+        if (el.scrollLeft !== before.left || el.scrollTop !== before.top) {
+          syncDragFromPointer();
+        }
+      }
+      autoScrollRafRef.current = requestAnimationFrame(tick);
+    };
+    autoScrollRafRef.current = requestAnimationFrame(tick);
   }
 
   function onBarPointerDown(
@@ -886,15 +973,10 @@ export function PmsBoard({
     if (e.pointerType === "touch" || e.pointerType === "pen") {
       e.preventDefault();
     }
-    const dx = e.clientX - d.pointerStartX;
-    const dy = e.clientY - d.pointerStartY;
-    if (!d.moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-    updateDrag({
-      ...d,
-      moved: true,
-      dayDelta: Math.round(dx / CELL),
-      rowDelta: d.mode === "move" ? Math.round(dy / ROW) : 0,
-    });
+    // Guardamos el último puntero para que el rAF de auto-scroll lo lea, y
+    // recalculamos los deltas considerando el scroll actual del grid.
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    syncDragFromPointer();
   }
 
   // El pointerUp NO commitea: prepara el "ghost preview" (cambio en cliente,
@@ -1219,8 +1301,18 @@ export function PmsBoard({
                 )}
               </div>
 
-              {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens) */}
-              <ModeFilterToggle value={modeFilter} onChange={setModeFilter} />
+              {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens).
+                  "Mens" cambia a la vista mensual, no es un filtro. */}
+              <ModeFilterToggle
+                value={modeFilter}
+                onChange={(next) => {
+                  if (next === "mensual") {
+                    router.push("/dashboard/unidades/calendario/mensual");
+                    return;
+                  }
+                  setModeFilter(next);
+                }}
+              />
 
               {/* Cuotas vencidas: chip toggle. Muestra el contador si hay vencidas */}
               <Tooltip>

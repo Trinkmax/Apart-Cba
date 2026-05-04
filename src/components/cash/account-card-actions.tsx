@@ -45,15 +45,30 @@ export function AccountCardActions({ account }: { account: CashAccount }) {
             className="size-7 shrink-0"
             disabled={isPending}
             aria-label="Acciones de la cuenta"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+            }}
           >
             <MoreVertical size={16} />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setEditOpen(true)}>
+        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+          <DropdownMenuItem
+            onSelect={(e) => {
+              e.preventDefault();
+              setEditOpen(true);
+            }}
+          >
             <Pencil size={14} /> Editar
           </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onSelect={handleDelete}>
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={(e) => {
+              e.preventDefault();
+              handleDelete();
+            }}
+          >
             <Trash2 size={14} /> Eliminar
           </DropdownMenuItem>
         </DropdownMenuContent>

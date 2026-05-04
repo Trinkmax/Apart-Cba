@@ -447,6 +447,8 @@ export function PmsMonthlyBoard({
                           currency={orgCurrency}
                           cellSchedule={cellSchedule}
                           accounts={accounts}
+                          year={m.year}
+                          month={m.month}
                         />
                       </td>
                     );
@@ -501,6 +503,8 @@ interface MonthCellProps {
   currency: string;
   cellSchedule?: BookingPaymentSchedule[];
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  year: number;
+  month: number;
 }
 
 function MonthCell({
@@ -508,6 +512,8 @@ function MonthCell({
   currency,
   cellSchedule = [],
   accounts = [],
+  year,
+  month,
 }: MonthCellProps) {
   if (!cell || cell.bookings.length === 0) {
     return (
@@ -528,6 +534,24 @@ function MonthCell({
   let payState: "ok" | "partial" | "due" = "ok";
   if (collectionPct < 1) payState = "due";
   else if (collectionPct < 99) payState = "partial";
+
+  // Día en que se desocupa la unidad dentro del mes mostrado.
+  // Tomamos el check_out_date más tardío entre las reservas de la celda;
+  // si cae dentro del mes y no hay otra reserva que arranque después, el
+  // depto se libera ese día.
+  const monthPrefix = `${year}-${String(month).padStart(2, "0")}`;
+  const sortedByOut = [...cell.bookings].sort((a, b) =>
+    a.check_out_date.localeCompare(b.check_out_date)
+  );
+  const lastOut = sortedByOut[sortedByOut.length - 1]?.check_out_date;
+  const vacancyDate =
+    lastOut && lastOut.startsWith(monthPrefix)
+      ? new Date(
+          parseInt(lastOut.slice(0, 4), 10),
+          parseInt(lastOut.slice(5, 7), 10) - 1,
+          parseInt(lastOut.slice(8, 10), 10)
+        )
+      : null;
 
   return (
     <Link
@@ -576,6 +600,17 @@ function MonthCell({
       <div className="text-[10px] tabular-nums font-mono">
         {formatCurrency(cell.total_expected, currency)}
       </div>
+      {vacancyDate && (
+        <div className="flex items-center gap-1 text-[9px] text-amber-700 dark:text-amber-300">
+          <CalendarRange size={10} />
+          <span className="tabular-nums">
+            Se desocupa{" "}
+            <span className="font-semibold">
+              {format(vacancyDate, "d MMM", { locale: es })}
+            </span>
+          </span>
+        </div>
+      )}
       <div className="flex items-center gap-1.5">
         <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
           <div

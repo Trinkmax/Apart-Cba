@@ -1,4 +1,5 @@
-import { Plus, Wallet } from "lucide-react";
+import Link from "next/link";
+import { Plus, Wallet, ArrowRight } from "lucide-react";
 import { listAccounts, listMovements, getAccountBalance } from "@/lib/actions/cash";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -77,26 +78,39 @@ export default async function CajaPage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {accounts.map((acc, i) => (
-              <Card key={acc.id} className="p-4 hover:shadow-md transition-shadow">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div
-                      className="size-8 rounded-lg flex items-center justify-center text-white shadow-sm shrink-0"
-                      style={{ backgroundColor: acc.color ?? "#0F766E" }}
-                    >
-                      <Wallet size={14} />
+              <Link
+                key={acc.id}
+                href={`/dashboard/caja/${acc.id}`}
+                className="group focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-xl"
+                aria-label={`Ver detalle de ${acc.name}`}
+              >
+                <Card className="p-4 hover:shadow-md hover:border-primary/40 transition-all relative">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div
+                        className="size-8 rounded-lg flex items-center justify-center text-white shadow-sm shrink-0"
+                        style={{ backgroundColor: acc.color ?? "#0F766E" }}
+                      >
+                        <Wallet size={14} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{acc.name}</div>
+                        <div className="text-xs text-muted-foreground capitalize">{acc.type} · {acc.currency}</div>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{acc.name}</div>
-                      <div className="text-xs text-muted-foreground capitalize">{acc.type} · {acc.currency}</div>
-                    </div>
+                    {canManageAccounts && <AccountCardActions account={acc} />}
                   </div>
-                  {canManageAccounts && <AccountCardActions account={acc} />}
-                </div>
-                <div className="mt-3 text-2xl font-semibold tabular-nums">
-                  {formatMoney(balances[i], acc.currency)}
-                </div>
-              </Card>
+                  <div className="mt-3 flex items-end justify-between gap-2">
+                    <div className="text-2xl font-semibold tabular-nums">
+                      {formatMoney(balances[i], acc.currency)}
+                    </div>
+                    <ArrowRight
+                      size={16}
+                      className="text-muted-foreground/40 group-hover:text-primary group-hover:translate-x-0.5 transition-all"
+                    />
+                  </div>
+                </Card>
+              </Link>
             ))}
           </div>
         )}
