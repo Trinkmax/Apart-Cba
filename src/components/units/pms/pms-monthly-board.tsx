@@ -187,15 +187,57 @@ export function PmsMonthlyBoard({
   return (
     <TooltipProvider delayDuration={300}>
       <div className="flex flex-col h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)] bg-background">
-        {/* Banner mobile */}
-        <div className="md:hidden shrink-0 border-b bg-violet-50 dark:bg-violet-500/10 px-3 py-2 text-[11px] text-violet-900 dark:text-violet-200 flex items-center gap-2">
-          <House size={14} className="shrink-0" />
-          <span className="leading-tight">Vista pensada para pantalla ancha. Desplazá lateralmente para ver más meses.</span>
-        </div>
-
         {/* Toolbar */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
-          <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
+          {/* MOBILE TOOLBAR */}
+          <div className="md:hidden flex items-center gap-1 px-2 py-2 safe-x">
+            <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => scrollByCols(-1)} aria-label="Mes anterior">
+              <ChevronLeft size={17} />
+            </Button>
+            <Button size="sm" variant="secondary" className="h-9 gap-1 text-[11px] px-2 tap shrink-0" onClick={scrollToToday}>
+              <CalendarRange size={13} /> Hoy
+            </Button>
+            <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => scrollByCols(1)} aria-label="Mes siguiente">
+              <ChevronRight size={17} />
+            </Button>
+            <div className="relative flex-1 min-w-0 ml-1">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Buscar"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="pl-7 h-9 w-full text-[12px]"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+            {bookingsWithOverdue.size > 0 && (
+              <Button
+                type="button"
+                size="icon"
+                variant={overdueOnly ? "default" : "outline"}
+                onClick={() => setOverdueOnly((v) => !v)}
+                className="size-9 shrink-0 relative"
+                aria-pressed={overdueOnly}
+                aria-label="Filtrar cuotas vencidas"
+              >
+                <AlertCircle size={14} />
+                <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold tabular-nums">
+                  {bookingsWithOverdue.size}
+                </span>
+              </Button>
+            )}
+          </div>
+
+          {/* DESKTOP TOOLBAR */}
+          <div className="hidden md:flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
             <div className="flex items-center gap-2">
               <div className="size-8 rounded-lg bg-gradient-to-br from-violet-500/20 to-violet-500/5 flex items-center justify-center ring-1 ring-violet-500/20">
                 <House size={15} className="text-violet-700 dark:text-violet-300" />
@@ -323,13 +365,13 @@ export function PmsMonthlyBoard({
         </div>
 
         {/* Grid */}
-        <div ref={scrollRef} className="flex-1 overflow-auto">
+        <div ref={scrollRef} className="flex-1 overflow-auto overscroll-contain touch-pan-x touch-pan-y">
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10 bg-background">
               <tr>
                 <th
                   scope="col"
-                  className="sticky left-0 z-20 bg-background border-b border-r px-3 py-2 text-left text-[10px] uppercase tracking-widest text-muted-foreground font-semibold w-56"
+                  className="sticky left-0 z-20 bg-background border-b border-r px-2 sm:px-3 py-1.5 sm:py-2 text-left text-[10px] uppercase tracking-widest text-muted-foreground font-semibold w-20 sm:w-56"
                 >
                   Unidad
                 </th>
@@ -338,7 +380,7 @@ export function PmsMonthlyBoard({
                     key={`${m.year}-${m.month}`}
                     ref={idx === 0 ? monthColRef : undefined}
                     scope="col"
-                    className="border-b border-r px-3 py-2 text-left text-[10px] uppercase tracking-widest text-muted-foreground font-semibold min-w-[180px]"
+                    className="border-b border-r px-2 sm:px-3 py-1.5 sm:py-2 text-left text-[10px] uppercase tracking-widest text-muted-foreground font-semibold min-w-[140px] sm:min-w-[180px]"
                   >
                     {m.label}
                   </th>
@@ -363,22 +405,19 @@ export function PmsMonthlyBoard({
                 >
                   <th
                     scope="row"
-                    className="sticky left-0 z-10 bg-inherit border-b border-r px-3 py-2 text-left align-top"
+                    className="sticky left-0 z-10 bg-inherit border-b border-r px-2 sm:px-3 py-1.5 sm:py-2 text-left align-top"
                   >
                     <div className="flex flex-col">
-                      <span className="font-mono text-xs font-semibold">
+                      <span className="font-mono text-[11px] sm:text-xs font-semibold">
                         {u.unit_code}
                       </span>
-                      <span className="text-[10px] text-muted-foreground truncate">
+                      <span className="hidden sm:inline text-[10px] text-muted-foreground truncate">
                         {u.unit_name}
                       </span>
                     </div>
                   </th>
                   {months.map((m) => {
                     const cell = u.cellsByYM.get(`${m.year}-${m.month}`);
-                    // Recolectar cuotas que aplican a este (unidad, mes) — buscamos
-                    // por las bookings de la celda. Si overdueOnly está activo y no
-                    // hay vencida, ocultamos la celda visualmente.
                     const cellSchedule: BookingPaymentSchedule[] = [];
                     if (cell) {
                       cell.bookings.forEach((b) => {
@@ -394,14 +433,14 @@ export function PmsMonthlyBoard({
                       return (
                         <td
                           key={`${u.unit_id}-${m.year}-${m.month}`}
-                          className="border-b border-r p-2 align-top min-w-[180px] opacity-30"
+                          className="border-b border-r p-1.5 sm:p-2 align-top min-w-[140px] sm:min-w-[180px] opacity-30"
                         />
                       );
                     }
                     return (
                       <td
                         key={`${u.unit_id}-${m.year}-${m.month}`}
-                        className="border-b border-r p-2 align-top min-w-[180px]"
+                        className="border-b border-r p-1.5 sm:p-2 align-top min-w-[140px] sm:min-w-[180px]"
                       >
                         <MonthCell
                           cell={cell}
@@ -420,9 +459,9 @@ export function PmsMonthlyBoard({
                 <tr className="bg-muted/40 font-medium">
                   <th
                     scope="row"
-                    className="sticky left-0 z-10 bg-muted/40 border-t border-r px-3 py-2 text-left text-[11px] uppercase tracking-wider"
+                    className="sticky left-0 z-10 bg-muted/40 border-t border-r px-2 sm:px-3 py-1.5 sm:py-2 text-left text-[10px] sm:text-[11px] uppercase tracking-wider"
                   >
-                    Total mes
+                    Total
                   </th>
                   {months.map((m) => {
                     const sum = monthSummaries.get(`${m.year}-${m.month}`) ?? {
@@ -433,12 +472,12 @@ export function PmsMonthlyBoard({
                     return (
                       <td
                         key={`sum-${m.year}-${m.month}`}
-                        className="border-t border-r px-3 py-2 text-[11px]"
+                        className="border-t border-r px-2 sm:px-3 py-1.5 sm:py-2 text-[10px] sm:text-[11px]"
                       >
                         <div className="font-mono tabular-nums">
                           {formatCurrency(sum.expected, orgCurrency)}
                         </div>
-                        <div className="text-[10px] text-muted-foreground tabular-nums">
+                        <div className="text-[9px] sm:text-[10px] text-muted-foreground tabular-nums">
                           {formatCurrency(sum.collected, orgCurrency)} ·{" "}
                           {pct.toFixed(0)}%
                         </div>

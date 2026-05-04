@@ -126,6 +126,8 @@ import {
   BOOKING_BAR_STYLE,
   BOOKING_MODE_OVERLAY,
   SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_MOBILE,
+  MOBILE_ZOOM,
   SOURCE_ACCENT,
   UNIT_OVERLAY_STYLE,
   ZOOM_CONFIG,
@@ -133,6 +135,7 @@ import {
   dayOffset,
   type ZoomLevel,
 } from "./pms-constants";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
 
@@ -449,8 +452,13 @@ export function PmsBoard({
     return undefined;
   }, [zenPhase, zenAtFullscreen, zenRect]);
 
-  // ── constantes de zoom
-  const { cellWidth: CELL, rowHeight: ROW } = ZOOM_CONFIG[zoom];
+  // ── constantes de zoom (en mobile usamos un preset compacto y un sidebar
+  // angosto para que entren ~6 días en pantallas de 360px)
+  const isMobile = useIsMobile();
+  const { cellWidth: CELL, rowHeight: ROW } = isMobile
+    ? { cellWidth: MOBILE_ZOOM.cellWidth, rowHeight: MOBILE_ZOOM.rowHeight }
+    : ZOOM_CONFIG[zoom];
+  const SIDEBAR = isMobile ? SIDEBAR_WIDTH_MOBILE : SIDEBAR_WIDTH;
 
   // ── dateRange memoizado
   const dateRange = useMemo(() => {
@@ -927,15 +935,47 @@ export function PmsBoard({
             : undefined
         }
       >
-        {/* Banner mobile: el PMS está pensado para pantallas anchas */}
-        <div className="md:hidden shrink-0 border-b bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200 flex items-center gap-2">
-          <CalendarRange size={14} className="shrink-0" />
-          <span className="leading-tight">Para mejor experiencia, rotá el celular o usá una tablet/desktop. Podés desplazar el calendario con el dedo.</span>
-        </div>
-
         {/* ═══════ Toolbar superior ═══════ */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
-          <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
+          {/* MOBILE TOOLBAR: nav + rango de fechas + búsqueda en una sola fila */}
+          <div className="md:hidden flex items-center gap-1 px-2 py-2 safe-x">
+            <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => shiftDays(-7)} aria-label="Semana anterior">
+              <ChevronLeft size={17} />
+            </Button>
+            <Button size="sm" variant="secondary" className="h-9 gap-1 text-[11px] px-2 tap shrink-0" onClick={jumpToday}>
+              <CalendarDays size={13} />
+              Hoy
+            </Button>
+            <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => shiftDays(7)} aria-label="Semana siguiente">
+              <ChevronRight size={17} />
+            </Button>
+            <div className="text-[10px] font-medium text-foreground/80 tabular-nums truncate min-w-0 flex-1 text-center px-1">
+              {format(parseISO(windowStart), "d MMM", { locale: es })}
+              {" — "}
+              {format(addDays(parseISO(windowStart), windowDays - 1), "d MMM", { locale: es })}
+            </div>
+            <div className="relative shrink-0">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Buscar"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="pl-7 h-9 w-28 text-[12px]"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* DESKTOP TOOLBAR */}
+          <div className="hidden md:flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
             <div className="flex items-center gap-2 mr-1">
               <div className="size-8 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center ring-1 ring-primary/20">
                 <Hotel size={15} className="text-primary" />
@@ -1542,32 +1582,32 @@ export function PmsBoard({
         /* ═══════ Grid ═══════ */
         <div
           ref={scrollRef}
-          className="flex-1 overflow-auto relative"
+          className="flex-1 overflow-auto relative overscroll-contain touch-pan-x touch-pan-y"
           style={{ scrollbarGutter: "stable" }}
         >
           <div
             ref={gridRef}
             className="relative"
             style={{
-              width: SIDEBAR_WIDTH + gridWidth,
+              width: SIDEBAR + gridWidth,
               minHeight: "100%",
             }}
           >
             {/* ─── Header fila fecha (sticky top) ─── */}
             <div
               className="sticky top-0 z-30 flex bg-background/95 backdrop-blur border-b"
-              style={{ height: 52 }}
+              style={{ height: isMobile ? 44 : 52 }}
             >
               <div
-                className="sticky left-0 z-40 bg-background border-r flex items-end px-3 pb-1.5 shrink-0"
-                style={{ width: SIDEBAR_WIDTH }}
+                className="sticky left-0 z-40 bg-background border-r flex items-end px-2 sm:px-3 pb-1.5 shrink-0"
+                style={{ width: SIDEBAR }}
               >
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold">
                     Unidad
                   </div>
-                  <div className="text-[11px] text-muted-foreground/80">
-                    {units.length} activas
+                  <div className="text-[10px] sm:text-[11px] text-muted-foreground/80">
+                    {units.length}{isMobile ? "" : " activas"}
                   </div>
                 </div>
               </div>
@@ -1638,6 +1678,8 @@ export function PmsBoard({
                     currency={orgCurrency}
                     isOpen={openUnitId === unit.id}
                     onOpenChange={(o) => setOpenUnitId(o ? unit.id : null)}
+                    sidebarWidth={SIDEBAR}
+                    compact={isMobile}
                   />
 
                   {/* Cells */}
@@ -1724,7 +1766,7 @@ export function PmsBoard({
               <div
                 className="absolute top-0 bottom-0 pointer-events-none z-[5]"
                 style={{
-                  left: SIDEBAR_WIDTH + todayOff * CELL,
+                  left: SIDEBAR + todayOff * CELL,
                   width: CELL,
                 }}
               >
@@ -1967,6 +2009,8 @@ function UnitCellHeader({
   currency,
   isOpen,
   onOpenChange,
+  sidebarWidth = SIDEBAR_WIDTH,
+  compact = false,
 }: {
   unit: UnitWithRelations;
   occupancyPct: number;
@@ -1976,6 +2020,8 @@ function UnitCellHeader({
   currency: string;
   isOpen: boolean;
   onOpenChange: (o: boolean) => void;
+  sidebarWidth?: number;
+  compact?: boolean;
 }) {
   const meta = UNIT_STATUS_META[unit.status];
   const overlay = UNIT_OVERLAY_STYLE[unit.status];
@@ -1986,9 +2032,10 @@ function UnitCellHeader({
           type="button"
           onClick={() => onOpenChange(!isOpen)}
           className={cn(
-            "sticky left-0 z-20 shrink-0 flex items-center gap-2.5 px-3 border-r bg-background hover:bg-accent/40 transition-colors text-left group"
+            "sticky left-0 z-20 shrink-0 flex items-center border-r bg-background hover:bg-accent/40 transition-colors text-left group",
+            compact ? "gap-1.5 px-1.5" : "gap-2.5 px-3"
           )}
-          style={{ width: SIDEBAR_WIDTH }}
+          style={{ width: sidebarWidth }}
         >
           {/* Status stripe vertical izquierda */}
           <div
@@ -1996,25 +2043,32 @@ function UnitCellHeader({
             style={{ backgroundColor: meta.color }}
           />
 
-          <div
-            className={cn(
-              "size-8 rounded-lg shrink-0 flex items-center justify-center ring-1 transition-all",
-              overlay ? "ring-transparent" : "ring-border/60"
-            )}
-            style={{
-              backgroundColor: meta.color + "20",
-              color: meta.color,
-              background: overlay ? overlay.pattern : `linear-gradient(135deg, ${meta.color}22, ${meta.color}10)`,
-            }}
-          >
-            <span className="text-[10px] font-bold tracking-tight">
-              {unit.code.slice(0, 3).toUpperCase()}
-            </span>
-          </div>
+          {!compact && (
+            <div
+              className={cn(
+                "size-8 rounded-lg shrink-0 flex items-center justify-center ring-1 transition-all",
+                overlay ? "ring-transparent" : "ring-border/60"
+              )}
+              style={{
+                backgroundColor: meta.color + "20",
+                color: meta.color,
+                background: overlay ? overlay.pattern : `linear-gradient(135deg, ${meta.color}22, ${meta.color}10)`,
+              }}
+            >
+              <span className="text-[10px] font-bold tracking-tight">
+                {unit.code.slice(0, 3).toUpperCase()}
+              </span>
+            </div>
+          )}
 
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono font-semibold text-xs truncate">
+          <div className="min-w-0 flex-1 pl-1">
+            <div className="flex items-center gap-1">
+              <span
+                className={cn(
+                  "font-mono font-semibold truncate",
+                  compact ? "text-[11px]" : "text-xs"
+                )}
+              >
                 {unit.code}
               </span>
               <span
@@ -2022,30 +2076,39 @@ function UnitCellHeader({
                 style={{ backgroundColor: meta.color }}
               />
             </div>
-            <div className="text-[10px] text-muted-foreground truncate">
-              {unit.name}
-            </div>
+            {!compact && (
+              <div className="text-[10px] text-muted-foreground truncate">
+                {unit.name}
+              </div>
+            )}
+            {compact && (
+              <div className="text-[9px] tabular-nums text-foreground/70 mt-0.5">
+                {occupancyPct.toFixed(0)}%
+              </div>
+            )}
           </div>
 
-          {/* Mini occupancy bar */}
-          <div className="flex flex-col items-end gap-0.5 shrink-0">
-            <span className="text-[9px] font-semibold tabular-nums text-foreground/80">
-              {occupancyPct.toFixed(0)}%
-            </span>
-            <div className="w-10 h-1 rounded-full bg-muted overflow-hidden">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all",
-                  occupancyPct >= 70
-                    ? "bg-emerald-500"
-                    : occupancyPct >= 40
-                      ? "bg-amber-500"
-                      : "bg-rose-500/60"
-                )}
-                style={{ width: `${Math.min(100, occupancyPct)}%` }}
-              />
+          {/* Mini occupancy bar — solo en desktop */}
+          {!compact && (
+            <div className="flex flex-col items-end gap-0.5 shrink-0">
+              <span className="text-[9px] font-semibold tabular-nums text-foreground/80">
+                {occupancyPct.toFixed(0)}%
+              </span>
+              <div className="w-10 h-1 rounded-full bg-muted overflow-hidden">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    occupancyPct >= 70
+                      ? "bg-emerald-500"
+                      : occupancyPct >= 40
+                        ? "bg-amber-500"
+                        : "bg-rose-500/60"
+                  )}
+                  style={{ width: `${Math.min(100, occupancyPct)}%` }}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </button>
       </PopoverAnchor>
       <PopoverContent align="start" side="right" className="p-0 w-auto">
@@ -2163,7 +2226,10 @@ function BookingBar({
       <PopoverAnchor asChild>
         <div
           className={cn(
-            "absolute rounded-md border flex items-stretch overflow-hidden select-none touch-none",
+            // En mobile dejamos pasar el swipe horizontal del scroll container
+            // (touch-pan-x permite scroll-x sobre la barra). En desktop touch-none
+            // bloquea el pan para que el drag con puntero sea perfecto.
+            "absolute rounded-md border flex items-stretch overflow-hidden select-none touch-pan-x md:touch-none",
             "bg-gradient-to-r shadow-sm",
             style.gradient,
             style.border,

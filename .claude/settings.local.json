@@ -43,7 +43,14 @@
       "Bash(curl -sf -I http://localhost:3001/dashboard -m 8)",
       "Bash(curl -sf -I http://localhost:3001/m -m 8)",
       "Bash(curl -sf -I http://localhost:3001/dashboard -m 5)",
-      "Bash(curl -sf -I http://localhost:3001/m -m 5)"
+      "Bash(curl -sf -I http://localhost:3001/m -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/kanban -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/calendario/mensual -m 8)",
+      "Bash(curl -sI http://localhost:3001/dashboard/unidades/kanban -m 10)",
+      "Bash(curl -sf -I \"http://localhost:3001/login\" -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/login -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/kanban -m 15)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/calendario/mensual -m 15)"
     ]
   }
 }
