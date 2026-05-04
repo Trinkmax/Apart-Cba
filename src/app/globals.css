@@ -330,3 +330,35 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ─────────────── PMS cell click-overlay ─────────────────────────────────────
+   El click-overlay del calendario PMS reemplaza ~30 botones absolutos por
+   fila. El "+" que aparecía sobre la celda hovereada lo dibujamos con un
+   ::after que se mueve siguiendo el puntero via la CSS variable --pms-cell-x
+   (escrita por React en pointermove). Sin esta solución, mostrar el "+"
+   requeriría re-render por cada move (caro). */
+.pms-cell-overlay {
+  position: relative;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pms-cell-overlay:hover::after,
+.pms-cell-overlay:focus-visible::after {
+  content: "+";
+  position: absolute;
+  top: 50%;
+  left: var(--pms-cell-x, -100px);
+  transform: translate(-50%, -50%);
+  color: var(--primary);
+  opacity: 0.55;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+  /* Sin transición sobre `left`: la posición se actualiza ~60 veces/seg
+     siguiendo al puntero, una transición se vería como "lag". */
+  transition: opacity 100ms ease;
+}
+.pms-cell-overlay:active {
+  background-color: rgba(var(--primary-rgb, 59, 130, 246), 0.06);
+}

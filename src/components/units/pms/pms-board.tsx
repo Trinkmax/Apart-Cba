@@ -1401,6 +1401,54 @@ export function PmsBoard({
   const todayOff = dayOffset(windowStart, todayISO);
   const gridWidth = windowDays * CELL;
 
+  // CSS background-image que pinta los gridlines + tinte de fin de semana
+  // sobre TODA la fila en una sola pasada — sustituye los ~30 <button> por
+  // unidad que renderizábamos antes (~600 nodos para 20 unidades). El patrón
+  // se repite cada 7 días; calculamos el offset del primer sábado según el
+  // día de la semana en que arranca windowStart.
+  const cellBackground = useMemo(() => {
+    const startDow = parseISO(windowStart).getDay(); // 0=Dom .. 6=Sáb
+    // Índice (0..6) del primer sábado dentro de la ventana.
+    const satOffset = (6 - startDow + 7) % 7;
+    const sevenW = 7 * CELL;
+    const weekendTint = "rgba(245, 158, 11, 0.045)"; // amber-500 sutil
+    // El fin de semana son 2 días contiguos (Sáb+Dom). Caso A: ambos caben en
+    // el período 7-day actual (satOffset ≤ 5). Caso B: satOffset = 6 → Sáb es
+    // el último día del período y Dom es el primero del siguiente (wrap).
+    let weekendGradient: string;
+    if (satOffset === 6) {
+      weekendGradient = `linear-gradient(90deg, ${weekendTint} 0 ${CELL}px, transparent ${CELL}px ${6 * CELL}px, ${weekendTint} ${6 * CELL}px ${sevenW}px)`;
+    } else {
+      weekendGradient = `linear-gradient(90deg, transparent 0 ${satOffset * CELL}px, ${weekendTint} ${satOffset * CELL}px ${(satOffset + 2) * CELL}px, transparent ${(satOffset + 2) * CELL}px ${sevenW}px)`;
+    }
+    // Borde derecho de cada celda (1px en `--border`, en el último pixel del
+    // ancho de celda — alineado con cómo lo dibujaban los <button> anteriores).
+    const gridlines = `linear-gradient(90deg, transparent 0 ${CELL - 1}px, var(--border) ${CELL - 1}px ${CELL}px)`;
+    return {
+      backgroundImage: `${gridlines}, ${weekendGradient}`,
+      backgroundSize: `${CELL}px 100%, ${sevenW}px 100%`,
+      backgroundRepeat: "repeat",
+    } satisfies React.CSSProperties;
+  }, [windowStart, CELL]);
+
+  // Posiciones (en px desde el inicio del grid) de las fronteras de mes que
+  // caen dentro de la ventana visible. Renderizamos un border-l-2 en cada una.
+  // Recorremos `windowDays` linealmente — O(días), no O(días × unidades).
+  const monthBoundaries = useMemo(() => {
+    const out: number[] = [];
+    const start = parseISO(windowStart);
+    let prevMonth = start.getMonth();
+    for (let i = 1; i < windowDays; i++) {
+      const d = addDays(start, i);
+      const m = d.getMonth();
+      if (m !== prevMonth) {
+        out.push(i * CELL);
+        prevMonth = m;
+      }
+    }
+    return out;
+  }, [windowStart, windowDays, CELL]);
+
   return (
     <TooltipProvider delayDuration={300}>
       <div
@@ -2150,7 +2198,10 @@ export function PmsBoard({
                     compact={isMobile}
                   />
 
-                  {/* Cells */}
+                  {/* Cells: single click-overlay por fila. Las gridlines y el
+                      tinte de fin de semana se pintan via CSS (`cellBackground`,
+                      memoizado a nivel del board), no como nodos DOM. Pasamos
+                      de ~30 <button> por fila × N filas a 1 elemento por fila. */}
                   <div
                     className="relative shrink-0"
                     style={{ width: gridWidth }}
@@ -2164,38 +2215,53 @@ export function PmsBoard({
                       />
                     )}
 
-                    {/* Day cells grid background */}
-                    {dateRange.map((d, i) => {
-                      const wk = isWeekend(d);
-                      const hoy = isToday(d);
-                      const prev = i > 0 ? dateRange[i - 1] : null;
-                      const monthBoundary = prev && !isSameMonth(prev, d);
-                      return (
-                        <button
-                          key={d.toISOString()}
-                          type="button"
-                          onClick={() => onCellClick(unit, d)}
-                          className={cn(
-                            "absolute top-0 bottom-0 hover:bg-primary/5 active:bg-primary/10 transition-colors group/cell",
-                            wk && "bg-amber-50/60 dark:bg-amber-500/[0.03]",
-                            hoy && "bg-primary/5 dark:bg-primary/10",
-                            monthBoundary && "border-l-2 border-border"
-                          )}
-                          style={{
-                            left: i * CELL,
-                            width: CELL,
-                            borderRight: "1px solid var(--border)",
-                          }}
-                          aria-label={`Crear reserva en ${unit.code} · ${format(d, "d MMM", { locale: es })}`}
-                        >
-                          <span className="sr-only">Crear reserva</span>
-                          <Plus
-                            size={14}
-                            className="text-primary/60 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity"
-                          />
-                        </button>
-                      );
-                    })}
+                    {/* Click-overlay único: calcula el día clickeado a partir
+                        del clientX. Mantiene el feedback visual del "+" del
+                        cell hover via CSS variables actualizadas en pointermove
+                        (sin re-renderizar React). */}
+                    <button
+                      type="button"
+                      className="absolute inset-0 pms-cell-overlay group/row"
+                      style={cellBackground}
+                      aria-label={`Crear reserva en ${unit.code}`}
+                      onPointerMove={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const idx = Math.floor(x / CELL);
+                        if (idx < 0 || idx >= windowDays) return;
+                        e.currentTarget.style.setProperty(
+                          "--pms-cell-x",
+                          `${idx * CELL + CELL / 2}px`
+                        );
+                      }}
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const idx = Math.floor(x / CELL);
+                        if (idx < 0 || idx >= windowDays) return;
+                        const d = dateRange[idx];
+                        if (d) onCellClick(unit, d);
+                      }}
+                    />
+
+                    {/* Highlight de "hoy" sobre la fila — un solo div en vez
+                        de pintar bg-primary en cada celda del día actual. */}
+                    {todayOff >= 0 && todayOff < windowDays && (
+                      <div
+                        className="absolute top-0 bottom-0 bg-primary/5 dark:bg-primary/10 pointer-events-none"
+                        style={{ left: todayOff * CELL, width: CELL }}
+                      />
+                    )}
+
+                    {/* Bordes de mes — una vez calculado a nivel de board,
+                        renderizamos como divs absolutos (≤ 4 por ventana). */}
+                    {monthBoundaries.map((leftPx) => (
+                      <div
+                        key={leftPx}
+                        className="absolute top-0 bottom-0 border-l-2 border-border pointer-events-none"
+                        style={{ left: leftPx }}
+                      />
+                    ))}
 
                     {/* Booking bars */}
                     {unitBookings.map((b) => (
