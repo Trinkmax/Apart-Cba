@@ -430,6 +430,8 @@ export interface CashAccount {
   created_at: string;
 }
 
+export type CashBillableTo = "apartcba" | "owner" | "guest";
+
 export interface CashMovement {
   id: string;
   organization_id: string;
@@ -446,6 +448,7 @@ export interface CashMovement {
   occurred_at: string;
   created_at: string;
   created_by: string | null;
+  billable_to: CashBillableTo;
 }
 
 export interface CashTransfer {

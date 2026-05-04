@@ -94,6 +94,7 @@ export type ListMovementsFilters = {
   toDate?: string;
   category?: MovementCategory | "all";
   direction?: MovementDirection | "all";
+  billableTo?: "apartcba" | "owner" | "guest" | "all";
   search?: string;
   page?: number;
   pageSize?: number;
@@ -147,6 +148,7 @@ const movementSchema = z.object({
   owner_id: z.string().uuid().optional().nullable(),
   description: z.string().optional().nullable(),
   occurred_at: z.string().optional(),
+  billable_to: z.enum(["apartcba", "owner", "guest"]).default("apartcba"),
 });
 
 export type AccountInput = z.infer<typeof accountSchema>;
@@ -452,7 +454,7 @@ export async function listAccountMovements(filters: ListMovementsFilters): Promi
   let q = admin
     .from("v_cash_movements_enriched")
     .select(
-      `id, organization_id, account_id, direction, amount, currency, category, ref_type, ref_id, unit_id, owner_id, description, occurred_at, created_at, created_by, account_name, account_color, account_type, running_balance`,
+      `id, organization_id, account_id, direction, amount, currency, category, ref_type, ref_id, unit_id, owner_id, description, occurred_at, created_at, created_by, billable_to, account_name, account_color, account_type, running_balance`,
       { count: "exact" }
     )
     .eq("account_id", filters.accountId)
@@ -462,6 +464,7 @@ export async function listAccountMovements(filters: ListMovementsFilters): Promi
   if (filters.toDate) q = q.lte("occurred_at", filters.toDate);
   if (filters.category && filters.category !== "all") q = q.eq("category", filters.category);
   if (filters.direction && filters.direction !== "all") q = q.eq("direction", filters.direction);
+  if (filters.billableTo && filters.billableTo !== "all") q = q.eq("billable_to", filters.billableTo);
   if (filters.search && filters.search.trim()) {
     q = q.ilike("description", `%${filters.search.trim()}%`);
   }
@@ -486,6 +489,7 @@ export async function listAccountMovements(filters: ListMovementsFilters): Promi
     occurred_at: string;
     created_at: string;
     created_by: string | null;
+    billable_to: "apartcba" | "owner" | "guest";
     account_name: string;
     account_color: string | null;
     account_type: string;
@@ -531,6 +535,7 @@ export async function listAccountMovements(filters: ListMovementsFilters): Promi
     occurred_at: r.occurred_at,
     created_at: r.created_at,
     created_by: r.created_by,
+    billable_to: r.billable_to,
     account: {
       id: r.account_id,
       name: r.account_name,
@@ -740,6 +745,7 @@ const updateMovementSchema = z.object({
   owner_id: z.string().uuid().optional().nullable(),
   description: z.string().optional().nullable(),
   occurred_at: z.string().optional(),
+  billable_to: z.enum(["apartcba", "owner", "guest"]).default("apartcba"),
   // Nombre del administrador que hace el cambio (audit trail informativo).
   // Se exige en updateMovement/deleteMovement; previewMovementUpdate puede ignorarlo.
   actor_name: z.string().min(2, "Indicá quién está haciendo el cambio").max(120).optional(),
@@ -868,6 +874,7 @@ export async function updateMovement(input: UpdateMovementInput): Promise<Mutati
     p_owner_id: validated.owner_id ?? null,
     p_description: validated.description ?? null,
     p_occurred_at: validated.occurred_at ?? new Date().toISOString(),
+    p_billable_to: validated.billable_to,
     p_actor_user_id: session.userId,
     p_actor_name: validated.actor_name.trim(),
   });

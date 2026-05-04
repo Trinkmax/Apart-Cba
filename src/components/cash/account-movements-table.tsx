@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowDownToLine, ArrowUpFromLine, ArrowRightLeft, Link2, History } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, ArrowRightLeft, Link2, History, Building, User2, BedDouble } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -15,6 +15,24 @@ import { cn } from "@/lib/utils";
 import { MovementDetailSheet } from "./movement-detail-sheet";
 import type { CashAccount, Unit } from "@/lib/types/database";
 import type { CashMovementAuditEntry, EnrichedMovementRow } from "@/lib/actions/cash";
+
+const BILLABLE_BADGE: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
+  apartcba: {
+    icon: <Building size={9} />,
+    label: "Organización",
+    cls: "bg-teal-500/10 text-teal-700 dark:text-teal-300",
+  },
+  owner: {
+    icon: <User2 size={9} />,
+    label: "Propietario",
+    cls: "bg-violet-500/10 text-violet-700 dark:text-violet-300",
+  },
+  guest: {
+    icon: <BedDouble size={9} />,
+    label: "Huésped",
+    cls: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  },
+};
 
 const CATEGORY_LABELS: Record<string, string> = {
   booking_payment: "Reserva",
@@ -115,6 +133,17 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                       <Badge variant="secondary" className="font-normal text-[10px] h-4 px-1.5">
                         {CATEGORY_LABELS[m.category] ?? m.category}
                       </Badge>
+                      {m.billable_to && (
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded",
+                            BILLABLE_BADGE[m.billable_to].cls
+                          )}
+                        >
+                          {BILLABLE_BADGE[m.billable_to].icon}
+                          {BILLABLE_BADGE[m.billable_to].label}
+                        </span>
+                      )}
                       {hasLink && <Link2 size={10} className="opacity-60" />}
                       {m.unit && <span className="font-mono">{m.unit.code}</span>}
                       {auditEntry && <AuditStamp entry={auditEntry} />}
@@ -139,6 +168,24 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                     <Badge variant="secondary" className="font-normal text-[10px]">
                       {CATEGORY_LABELS[m.category] ?? m.category}
                     </Badge>
+                    {m.billable_to && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded",
+                              BILLABLE_BADGE[m.billable_to].cls
+                            )}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {BILLABLE_BADGE[m.billable_to].icon}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">
+                          <span className="text-[11px]">Imputado a {BILLABLE_BADGE[m.billable_to].label}</span>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                     {auditEntry && <AuditStamp entry={auditEntry} />}
                   </div>
                   <div className="col-span-1 text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">

@@ -9,7 +9,10 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   ArrowRightLeft,
+  Building,
   Building2,
+  BedDouble,
+  User2,
   Calendar,
   ExternalLink,
   Wallet,
@@ -284,10 +287,39 @@ function SheetBody({
   );
 }
 
+const BILLABLE_META: Record<"apartcba" | "owner" | "guest", { label: string; icon: React.ReactNode; cls: string }> = {
+  apartcba: {
+    label: "Organización",
+    icon: <Building size={11} />,
+    cls: "bg-teal-500/15 text-teal-700 dark:text-teal-300 border-teal-500/30",
+  },
+  owner: {
+    label: "Propietario",
+    icon: <User2 size={11} />,
+    cls: "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",
+  },
+  guest: {
+    label: "Huésped",
+    icon: <BedDouble size={11} />,
+    cls: "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30",
+  },
+};
+
 function DetailPane({ detail, audit }: { detail: MovementDetail; audit: CashMovementAuditEntry[] }) {
   const lastEntry = audit[0] ?? null;
+  const billable = BILLABLE_META[detail.billable_to ?? "apartcba"];
   return (
     <>
+      <div
+        className={cn(
+          "rounded-lg border px-3 py-2 inline-flex items-center gap-2 text-xs font-medium",
+          billable.cls
+        )}
+      >
+        {billable.icon}
+        <span>Imputado a: {billable.label}</span>
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <Field label="Cuenta">
           {detail.account ? (
@@ -570,6 +602,7 @@ function EditPane({
     owner_id: detail.owner_id,
     description: detail.description ?? "",
     occurred_at: detail.occurred_at,
+    billable_to: detail.billable_to ?? "apartcba",
     actor_name: "",
   });
 
@@ -586,7 +619,8 @@ function EditPane({
     (form.unit_id ?? null) !== (detail.unit_id ?? null) ||
     (form.owner_id ?? null) !== (detail.owner_id ?? null) ||
     (form.description ?? "") !== (detail.description ?? "") ||
-    form.occurred_at !== detail.occurred_at;
+    form.occurred_at !== detail.occurred_at ||
+    form.billable_to !== (detail.billable_to ?? "apartcba");
 
   const actorOk = (form.actor_name?.trim().length ?? 0) >= 2;
 
@@ -780,6 +814,34 @@ function EditPane({
           </div>
         </div>
       )}
+
+      <div className="space-y-1.5">
+        <Label className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+          ¿Quién paga / recibe? *
+        </Label>
+        <div className="grid grid-cols-3 gap-2">
+          {([
+            { v: "apartcba", label: "Organización", icon: <Building size={14} /> },
+            { v: "owner", label: "Propietario", icon: <User2 size={14} /> },
+            { v: "guest", label: "Huésped", icon: <BedDouble size={14} /> },
+          ] as const).map((opt) => (
+            <button
+              key={opt.v}
+              type="button"
+              onClick={() => set("billable_to", opt.v)}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1 rounded-lg p-2.5 border-2 transition-all text-xs",
+                form.billable_to === opt.v
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:border-primary/40"
+              )}
+            >
+              {opt.icon}
+              <span className="font-medium">{opt.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="space-y-1.5">
         <Label>Descripción</Label>

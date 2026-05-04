@@ -30,9 +30,10 @@ interface Props {
   search: string;
   fromDate: string;
   toDate: string;
+  billable: string;
 }
 
-export function AccountMovementsFilterBar({ category, direction, search, fromDate, toDate }: Props) {
+export function AccountMovementsFilterBar({ category, direction, search, fromDate, toDate, billable }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -55,7 +56,7 @@ export function AccountMovementsFilterBar({ category, direction, search, fromDat
     [params, pathname, router]
   );
 
-  const hasFilters = category !== "all" || direction !== "all" || search || fromDate || toDate;
+  const hasFilters = category !== "all" || direction !== "all" || billable !== "all" || search || fromDate || toDate;
 
   return (
     <div className="flex flex-wrap items-end gap-2">
@@ -91,6 +92,16 @@ export function AccountMovementsFilterBar({ category, direction, search, fromDat
         </SelectContent>
       </Select>
 
+      <Select value={billable} onValueChange={(v) => update({ bill: v })}>
+        <SelectTrigger className="h-9 w-[150px]"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">Toda imputación</SelectItem>
+          <SelectItem value="apartcba">Organización</SelectItem>
+          <SelectItem value="owner">Propietario</SelectItem>
+          <SelectItem value="guest">Huésped</SelectItem>
+        </SelectContent>
+      </Select>
+
       <Input
         type="date"
         value={fromDate}
@@ -111,7 +122,9 @@ export function AccountMovementsFilterBar({ category, direction, search, fromDat
           variant="ghost"
           size="sm"
           className="gap-1.5 h-9"
-          onClick={() => update({ q: undefined, cat: undefined, dir: undefined, from: undefined, to: undefined })}
+          onClick={() =>
+            update({ q: undefined, cat: undefined, dir: undefined, from: undefined, to: undefined, bill: undefined })
+          }
         >
           <X size={14} /> Limpiar
         </Button>

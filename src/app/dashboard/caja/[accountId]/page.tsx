@@ -17,6 +17,7 @@ interface SearchParams {
   q?: string;
   cat?: string;
   dir?: string;
+  bill?: string;
   from?: string;
   to?: string;
   page?: string;
@@ -43,6 +44,7 @@ export default async function AccountDetailPage({
       search: sp.q,
       category: (sp.cat as never) ?? "all",
       direction: (sp.dir as never) ?? "all",
+      billableTo: (sp.bill as never) ?? "all",
       fromDate: sp.from ? new Date(sp.from).toISOString() : undefined,
       toDate: sp.to ? new Date(sp.to + "T23:59:59").toISOString() : undefined,
       page: sp.page ? Number(sp.page) : 0,
@@ -85,6 +87,7 @@ export default async function AccountDetailPage({
         <AccountMovementsFilterBar
           category={sp.cat ?? "all"}
           direction={sp.dir ?? "all"}
+          billable={sp.bill ?? "all"}
           search={sp.q ?? ""}
           fromDate={sp.from ?? ""}
           toDate={sp.to ?? ""}

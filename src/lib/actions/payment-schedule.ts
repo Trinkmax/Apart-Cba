@@ -227,6 +227,7 @@ export async function markScheduleAsPaid(
       ref_type: "payment_schedule",
       ref_id: schedule.id,
       unit_id: booking.unit_id,
+      billable_to: "owner",
       description:
         validated.notes ??
         `Cuota ${schedule.sequence_number}/${schedule.total_count} · vencía ${schedule.due_date}`,

@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
+import { Building, User2, BedDouble } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -90,6 +91,7 @@ export function MovementFormDialog({
     unit_id: null,
     owner_id: null,
     description: "",
+    billable_to: "apartcba",
   });
 
   const [unitPickerOpen, setUnitPickerOpen] = useState(false);
@@ -193,6 +195,42 @@ export function MovementFormDialog({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          {/* Imputación contable: ¿quién absorbe este movimiento? */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+              ¿Quién paga / recibe? *
+            </Label>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { v: "apartcba", label: "Organización", icon: <Building size={14} /> },
+                { v: "owner", label: "Propietario", icon: <User2 size={14} /> },
+                { v: "guest", label: "Huésped", icon: <BedDouble size={14} /> },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => set("billable_to", opt.v)}
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 rounded-lg p-2.5 border-2 transition-all text-xs",
+                    form.billable_to === opt.v
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:border-primary/40"
+                  )}
+                >
+                  {opt.icon}
+                  <span className="font-medium">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {form.billable_to === "apartcba"
+                ? "Costo/ingreso operativo de la organización."
+                : form.billable_to === "owner"
+                ? "Se descuenta o suma en la liquidación del propietario."
+                : "Se cobra/devuelve al huésped."}
+            </p>
           </div>
 
           {/* Unidad — opcional. Permite imputar el movimiento a una unidad puntual

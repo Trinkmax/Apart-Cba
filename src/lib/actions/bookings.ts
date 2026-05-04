@@ -161,6 +161,7 @@ async function syncBookingPaymentToCash(params: {
     ref_type: "booking",
     ref_id: params.bookingId,
     unit_id: params.unitId,
+    billable_to: "owner",
     description:
       params.delta > 0
         ? `Cobro de reserva ${params.bookingId.slice(0, 8)}`
