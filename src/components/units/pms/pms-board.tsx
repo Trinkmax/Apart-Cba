@@ -361,10 +361,42 @@ export function PmsBoard({
     pointerId: number;
     startX: number;
     startY: number;
+    /** Última posición del puntero antes de disparar (≤ tolerancia) */
+    lastX: number;
+    lastY: number;
     target: HTMLElement;
     booking: BookingWithRelations;
     mode: DragMode;
   } | null>(null);
+  // Cuando el long-press dispara y entramos en modo drag, congelamos el scroll
+  // del contenedor para que la barra no "vuele" con el inertial scroll de iOS
+  // ni se desplace al moverse el dedo. Guardamos las clases originales para
+  // restaurar al terminar.
+  const scrollLockRef = useRef<{
+    overflow: string;
+    touchAction: string;
+    overscrollBehavior: string;
+  } | null>(null);
+  const lockGridScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || scrollLockRef.current) return;
+    scrollLockRef.current = {
+      overflow: el.style.overflow,
+      touchAction: el.style.touchAction,
+      overscrollBehavior: el.style.overscrollBehavior,
+    };
+    el.style.overflow = "hidden";
+    el.style.touchAction = "none";
+    el.style.overscrollBehavior = "none";
+  }, []);
+  const unlockGridScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || !scrollLockRef.current) return;
+    el.style.overflow = scrollLockRef.current.overflow;
+    el.style.touchAction = scrollLockRef.current.touchAction;
+    el.style.overscrollBehavior = scrollLockRef.current.overscrollBehavior;
+    scrollLockRef.current = null;
+  }, []);
   const cancelLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
@@ -447,7 +479,7 @@ export function PmsBoard({
     return () => window.removeEventListener("keydown", onKey);
   }, [zenPhase, exitZen]);
 
-  // Limpia el timer del long-press al desmontar el componente
+  // Limpia el timer del long-press y restaura el scroll del grid al desmontar
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) {
@@ -455,8 +487,9 @@ export function PmsBoard({
         longPressTimerRef.current = null;
       }
       longPressArmRef.current = null;
+      unlockGridScroll();
     };
-  }, []);
+  }, [unlockGridScroll]);
 
   // Bloquear scroll del body mientras zen está activo
   useEffect(() => {
@@ -790,6 +823,8 @@ export function PmsBoard({
         pointerId,
         startX: clientX,
         startY: clientY,
+        lastX: clientX,
+        lastY: clientY,
         target,
         booking,
         mode,
@@ -807,7 +842,14 @@ export function PmsBoard({
         } catch {
           // best-effort, no rompe el drag
         }
-        startActiveDrag(arm.target, arm.pointerId, arm.startX, arm.startY, arm.booking, arm.mode);
+        // CRÍTICO en mobile: congelamos el scroll-x/y del grid antes de tomar
+        // el control. Si no, iOS sigue scrolleando con el dedo y la barra
+        // "viaja" con el contenedor en vez de seguir al puntero.
+        lockGridScroll();
+        // Usamos la última posición del dedo (lastX/lastY) como origen del drag,
+        // no la posición original del touchstart, para que el dayDelta inicial
+        // sea cero y la barra no salte cuando arranca el drag.
+        startActiveDrag(arm.target, arm.pointerId, arm.lastX, arm.lastY, arm.booking, arm.mode);
       }, LONG_PRESS_MS);
       return;
     }
@@ -820,19 +862,30 @@ export function PmsBoard({
 
   function onBarPointerMove(e: React.PointerEvent<HTMLDivElement>) {
     // Si todavía estamos esperando el long-press, cualquier movimiento mayor
-    // a la tolerancia cancela: el usuario está scrolleando.
+    // a la tolerancia cancela: el usuario está scrolleando. Si está dentro de
+    // tolerancia, actualizamos lastX/lastY para arrancar el drag exactamente
+    // donde está el dedo en el momento del fire (evita "saltos" iniciales).
     const arm = longPressArmRef.current;
     if (arm) {
       const dx = e.clientX - arm.startX;
       const dy = e.clientY - arm.startY;
       if (Math.abs(dx) > LONG_PRESS_TOLERANCE_PX || Math.abs(dy) > LONG_PRESS_TOLERANCE_PX) {
         cancelLongPress();
+      } else {
+        arm.lastX = e.clientX;
+        arm.lastY = e.clientY;
       }
       return;
     }
 
     const d = dragRef.current;
     if (!d) return;
+    // En mobile preventDefault dentro del move asegura que iOS no inicie un
+    // gesto de scroll/zoom paralelo aún con el contenedor lockeado. (e.button
+    // no aplica a touch; usamos pointerType.)
+    if (e.pointerType === "touch" || e.pointerType === "pen") {
+      e.preventDefault();
+    }
     const dx = e.clientX - d.pointerStartX;
     const dy = e.clientY - d.pointerStartY;
     if (!d.moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
@@ -860,7 +913,10 @@ export function PmsBoard({
     }
 
     const d = dragRef.current;
-    if (!d) return;
+    if (!d) {
+      unlockGridScroll();
+      return;
+    }
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {
@@ -870,6 +926,7 @@ export function PmsBoard({
     // Click (no-drag) → abrir popover de reserva
     if (!d.moved) {
       updateDrag(null);
+      unlockGridScroll();
       setOpenBookingId(booking.id);
       setOpenUnitId(null);
       return;
@@ -902,6 +959,7 @@ export function PmsBoard({
       newUnitId === booking.unit_id
     ) {
       updateDrag(null);
+      unlockGridScroll();
       return;
     }
 
@@ -930,6 +988,7 @@ export function PmsBoard({
     );
     pendingMutateIds.current.add(booking.id);
     updateDrag(null);
+    unlockGridScroll();
 
     setPendingMove({
       booking,
@@ -946,6 +1005,7 @@ export function PmsBoard({
   // interrumpe (e.g. el scroll container toma el control en mobile).
   function onBarPointerCancel() {
     cancelLongPress();
+    unlockGridScroll();
   }
 
   function handleConfirmMove() {
