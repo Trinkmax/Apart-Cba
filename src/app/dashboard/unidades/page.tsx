@@ -2,12 +2,19 @@ import Link from "next/link";
 import { Plus, Hotel } from "lucide-react";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { UnitFormDialog } from "@/components/units/unit-form-dialog";
 import { UnitsGrid } from "@/components/units/units-grid";
 
 export default async function UnidadesPage() {
-  const [units, owners] = await Promise.all([listUnitsEnriched(), listOwners()]);
+  const [units, owners, { role }] = await Promise.all([
+    listUnitsEnriched(),
+    listOwners(),
+    getCurrentOrg(),
+  ]);
+  const canDelete = can(role, "units", "delete");
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
@@ -34,6 +41,7 @@ export default async function UnidadesPage() {
 
       <UnitsGrid
         units={units}
+        canDelete={canDelete}
         emptyCta={
           <UnitFormDialog owners={owners}>
             <Button className="gap-2">

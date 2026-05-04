@@ -53,14 +53,18 @@ import { UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney, getInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
+import { UnitDeleteAction } from "@/components/units/unit-delete-action";
 import type { UnitWithRelations, UnitStatus } from "@/lib/types/database";
 
 export function UnitsGrid({
   units,
   emptyCta,
+  canDelete = false,
 }: {
   units: UnitWithRelations[];
   emptyCta?: React.ReactNode;
+  /** Mostrar acción "Eliminar" en cada card (sólo admin). */
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -197,6 +201,7 @@ export function UnitsGrid({
                   key={unit.id}
                   unit={unit}
                   draggable={dragEnabled}
+                  canDelete={canDelete}
                 />
               ))}
             </div>
@@ -232,9 +237,11 @@ export function UnitsGrid({
 function SortableUnitCard({
   unit,
   draggable,
+  canDelete,
 }: {
   unit: UnitWithRelations;
   draggable: boolean;
+  canDelete: boolean;
 }) {
   const {
     attributes,
@@ -274,6 +281,15 @@ function SortableUnitCard({
               <GripVertical size={14} />
             </button>
           )}
+          {canDelete && (
+            <div className="absolute top-2 right-2 z-10">
+              <UnitDeleteAction
+                unitId={unit.id}
+                unitCode={unit.code}
+                unitName={unit.name}
+              />
+            </div>
+          )}
           <Link
             href={`/dashboard/unidades/${unit.id}`}
             className="p-4 flex-1 flex flex-col group focus:outline-none"
@@ -284,7 +300,13 @@ function SortableUnitCard({
               }
             }}
           >
-            <div className={cn("flex items-start justify-between gap-2", draggable && "pl-6")}>
+            <div
+              className={cn(
+                "flex items-start justify-between gap-2",
+                draggable && "pl-6",
+                canDelete && "pr-8"
+              )}
+            >
               <div className="min-w-0">
                 <div className="font-semibold tracking-tight font-mono text-sm group-hover:text-primary transition-colors">
                   {unit.code}
