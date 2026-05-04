@@ -58,19 +58,35 @@ interface Props {
   accounts: CashAccount[];
   /** Unidades disponibles para imputar el movimiento (opcional). */
   units?: UnitForMovement[];
+  /** Pre-seleccionar dirección al abrir (ej. botón "Egreso"). */
+  defaultDirection?: "in" | "out";
+  /** Pre-seleccionar cuenta al abrir (usado desde el detalle de cuenta). */
+  defaultAccountId?: string;
+  /** Pre-seleccionar categoría al abrir (ej. egreso suele ser maintenance/utilities). */
+  defaultCategory?: MovementInput["category"];
 }
 
-export function MovementFormDialog({ children, accounts, units = [] }: Props) {
+export function MovementFormDialog({
+  children,
+  accounts,
+  units = [],
+  defaultDirection = "in",
+  defaultAccountId,
+  defaultCategory,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
+  const initialAccount: CashAccount | undefined =
+    accounts.find((a) => a.id === defaultAccountId) ?? accounts[0];
+
   const [form, setForm] = useState<MovementInput>({
-    account_id: accounts[0]?.id ?? "",
-    direction: "in",
+    account_id: initialAccount?.id ?? "",
+    direction: defaultDirection,
     amount: 0,
-    currency: accounts[0]?.currency ?? "ARS",
-    category: "other",
+    currency: initialAccount?.currency ?? "ARS",
+    category: defaultCategory ?? (defaultDirection === "out" ? "supplies" : "other"),
     unit_id: null,
     owner_id: null,
     description: "",

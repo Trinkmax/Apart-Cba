@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, ArrowDownToLine, ArrowUpFromLine, Wallet, Plus } from "lucide-react";
+import { ArrowLeft, ArrowDownToLine, ArrowUpFromLine, Wallet } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,15 +39,34 @@ export function AccountDetailHeader({ account, balance, stats, accounts, units }
         >
           <ArrowLeft size={14} /> Caja
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <TransferFormDialog accounts={accounts}>
             <Button variant="outline" size="sm" className="gap-1.5">
               ⇄ <span className="hidden sm:inline">Transferir</span>
             </Button>
           </TransferFormDialog>
-          <MovementFormDialog accounts={accounts} units={units}>
+          <MovementFormDialog
+            accounts={accounts}
+            units={units}
+            defaultDirection="out"
+            defaultAccountId={account.id}
+          >
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 border-rose-300/60 text-rose-700 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-800/50 dark:text-rose-300 dark:hover:bg-rose-950/40"
+            >
+              <ArrowUpFromLine size={14} /> Egreso
+            </Button>
+          </MovementFormDialog>
+          <MovementFormDialog
+            accounts={accounts}
+            units={units}
+            defaultDirection="in"
+            defaultAccountId={account.id}
+          >
             <Button size="sm" className="gap-1.5">
-              <Plus size={14} /> <span className="hidden sm:inline">Movimiento</span>
+              <ArrowDownToLine size={14} /> Ingreso
             </Button>
           </MovementFormDialog>
         </div>

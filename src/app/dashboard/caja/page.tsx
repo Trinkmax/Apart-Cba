@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Wallet, ArrowRight } from "lucide-react";
+import { Plus, Wallet, ArrowRight, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { listAccounts, listMovements, getAccountBalance } from "@/lib/actions/cash";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -41,12 +41,32 @@ export default async function CajaPage() {
             {accounts.length} cuentas · {movements.length} movimientos
           </p>
         </div>
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
           <TransferFormDialog accounts={accounts}>
-            <Button variant="outline" className="gap-1.5 sm:gap-2 flex-1 sm:flex-none">⇄ <span className="hidden xs:inline sm:inline">Transferir</span></Button>
+            <Button variant="outline" className="gap-1.5 sm:gap-2 flex-1 sm:flex-none">
+              ⇄ <span className="hidden xs:inline sm:inline">Transferir</span>
+            </Button>
           </TransferFormDialog>
+          <MovementFormDialog accounts={accounts} units={unitsForMovement} defaultDirection="out">
+            <Button
+              variant="outline"
+              className="gap-1.5 sm:gap-2 flex-1 sm:flex-none border-rose-300/60 text-rose-700 hover:bg-rose-50 hover:text-rose-800 dark:border-rose-800/50 dark:text-rose-300 dark:hover:bg-rose-950/40"
+            >
+              <ArrowUpFromLine size={15} /> <span className="hidden xs:inline sm:inline">Egreso</span>
+            </Button>
+          </MovementFormDialog>
+          <MovementFormDialog accounts={accounts} units={unitsForMovement} defaultDirection="in">
+            <Button
+              variant="outline"
+              className="gap-1.5 sm:gap-2 flex-1 sm:flex-none border-emerald-300/60 text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 dark:border-emerald-800/50 dark:text-emerald-300 dark:hover:bg-emerald-950/40"
+            >
+              <ArrowDownToLine size={15} /> <span className="hidden xs:inline sm:inline">Ingreso</span>
+            </Button>
+          </MovementFormDialog>
           <MovementFormDialog accounts={accounts} units={unitsForMovement}>
-            <Button className="gap-1.5 sm:gap-2 flex-1 sm:flex-none"><Plus size={16} /> Movimiento</Button>
+            <Button className="gap-1.5 sm:gap-2 flex-1 sm:flex-none">
+              <Plus size={16} /> <span className="hidden xs:inline sm:inline">Movimiento</span>
+            </Button>
           </MovementFormDialog>
         </div>
       </div>
