@@ -28,7 +28,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { exportMovements, type ExportMovementsFilters } from "@/lib/actions/cash";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { formatDateTime } from "@/lib/format";
@@ -173,14 +172,17 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
         )}
       </DialogTrigger>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
+        <DialogHeader className="shrink-0">
           <DialogTitle>Exportar movimientos</DialogTitle>
           <DialogDescription>
             Genera un archivo CSV con los movimientos de caja según los filtros que elijas.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5 mt-1">
+        {/* Body del modal: scroll INTERNO acá (no en el DialogContent), así
+            el footer sticky siempre permanece visible y los popovers que se
+            abren dentro no empujan el footer fuera de la pantalla. */}
+        <div className="space-y-5 mt-1 -mx-1 px-1">
           {/* Período */}
           <div className="space-y-2">
             <Label>Período</Label>
@@ -337,37 +339,49 @@ function MultiSelectPopover({
           <ChevronDown size={14} className="opacity-60" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]" align="start">
-        <ScrollArea className="max-h-64">
-          <div className="p-1.5 space-y-0.5">
-            <button
-              type="button"
-              onClick={() => onChange([])}
-              className="w-full px-2 py-1.5 text-xs text-left text-muted-foreground hover:bg-accent rounded"
-            >
-              Limpiar selección
-            </button>
-            {items.map((it) => {
-              const checked = selected.includes(it.value);
-              return (
-                <label
-                  key={it.value}
-                  className="flex items-center gap-2 px-2 py-1.5 hover:bg-accent rounded cursor-pointer text-sm"
-                >
-                  <Checkbox checked={checked} onCheckedChange={() => toggle(it.value)} />
-                  {it.color && (
-                    <span
-                      className="size-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: it.color }}
-                    />
-                  )}
-                  <span className="truncate flex-1">{it.label}</span>
-                  {it.hint && <span className="text-[10px] text-muted-foreground capitalize">{it.hint}</span>}
-                </label>
-              );
-            })}
-          </div>
-        </ScrollArea>
+      <PopoverContent
+        // Estructura: el container limita la altura total y reparte espacio
+        // entre el header sticky ("Limpiar selección") y la lista scrolleable.
+        // `collisionPadding` reserva 16px alrededor para que Radix flipée
+        // hacia arriba cuando el trigger está cerca del bottom del viewport
+        // (caso típico dentro de un Dialog).
+        className="p-0 w-[var(--radix-popover-trigger-width)] max-h-[min(320px,60svh)] overflow-hidden flex flex-col"
+        align="start"
+        side="bottom"
+        sideOffset={4}
+        collisionPadding={16}
+        avoidCollisions
+      >
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className="shrink-0 w-full px-3 py-2 text-xs text-left text-muted-foreground hover:bg-accent border-b"
+        >
+          Limpiar selección
+        </button>
+        {/* Lista scrolleable. `min-h-0` es crítico para que un flex child
+            herede el max-height del padre (sin esto el child no scrollea). */}
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-1.5 space-y-0.5">
+          {items.map((it) => {
+            const checked = selected.includes(it.value);
+            return (
+              <label
+                key={it.value}
+                className="flex items-center gap-2 px-2 py-1.5 hover:bg-accent rounded cursor-pointer text-sm"
+              >
+                <Checkbox checked={checked} onCheckedChange={() => toggle(it.value)} />
+                {it.color && (
+                  <span
+                    className="size-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: it.color }}
+                  />
+                )}
+                <span className="truncate flex-1">{it.label}</span>
+                {it.hint && <span className="text-[10px] text-muted-foreground capitalize">{it.hint}</span>}
+              </label>
+            );
+          })}
+        </div>
       </PopoverContent>
     </Popover>
   );
