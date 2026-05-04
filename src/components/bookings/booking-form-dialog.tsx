@@ -164,6 +164,16 @@ export function BookingFormDialog({
     | "security_deposit"
     | "monthly_inflation_adjustment_pct"
   > & {
+    /**
+     * Precio por noche (modo temporario). NO se persiste — el server recibe
+     * `total_amount` ya calculado como `price_per_night × nights`. La comisión
+     * se decide en liquidaciones, no acá.
+     */
+    price_per_night: string;
+    /**
+     * Total del período (modo mensual). En temporario se calcula en vivo
+     * desde price_per_night × nights y se muestra como display readonly.
+     */
     total_amount: string;
     paid_amount: string;
     commission_pct: string;
@@ -181,6 +191,20 @@ export function BookingFormDialog({
     add_payment: string;
   };
 
+  // Derivar price_per_night inicial: en edición = total / nights del booking;
+  // en creación = vacío (lo rellena el auto-cálculo desde unit.base_price).
+  const initialPricePerNight = (() => {
+    if (!booking) return "";
+    const ci = booking.check_in_date;
+    const co = booking.check_out_date;
+    const n = ci && co ? nightsBetween(ci, co) : 0;
+    const total = Number(booking.total_amount ?? 0);
+    if (n > 0 && total > 0) {
+      return formatMoneyValue(Math.round((total / n) * 100) / 100);
+    }
+    return "";
+  })();
+
   const [form, setForm] = useState<FormShape>({
     unit_id: booking?.unit_id ?? defaultUnitId ?? "",
     guest_id: booking?.guest_id ?? null,
@@ -194,6 +218,7 @@ export function BookingFormDialog({
     check_out_time: booking?.check_out_time ?? "10:00",
     guests_count: booking?.guests_count ?? 2,
     currency: booking?.currency ?? "ARS",
+    price_per_night: initialPricePerNight,
     total_amount: formatMoneyValue(booking?.total_amount),
     paid_amount: formatMoneyValue(booking?.paid_amount),
     commission_pct:
@@ -216,8 +241,9 @@ export function BookingFormDialog({
   // tipea "Agregar pago"). Sólo aplica en modo edición.
   const previousPaid = Number(booking?.paid_amount ?? 0);
 
-  // Tracking del input "tocado" — si el usuario editó manualmente el total,
-  // dejamos de auto-calcularlo desde base_price.
+  // Tracking del input "tocado" — si el usuario editó manualmente el precio
+  // (temporario) o el total del período (mensual), dejamos de auto-calcular.
+  const [priceTouched, setPriceTouched] = useState(isEdit);
   const [totalTouched, setTotalTouched] = useState(isEdit);
 
   function set<K extends keyof FormShape>(k: K, v: FormShape[K]) {
@@ -238,28 +264,29 @@ export function BookingFormDialog({
     });
   }
 
-  // ─── Auto-cálculo de Total ───────────────────────────────────────────────
-  // Cuando cambia unit/check_in/check_out y el usuario NO tocó el total,
-  // calculamos total = base_price × noches (modo temporario) o monthly_rent ×
-  // (días/30) (modo mensual). Patrón "ajuste de state durante render" para no
-  // violar la regla react-hooks/set-state-in-effect.
-  const autoKey = `${form.unit_id}|${form.check_in_date}|${form.check_out_date}|${form.mode}|${form.monthly_rent}`;
+  // ─── Auto-cálculo de precio/total ────────────────────────────────────────
+  // Modo temporario: auto-rellena price_per_night desde unit.base_price si el
+  // usuario no lo tocó. El total se deriva en vivo (price × nights).
+  // Modo mensual: auto-rellena total_amount desde monthly_rent × días/30.
+  // Patrón "ajuste de state durante render" para no violar
+  // react-hooks/set-state-in-effect.
+  const autoKey = `${form.unit_id}|${form.mode}|${form.monthly_rent}|${form.check_in_date}|${form.check_out_date}`;
   const [prevAutoKey, setPrevAutoKey] = useState(autoKey);
   if (prevAutoKey !== autoKey) {
     setPrevAutoKey(autoKey);
-    if (!totalTouched) {
-      const u = units.find((x) => x.id === form.unit_id);
-      const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
-      let computed: number | null = null;
-      if (form.mode === "mensual") {
-        const rent = parseMoneyInput(form.monthly_rent);
-        if (rent && nightsCount > 0) computed = Math.round((rent / 30) * nightsCount * 100) / 100;
-      } else if (u?.base_price && nightsCount > 0) {
-        computed = Math.round(Number(u.base_price) * nightsCount * 100) / 100;
-      }
-      if (computed !== null) {
+    const u = units.find((x) => x.id === form.unit_id);
+    const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
+    if (form.mode === "mensual" && !totalTouched) {
+      const rent = parseMoneyInput(form.monthly_rent);
+      if (rent && nightsCount > 0) {
+        const computed = Math.round((rent / 30) * nightsCount * 100) / 100;
         setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
       }
+    } else if (form.mode !== "mensual" && !priceTouched && u?.base_price) {
+      setForm((f) => ({
+        ...f,
+        price_per_night: formatMoneyValue(Number(u.base_price)),
+      }));
     }
   }
 
@@ -300,12 +327,16 @@ export function BookingFormDialog({
       ? formatNights(form.check_in_date, form.check_out_date)
       : 0;
 
-  const totalNum = parseMoneyInput(form.total_amount) ?? 0;
-  const cleaningNum = parseMoneyInput(form.cleaning_fee) ?? 0;
+  // En temporario: total = precio/noche × noches. En mensual: total tipeado.
+  const pricePerNightNum = parseMoneyInput(form.price_per_night) ?? 0;
+  const totalNum =
+    form.mode === "mensual"
+      ? parseMoneyInput(form.total_amount) ?? 0
+      : Math.round(pricePerNightNum * nights * 100) / 100;
+  // Comisión ya no se ingresa en este form — se decide en liquidaciones.
+  // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
+  // para no perder data en edición; el server decide el fallback definitivo.
   const commissionPctNum = parseMoneyInput(form.commission_pct);
-  const commissionAmount =
-    commissionPctNum !== null ? (totalNum * commissionPctNum) / 100 : 0;
-  const ownerNet = totalNum - commissionAmount - cleaningNum;
 
   // ─── Split preview: cualquier reserva > MAX_BOOKING_NIGHTS se divide ───
   const splitSegments =
@@ -355,7 +386,7 @@ export function BookingFormDialog({
       check_out_time: form.check_out_time,
       guests_count: form.guests_count,
       currency: form.currency,
-      total_amount: parseMoneyInput(form.total_amount) ?? 0,
+      total_amount: totalNum,
       paid_amount: paidAmount,
       commission_pct: commissionPctNum,
       cleaning_fee: parseMoneyInput(form.cleaning_fee),
@@ -422,7 +453,7 @@ export function BookingFormDialog({
       }}
     >
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar reserva" : "Nueva reserva"}</DialogTitle>
         </DialogHeader>
@@ -743,106 +774,163 @@ export function BookingFormDialog({
             </div>
           )}
 
-          {/* Money */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t pt-4">
-            <div className="space-y-1.5">
-              <Label>Moneda</Label>
-              <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ARS">ARS</SelectItem>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="EUR">EUR</SelectItem>
-                  <SelectItem value="USDT">USDT</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="total_amount">{form.mode === "mensual" ? "Total del período" : "Total"}</Label>
-              <Input
-                id="total_amount"
-                type="text"
-                inputMode="decimal"
-                value={form.total_amount}
-                onFocus={(e) => {
-                  if (e.target.value === "0") {
-                    setTotalTouched(true);
-                    set("total_amount", "");
-                  }
-                }}
-                onChange={(e) => {
-                  setTotalTouched(true);
-                  set("total_amount", e.target.value);
-                }}
-                placeholder={(() => {
-                  // Placeholder dinámico mostrando el total que se calcularía
-                  const u = units.find((x) => x.id === form.unit_id);
-                  if (form.mode === "mensual") {
-                    const rent = parseMoneyInput(form.monthly_rent);
-                    if (rent && nights > 0) {
-                      return formatMoneyValue(Math.round((rent / 30) * nights * 100) / 100);
-                    }
-                  } else if (u?.base_price && nights > 0) {
-                    return formatMoneyValue(Math.round(Number(u.base_price) * nights * 100) / 100);
-                  }
-                  return "0";
-                })()}
-              />
-              {form.mode === "mensual" && (
-                <p className="text-[10px] text-muted-foreground">
-                  Total cobrado del período.
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="paid_amount">Cobrado</Label>
-              <Input
-                id="paid_amount"
-                type="text"
-                inputMode="decimal"
-                value={isEdit ? formatMoneyValue(previousPaid) : form.paid_amount}
-                onFocus={(e) => {
-                  if (!isEdit && e.target.value === "0") set("paid_amount", "");
-                }}
-                onChange={(e) => set("paid_amount", e.target.value)}
-                placeholder="0"
-                readOnly={isEdit}
-                disabled={isEdit}
-                className={isEdit ? "bg-muted/40 cursor-not-allowed" : undefined}
-              />
-              {isEdit && (
-                <p className="text-[10px] text-muted-foreground">
-                  Total ya cobrado. Usá &quot;Agregar pago&quot; abajo para sumar más.
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="commission_pct">Comisión %</Label>
-              <Input
-                id="commission_pct"
-                type="text"
-                inputMode="decimal"
-                value={form.commission_pct}
-                onChange={(e) => set("commission_pct", e.target.value)}
-                placeholder="20"
-              />
-            </div>
-            <div className="space-y-1.5 col-span-2 sm:col-span-1">
-              <Label htmlFor="cleaning_fee">Fee limpieza</Label>
-              <Input
-                id="cleaning_fee"
-                type="text"
-                inputMode="decimal"
-                value={form.cleaning_fee}
-                onChange={(e) => set("cleaning_fee", e.target.value)}
-                placeholder="0"
-              />
-            </div>
-          </div>
+          {/* Money — grid simétrico de 5 cols: labels en una línea, inputs
+              alineados, helper text con altura fija para que todas las
+              columnas tengan exactamente la misma altura visual. */}
+          {(() => {
+            const pendingNum = Math.max(
+              0,
+              totalNum -
+                (isEdit
+                  ? previousPaid
+                  : parseMoneyInput(form.paid_amount) ?? 0)
+            );
+            const labelCls = "whitespace-nowrap text-xs sm:text-sm";
+            const helperCls =
+              "text-[10px] text-muted-foreground min-h-[14px] leading-[14px] whitespace-nowrap overflow-hidden text-ellipsis";
+            const readonlyBoxCls =
+              "flex h-9 w-full items-center rounded-md border border-input bg-muted/40 px-3 py-1 text-sm font-mono tabular-nums text-muted-foreground";
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 border-t pt-4">
+                {/* 1. Moneda */}
+                <div className="space-y-1.5">
+                  <Label className={labelCls}>Moneda</Label>
+                  <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ARS">ARS</SelectItem>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="EUR">EUR</SelectItem>
+                      <SelectItem value="USDT">USDT</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className={helperCls}>&nbsp;</p>
+                </div>
+
+                {/* 2. Precio/noche (temporario) o Total (mensual) */}
+                {form.mode === "mensual" ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="total_amount" className={labelCls}>Total</Label>
+                    <Input
+                      id="total_amount"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.total_amount}
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setTotalTouched(true);
+                          set("total_amount", "");
+                        }
+                      }}
+                      onChange={(e) => {
+                        setTotalTouched(true);
+                        set("total_amount", e.target.value);
+                      }}
+                      placeholder={(() => {
+                        const rent = parseMoneyInput(form.monthly_rent);
+                        if (rent && nights > 0) {
+                          return formatMoneyValue(Math.round((rent / 30) * nights * 100) / 100);
+                        }
+                        return "0";
+                      })()}
+                    />
+                    <p className={helperCls}>Total del período</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="price_per_night" className={labelCls}>Precio/noche</Label>
+                    <Input
+                      id="price_per_night"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.price_per_night}
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setPriceTouched(true);
+                          set("price_per_night", "");
+                        }
+                      }}
+                      onChange={(e) => {
+                        setPriceTouched(true);
+                        set("price_per_night", e.target.value);
+                      }}
+                      placeholder={(() => {
+                        const u = units.find((x) => x.id === form.unit_id);
+                        return u?.base_price ? formatMoneyValue(Number(u.base_price)) : "0";
+                      })()}
+                    />
+                    <p className={helperCls}>Tarifa por noche</p>
+                  </div>
+                )}
+
+                {/* 3. Cobrado */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="paid_amount" className={labelCls}>Cobrado</Label>
+                  <Input
+                    id="paid_amount"
+                    type="text"
+                    inputMode="decimal"
+                    value={isEdit ? formatMoneyValue(previousPaid) : form.paid_amount}
+                    onFocus={(e) => {
+                      if (!isEdit && e.target.value === "0") set("paid_amount", "");
+                    }}
+                    onChange={(e) => set("paid_amount", e.target.value)}
+                    placeholder="0"
+                    readOnly={isEdit}
+                    disabled={isEdit}
+                    className={isEdit ? "bg-muted/40 cursor-not-allowed" : undefined}
+                  />
+                  <p className={helperCls}>
+                    {isEdit ? "Usá \"Agregar pago\" para sumar más" : "Pagado al ingresar"}
+                  </p>
+                </div>
+
+                {/* 4. Total (temporario, calculado) o Saldo (mensual, calculado) */}
+                <div className="space-y-1.5">
+                  <Label className={labelCls}>
+                    {form.mode === "mensual" ? "Saldo" : "Total"}
+                  </Label>
+                  <div
+                    className={readonlyBoxCls}
+                    aria-label={form.mode === "mensual" ? "Saldo pendiente" : "Total calculado"}
+                  >
+                    {form.mode === "mensual"
+                      ? pendingNum > 0
+                        ? pendingNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })
+                        : "—"
+                      : totalNum > 0
+                        ? totalNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })
+                        : "—"}
+                  </div>
+                  <p className={helperCls}>
+                    {form.mode === "mensual"
+                      ? "Total − cobrado"
+                      : nights > 0 && pricePerNightNum > 0
+                        ? `${formatMoneyValue(pricePerNightNum)} × ${nights}n`
+                        : "Precio × noches"}
+                  </p>
+                </div>
+
+                {/* 5. Limpieza */}
+                <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                  <Label htmlFor="cleaning_fee" className={labelCls}>Limpieza</Label>
+                  <Input
+                    id="cleaning_fee"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.cleaning_fee}
+                    onChange={(e) => set("cleaning_fee", e.target.value)}
+                    placeholder="0"
+                  />
+                  <p className={helperCls}>Fee de limpieza</p>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Cobrar en cuenta — siempre visible en creación y edición */}
           {(() => {
-            const totalNumLocal = parseMoneyInput(form.total_amount) ?? 0;
+            const totalNumLocal = totalNum;
             const pendingBefore = isEdit
               ? Math.max(0, totalNumLocal - previousPaid)
               : Math.max(0, totalNumLocal - (parseMoneyInput(form.paid_amount) ?? 0));
@@ -946,23 +1034,6 @@ export function BookingFormDialog({
             );
           })()}
 
-          {totalNum > 0 && (
-            <div className="grid grid-cols-3 gap-3 p-3 bg-muted/40 rounded-lg text-xs">
-              <div>
-                <div className="text-muted-foreground">Comisión Apart Cba</div>
-                <div className="font-medium font-mono">{commissionAmount.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Fee limpieza</div>
-                <div className="font-medium font-mono">{cleaningNum.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground">Neto al propietario</div>
-                <div className="font-semibold font-mono text-emerald-600 dark:text-emerald-400">{ownerNet.toFixed(2)}</div>
-              </div>
-            </div>
-          )}
-
           <div className="space-y-1.5">
             <Label>Notas para el huésped</Label>
             <Textarea rows={2} value={form.notes ?? ""} onChange={(e) => set("notes", e.target.value)} />
@@ -972,7 +1043,7 @@ export function BookingFormDialog({
             <Textarea rows={2} value={form.internal_notes ?? ""} onChange={(e) => set("internal_notes", e.target.value)} placeholder="Solo el equipo lo ve" />
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="sm:bg-background sm:border-t sm:px-6 sm:py-3 sm:-mx-6 sm:-mb-6 sm:mt-4">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isPending}>
               {isPending && <Loader2 className="animate-spin" />}

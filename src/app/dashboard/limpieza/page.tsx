@@ -15,6 +15,7 @@ export default async function LimpiezaPage() {
   ]);
 
   const pendientes = tasks.filter((t) => t.status === "pendiente").length;
+  const unitsLite = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
@@ -29,14 +30,14 @@ export default async function LimpiezaPage() {
             <span className="hidden sm:inline"> · arrastrá las cards entre columnas para cambiar el estado</span>
           </p>
         </div>
-        <CleaningFormDialog units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}>
+        <CleaningFormDialog units={unitsLite}>
           <Button className="gap-2">
             <Plus size={16} /> Nueva tarea
           </Button>
         </CleaningFormDialog>
       </div>
 
-      <CleaningBoard initialTasks={tasks} />
+      <CleaningBoard initialTasks={tasks} units={unitsLite} />
     </div>
   );
 }

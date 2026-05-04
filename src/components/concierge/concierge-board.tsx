@@ -6,11 +6,13 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  Plus,
   Sparkles,
   User2,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { changeConciergeStatus } from "@/lib/actions/concierge";
 import { formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -23,6 +25,7 @@ import type {
 } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { ConciergeDetailDialog } from "./concierge-detail-dialog";
+import { ConciergeFormDialog } from "./concierge-form-dialog";
 
 type Member = { user_id: string; full_name: string | null };
 
@@ -125,6 +128,16 @@ export function ConciergeBoard({ initialRequests, units, members = [] }: Props) 
           setOpenId(null);
         }}
       />
+
+      {/* FAB siempre visible — vía garantizada para crear tareas */}
+      <ConciergeFormDialog units={units} members={members}>
+        <Button
+          size="lg"
+          className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"
+        >
+          <Plus size={18} /> Nueva tarea
+        </Button>
+      </ConciergeFormDialog>
     </>
   );
 }
