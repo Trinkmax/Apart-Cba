@@ -350,6 +350,29 @@ export function PmsBoard({
   const [drag, setDragState] = useState<DragState | null>(null);
   const pendingMutateIds = useRef<Set<string>>(new Set());
 
+  // Long-press en mobile: el drag arranca recién después de mantener apretado
+  // 600ms sin moverse. Mientras tanto, el scroll horizontal/vertical funciona
+  // libremente porque NO hicimos preventDefault. Si el usuario mueve antes de
+  // que dispare el timer, cancelamos y el browser hace pan natural.
+  const LONG_PRESS_MS = 600;
+  const LONG_PRESS_TOLERANCE_PX = 8;
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressArmRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    target: HTMLElement;
+    booking: BookingWithRelations;
+    mode: DragMode;
+  } | null>(null);
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressArmRef.current = null;
+  }, []);
+
   const updateDrag = useCallback((next: DragState | null) => {
     dragRef.current = next;
     setDragState(next ? { ...next } : null);
@@ -423,6 +446,17 @@ export function PmsBoard({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [zenPhase, exitZen]);
+
+  // Limpia el timer del long-press al desmontar el componente
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      longPressArmRef.current = null;
+    };
+  }, []);
 
   // Bloquear scroll del body mientras zen está activo
   useEffect(() => {
@@ -702,22 +736,25 @@ export function PmsBoard({
   }, [CELL]);
 
   // ── drag handlers
-  function onBarPointerDown(
-    e: React.PointerEvent<HTMLDivElement>,
+  // Helper: arranca el drag activo (con captura de puntero)
+  function startActiveDrag(
+    target: HTMLElement,
+    pointerId: number,
+    clientX: number,
+    clientY: number,
     booking: BookingWithRelations,
     mode: DragMode
   ) {
-    if (e.button !== 0) return;
-    // no arrastrar canceladas/no-show
-    if (booking.status === "cancelada" || booking.status === "no_show") return;
-    e.stopPropagation();
-    e.preventDefault();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {
+      // ignorable: el puntero ya fue liberado (e.g. scroll)
+    }
     updateDrag({
       bookingId: booking.id,
       mode,
-      pointerStartX: e.clientX,
-      pointerStartY: e.clientY,
+      pointerStartX: clientX,
+      pointerStartY: clientY,
       originalUnitId: booking.unit_id,
       originalCheckIn: booking.check_in_date,
       originalCheckOut: booking.check_out_date,
@@ -727,7 +764,73 @@ export function PmsBoard({
     });
   }
 
+  function onBarPointerDown(
+    e: React.PointerEvent<HTMLDivElement>,
+    booking: BookingWithRelations,
+    mode: DragMode
+  ) {
+    if (e.button !== 0) return;
+    // no arrastrar canceladas/no-show
+    if (booking.status === "cancelada" || booking.status === "no_show") return;
+
+    const isTouch = e.pointerType === "touch" || e.pointerType === "pen";
+
+    if (isTouch) {
+      // En mobile: armamos el long-press. NO hacemos preventDefault para que
+      // el scroll-x del contenedor funcione libre. Recién cuando el timer
+      // dispara (sin movimiento previo) tomamos el control con pointer capture
+      // y entramos a modo drag con feedback háptico.
+      e.stopPropagation();
+      cancelLongPress();
+      const target = e.currentTarget as HTMLElement;
+      const pointerId = e.pointerId;
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      longPressArmRef.current = {
+        pointerId,
+        startX: clientX,
+        startY: clientY,
+        target,
+        booking,
+        mode,
+      };
+      longPressTimerRef.current = setTimeout(() => {
+        const arm = longPressArmRef.current;
+        if (!arm) return;
+        longPressArmRef.current = null;
+        longPressTimerRef.current = null;
+        // Vibración háptica si el dispositivo la soporta
+        try {
+          if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+            (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean }).vibrate?.(20);
+          }
+        } catch {
+          // best-effort, no rompe el drag
+        }
+        startActiveDrag(arm.target, arm.pointerId, arm.startX, arm.startY, arm.booking, arm.mode);
+      }, LONG_PRESS_MS);
+      return;
+    }
+
+    // Desktop / mouse / stylus con botón: drag inmediato
+    e.stopPropagation();
+    e.preventDefault();
+    startActiveDrag(e.currentTarget as HTMLElement, e.pointerId, e.clientX, e.clientY, booking, mode);
+  }
+
   function onBarPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    // Si todavía estamos esperando el long-press, cualquier movimiento mayor
+    // a la tolerancia cancela: el usuario está scrolleando.
+    const arm = longPressArmRef.current;
+    if (arm) {
+      const dx = e.clientX - arm.startX;
+      const dy = e.clientY - arm.startY;
+      if (Math.abs(dx) > LONG_PRESS_TOLERANCE_PX || Math.abs(dy) > LONG_PRESS_TOLERANCE_PX) {
+        cancelLongPress();
+      }
+      return;
+    }
+
     const d = dragRef.current;
     if (!d) return;
     const dx = e.clientX - d.pointerStartX;
@@ -748,9 +851,21 @@ export function PmsBoard({
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations
   ) {
+    // Si soltamos antes de que el long-press dispare → es un tap: abrir popover
+    if (longPressArmRef.current) {
+      cancelLongPress();
+      setOpenBookingId(booking.id);
+      setOpenUnitId(null);
+      return;
+    }
+
     const d = dragRef.current;
     if (!d) return;
-    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignorable
+    }
 
     // Click (no-drag) → abrir popover de reserva
     if (!d.moved) {
@@ -825,6 +940,12 @@ export function PmsBoard({
       newCheckInDate: newCheckIn,
       newCheckOutDate: newCheckOut,
     });
+  }
+
+  // Cancela cualquier long-press pendiente y resetea el drag si el browser
+  // interrumpe (e.g. el scroll container toma el control en mobile).
+  function onBarPointerCancel() {
+    cancelLongPress();
   }
 
   function handleConfirmMove() {
@@ -1751,6 +1872,7 @@ export function PmsBoard({
                         onPointerDown={onBarPointerDown}
                         onPointerMove={onBarPointerMove}
                         onPointerUp={onBarPointerUp}
+                        onPointerCancel={onBarPointerCancel}
                         onRequestDateChange={requestDateChangeFromPopover}
                         unitCode={unit.code}
                         unitName={unit.name}
@@ -2150,6 +2272,8 @@ interface BookingBarProps {
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations
   ) => void;
+  /** Cancela el long-press si el browser interrumpe (scroll, touch-cancel) */
+  onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => void;
   onRequestDateChange: (
     booking: BookingWithRelations,
     field: "check_in_date" | "check_out_date",
@@ -2175,6 +2299,7 @@ function BookingBar({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onPointerCancel,
   onRequestDateChange,
   unitCode,
   unitName,
@@ -2226,10 +2351,12 @@ function BookingBar({
       <PopoverAnchor asChild>
         <div
           className={cn(
-            // En mobile dejamos pasar el swipe horizontal del scroll container
-            // (touch-pan-x permite scroll-x sobre la barra). En desktop touch-none
-            // bloquea el pan para que el drag con puntero sea perfecto.
-            "absolute rounded-md border flex items-stretch overflow-hidden select-none touch-pan-x md:touch-none",
+            // En mobile dejamos pasar el scroll del contenedor (touch-pan-x/y)
+            // hasta que el long-press dispara y entramos en modo drag. En desktop
+            // touch-none bloquea el pan para que el drag con puntero sea perfecto.
+            // Cuando isDragging=true forzamos touch-none también en mobile.
+            "absolute rounded-md border flex items-stretch overflow-hidden select-none",
+            isDragging ? "touch-none" : "touch-pan-x touch-pan-y md:touch-none",
             "bg-gradient-to-r shadow-sm",
             style.gradient,
             style.border,
@@ -2260,6 +2387,8 @@ function BookingBar({
           }}
           onPointerMove={onPointerMove}
           onPointerUp={(e) => onPointerUp(e, booking)}
+          onPointerCancel={onPointerCancel}
+          onLostPointerCapture={onPointerCancel}
         >
           {/* Resize handle izquierdo */}
           {!leftOverflow && booking.status !== "cancelada" && (
@@ -2269,6 +2398,8 @@ function BookingBar({
               onPointerDown={(e) => onPointerDown(e, booking, "resize-left")}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => onPointerUp(e, booking)}
+              onPointerCancel={onPointerCancel}
+              onLostPointerCapture={onPointerCancel}
             >
               <div className="h-full w-px bg-white/40 mx-auto opacity-0 group-hover/handle:opacity-100" />
             </div>
@@ -2367,6 +2498,8 @@ function BookingBar({
               onPointerDown={(e) => onPointerDown(e, booking, "resize-right")}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => onPointerUp(e, booking)}
+              onPointerCancel={onPointerCancel}
+              onLostPointerCapture={onPointerCancel}
             >
               <div className="h-full w-px bg-white/40 mx-auto opacity-0 group-hover/handle:opacity-100" />
             </div>
