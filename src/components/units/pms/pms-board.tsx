@@ -38,6 +38,7 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  Wallet,
   X,
   ZoomIn,
 } from "lucide-react";
@@ -104,6 +105,7 @@ import {
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { cn } from "@/lib/utils";
+import { formatMoney } from "@/lib/format";
 import type {
   BookingMode,
   BookingPaymentSchedule,
@@ -2608,9 +2610,28 @@ function BookingBar({
                 <span>·</span>
                 <span>{booking.guests_count}p</span>
                 {Number(booking.paid_amount) < Number(booking.total_amount) && (
-                  <span className="ml-auto text-[9px] bg-white/20 rounded px-1">
-                    Saldo
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        aria-label="Saldo pendiente — no se podrá hacer check-out hasta cobrarlo"
+                        className="ml-auto inline-flex items-center gap-0.5 rounded-sm bg-amber-400 text-amber-950 px-1 py-px font-bold tabular-nums shadow-sm ring-1 ring-amber-200/40"
+                      >
+                        <Wallet size={9} strokeWidth={2.5} />
+                        {formatMoney(
+                          Number(booking.total_amount) - Number(booking.paid_amount),
+                          booking.currency
+                        )}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <span className="text-[10px] uppercase tracking-wider opacity-70 block mb-0.5">
+                        Saldo pendiente
+                      </span>
+                      <span>
+                        Cobrá antes del check-out — el sistema bloquea la salida con saldo.
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
                 )}
               </div>
             </div>

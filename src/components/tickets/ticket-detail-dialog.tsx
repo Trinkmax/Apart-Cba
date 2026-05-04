@@ -7,7 +7,6 @@ import {
   Building2,
   CheckCircle2,
   Clock,
-  History,
   Loader2,
   Package,
   Pencil,
@@ -46,6 +45,7 @@ import {
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EventTimeline } from "@/components/shared/event-timeline";
 import { TicketPhotosSection } from "./ticket-photos-section";
 import type {
   MaintenanceTicket,
@@ -497,34 +497,17 @@ export function TicketDetailDialog({
             </Field>
           )}
 
-          {/* Historial — auditoría de cambios */}
-          <div className="space-y-2.5">
-            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground font-medium">
-              <History size={13} />
-              Historial
-              {events && events.length > 0 && (
-                <span className="text-muted-foreground/60 normal-case tracking-normal">
-                  · {events.length} evento{events.length === 1 ? "" : "s"}
-                </span>
-              )}
-            </div>
-            {events === null ? (
-              <div className="text-xs text-muted-foreground italic flex items-center gap-1.5">
-                <Loader2 size={12} className="animate-spin" />
-                Cargando historial...
-              </div>
-            ) : events.length === 0 ? (
-              <div className="text-xs text-muted-foreground italic">
-                Sin eventos registrados aún.
-              </div>
-            ) : (
-              <ol className="relative border-l border-border/60 ml-1.5 space-y-3 pl-4">
-                {events.map((ev) => (
-                  <TicketEventRow key={ev.id} event={ev} />
-                ))}
-              </ol>
-            )}
-          </div>
+          <EventTimeline
+            events={events}
+            getDotColor={(ev) =>
+              ev.event_type === "status_changed" && ev.to_status
+                ? TICKET_STATUS_META[ev.to_status].color
+                : ev.event_type === "created"
+                  ? "#10b981"
+                  : "#94a3b8"
+            }
+            renderDescription={(ev) => <TicketEventDescription event={ev} />}
+          />
 
           {/* Meta */}
           <div className="text-[11px] text-muted-foreground flex items-center gap-3 pt-1">
@@ -611,34 +594,7 @@ function Field({
   );
 }
 
-function TicketEventRow({ event }: { event: TicketEventWithActor }) {
-  const actorName = event.actor?.full_name?.trim() || "Sistema";
-  const dotColor =
-    event.event_type === "status_changed" && event.to_status
-      ? TICKET_STATUS_META[event.to_status].color
-      : event.event_type === "created"
-      ? "#10b981"
-      : "#94a3b8";
-
-  return (
-    <li className="relative">
-      <span
-        className="absolute -left-[21px] top-1.5 size-2.5 rounded-full ring-2 ring-background"
-        style={{ backgroundColor: dotColor }}
-        aria-hidden
-      />
-      <div className="text-xs leading-snug">
-        <span className="font-medium text-foreground">{actorName}</span>{" "}
-        <EventDescription event={event} />
-      </div>
-      <div className="text-[10px] text-muted-foreground mt-0.5 tabular-nums">
-        {formatDate(event.created_at)} · {formatTimeAgo(event.created_at)}
-      </div>
-    </li>
-  );
-}
-
-function EventDescription({ event }: { event: TicketEventWithActor }) {
+function TicketEventDescription({ event }: { event: TicketEventWithActor }) {
   switch (event.event_type) {
     case "created":
       return <span className="text-muted-foreground">creó el ticket</span>;

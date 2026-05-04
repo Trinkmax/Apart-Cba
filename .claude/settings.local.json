@@ -53,7 +53,8 @@
       "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/calendario/mensual -m 15)",
       "Bash(xargs cat *)",
       "Bash(cat)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(grep -n \"^    </div>$\\\\|^  \\);\\\\|^}$\" /Users/ignaciobaldovino/Apart-Cba/src/components/units/pms/pms-booking-popover.tsx)"
     ]
   }
 }

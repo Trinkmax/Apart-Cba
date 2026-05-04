@@ -388,6 +388,87 @@ export async function listCurrentOccupancyByUnit(): Promise<
   return map;
 }
 
+/**
+ * Snapshot del estado operativo de una unidad antes de hacer check-in.
+ * Devuelve `ready: true` cuando la unidad está limpia + sin tickets abiertos
+ * críticos. Se usa para mostrar un warning dialog al usuario y pedir
+ * confirmación antes de mover la reserva a `check_in` cuando la unidad no
+ * está lista (ej. limpieza pendiente del huésped anterior).
+ */
+export type UnitReadiness = {
+  ready: boolean;
+  unit_status:
+    | "disponible"
+    | "reservado"
+    | "ocupado"
+    | "limpieza"
+    | "mantenimiento"
+    | "bloqueado";
+  pending_cleaning: { id: string; scheduled_for: string; status: string }[];
+  open_maintenance: {
+    id: string;
+    title: string;
+    priority: string;
+    status: string;
+  }[];
+};
+
+export async function getUnitReadinessForCheckIn(
+  unitId: string
+): Promise<UnitReadiness> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const [unitRes, cleaningRes, ticketsRes] = await Promise.all([
+    admin
+      .from("units")
+      .select("status")
+      .eq("id", unitId)
+      .eq("organization_id", organization.id)
+      .maybeSingle(),
+    admin
+      .from("cleaning_tasks")
+      .select("id, scheduled_for, status")
+      .eq("unit_id", unitId)
+      .eq("organization_id", organization.id)
+      .in("status", ["pendiente", "en_progreso"])
+      .order("scheduled_for", { ascending: true }),
+    admin
+      .from("maintenance_tickets")
+      .select("id, title, priority, status")
+      .eq("unit_id", unitId)
+      .eq("organization_id", organization.id)
+      .not("status", "in", "(resuelto,cerrado)")
+      .order("opened_at", { ascending: false }),
+  ]);
+
+  const unitStatus = (unitRes.data?.status ?? "disponible") as UnitReadiness["unit_status"];
+  const pending = (cleaningRes.data ?? []) as {
+    id: string;
+    scheduled_for: string;
+    status: string;
+  }[];
+  const tickets = (ticketsRes.data ?? []) as {
+    id: string;
+    title: string;
+    priority: string;
+    status: string;
+  }[];
+
+  // "ready" = la unidad NO está sucia y NO tiene limpieza pendiente.
+  // Los tickets de mantenimiento abiertos los reportamos pero no bloquean
+  // por sí solos (puede ser un arreglo menor). El warning final lo decide
+  // el cliente con base en estos tres campos.
+  const isDirty = unitStatus === "limpieza" || pending.length > 0;
+  return {
+    ready: !isDirty && tickets.length === 0,
+    unit_status: unitStatus,
+    pending_cleaning: pending,
+    open_maintenance: tickets,
+  };
+}
+
 export async function getBooking(id: string) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();

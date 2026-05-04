@@ -6,6 +6,7 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
+  MinusCircle,
   Plus,
   Sparkles,
   User2,
@@ -63,6 +64,7 @@ const COLUMNS: KanbanColumn<ConciergeStatus>[] = [
   { key: "en_progreso", label: STATUS_META.en_progreso.label, color: STATUS_META.en_progreso.color, icon: Sparkles, emptyText: "Soltá tareas aquí" },
   { key: "completada", label: STATUS_META.completada.label, color: STATUS_META.completada.color, icon: CheckCircle2, emptyText: "Soltá tareas aquí" },
   { key: "rechazada", label: STATUS_META.rechazada.label, color: STATUS_META.rechazada.color, icon: X, emptyText: "Rechazadas" },
+  { key: "cancelada", label: STATUS_META.cancelada.label, color: STATUS_META.cancelada.color, icon: MinusCircle, emptyText: "Canceladas" },
 ];
 
 interface Props {
@@ -95,6 +97,7 @@ export function ConciergeBoard({ initialRequests, units, members = [] }: Props) 
           if (wA !== wB) return wB - wA;
           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }}
+        xlCols={5}
       />
 
       <ConciergeDetailDialog

@@ -44,7 +44,13 @@ import {
 } from "@/components/ui/select";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatNights, getInitials } from "@/lib/format";
-import { addBookingPayment, changeBookingStatus } from "@/lib/actions/bookings";
+import {
+  addBookingPayment,
+  changeBookingStatus,
+  getUnitReadinessForCheckIn,
+  type UnitReadiness,
+} from "@/lib/actions/bookings";
+import { CheckInReadinessDialog } from "@/components/bookings/check-in-readiness-dialog";
 import type {
   BookingWithRelations,
   BookingStatus,
@@ -94,6 +100,23 @@ export function PmsBookingPopoverContent({
   const [payAmount, setPayAmount] = useState<string>("");
   const [payAccountId, setPayAccountId] = useState<string>("");
   const [paying, startPaying] = useTransition();
+  const [readinessOpen, setReadinessOpen] = useState(false);
+  const [readiness, setReadiness] = useState<UnitReadiness | null>(null);
+
+  function performCheckIn() {
+    startTransition(async () => {
+      try {
+        await changeBookingStatus(booking.id, "check_in");
+        toast.success(`Reserva marcada como ${BOOKING_STATUS_META.check_in.label}`);
+        setReadinessOpen(false);
+        onStatusChanged?.("check_in");
+      } catch (err) {
+        toast.error("No se pudo actualizar", {
+          description: (err as Error).message,
+        });
+      }
+    });
+  }
 
   function openPayForm() {
     setPayAmount(pendingAmount > 0 ? String(pendingAmount) : "");
@@ -145,6 +168,29 @@ export function PmsBookingPopoverContent({
       }
     }
     if (confirmMsg && !window.confirm(confirmMsg)) return;
+    if (next === "check_in") {
+      // Verificamos limpieza/mantenimiento antes de avanzar.
+      startTransition(async () => {
+        try {
+          const snap = await getUnitReadinessForCheckIn(booking.unit_id);
+          if (snap.ready) {
+            await changeBookingStatus(booking.id, "check_in");
+            toast.success(
+              `Reserva marcada como ${BOOKING_STATUS_META.check_in.label}`
+            );
+            onStatusChanged?.("check_in");
+            return;
+          }
+          setReadiness(snap);
+          setReadinessOpen(true);
+        } catch (err) {
+          toast.error("No se pudo actualizar", {
+            description: (err as Error).message,
+          });
+        }
+      });
+      return;
+    }
     startTransition(async () => {
       try {
         await changeBookingStatus(booking.id, next);
@@ -164,6 +210,7 @@ export function PmsBookingPopoverContent({
   }
 
   return (
+    <>
     <div className="w-[380px] max-w-[92vw] text-sm">
       {/* Header: status banner */}
       <div
@@ -458,6 +505,15 @@ export function PmsBookingPopoverContent({
         )}
       </div>
     </div>
+
+    <CheckInReadinessDialog
+      open={readinessOpen}
+      onOpenChange={setReadinessOpen}
+      readiness={readiness}
+      isPending={pending}
+      onConfirm={performCheckIn}
+    />
+    </>
   );
 }
 

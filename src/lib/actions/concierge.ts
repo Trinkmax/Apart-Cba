@@ -5,7 +5,11 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import type { ConciergeRequest, ConciergeStatus } from "@/lib/types/database";
+import type {
+  ConciergeEvent,
+  ConciergeRequest,
+  ConciergeStatus,
+} from "@/lib/types/database";
 
 const conciergeSchema = z.object({
   unit_id: z.string().uuid().optional().nullable(),
@@ -264,14 +268,31 @@ export async function createConciergeRequest(input: ConciergeInput) {
     createdBy: session.userId,
   });
 
+  await admin.from("concierge_events").insert({
+    concierge_request_id: data.id,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "created",
+    to_status: persistable.status,
+    metadata: { priority: persistable.priority, alert_enabled },
+  });
+
   revalidateAll();
   return data as ConciergeRequest;
 }
 
 export async function changeConciergeStatus(id: string, status: ConciergeStatus) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  const { data: prev } = await admin
+    .from("concierge_requests")
+    .select("status")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const update: Record<string, unknown> = { status };
   if (status === "completada") update.completed_at = new Date().toISOString();
   const { error } = await admin
@@ -280,6 +301,19 @@ export async function changeConciergeStatus(id: string, status: ConciergeStatus)
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  if (prev && prev.status !== status) {
+    await admin.from("concierge_events").insert({
+      concierge_request_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "status_changed",
+      from_status: prev.status,
+      to_status: status,
+      metadata: { source: "kanban_or_chip" },
+    });
+  }
+
   // Cuando la tarea cierra (completada/cancelada/rechazada), silenciamos la alerta.
   if (
     status === "completada" ||
@@ -301,6 +335,14 @@ export async function updateConciergeRequest(id: string, input: Partial<Concierg
     alert_offset_hours,
     ...persistable
   } = input;
+
+  const { data: prev } = await admin
+    .from("concierge_requests")
+    .select("status")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const { data, error } = await admin
     .from("concierge_requests")
     .update(persistable)
@@ -309,6 +351,27 @@ export async function updateConciergeRequest(id: string, input: Partial<Concierg
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  const newStatus = persistable.status;
+  if (prev && newStatus && prev.status !== newStatus) {
+    await admin.from("concierge_events").insert({
+      concierge_request_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "status_changed",
+      from_status: prev.status,
+      to_status: newStatus,
+      metadata: { source: "edit_form" },
+    });
+  } else {
+    await admin.from("concierge_events").insert({
+      concierge_request_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "updated",
+      metadata: { source: "edit_form" },
+    });
+  }
 
   // Re-sincronizar alerta sólo si el caller tocó alguno de los campos
   // relevantes (alert_*, scheduled_for, description, unit_id, assigned_to).
@@ -400,4 +463,41 @@ export async function getTaskAlertSnapshot(taskId: string): Promise<{
       ? notif.severity
       : "info";
   return { enabled: true, severity: sev, offsetHours };
+}
+
+export async function listConciergeEvents(requestId: string): Promise<
+  (ConciergeEvent & { actor: { full_name: string | null } | null })[]
+> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("concierge_events")
+    .select("*")
+    .eq("concierge_request_id", requestId)
+    .eq("organization_id", organization.id)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  const events = (data ?? []) as ConciergeEvent[];
+
+  const actorIds = Array.from(
+    new Set(events.map((e) => e.actor_id).filter((v): v is string => !!v))
+  );
+  let byId = new Map<string, { full_name: string | null }>();
+  if (actorIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("user_profiles")
+      .select("user_id, full_name")
+      .in("user_id", actorIds);
+    byId = new Map(
+      (profiles ?? []).map((p) => [
+        p.user_id as string,
+        { full_name: (p.full_name as string | null) ?? null },
+      ])
+    );
+  }
+
+  return events.map((e) => ({
+    ...e,
+    actor: e.actor_id ? byId.get(e.actor_id) ?? { full_name: null } : null,
+  }));
 }

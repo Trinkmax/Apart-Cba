@@ -41,18 +41,25 @@ import {
   changeConciergeStatus,
   deleteConciergeRequest,
   getTaskAlertSnapshot,
+  listConciergeEvents,
   updateConciergeRequest,
   type ConciergeInput,
 } from "@/lib/actions/concierge";
 import { formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EventTimeline } from "@/components/shared/event-timeline";
 import type {
+  ConciergeEvent,
   ConciergePriority,
   ConciergeRequest,
   ConciergeStatus,
   Guest,
   Unit,
 } from "@/lib/types/database";
+
+type ConciergeEventWithActor = ConciergeEvent & {
+  actor: { full_name: string | null } | null;
+};
 
 type Member = { user_id: string; full_name: string | null };
 
@@ -148,6 +155,7 @@ export function ConciergeDetailDialog({
   >("info");
   const [alertOffsetHours, setAlertOffsetHours] = useState(24);
   const [alertLoaded, setAlertLoaded] = useState(false);
+  const [events, setEvents] = useState<ConciergeEventWithActor[] | null>(null);
   if (request && request.id !== prevRequestId) {
     setPrevRequestId(request.id);
     setForm(buildForm(request));
@@ -157,7 +165,24 @@ export function ConciergeDetailDialog({
     setConfirmDelete(false);
     setAlertLoaded(false);
     setAlertEnabled(false);
+    setEvents(null);
   }
+
+  const requestId = request?.id;
+  useEffect(() => {
+    if (!open || !requestId) return;
+    let cancelled = false;
+    listConciergeEvents(requestId)
+      .then((rows) => {
+        if (!cancelled) setEvents(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, requestId, isPending]);
 
   // Hidratar el estado de la alerta al abrir esta tarea (snapshot del notification).
   useEffect(() => {
@@ -652,6 +677,18 @@ export function ConciergeDetailDialog({
               onBlur={() => saveDetails()}
             />
           </div>
+
+          <EventTimeline
+            events={events}
+            getDotColor={(ev) =>
+              ev.event_type === "status_changed" && ev.to_status
+                ? STATUS_META[ev.to_status].color
+                : ev.event_type === "created"
+                  ? "#10b981"
+                  : "#94a3b8"
+            }
+            renderDescription={(ev) => <ConciergeEventDescription event={ev} />}
+          />
         </div>
 
         <Separator />
@@ -685,4 +722,33 @@ export function ConciergeDetailDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function ConciergeEventDescription({ event }: { event: ConciergeEventWithActor }) {
+  switch (event.event_type) {
+    case "created":
+      return <span className="text-muted-foreground">creó la tarea</span>;
+    case "status_changed": {
+      const fromLabel = event.from_status ? STATUS_META[event.from_status].label : "—";
+      const toLabel = event.to_status ? STATUS_META[event.to_status].label : "—";
+      const toColor = event.to_status ? STATUS_META[event.to_status].color : undefined;
+      return (
+        <span className="text-muted-foreground">
+          movió de <span className="font-medium text-foreground">{fromLabel}</span> a{" "}
+          <span className="font-medium" style={{ color: toColor }}>
+            {toLabel}
+          </span>
+        </span>
+      );
+    }
+    case "assigned":
+      return <span className="text-muted-foreground">cambió el asignado</span>;
+    case "cost_updated":
+      return <span className="text-muted-foreground">actualizó el costo</span>;
+    case "alert_updated":
+      return <span className="text-muted-foreground">cambió la alerta</span>;
+    case "updated":
+    default:
+      return <span className="text-muted-foreground">editó la tarea</span>;
+  }
 }

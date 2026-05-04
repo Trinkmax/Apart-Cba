@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
 import { LogIn, LogOut, X, Loader2, AlertTriangle, ShieldAlert, Wallet } from "lucide-react";
 import { toast } from "sonner";
@@ -16,9 +16,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { changeBookingStatus } from "@/lib/actions/bookings";
+import {
+  changeBookingStatus,
+  getUnitReadinessForCheckIn,
+  type UnitReadiness,
+} from "@/lib/actions/bookings";
+import { listAccounts } from "@/lib/actions/cash";
 import { formatMoney } from "@/lib/format";
-import type { Booking } from "@/lib/types/database";
+import type { Booking, CashAccount } from "@/lib/types/database";
+import { CheckInReadinessDialog } from "./check-in-readiness-dialog";
+import { QuickPayCard } from "./quick-pay-card";
 
 interface Props {
   booking: Booking;
@@ -31,11 +38,44 @@ export function BookingActions({ booking, role }: Props) {
   const [isPending, startTransition] = useTransition();
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
   const [forceReason, setForceReason] = useState("");
+  const [readinessOpen, setReadinessOpen] = useState(false);
+  const [readiness, setReadiness] = useState<UnitReadiness | null>(null);
+  // Cuentas de caja para cobrar saldo in-place dentro del dialog.
+  // Se cargan lazy al abrir el dialog para no bloquear el render inicial.
+  const [accounts, setAccounts] = useState<CashAccount[] | null>(null);
 
   const total = Number(booking.total_amount ?? 0);
   const paid = Number(booking.paid_amount ?? 0);
   const pending = Number((total - paid).toFixed(2));
   const isAdmin = role === "admin";
+
+  useEffect(() => {
+    if (!pendingDialogOpen || accounts !== null) return;
+    let cancelled = false;
+    listAccounts()
+      .then((rows) => {
+        if (!cancelled) setAccounts(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setAccounts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingDialogOpen, accounts]);
+
+  function performCheckIn() {
+    startTransition(async () => {
+      try {
+        await changeBookingStatus(booking.id, "check_in");
+        toast.success("Check-in registrado");
+        setReadinessOpen(false);
+        router.refresh();
+      } catch (e) {
+        toast.error("Error", { description: friendly((e as Error).message) });
+      }
+    });
+  }
 
   function handle(newStatus: "check_in" | "check_out" | "cancelada") {
     if (newStatus === "cancelada" && !confirm("¿Cancelar la reserva?")) return;
@@ -45,13 +85,34 @@ export function BookingActions({ booking, role }: Props) {
       setPendingDialogOpen(true);
       return;
     }
+    if (newStatus === "check_in") {
+      // Antes de hacer el check-in chequeamos si la unidad está sucia,
+      // tiene limpieza pendiente o tickets de mantenimiento abiertos.
+      // Si todo está OK avanzamos directo; sino mostramos un warning.
+      startTransition(async () => {
+        try {
+          const snap = await getUnitReadinessForCheckIn(booking.unit_id);
+          if (snap.ready) {
+            await changeBookingStatus(booking.id, "check_in");
+            toast.success("Check-in registrado");
+            router.refresh();
+            return;
+          }
+          setReadiness(snap);
+          setReadinessOpen(true);
+        } catch (e) {
+          toast.error("Error", {
+            description: friendly((e as Error).message),
+          });
+        }
+      });
+      return;
+    }
     startTransition(async () => {
       try {
         await changeBookingStatus(booking.id, newStatus);
         toast.success(
-          newStatus === "check_in"
-            ? "Check-in registrado"
-            : newStatus === "check_out"
+          newStatus === "check_out"
             ? "Check-out registrado"
             : "Reserva cancelada"
         );
@@ -115,7 +176,8 @@ export function BookingActions({ booking, role }: Props) {
               <AlertTriangle size={18} /> Saldo pendiente
             </DialogTitle>
             <DialogDescription>
-              No se puede hacer check-out hasta saldar la reserva.
+              No se puede hacer check-out hasta saldar la reserva. Cobrá el saldo
+              acá mismo y volvé a intentar el check-out.
             </DialogDescription>
           </DialogHeader>
 
@@ -138,6 +200,24 @@ export function BookingActions({ booking, role }: Props) {
             </div>
           </div>
 
+          {/* Cobro inline — se carga el listado de cuentas al abrir el dialog */}
+          {accounts === null ? (
+            <div className="flex items-center justify-center py-4 text-xs text-muted-foreground gap-2">
+              <Loader2 size={14} className="animate-spin" /> Cargando cuentas de caja...
+            </div>
+          ) : (
+            <QuickPayCard
+              bookingId={booking.id}
+              currency={booking.currency}
+              totalAmount={total}
+              paidAmount={paid}
+              accounts={accounts}
+              disabled={
+                booking.status === "cancelada" || booking.status === "no_show"
+              }
+            />
+          )}
+
           {isAdmin && (
             <div className="rounded-xl border border-rose-300/60 bg-rose-50/50 dark:bg-rose-950/20 dark:border-rose-800/40 p-3 space-y-2">
               <Label className="flex items-center gap-1.5 text-rose-900 dark:text-rose-200 text-[11px] uppercase tracking-wider font-semibold">
@@ -159,9 +239,9 @@ export function BookingActions({ booking, role }: Props) {
             <Button variant="outline" onClick={() => setPendingDialogOpen(false)}>
               Cerrar
             </Button>
-            <Button asChild className="gap-1.5">
+            <Button asChild variant="outline" className="gap-1.5">
               <Link href={`/dashboard/reservas/${booking.id}`}>
-                <Wallet size={14} /> Cobrar saldo
+                <Wallet size={14} /> Ver detalle
               </Link>
             </Button>
             {isAdmin && (
@@ -178,6 +258,14 @@ export function BookingActions({ booking, role }: Props) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CheckInReadinessDialog
+        open={readinessOpen}
+        onOpenChange={setReadinessOpen}
+        readiness={readiness}
+        isPending={isPending}
+        onConfirm={performCheckIn}
+      />
     </>
   );
 }

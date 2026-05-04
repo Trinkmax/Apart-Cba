@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   BadgeCheck,
   Building2,
@@ -30,14 +30,24 @@ import { formatDateTime } from "@/lib/format";
 import {
   changeCleaningStatus,
   deleteCleaningTask,
+  listCleaningEvents,
   updateCleaningChecklist,
   updateCleaningTask,
 } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
-import type { CleaningStatus, CleaningTask, Unit } from "@/lib/types/database";
+import { EventTimeline } from "@/components/shared/event-timeline";
+import type {
+  CleaningEvent,
+  CleaningStatus,
+  CleaningTask,
+  Unit,
+} from "@/lib/types/database";
 
 type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
 type ChecklistItem = { item: string; done: boolean; note?: string };
+type CleaningEventWithActor = CleaningEvent & {
+  actor: { full_name: string | null } | null;
+};
 
 const STATUS_ICON: Record<CleaningStatus, React.ComponentType<{ size?: number; className?: string }>> = {
   pendiente: Clock,
@@ -66,13 +76,31 @@ export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDe
   );
   const [notes, setNotes] = useState(task?.notes ?? "");
   const [cost, setCost] = useState<string>(task?.cost?.toString() ?? "");
+  const [events, setEvents] = useState<CleaningEventWithActor[] | null>(null);
   if (task && task.id !== prevTaskId) {
     setPrevTaskId(task.id);
     setChecklist((task.checklist as ChecklistItem[]) ?? []);
     setNotes(task.notes ?? "");
     setCost(task.cost?.toString() ?? "");
     setConfirmDelete(false);
+    setEvents(null);
   }
+
+  const taskId = task?.id;
+  useEffect(() => {
+    if (!open || !taskId) return;
+    let cancelled = false;
+    listCleaningEvents(taskId)
+      .then((rows) => {
+        if (!cancelled) setEvents(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, taskId, isPending]);
 
   if (!task) return null;
 
@@ -277,6 +305,18 @@ export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDe
               />
             </div>
           </div>
+
+          <EventTimeline
+            events={events}
+            getDotColor={(ev) =>
+              ev.event_type === "status_changed" && ev.to_status
+                ? CLEANING_STATUS_META[ev.to_status].color
+                : ev.event_type === "created"
+                  ? "#10b981"
+                  : "#94a3b8"
+            }
+            renderDescription={(ev) => <CleaningEventDescription event={ev} />}
+          />
         </div>
 
         <Separator />
@@ -310,4 +350,46 @@ export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDe
       </DialogContent>
     </Dialog>
   );
+}
+
+function CleaningEventDescription({ event }: { event: CleaningEventWithActor }) {
+  switch (event.event_type) {
+    case "created":
+      return <span className="text-muted-foreground">creó la tarea</span>;
+    case "status_changed": {
+      const fromLabel = event.from_status ? CLEANING_STATUS_META[event.from_status].label : "—";
+      const toLabel = event.to_status ? CLEANING_STATUS_META[event.to_status].label : "—";
+      const toColor = event.to_status ? CLEANING_STATUS_META[event.to_status].color : undefined;
+      return (
+        <span className="text-muted-foreground">
+          movió de <span className="font-medium text-foreground">{fromLabel}</span> a{" "}
+          <span className="font-medium" style={{ color: toColor }}>
+            {toLabel}
+          </span>
+        </span>
+      );
+    }
+    case "checklist_updated": {
+      const meta = event.metadata as { done?: number; total?: number };
+      if (typeof meta.done === "number" && typeof meta.total === "number") {
+        return (
+          <span className="text-muted-foreground">
+            actualizó el checklist (
+            <span className="tabular-nums font-medium text-foreground">
+              {meta.done}/{meta.total}
+            </span>
+            )
+          </span>
+        );
+      }
+      return <span className="text-muted-foreground">actualizó el checklist</span>;
+    }
+    case "assigned":
+      return <span className="text-muted-foreground">cambió el asignado</span>;
+    case "cost_updated":
+      return <span className="text-muted-foreground">actualizó el costo</span>;
+    case "updated":
+    default:
+      return <span className="text-muted-foreground">editó la tarea</span>;
+  }
 }

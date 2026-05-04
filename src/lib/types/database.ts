@@ -401,6 +401,46 @@ export interface TicketEvent {
   created_at: string;
 }
 
+export type CleaningEventType =
+  | "created"
+  | "status_changed"
+  | "updated"
+  | "assigned"
+  | "checklist_updated"
+  | "cost_updated";
+
+export interface CleaningEvent {
+  id: string;
+  cleaning_task_id: string;
+  organization_id: string;
+  actor_id: string | null;
+  event_type: CleaningEventType;
+  from_status: CleaningStatus | null;
+  to_status: CleaningStatus | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export type ConciergeEventType =
+  | "created"
+  | "status_changed"
+  | "updated"
+  | "assigned"
+  | "cost_updated"
+  | "alert_updated";
+
+export interface ConciergeEvent {
+  id: string;
+  concierge_request_id: string;
+  organization_id: string;
+  actor_id: string | null;
+  event_type: ConciergeEventType;
+  from_status: ConciergeStatus | null;
+  to_status: ConciergeStatus | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface TicketAttachment {
   id: string;
   ticket_id: string;

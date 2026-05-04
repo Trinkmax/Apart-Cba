@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles } from "lucide-react";
+import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CLEANING_STATUS_META } from "@/lib/constants";
@@ -20,6 +20,7 @@ const COLUMNS: KanbanColumn<CleaningStatus>[] = [
   { key: "en_progreso", label: CLEANING_STATUS_META.en_progreso.label, color: CLEANING_STATUS_META.en_progreso.color, icon: Sparkles, emptyText: "Soltá tareas aquí" },
   { key: "completada", label: CLEANING_STATUS_META.completada.label, color: CLEANING_STATUS_META.completada.color, icon: CheckCircle2, emptyText: "Soltá tareas aquí" },
   { key: "verificada", label: CLEANING_STATUS_META.verificada.label, color: CLEANING_STATUS_META.verificada.color, icon: BadgeCheck, emptyText: "Soltá tareas aquí" },
+  { key: "cancelada", label: CLEANING_STATUS_META.cancelada.label, color: CLEANING_STATUS_META.cancelada.color, icon: X, emptyText: "Canceladas" },
 ];
 
 interface Props {
@@ -46,6 +47,7 @@ export function CleaningBoard({ initialTasks, units }: Props) {
         onCardClick={(t) => setOpenId(t.id)}
         renderCard={(t, { dragging }) => <CleaningCard task={t} dragging={dragging} />}
         sortFn={(a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime()}
+        xlCols={5}
       />
 
       <CleaningDetailDialog
