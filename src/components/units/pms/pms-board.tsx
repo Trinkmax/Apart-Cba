@@ -1638,7 +1638,7 @@ export function PmsBoard({
                     className="h-8 gap-1.5 text-xs"
                   >
                     <SlidersHorizontal size={12} />
-                    Buscar dept
+                    Buscar disp
                     {activeUnitFilterCount > 0 && (
                       <Badge
                         variant="secondary"
