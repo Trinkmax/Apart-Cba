@@ -2459,6 +2459,28 @@ export function PmsBoard({
           <DragChip drag={drag} bookings={bookings} units={units} />
         )}
 
+        {/* FAB mobile: la toolbar mobile no tiene espacio para "Nueva reserva".
+            Lo escondemos en editMode (reorden) y mientras el usuario arrastra,
+            para no tapar el target ni competir con el DragChip. */}
+        {!editMode && !drag && (
+          <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
+            <button
+              type="button"
+              aria-label="Nueva reserva"
+              className={cn(
+                "md:hidden fixed right-4 z-[55]",
+                "bottom-[calc(env(safe-area-inset-bottom,0px)+1rem)]",
+                "size-14 rounded-full bg-primary text-primary-foreground",
+                "shadow-lg shadow-primary/30 ring-1 ring-primary/40",
+                "flex items-center justify-center",
+                "active:scale-95 transition-transform tap"
+              )}
+            >
+              <Plus size={24} strokeWidth={2.5} />
+            </button>
+          </BookingFormDialog>
+        )}
+
         {/* Modal de confirmación obligatoria para mover/extender */}
         <MoveConfirmDialog
           pending={pendingMove}
