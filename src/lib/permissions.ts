@@ -15,6 +15,7 @@ export type Resource =
   | "concierge"
   | "amenities"
   | "ical"
+  | "messaging"
   | "users";
 
 export function can(role: UserRole, resource: Resource, action: Action = "view"): boolean {
