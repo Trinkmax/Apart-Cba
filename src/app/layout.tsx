@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
@@ -12,20 +13,38 @@ export const metadata: Metadata = {
   description: "Gestión integral de departamentos temporales en Córdoba",
   applicationName: "Apart Cba",
   manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    title: "Apart Cba",
+    statusBarStyle: "default",
+  },
   icons: {
-    icon: "/favicon.svg",
-    apple: "/apple-touch-icon.png",
+    icon: [
+      { url: "/favicon-16.png", sizes: "16x16", type: "image/png" },
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/icon-48.png", sizes: "48x48", type: "image/png" },
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    shortcut: "/favicon.png",
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180" },
+      { url: "/icons/icon-152.png", sizes: "152x152" },
+      { url: "/icons/icon-167.png", sizes: "167x167" },
+    ],
   },
 };
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#8FA98E" },
-    { media: "(prefers-color-scheme: dark)", color: "#1a2418" },
+    { media: "(prefers-color-scheme: light)", color: "#FFFFFF" },
+    { media: "(prefers-color-scheme: dark)", color: "#0A0A0A" },
   ],
   width: "device-width",
   initialScale: 1,
+  maximumScale: 5,
   viewportFit: "cover",
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -53,6 +72,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             }}
           />
         </ThemeProvider>
+        <SpeedInsights />
       </body>
     </html>
   );

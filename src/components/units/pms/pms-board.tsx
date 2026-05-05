@@ -38,7 +38,7 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
-  Wifi,
+  Wallet,
   X,
   ZoomIn,
 } from "lucide-react";
@@ -104,9 +104,12 @@ import {
 } from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
+import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { cn } from "@/lib/utils";
+import { formatMoney } from "@/lib/format";
 import type {
   BookingMode,
+  BookingPaymentSchedule,
   BookingSource,
   BookingStatus,
   BookingWithRelations,
@@ -114,6 +117,7 @@ import type {
   Unit,
   UnitWithRelations,
 } from "@/lib/types/database";
+import { CuotaBadge } from "@/components/payment-schedule/cuota-badge";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import {
   MoveConfirmDialog,
@@ -124,6 +128,8 @@ import {
   BOOKING_BAR_STYLE,
   BOOKING_MODE_OVERLAY,
   SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_MOBILE,
+  MOBILE_ZOOM,
   SOURCE_ACCENT,
   UNIT_OVERLAY_STYLE,
   ZOOM_CONFIG,
@@ -131,6 +137,7 @@ import {
   dayOffset,
   type ZoomLevel,
 } from "./pms-constants";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
 
@@ -139,6 +146,8 @@ interface PmsBoardProps {
   initialBookings: BookingWithRelations[];
   /** Cuentas de caja activas para el form de booking (cobro al crear/editar) */
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  /** Cuotas mensuales — para badges 1/N flotantes sobre las barras */
+  initialSchedule?: BookingPaymentSchedule[];
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -173,17 +182,55 @@ interface DragState {
   moved: boolean;
 }
 
+// Calcula el resultado real de aplicar el drag actual a una booking. Lógica
+// compartida entre el commit (`onBarPointerUp`), el chip flotante (`DragChip`)
+// y el highlight visual del target (`<DragTargetHighlight>`). Mantener una
+// sola fuente de verdad acá evita que el feedback visual y la mutación final
+// se desincronicen.
+function computeDragTarget(
+  drag: DragState,
+  booking: BookingWithRelations,
+  units: UnitWithRelations[]
+): {
+  newCheckIn: string;
+  newCheckOut: string;
+  newUnitId: string;
+} {
+  let newCheckIn = booking.check_in_date;
+  let newCheckOut = booking.check_out_date;
+  let newUnitId = booking.unit_id;
+  if (drag.mode === "move") {
+    newCheckIn = isoAddDays(drag.originalCheckIn, drag.dayDelta);
+    newCheckOut = isoAddDays(drag.originalCheckOut, drag.dayDelta);
+    const curRow = units.findIndex((u) => u.id === drag.originalUnitId);
+    const newRow = Math.max(
+      0,
+      Math.min(units.length - 1, curRow + drag.rowDelta)
+    );
+    newUnitId = units[newRow]?.id ?? newUnitId;
+  } else if (drag.mode === "resize-left") {
+    newCheckIn = isoAddDays(drag.originalCheckIn, drag.dayDelta);
+    if (newCheckIn >= newCheckOut) newCheckIn = isoAddDays(newCheckOut, -1);
+  } else if (drag.mode === "resize-right") {
+    newCheckOut = isoAddDays(drag.originalCheckOut, drag.dayDelta);
+    if (newCheckOut <= newCheckIn) newCheckOut = isoAddDays(newCheckIn, 1);
+  }
+  return { newCheckIn, newCheckOut, newUnitId };
+}
+
 // ─── Componente principal ───────────────────────────────────────────────────
 export function PmsBoard({
   initialUnits,
   initialBookings,
   accounts = [],
+  initialSchedule = [],
   organizationId,
   startISO,
   days,
   orgCurrency = "ARS",
 }: PmsBoardProps) {
   const router = useRouter();
+  const statusColors = useBookingStatusColors();
   // ── estado base
   // Sincronizamos units/bookings cuando llegan nuevos props (router.refresh tras
   // crear/editar). Patrón "ajuste de state durante render" — reemplaza al
@@ -210,7 +257,15 @@ export function PmsBoard({
   );
   // Filtro de modo: null = todos | "temporario" | "mensual"
   const [modeFilter, setModeFilter] = useState<BookingMode | null>(null);
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  // Filtro: mostrar sólo bookings con cuotas vencidas
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  // Schedule (cuotas) — sincronizado con prop
+  const [prevInitialSchedule, setPrevInitialSchedule] = useState(initialSchedule);
+  const [schedule, setSchedule] = useState(initialSchedule);
+  if (prevInitialSchedule !== initialSchedule) {
+    setPrevInitialSchedule(initialSchedule);
+    setSchedule(initialSchedule);
+  }
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
 
@@ -325,13 +380,131 @@ export function PmsBoard({
   } | null>(null);
 
   // ── refs + drag state
-  // `drag` state se lee en render. `dragRef` se lee desde los handlers de
-  // pointer (síncrono, sin stale-closures). Ambos se mantienen en sync.
+  // Arquitectura del drag (clave para fluidez):
+  //  • `dragRef`      — lectura síncrona desde los handlers de pointer/rAF
+  //                     (sin stale-closures). Se muta directamente.
+  //  • `drag` state   — sólo se actualiza cuando cambia el SNAP (día/fila),
+  //                     no en cada pixel. Dispara re-render del chip flotante,
+  //                     tick háptico y resaltado del target. **No** mueve la
+  //                     barra: la barra se posiciona via DOM directo abajo.
+  //  • `dragNodeRef`  — referencia al DOM de la barra activa, para escribir
+  //                     `style.left/top/width` en cada pointer-move sin pasar
+  //                     por React (cero re-renders durante movimiento libre).
+  //  • `dragOriginRef`— left/width/top originales (en grid-coords) capturados
+  //                     al arrancar el drag. Sirven como base para los offsets
+  //                     y para resetear si la mutación se cancela.
   const gridRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
+  const dragNodeRef = useRef<HTMLDivElement | null>(null);
+  const dragOriginRef = useRef<{ left: number; width: number; top: number } | null>(null);
   const [drag, setDragState] = useState<DragState | null>(null);
   const pendingMutateIds = useRef<Set<string>>(new Set());
+
+  // Long-press en mobile: el drag arranca recién después de mantener apretado
+  // 600ms sin moverse. Mientras tanto, el scroll horizontal/vertical funciona
+  // libremente porque NO hicimos preventDefault. Si el usuario mueve antes de
+  // que dispare el timer, cancelamos y el browser hace pan natural.
+  const LONG_PRESS_MS = 600;
+  const LONG_PRESS_TOLERANCE_PX = 8;
+  // Mínimo de pixels que debe moverse el puntero para considerarse drag (no tap).
+  const DRAG_THRESHOLD_PX = 5;
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressArmRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    /** Última posición del puntero antes de disparar (≤ tolerancia) */
+    lastX: number;
+    lastY: number;
+    target: HTMLElement;
+    booking: BookingWithRelations;
+    mode: DragMode;
+  } | null>(null);
+  // Cuando el long-press dispara y entramos en modo drag, congelamos el scroll
+  // *user-driven* del contenedor (touch-action: none) pero dejamos `overflow`
+  // intacto para poder hacer auto-scroll programático cuando el dedo se acerca
+  // a los bordes. Guardamos los estilos originales para restaurar.
+  const scrollLockRef = useRef<{
+    touchAction: string;
+    overscrollBehavior: string;
+  } | null>(null);
+  // Posición de scroll y de puntero al iniciar el drag — para que el dayDelta
+  // tenga en cuenta tanto el movimiento del dedo como el auto-scroll del grid.
+  const dragInitialScrollRef = useRef<{ left: number; top: number } | null>(null);
+  const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const autoScrollRafRef = useRef<number | null>(null);
+  // Auto-scroll: timestamp del último frame para velocidad time-based (px/seg
+  // en vez de px/frame — independiente del refresh-rate del display: 60Hz vs
+  // 120Hz daban velocidades distintas con la implementación anterior).
+  const autoScrollLastTsRef = useRef<number>(0);
+  const lockGridScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || scrollLockRef.current) return;
+    scrollLockRef.current = {
+      touchAction: el.style.touchAction,
+      overscrollBehavior: el.style.overscrollBehavior,
+    };
+    // touch-action:none corta cualquier pan/zoom táctil pero no `overflow`,
+    // así podemos seguir scrolleando programáticamente con scrollBy/scrollLeft.
+    el.style.touchAction = "none";
+    el.style.overscrollBehavior = "none";
+  }, []);
+  // `commitToOrigin`: si true, reseteamos las inline-styles de la barra a los
+  // valores capturados al inicio del drag — usado cuando soltamos sin que
+  // React vaya a aplicar una nueva posición (drag cancelado / sin cambio real).
+  // Si false, dejamos que React re-renderice con la posición nueva (post
+  // setBookings) y la transición inline anima desde "donde quedó el dedo"
+  // hasta la posición autoritativa.
+  const unlockGridScroll = useCallback((commitToOrigin: boolean = true) => {
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+    autoScrollLastTsRef.current = 0;
+    const node = dragNodeRef.current;
+    const orig = dragOriginRef.current;
+    if (node) {
+      // Activamos transición inline para animar suavemente el snap-back.
+      // Como el drag escribe `transform` (translate3d + scale 1.02), la
+      // animación principal de retorno usa también `transform` — GPU,
+      // smooth. `width` se transiciona para resize. `left/top` por si en
+      // el futuro algún cambio en React-state mueve la barra durante la
+      // animación. ~220ms ease-out estilo "spring suave".
+      node.style.transition =
+        "transform 220ms cubic-bezier(0.22,1,0.36,1), width 220ms cubic-bezier(0.22,1,0.36,1), left 220ms cubic-bezier(0.22,1,0.36,1), top 220ms cubic-bezier(0.22,1,0.36,1), box-shadow 200ms ease-out";
+      // Limpiamos siempre el transform (la barra deja de estar "elevada" y
+      // vuelve al flow del layout — su posición final la define el `style`
+      // de React). Si `commitToOrigin`, reseteamos también el width.
+      node.style.transform = "";
+      if (commitToOrigin && orig) {
+        node.style.width = `${orig.width}px`;
+      }
+      // Cleanup: liberar la inline-transition + transform tras la animación
+      // para que futuros cambios (hover, drag) usen la transición del className.
+      const target = node;
+      window.setTimeout(() => {
+        target.style.transition = "";
+        target.style.transform = "";
+      }, 280);
+    }
+    dragNodeRef.current = null;
+    dragOriginRef.current = null;
+    dragInitialScrollRef.current = null;
+    lastPointerRef.current = null;
+    const el = scrollRef.current;
+    if (!el || !scrollLockRef.current) return;
+    el.style.touchAction = scrollLockRef.current.touchAction;
+    el.style.overscrollBehavior = scrollLockRef.current.overscrollBehavior;
+    scrollLockRef.current = null;
+  }, []);
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressArmRef.current = null;
+  }, []);
 
   const updateDrag = useCallback((next: DragState | null) => {
     dragRef.current = next;
@@ -407,6 +580,18 @@ export function PmsBoard({
     return () => window.removeEventListener("keydown", onKey);
   }, [zenPhase, exitZen]);
 
+  // Limpia el timer del long-press y restaura el scroll del grid al desmontar
+  useEffect(() => {
+    return () => {
+      if (longPressTimerRef.current) {
+        clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      longPressArmRef.current = null;
+      unlockGridScroll();
+    };
+  }, [unlockGridScroll]);
+
   // Bloquear scroll del body mientras zen está activo
   useEffect(() => {
     if (!zenActive) return;
@@ -435,14 +620,39 @@ export function PmsBoard({
     return undefined;
   }, [zenPhase, zenAtFullscreen, zenRect]);
 
-  // ── constantes de zoom
-  const { cellWidth: CELL, rowHeight: ROW } = ZOOM_CONFIG[zoom];
+  // ── constantes de zoom (en mobile usamos un preset compacto y un sidebar
+  // angosto para que entren ~6 días en pantallas de 360px)
+  const isMobile = useIsMobile();
+  const { cellWidth: CELL, rowHeight: ROW } = isMobile
+    ? { cellWidth: MOBILE_ZOOM.cellWidth, rowHeight: MOBILE_ZOOM.rowHeight }
+    : ZOOM_CONFIG[zoom];
+  const SIDEBAR = isMobile ? SIDEBAR_WIDTH_MOBILE : SIDEBAR_WIDTH;
 
   // ── dateRange memoizado
   const dateRange = useMemo(() => {
     const start = parseISO(windowStart);
     return Array.from({ length: windowDays }).map((_, i) => addDays(start, i));
   }, [windowStart, windowDays]);
+
+  // ── schedule indexado por booking_id (para badges flotantes)
+  const scheduleByBooking = useMemo(() => {
+    const m = new Map<string, BookingPaymentSchedule[]>();
+    schedule.forEach((s) => {
+      const arr = m.get(s.booking_id) ?? [];
+      arr.push(s);
+      m.set(s.booking_id, arr);
+    });
+    return m;
+  }, [schedule]);
+
+  // Booking IDs con al menos una cuota vencida
+  const bookingsWithOverdue = useMemo(() => {
+    const set = new Set<string>();
+    schedule.forEach((s) => {
+      if (s.status === "overdue") set.add(s.booking_id);
+    });
+    return set;
+  }, [schedule]);
 
   // ── filtrado
   const visibleBookings = useMemo(() => {
@@ -451,6 +661,7 @@ export function PmsBoard({
       if (!statusFilter.has(b.status)) return false;
       if (!sourceFilter.has(b.source)) return false;
       if (modeFilter && (b.mode ?? "temporario") !== modeFilter) return false;
+      if (overdueOnly && !bookingsWithOverdue.has(b.id)) return false;
       if (!q) return true;
       return (
         b.guest?.full_name?.toLowerCase().includes(q) ||
@@ -460,7 +671,7 @@ export function PmsBoard({
         false
       );
     });
-  }, [bookings, statusFilter, sourceFilter, modeFilter, query]);
+  }, [bookings, statusFilter, sourceFilter, modeFilter, query, overdueOnly, bookingsWithOverdue]);
 
   const bookingsByUnit = useMemo(() => {
     const m = new Map<string, BookingWithRelations[]>();
@@ -471,6 +682,30 @@ export function PmsBoard({
     });
     return m;
   }, [visibleBookings]);
+
+  // Lease groups: para cada booking que pertenece a un grupo, calculamos
+  // index (1..N) y total (N) ordenando por check_in_date. Lo computamos sobre
+  // TODO el array `bookings` (no sólo visibles) para no perder índices cuando
+  // el usuario filtra por status/canal/modo.
+  const leaseGroupIndex = useMemo(() => {
+    const groups = new Map<string, BookingWithRelations[]>();
+    bookings.forEach((b) => {
+      if (!b.lease_group_id) return;
+      const arr = groups.get(b.lease_group_id) ?? [];
+      arr.push(b);
+      groups.set(b.lease_group_id, arr);
+    });
+    const out = new Map<string, { index: number; total: number }>();
+    groups.forEach((arr) => {
+      const sorted = arr.slice().sort((a, b) =>
+        a.check_in_date < b.check_in_date ? -1 : 1
+      );
+      sorted.forEach((b, i) => {
+        out.set(b.id, { index: i + 1, total: sorted.length });
+      });
+    });
+    return out;
+  }, [bookings]);
 
   // ── Filtrado de unidades (filtros de búsqueda) ─────────────────────────────
   // Aplicado DESPUÉS del cálculo de bookingsByUnit para usar las reservas
@@ -596,7 +831,7 @@ export function PmsBoard({
           });
         }
       )
-      .subscribe((status) => setRealtimeConnected(status === "SUBSCRIBED"));
+      .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
@@ -608,8 +843,8 @@ export function PmsBoard({
     if (!el) return;
     const todayOff = dayOffset(windowStart, new Date().toISOString().slice(0, 10));
     if (todayOff < 0 || todayOff >= windowDays) return;
-    // centrar hoy
-    const target = todayOff * CELL - el.clientWidth / 2 + CELL / 2;
+    // hoy cerca del borde izquierdo (2 días de pasado visibles)
+    const target = (todayOff - 2) * CELL;
     el.scrollLeft = Math.max(0, target);
     // solo la primera vez
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -624,17 +859,269 @@ export function PmsBoard({
   );
   const jumpToday = useCallback(() => {
     const today = new Date().toISOString().slice(0, 10);
+    const el = scrollRef.current;
+    const todayOffCurrent = dayOffset(windowStart, today);
+    // Si "hoy" ya cae dentro de la ventana → smooth-scroll horizontal sin
+    // recargar contenido. Si no → cambiamos windowStart y re-anclamos el
+    // scroll en el frame siguiente para evitar el flash de "vuelve a 0".
+    if (el && todayOffCurrent >= 2 && todayOffCurrent < windowDays - 2) {
+      el.scrollTo({
+        left: Math.max(0, (todayOffCurrent - 2) * CELL),
+        behavior: "smooth",
+      });
+      return;
+    }
     setWindowStart(isoAddDays(today, -7));
     requestAnimationFrame(() => {
-      const el = scrollRef.current;
-      if (el) {
+      const node = scrollRef.current;
+      if (node) {
         const todayOff = 7;
-        el.scrollLeft = Math.max(0, todayOff * CELL - el.clientWidth / 2 + CELL / 2);
+        node.scrollTo({
+          left: Math.max(0, (todayOff - 2) * CELL),
+          behavior: "smooth",
+        });
       }
     });
-  }, [CELL]);
+  }, [CELL, windowStart, windowDays]);
+
+  // Helper: scroll horizontal suave dentro de la ventana actual (no toca
+  // windowStart, sólo desplaza la vista). Usado por las flechas del teclado.
+  const scrollByDays = useCallback(
+    (delta: number) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      el.scrollBy({ left: delta * CELL, behavior: "smooth" });
+    },
+    [CELL]
+  );
+
+  // Atajos de teclado para navegación rápida (desktop). Skipeamos cuando el
+  // foco está en un input/textarea/contenteditable para no robar tecleo.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      const tag = t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (t.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // No interferir mientras hay un drag activo (los handlers del bar
+      // pueden necesitar el evento, y el usuario no debería navegar a la
+      // vez que mueve una reserva).
+      if (dragRef.current) return;
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (e.shiftKey) shiftDays(-7);
+        else scrollByDays(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (e.shiftKey) shiftDays(7);
+        else scrollByDays(1);
+      } else if (e.key === "t" || e.key === "T" || e.key === "Home") {
+        e.preventDefault();
+        jumpToday();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shiftDays, scrollByDays, jumpToday]);
 
   // ── drag handlers
+  // Helper: arranca el drag activo (con captura de puntero)
+  function startActiveDrag(
+    target: HTMLElement,
+    pointerId: number,
+    clientX: number,
+    clientY: number,
+    booking: BookingWithRelations,
+    mode: DragMode
+  ) {
+    try {
+      target.setPointerCapture(pointerId);
+    } catch {
+      // ignorable: el puntero ya fue liberado (e.g. scroll)
+    }
+    // Resolvemos el nodo raíz de la barra (puede no ser `target`, ya que las
+    // resize-handles son hijos de la barra). Necesitamos el root para escribir
+    // left/width/top directos durante el move.
+    const barNode = (target.closest("[data-bar-root]") as HTMLDivElement | null);
+    dragNodeRef.current = barNode;
+    if (barNode) {
+      // Origen en grid-coords: leemos los inline styles que React ya escribió
+      // en el render previo (ciOffset*CELL+2, etc). parseFloat es robusto al
+      // sufijo "px" que React inserta automáticamente.
+      const left = parseFloat(barNode.style.left) || 0;
+      const width = parseFloat(barNode.style.width) || 0;
+      const top = parseFloat(barNode.style.top) || 0;
+      dragOriginRef.current = { left, width, top };
+      // Apagamos transiciones CSS durante el drag para que cada escritura DOM
+      // sea instantánea. Al soltar, restauramos (vacío = default del className)
+      // y la transición animará el snap final.
+      barNode.style.transition = "none";
+    }
+    // Capturamos el scroll del grid en este instante: cuando el auto-scroll
+    // mueva el contenedor, el delta de scroll se sumará al delta del puntero
+    // para mantener la barra pegada al dedo y abrir paso a más días/unidades.
+    if (scrollRef.current) {
+      dragInitialScrollRef.current = {
+        left: scrollRef.current.scrollLeft,
+        top: scrollRef.current.scrollTop,
+      };
+    }
+    lastPointerRef.current = { x: clientX, y: clientY };
+    updateDrag({
+      bookingId: booking.id,
+      mode,
+      pointerStartX: clientX,
+      pointerStartY: clientY,
+      originalUnitId: booking.unit_id,
+      originalCheckIn: booking.check_in_date,
+      originalCheckOut: booking.check_out_date,
+      dayDelta: 0,
+      rowDelta: 0,
+      moved: false,
+    });
+    startAutoScroll();
+  }
+
+  // ▶ Movimiento pixel-perfect sin re-render. El bar se posiciona escribiendo
+  //   `style.left/width/top` directos al DOM (clave para que el dragging se
+  //   sienta nativo: 60+ fps en mobile, sin reconciliación de React por pixel).
+  //   El estado React (`drag`) sólo se actualiza cuando el SNAP redondeado
+  //   (día / fila) cambia — eso dispara el chip flotante, el resaltado de
+  //   target y el tick háptico de iOS/Android.
+  function syncDragFromPointer() {
+    const d = dragRef.current;
+    const p = lastPointerRef.current;
+    const init = dragInitialScrollRef.current;
+    const el = scrollRef.current;
+    if (!d || !p || !init || !el) return;
+    const scrollDX = el.scrollLeft - init.left;
+    const scrollDY = el.scrollTop - init.top;
+    const rawDx = (p.x - d.pointerStartX) + scrollDX;
+    const rawDy = (p.y - d.pointerStartY) + scrollDY;
+    // Threshold inicial: filtra micro-jitter del trackpad/dedo.
+    if (!d.moved && Math.abs(rawDx) < DRAG_THRESHOLD_PX && Math.abs(rawDy) < DRAG_THRESHOLD_PX) {
+      return;
+    }
+    // 1) Posición pixel-perfect en el DOM (sin React) — sigue al puntero.
+    //    Usamos `transform: translate3d()` en vez de `left/top` porque React
+    //    reconcilia `style.left/top` cada re-render (Radix `<PopoverAnchor
+    //    asChild>` re-mergea el style del hijo, sobrescribiendo nuestros
+    //    inline writes). `transform` no aparece en el `style` prop de
+    //    BookingBar, así que React nunca lo toca → el DOM write persiste.
+    //    Bonus: transform es GPU-accelerated → 60fps incluso en mobile lento.
+    //    Incluimos `scale(1.02)` para preservar el "lift" visual del drag
+    //    (reemplaza la clase `scale-[1.02]` que el className activaría).
+    const node = dragNodeRef.current;
+    const orig = dragOriginRef.current;
+    if (node && orig) {
+      if (d.mode === "move") {
+        node.style.transform = `translate3d(${rawDx}px, ${rawDy}px, 0) scale(1.02)`;
+      } else if (d.mode === "resize-left") {
+        // resize-left: el lado derecho queda fijo. Trasladamos la barra y
+        // achicamos el ancho proporcionalmente. minWidth = 1 día.
+        const minWidth = CELL - 4;
+        const dx = Math.min(rawDx, orig.width - minWidth);
+        node.style.transform = `translate3d(${dx}px, 0, 0) scale(1.02)`;
+        node.style.width = `${orig.width - dx}px`;
+      } else if (d.mode === "resize-right") {
+        // resize-right: lado izquierdo fijo, sólo crece/decrece el ancho.
+        const minWidth = CELL - 4;
+        const dx = Math.max(rawDx, minWidth - orig.width);
+        node.style.transform = `scale(1.02)`;
+        node.style.width = `${orig.width + dx}px`;
+      }
+    }
+    // 2) Snap discreto a celdas (días/filas). Sólo actualizamos React si el
+    //    snap cambia → re-render mínimo del chip flotante + tick háptico.
+    const newDayDelta = Math.round(rawDx / CELL);
+    const newRowDelta = d.mode === "move" ? Math.round(rawDy / ROW) : 0;
+    const snapChanged =
+      !d.moved || d.dayDelta !== newDayDelta || d.rowDelta !== newRowDelta;
+    if (snapChanged) {
+      d.moved = true;
+      d.dayDelta = newDayDelta;
+      d.rowDelta = newRowDelta;
+      // Clone para que React detecte el cambio (identity).
+      setDragState({ ...d });
+      // Tick háptico — sólo en cambio de snap, no en cada pixel. iOS/Android
+      // lo expone como `navigator.vibrate`; Safari iOS lo ignora silenciosamente
+      // (no tira error). Es sentido como un "click" mínimo bajo el dedo.
+      if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+        try {
+          (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean })
+            .vibrate?.(3);
+        } catch {
+          // best-effort
+        }
+      }
+    } else if (!d.moved) {
+      // Pasamos el threshold pero sin cambio de snap todavía → marcamos como
+      // moved sin re-render (evita que pointerUp lo trate como click).
+      d.moved = true;
+    }
+  }
+
+  // Auto-scroll del grid mientras el puntero está cerca de un borde durante el
+  // drag. La velocidad es time-based (px/segundo) y no frame-based, para que
+  // se comporte igual en displays a 60Hz y a 120Hz (en frame-based los iPhones
+  // recientes scrolleaban al doble de velocidad). Curva ease-in (t²) hacia el
+  // borde para que sea suave cerca de la zona de auto-scroll y rápida cuando
+  // el dedo está pegado contra el límite.
+  function startAutoScroll() {
+    if (autoScrollRafRef.current !== null) return;
+    autoScrollLastTsRef.current = 0;
+    const EDGE_X = 80; // px de banda en horizontal donde arranca el auto-scroll
+    const EDGE_Y = 56; // banda más angosta en vertical (la lista no es tan larga)
+    const MAX_SPEED_PX_PER_SEC = 1400; // ≈ 23 px/frame a 60Hz, 11.5 a 120Hz
+    const tick = (now: number) => {
+      const el = scrollRef.current;
+      const p = lastPointerRef.current;
+      if (!el || !p || !dragRef.current) {
+        autoScrollRafRef.current = null;
+        autoScrollLastTsRef.current = 0;
+        return;
+      }
+      // Δt en segundos desde el frame anterior. En el primer frame, asumimos
+      // 16ms (≈ un frame a 60Hz) para evitar saltos cuando arranca.
+      const dt = autoScrollLastTsRef.current
+        ? Math.min((now - autoScrollLastTsRef.current) / 1000, 1 / 30)
+        : 1 / 60;
+      autoScrollLastTsRef.current = now;
+      const r = el.getBoundingClientRect();
+      let vx = 0;
+      let vy = 0;
+      if (p.x < r.left + EDGE_X) {
+        const t = Math.min(1, (r.left + EDGE_X - p.x) / EDGE_X);
+        vx = -MAX_SPEED_PX_PER_SEC * t * t; // ease-in (t²)
+      } else if (p.x > r.right - EDGE_X) {
+        const t = Math.min(1, (p.x - (r.right - EDGE_X)) / EDGE_X);
+        vx = MAX_SPEED_PX_PER_SEC * t * t;
+      }
+      if (p.y < r.top + EDGE_Y) {
+        const t = Math.min(1, (r.top + EDGE_Y - p.y) / EDGE_Y);
+        vy = -MAX_SPEED_PX_PER_SEC * t * t;
+      } else if (p.y > r.bottom - EDGE_Y) {
+        const t = Math.min(1, (p.y - (r.bottom - EDGE_Y)) / EDGE_Y);
+        vy = MAX_SPEED_PX_PER_SEC * t * t;
+      }
+      if (vx !== 0 || vy !== 0) {
+        const before = { left: el.scrollLeft, top: el.scrollTop };
+        el.scrollLeft += vx * dt;
+        el.scrollTop += vy * dt;
+        // Si el contenedor llegó al límite, no recalculamos (evita acumular
+        // delta fantasma cuando ya no se mueve).
+        if (el.scrollLeft !== before.left || el.scrollTop !== before.top) {
+          syncDragFromPointer();
+        }
+      }
+      autoScrollRafRef.current = requestAnimationFrame(tick);
+    };
+    autoScrollRafRef.current = requestAnimationFrame(tick);
+  }
+
   function onBarPointerDown(
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations,
@@ -643,35 +1130,91 @@ export function PmsBoard({
     if (e.button !== 0) return;
     // no arrastrar canceladas/no-show
     if (booking.status === "cancelada" || booking.status === "no_show") return;
+
+    const isTouch = e.pointerType === "touch" || e.pointerType === "pen";
+
+    if (isTouch) {
+      // En mobile: armamos el long-press. NO hacemos preventDefault para que
+      // el scroll-x del contenedor funcione libre. Recién cuando el timer
+      // dispara (sin movimiento previo) tomamos el control con pointer capture
+      // y entramos a modo drag con feedback háptico.
+      e.stopPropagation();
+      cancelLongPress();
+      const target = e.currentTarget as HTMLElement;
+      const pointerId = e.pointerId;
+      const clientX = e.clientX;
+      const clientY = e.clientY;
+      longPressArmRef.current = {
+        pointerId,
+        startX: clientX,
+        startY: clientY,
+        lastX: clientX,
+        lastY: clientY,
+        target,
+        booking,
+        mode,
+      };
+      longPressTimerRef.current = setTimeout(() => {
+        const arm = longPressArmRef.current;
+        if (!arm) return;
+        longPressArmRef.current = null;
+        longPressTimerRef.current = null;
+        // Vibración háptica si el dispositivo la soporta
+        try {
+          if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+            (navigator as Navigator & { vibrate?: (p: number | number[]) => boolean }).vibrate?.(20);
+          }
+        } catch {
+          // best-effort, no rompe el drag
+        }
+        // CRÍTICO en mobile: congelamos el scroll-x/y del grid antes de tomar
+        // el control. Si no, iOS sigue scrolleando con el dedo y la barra
+        // "viaja" con el contenedor en vez de seguir al puntero.
+        lockGridScroll();
+        // Usamos la última posición del dedo (lastX/lastY) como origen del drag,
+        // no la posición original del touchstart, para que el dayDelta inicial
+        // sea cero y la barra no salte cuando arranca el drag.
+        startActiveDrag(arm.target, arm.pointerId, arm.lastX, arm.lastY, arm.booking, arm.mode);
+      }, LONG_PRESS_MS);
+      return;
+    }
+
+    // Desktop / mouse / stylus con botón: drag inmediato
     e.stopPropagation();
     e.preventDefault();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    updateDrag({
-      bookingId: booking.id,
-      mode,
-      pointerStartX: e.clientX,
-      pointerStartY: e.clientY,
-      originalUnitId: booking.unit_id,
-      originalCheckIn: booking.check_in_date,
-      originalCheckOut: booking.check_out_date,
-      dayDelta: 0,
-      rowDelta: 0,
-      moved: false,
-    });
+    startActiveDrag(e.currentTarget as HTMLElement, e.pointerId, e.clientX, e.clientY, booking, mode);
   }
 
   function onBarPointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    // Si todavía estamos esperando el long-press, cualquier movimiento mayor
+    // a la tolerancia cancela: el usuario está scrolleando. Si está dentro de
+    // tolerancia, actualizamos lastX/lastY para arrancar el drag exactamente
+    // donde está el dedo en el momento del fire (evita "saltos" iniciales).
+    const arm = longPressArmRef.current;
+    if (arm) {
+      const dx = e.clientX - arm.startX;
+      const dy = e.clientY - arm.startY;
+      if (Math.abs(dx) > LONG_PRESS_TOLERANCE_PX || Math.abs(dy) > LONG_PRESS_TOLERANCE_PX) {
+        cancelLongPress();
+      } else {
+        arm.lastX = e.clientX;
+        arm.lastY = e.clientY;
+      }
+      return;
+    }
+
     const d = dragRef.current;
     if (!d) return;
-    const dx = e.clientX - d.pointerStartX;
-    const dy = e.clientY - d.pointerStartY;
-    if (!d.moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-    updateDrag({
-      ...d,
-      moved: true,
-      dayDelta: Math.round(dx / CELL),
-      rowDelta: d.mode === "move" ? Math.round(dy / ROW) : 0,
-    });
+    // En mobile preventDefault dentro del move asegura que iOS no inicie un
+    // gesto de scroll/zoom paralelo aún con el contenedor lockeado. (e.button
+    // no aplica a touch; usamos pointerType.)
+    if (e.pointerType === "touch" || e.pointerType === "pen") {
+      e.preventDefault();
+    }
+    // Guardamos el último puntero para que el rAF de auto-scroll lo lea, y
+    // recalculamos los deltas considerando el scroll actual del grid.
+    lastPointerRef.current = { x: e.clientX, y: e.clientY };
+    syncDragFromPointer();
   }
 
   // El pointerUp NO commitea: prepara el "ghost preview" (cambio en cliente,
@@ -681,37 +1224,43 @@ export function PmsBoard({
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations
   ) {
-    const d = dragRef.current;
-    if (!d) return;
-    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-
-    // Click (no-drag) → abrir popover de reserva
-    if (!d.moved) {
-      updateDrag(null);
+    // Si soltamos antes de que el long-press dispare → es un tap: abrir popover
+    if (longPressArmRef.current) {
+      cancelLongPress();
       setOpenBookingId(booking.id);
       setOpenUnitId(null);
       return;
     }
 
-    // Calcular target
-    let newCheckIn = booking.check_in_date;
-    let newCheckOut = booking.check_out_date;
-    let newUnitId = booking.unit_id;
-    const operation: MoveOperation = d.mode;
-
-    if (d.mode === "move") {
-      newCheckIn = isoAddDays(d.originalCheckIn, d.dayDelta);
-      newCheckOut = isoAddDays(d.originalCheckOut, d.dayDelta);
-      const curRow = units.findIndex((u) => u.id === d.originalUnitId);
-      const newRow = Math.max(0, Math.min(units.length - 1, curRow + d.rowDelta));
-      newUnitId = units[newRow]?.id ?? newUnitId;
-    } else if (d.mode === "resize-left") {
-      newCheckIn = isoAddDays(d.originalCheckIn, d.dayDelta);
-      if (newCheckIn >= newCheckOut) newCheckIn = isoAddDays(newCheckOut, -1);
-    } else if (d.mode === "resize-right") {
-      newCheckOut = isoAddDays(d.originalCheckOut, d.dayDelta);
-      if (newCheckOut <= newCheckIn) newCheckOut = isoAddDays(newCheckIn, 1);
+    const d = dragRef.current;
+    if (!d) {
+      unlockGridScroll();
+      return;
     }
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignorable
+    }
+
+    // Click (no-drag) → abrir popover de reserva
+    if (!d.moved) {
+      updateDrag(null);
+      unlockGridScroll();
+      setOpenBookingId(booking.id);
+      setOpenUnitId(null);
+      return;
+    }
+
+    // Calcular target — misma lógica que el chip flotante y el highlight,
+    // de modo que lo que el usuario ve durante el drag es exactamente lo que
+    // se commitea al soltar.
+    const operation: MoveOperation = d.mode;
+    const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
+      d,
+      booking,
+      units
+    );
 
     // Sin cambio real
     if (
@@ -720,6 +1269,7 @@ export function PmsBoard({
       newUnitId === booking.unit_id
     ) {
       updateDrag(null);
+      unlockGridScroll();
       return;
     }
 
@@ -748,6 +1298,10 @@ export function PmsBoard({
     );
     pendingMutateIds.current.add(booking.id);
     updateDrag(null);
+    // commitToOrigin=false: React acaba de re-renderizar la barra en su nueva
+    // posición (post setBookings). La transición inline animará suavemente
+    // desde "donde quedó el dedo" hasta el target snap final.
+    unlockGridScroll(false);
 
     setPendingMove({
       booking,
@@ -758,6 +1312,13 @@ export function PmsBoard({
       newCheckInDate: newCheckIn,
       newCheckOutDate: newCheckOut,
     });
+  }
+
+  // Cancela cualquier long-press pendiente y resetea el drag si el browser
+  // interrumpe (e.g. el scroll container toma el control en mobile).
+  function onBarPointerCancel() {
+    cancelLongPress();
+    unlockGridScroll();
   }
 
   function handleConfirmMove() {
@@ -852,6 +1413,54 @@ export function PmsBoard({
   const todayOff = dayOffset(windowStart, todayISO);
   const gridWidth = windowDays * CELL;
 
+  // CSS background-image que pinta los gridlines + tinte de fin de semana
+  // sobre TODA la fila en una sola pasada — sustituye los ~30 <button> por
+  // unidad que renderizábamos antes (~600 nodos para 20 unidades). El patrón
+  // se repite cada 7 días; calculamos el offset del primer sábado según el
+  // día de la semana en que arranca windowStart.
+  const cellBackground = useMemo(() => {
+    const startDow = parseISO(windowStart).getDay(); // 0=Dom .. 6=Sáb
+    // Índice (0..6) del primer sábado dentro de la ventana.
+    const satOffset = (6 - startDow + 7) % 7;
+    const sevenW = 7 * CELL;
+    const weekendTint = "rgba(245, 158, 11, 0.045)"; // amber-500 sutil
+    // El fin de semana son 2 días contiguos (Sáb+Dom). Caso A: ambos caben en
+    // el período 7-day actual (satOffset ≤ 5). Caso B: satOffset = 6 → Sáb es
+    // el último día del período y Dom es el primero del siguiente (wrap).
+    let weekendGradient: string;
+    if (satOffset === 6) {
+      weekendGradient = `linear-gradient(90deg, ${weekendTint} 0 ${CELL}px, transparent ${CELL}px ${6 * CELL}px, ${weekendTint} ${6 * CELL}px ${sevenW}px)`;
+    } else {
+      weekendGradient = `linear-gradient(90deg, transparent 0 ${satOffset * CELL}px, ${weekendTint} ${satOffset * CELL}px ${(satOffset + 2) * CELL}px, transparent ${(satOffset + 2) * CELL}px ${sevenW}px)`;
+    }
+    // Borde derecho de cada celda (1px en `--border`, en el último pixel del
+    // ancho de celda — alineado con cómo lo dibujaban los <button> anteriores).
+    const gridlines = `linear-gradient(90deg, transparent 0 ${CELL - 1}px, var(--border) ${CELL - 1}px ${CELL}px)`;
+    return {
+      backgroundImage: `${gridlines}, ${weekendGradient}`,
+      backgroundSize: `${CELL}px 100%, ${sevenW}px 100%`,
+      backgroundRepeat: "repeat",
+    } satisfies React.CSSProperties;
+  }, [windowStart, CELL]);
+
+  // Posiciones (en px desde el inicio del grid) de las fronteras de mes que
+  // caen dentro de la ventana visible. Renderizamos un border-l-2 en cada una.
+  // Recorremos `windowDays` linealmente — O(días), no O(días × unidades).
+  const monthBoundaries = useMemo(() => {
+    const out: number[] = [];
+    const start = parseISO(windowStart);
+    let prevMonth = start.getMonth();
+    for (let i = 1; i < windowDays; i++) {
+      const d = addDays(start, i);
+      const m = d.getMonth();
+      if (m !== prevMonth) {
+        out.push(i * CELL);
+        prevMonth = m;
+      }
+    }
+    return out;
+  }, [windowStart, windowDays, CELL]);
+
   return (
     <TooltipProvider delayDuration={300}>
       <div
@@ -860,7 +1469,7 @@ export function PmsBoard({
           "flex flex-col bg-background",
           zenActive
             ? "fixed z-[60] shadow-2xl ring-1 ring-border/40 transition-[top,left,width,height] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[top,left,width,height]"
-            : "h-[calc(100vh-4rem)]"
+            : "h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)]"
         )}
         style={
           zenActive
@@ -870,7 +1479,45 @@ export function PmsBoard({
       >
         {/* ═══════ Toolbar superior ═══════ */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
-          <div className="flex items-center gap-2 px-4 py-2.5 flex-wrap">
+          {/* MOBILE TOOLBAR: nav + rango de fechas + búsqueda en una sola fila */}
+          <div className="md:hidden flex items-center gap-1 px-2 py-2 safe-x">
+            <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => shiftDays(-7)} aria-label="Semana anterior">
+              <ChevronLeft size={17} />
+            </Button>
+            <Button size="sm" variant="secondary" className="h-9 gap-1 text-[11px] px-2 tap shrink-0" onClick={jumpToday}>
+              <CalendarDays size={13} />
+              Hoy
+            </Button>
+            <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => shiftDays(7)} aria-label="Semana siguiente">
+              <ChevronRight size={17} />
+            </Button>
+            <div className="text-[10px] font-medium text-foreground/80 tabular-nums truncate min-w-0 flex-1 text-center px-1">
+              {format(parseISO(windowStart), "d MMM", { locale: es })}
+              {" — "}
+              {format(addDays(parseISO(windowStart), windowDays - 1), "d MMM", { locale: es })}
+            </div>
+            <div className="relative shrink-0">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Buscar"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="pl-7 h-9 w-28 text-[12px]"
+              />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X size={11} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* DESKTOP TOOLBAR */}
+          <div className="hidden md:flex items-center gap-1.5 sm:gap-2 px-2 sm:px-4 py-2 sm:py-2.5 flex-wrap">
             <div className="flex items-center gap-2 mr-1">
               <div className="size-8 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 flex items-center justify-center ring-1 ring-primary/20">
                 <Hotel size={15} className="text-primary" />
@@ -933,8 +1580,54 @@ export function PmsBoard({
                 )}
               </div>
 
-              {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens) */}
-              <ModeFilterToggle value={modeFilter} onChange={setModeFilter} />
+              {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens).
+                  "Mens" cambia a la vista mensual, no es un filtro. */}
+              <ModeFilterToggle
+                value={modeFilter}
+                onChange={(next) => {
+                  if (next === "mensual") {
+                    router.push("/dashboard/unidades/calendario/mensual");
+                    return;
+                  }
+                  setModeFilter(next);
+                }}
+              />
+
+              {/* Cuotas vencidas: chip toggle. Muestra el contador si hay vencidas */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={overdueOnly ? "default" : "outline"}
+                    onClick={() => setOverdueOnly((v) => !v)}
+                    className={cn(
+                      "h-8 gap-1 text-xs",
+                      bookingsWithOverdue.size > 0 && !overdueOnly &&
+                        "border-rose-300/70 dark:border-rose-700/60 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    )}
+                    aria-pressed={overdueOnly}
+                  >
+                    <span className={cn(
+                      "size-1.5 rounded-full",
+                      bookingsWithOverdue.size > 0
+                        ? "bg-rose-500 animate-pulse"
+                        : "bg-muted-foreground/40"
+                    )} />
+                    Cuotas vencidas
+                    {bookingsWithOverdue.size > 0 && (
+                      <span className="ml-0.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-rose-600 text-white text-[9px] font-bold tabular-nums">
+                        {bookingsWithOverdue.size}
+                      </span>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {bookingsWithOverdue.size === 0
+                    ? "No hay cuotas vencidas"
+                    : `${bookingsWithOverdue.size} reserva${bookingsWithOverdue.size === 1 ? "" : "s"} con cuota vencida`}
+                </TooltipContent>
+              </Tooltip>
 
               {/* Buscar deptos: filtros por disponibilidad/cap/precio */}
               <Popover>
@@ -945,7 +1638,7 @@ export function PmsBoard({
                     className="h-8 gap-1.5 text-xs"
                   >
                     <SlidersHorizontal size={12} />
-                    Buscar dept
+                    Buscar disp
                     {activeUnitFilterCount > 0 && (
                       <Badge
                         variant="secondary"
@@ -1175,7 +1868,7 @@ export function PmsBoard({
                     >
                       <span
                         className="size-2 rounded-full mr-2"
-                        style={{ backgroundColor: BOOKING_STATUS_META[s].color }}
+                        style={{ backgroundColor: statusColors[s] }}
                       />
                       {BOOKING_STATUS_META[s].label}
                     </DropdownMenuCheckboxItem>
@@ -1241,30 +1934,6 @@ export function PmsBoard({
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Realtime pill */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div
-                    className={cn(
-                      "flex items-center gap-1 text-[10px] font-medium px-2 h-8 rounded-md",
-                      realtimeConnected
-                        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                        : "bg-muted text-muted-foreground"
-                    )}
-                  >
-                    <Wifi size={11} className={cn(realtimeConnected && "animate-pulse")} />
-                    <span className="hidden md:inline">
-                      {realtimeConnected ? "En vivo" : "Sin conexión"}
-                    </span>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {realtimeConnected
-                    ? "Actualizaciones en tiempo real activas"
-                    : "Realtime desconectado"}
-                </TooltipContent>
-              </Tooltip>
-
               {/* Zen mode (pantalla completa) */}
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1310,7 +1979,7 @@ export function PmsBoard({
               </Tooltip>
 
               {/* Nueva reserva */}
-              <BookingFormDialog units={units} accounts={accounts}>
+              <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
                 <Button
                   size="sm"
                   className="h-8 gap-1.5 text-xs"
@@ -1326,13 +1995,13 @@ export function PmsBoard({
           <div className="hidden lg:flex items-center gap-3 px-4 pb-2 text-[10px] text-muted-foreground flex-wrap">
             <span className="uppercase tracking-wider text-[9px] font-semibold text-foreground/60 mr-1">Leyenda</span>
             {(Object.keys(BOOKING_BAR_STYLE) as BookingStatus[]).map((s) => {
-              const st = BOOKING_BAR_STYLE[s];
+              const hex = statusColors[s];
               return (
                 <span key={s} className="flex items-center gap-1.5">
                   <span
                     className="inline-block h-2 w-5 rounded-sm bg-gradient-to-r"
                     style={{
-                      backgroundImage: `linear-gradient(to right, ${st.hex}, ${st.hex}CC)`,
+                      backgroundImage: `linear-gradient(to right, ${hex}, ${hex}CC)`,
                     }}
                   />
                   {BOOKING_STATUS_META[s].label}
@@ -1441,32 +2110,32 @@ export function PmsBoard({
         /* ═══════ Grid ═══════ */
         <div
           ref={scrollRef}
-          className="flex-1 overflow-auto relative"
+          className="flex-1 overflow-auto relative overscroll-contain touch-pan-x touch-pan-y"
           style={{ scrollbarGutter: "stable" }}
         >
           <div
             ref={gridRef}
             className="relative"
             style={{
-              width: SIDEBAR_WIDTH + gridWidth,
+              width: SIDEBAR + gridWidth,
               minHeight: "100%",
             }}
           >
             {/* ─── Header fila fecha (sticky top) ─── */}
             <div
               className="sticky top-0 z-30 flex bg-background/95 backdrop-blur border-b"
-              style={{ height: 52 }}
+              style={{ height: isMobile ? 44 : 52 }}
             >
               <div
-                className="sticky left-0 z-40 bg-background border-r flex items-end px-3 pb-1.5 shrink-0"
-                style={{ width: SIDEBAR_WIDTH }}
+                className="sticky left-0 z-40 bg-background border-r flex items-end px-2 sm:px-3 pb-1.5 shrink-0"
+                style={{ width: SIDEBAR }}
               >
                 <div>
                   <div className="text-[9px] uppercase tracking-widest text-muted-foreground font-semibold">
                     Unidad
                   </div>
-                  <div className="text-[11px] text-muted-foreground/80">
-                    {units.length} activas
+                  <div className="text-[10px] sm:text-[11px] text-muted-foreground/80">
+                    {units.length}{isMobile ? "" : " activas"}
                   </div>
                 </div>
               </div>
@@ -1537,9 +2206,14 @@ export function PmsBoard({
                     currency={orgCurrency}
                     isOpen={openUnitId === unit.id}
                     onOpenChange={(o) => setOpenUnitId(o ? unit.id : null)}
+                    sidebarWidth={SIDEBAR}
+                    compact={isMobile}
                   />
 
-                  {/* Cells */}
+                  {/* Cells: single click-overlay por fila. Las gridlines y el
+                      tinte de fin de semana se pintan via CSS (`cellBackground`,
+                      memoizado a nivel del board), no como nodos DOM. Pasamos
+                      de ~30 <button> por fila × N filas a 1 elemento por fila. */}
                   <div
                     className="relative shrink-0"
                     style={{ width: gridWidth }}
@@ -1553,44 +2227,62 @@ export function PmsBoard({
                       />
                     )}
 
-                    {/* Day cells grid background */}
-                    {dateRange.map((d, i) => {
-                      const wk = isWeekend(d);
-                      const hoy = isToday(d);
-                      const prev = i > 0 ? dateRange[i - 1] : null;
-                      const monthBoundary = prev && !isSameMonth(prev, d);
-                      return (
-                        <button
-                          key={d.toISOString()}
-                          type="button"
-                          onClick={() => onCellClick(unit, d)}
-                          className={cn(
-                            "absolute top-0 bottom-0 hover:bg-primary/5 active:bg-primary/10 transition-colors group/cell",
-                            wk && "bg-amber-50/60 dark:bg-amber-500/[0.03]",
-                            hoy && "bg-primary/5 dark:bg-primary/10",
-                            monthBoundary && "border-l-2 border-border"
-                          )}
-                          style={{
-                            left: i * CELL,
-                            width: CELL,
-                            borderRight: "1px solid var(--border)",
-                          }}
-                          aria-label={`Crear reserva en ${unit.code} · ${format(d, "d MMM", { locale: es })}`}
-                        >
-                          <span className="sr-only">Crear reserva</span>
-                          <Plus
-                            size={14}
-                            className="text-primary/60 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 opacity-0 group-hover/cell:opacity-100 transition-opacity"
-                          />
-                        </button>
-                      );
-                    })}
+                    {/* Click-overlay único: calcula el día clickeado a partir
+                        del clientX. Mantiene el feedback visual del "+" del
+                        cell hover via CSS variables actualizadas en pointermove
+                        (sin re-renderizar React). */}
+                    <button
+                      type="button"
+                      className="absolute inset-0 pms-cell-overlay group/row"
+                      style={cellBackground}
+                      aria-label={`Crear reserva en ${unit.code}`}
+                      onPointerMove={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const idx = Math.floor(x / CELL);
+                        if (idx < 0 || idx >= windowDays) return;
+                        e.currentTarget.style.setProperty(
+                          "--pms-cell-x",
+                          `${idx * CELL + CELL / 2}px`
+                        );
+                      }}
+                      onClick={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const idx = Math.floor(x / CELL);
+                        if (idx < 0 || idx >= windowDays) return;
+                        const d = dateRange[idx];
+                        if (d) onCellClick(unit, d);
+                      }}
+                    />
+
+                    {/* Highlight de "hoy" sobre la fila — un solo div en vez
+                        de pintar bg-primary en cada celda del día actual. */}
+                    {todayOff >= 0 && todayOff < windowDays && (
+                      <div
+                        className="absolute top-0 bottom-0 bg-primary/5 dark:bg-primary/10 pointer-events-none"
+                        style={{ left: todayOff * CELL, width: CELL }}
+                      />
+                    )}
+
+                    {/* Bordes de mes — una vez calculado a nivel de board,
+                        renderizamos como divs absolutos (≤ 4 por ventana). */}
+                    {monthBoundaries.map((leftPx) => (
+                      <div
+                        key={leftPx}
+                        className="absolute top-0 bottom-0 border-l-2 border-border pointer-events-none"
+                        style={{ left: leftPx }}
+                      />
+                    ))}
 
                     {/* Booking bars */}
                     {unitBookings.map((b) => (
                       <BookingBar
                         key={b.id}
                         booking={b}
+                        leaseInfo={leaseGroupIndex.get(b.id) ?? null}
+                        scheduleForBooking={scheduleByBooking.get(b.id) ?? []}
+                        accounts={accounts}
                         windowStart={windowStart}
                         windowDays={windowDays}
                         cellWidth={CELL}
@@ -1605,9 +2297,16 @@ export function PmsBoard({
                         onPointerDown={onBarPointerDown}
                         onPointerMove={onBarPointerMove}
                         onPointerUp={onBarPointerUp}
+                        onPointerCancel={onBarPointerCancel}
                         onRequestDateChange={requestDateChangeFromPopover}
                         unitCode={unit.code}
                         unitName={unit.name}
+                        customStatusHex={
+                          statusColors[b.status] !==
+                          BOOKING_STATUS_META[b.status].color
+                            ? statusColors[b.status]
+                            : null
+                        }
                       />
                     ))}
                   </div>
@@ -1615,12 +2314,63 @@ export function PmsBoard({
               );
             })}
 
+            {/* Highlight del target durante drag activo: columna de días
+                destino + ring de fila destino. Sólo se muestra una vez que el
+                usuario cruzó el umbral (drag.moved=true) y el componente
+                vive dentro del gridRef, así scrollea con el contenido. */}
+            {drag && drag.moved && (() => {
+              const draggedBooking = bookings.find((b) => b.id === drag.bookingId);
+              if (!draggedBooking) return null;
+              const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
+                drag,
+                draggedBooking,
+                units
+              );
+              const ciOff = dayOffset(windowStart, newCheckIn);
+              const coOff = dayOffset(windowStart, newCheckOut);
+              const ciClipped = Math.max(0, ciOff);
+              const coClipped = Math.min(windowDays, coOff);
+              if (coClipped <= ciClipped) return null;
+              const targetRowIdx = filteredUnits.findIndex((u) => u.id === newUnitId);
+              const originRowIdx = filteredUnits.findIndex(
+                (u) => u.id === drag.originalUnitId
+              );
+              const rowChanged = targetRowIdx >= 0 && targetRowIdx !== originRowIdx;
+              const HEADER_H = isMobile ? 44 : 52;
+              return (
+                <>
+                  {/* Columna destino — abarca todas las filas, debajo del header */}
+                  <div
+                    className="absolute pointer-events-none z-[4] bg-primary/[0.05] dark:bg-primary/[0.08] border-x border-dashed border-primary/40 rounded-sm"
+                    style={{
+                      top: HEADER_H,
+                      left: SIDEBAR + ciClipped * CELL,
+                      width: (coClipped - ciClipped) * CELL,
+                      bottom: 0,
+                    }}
+                  />
+                  {/* Fila destino — sólo si cambió por arrastre vertical */}
+                  {rowChanged && (
+                    <div
+                      className="absolute pointer-events-none z-[4] bg-primary/[0.07] ring-1 ring-primary/30 rounded-sm"
+                      style={{
+                        top: HEADER_H + targetRowIdx * ROW,
+                        left: SIDEBAR,
+                        width: windowDays * CELL,
+                        height: ROW,
+                      }}
+                    />
+                  )}
+                </>
+              );
+            })()}
+
             {/* Today vertical line (over all rows) */}
             {todayOff >= 0 && todayOff < windowDays && (
               <div
                 className="absolute top-0 bottom-0 pointer-events-none z-[5]"
                 style={{
-                  left: SIDEBAR_WIDTH + todayOff * CELL,
+                  left: SIDEBAR + todayOff * CELL,
                   width: CELL,
                 }}
               >
@@ -1682,6 +2432,7 @@ export function PmsBoard({
             booking={editBooking}
             units={units}
             accounts={accounts}
+            existingBookings={bookings}
             open
             onOpenChange={(o) => { if (!o) setEditBooking(null); }}
           />
@@ -1692,11 +2443,42 @@ export function PmsBoard({
           <QuickAddBridge
             units={units}
             accounts={accounts}
+            existingBookings={bookings}
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
             checkOut={quickAdd.checkOut}
             onClose={() => setQuickAdd(null)}
           />
+        )}
+
+        {/* Chip flotante con feedback de drag (target dates + unit + nights).
+            Sólo se muestra una vez que el usuario cruzó el umbral de movimiento
+            para no aparecer en taps. Posicionado fixed bottom-center; escala
+            limpia tanto en mobile como en desktop. */}
+        {drag && drag.moved && (
+          <DragChip drag={drag} bookings={bookings} units={units} />
+        )}
+
+        {/* FAB mobile: la toolbar mobile no tiene espacio para "Nueva reserva".
+            Lo escondemos en editMode (reorden) y mientras el usuario arrastra,
+            para no tapar el target ni competir con el DragChip. */}
+        {!editMode && !drag && (
+          <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
+            <button
+              type="button"
+              aria-label="Nueva reserva"
+              className={cn(
+                "md:hidden fixed right-4 z-[55]",
+                "bottom-[calc(env(safe-area-inset-bottom,0px)+1rem)]",
+                "size-14 rounded-full bg-primary text-primary-foreground",
+                "shadow-lg shadow-primary/30 ring-1 ring-primary/40",
+                "flex items-center justify-center",
+                "active:scale-95 transition-transform tap"
+              )}
+            >
+              <Plus size={24} strokeWidth={2.5} />
+            </button>
+          </BookingFormDialog>
         )}
 
         {/* Modal de confirmación obligatoria para mover/extender */}
@@ -1861,6 +2643,8 @@ function UnitCellHeader({
   currency,
   isOpen,
   onOpenChange,
+  sidebarWidth = SIDEBAR_WIDTH,
+  compact = false,
 }: {
   unit: UnitWithRelations;
   occupancyPct: number;
@@ -1870,6 +2654,8 @@ function UnitCellHeader({
   currency: string;
   isOpen: boolean;
   onOpenChange: (o: boolean) => void;
+  sidebarWidth?: number;
+  compact?: boolean;
 }) {
   const meta = UNIT_STATUS_META[unit.status];
   const overlay = UNIT_OVERLAY_STYLE[unit.status];
@@ -1880,9 +2666,10 @@ function UnitCellHeader({
           type="button"
           onClick={() => onOpenChange(!isOpen)}
           className={cn(
-            "sticky left-0 z-20 shrink-0 flex items-center gap-2.5 px-3 border-r bg-background hover:bg-accent/40 transition-colors text-left group"
+            "sticky left-0 z-20 shrink-0 flex items-center border-r bg-background hover:bg-accent/40 transition-colors text-left group",
+            compact ? "gap-1.5 px-1.5" : "gap-2.5 px-3"
           )}
-          style={{ width: SIDEBAR_WIDTH }}
+          style={{ width: sidebarWidth }}
         >
           {/* Status stripe vertical izquierda */}
           <div
@@ -1890,25 +2677,32 @@ function UnitCellHeader({
             style={{ backgroundColor: meta.color }}
           />
 
-          <div
-            className={cn(
-              "size-8 rounded-lg shrink-0 flex items-center justify-center ring-1 transition-all",
-              overlay ? "ring-transparent" : "ring-border/60"
-            )}
-            style={{
-              backgroundColor: meta.color + "20",
-              color: meta.color,
-              background: overlay ? overlay.pattern : `linear-gradient(135deg, ${meta.color}22, ${meta.color}10)`,
-            }}
-          >
-            <span className="text-[10px] font-bold tracking-tight">
-              {unit.code.slice(0, 3).toUpperCase()}
-            </span>
-          </div>
+          {!compact && (
+            <div
+              className={cn(
+                "size-8 rounded-lg shrink-0 flex items-center justify-center ring-1 transition-all",
+                overlay ? "ring-transparent" : "ring-border/60"
+              )}
+              style={{
+                backgroundColor: meta.color + "20",
+                color: meta.color,
+                background: overlay ? overlay.pattern : `linear-gradient(135deg, ${meta.color}22, ${meta.color}10)`,
+              }}
+            >
+              <span className="text-[10px] font-bold tracking-tight">
+                {unit.code.slice(0, 3).toUpperCase()}
+              </span>
+            </div>
+          )}
 
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <span className="font-mono font-semibold text-xs truncate">
+          <div className="min-w-0 flex-1 pl-1">
+            <div className="flex items-center gap-1">
+              <span
+                className={cn(
+                  "font-mono font-semibold truncate",
+                  compact ? "text-[11px]" : "text-xs"
+                )}
+              >
                 {unit.code}
               </span>
               <span
@@ -1916,30 +2710,39 @@ function UnitCellHeader({
                 style={{ backgroundColor: meta.color }}
               />
             </div>
-            <div className="text-[10px] text-muted-foreground truncate">
-              {unit.name}
-            </div>
+            {!compact && (
+              <div className="text-[10px] text-muted-foreground truncate">
+                {unit.name}
+              </div>
+            )}
+            {compact && (
+              <div className="text-[9px] tabular-nums text-foreground/70 mt-0.5">
+                {occupancyPct.toFixed(0)}%
+              </div>
+            )}
           </div>
 
-          {/* Mini occupancy bar */}
-          <div className="flex flex-col items-end gap-0.5 shrink-0">
-            <span className="text-[9px] font-semibold tabular-nums text-foreground/80">
-              {occupancyPct.toFixed(0)}%
-            </span>
-            <div className="w-10 h-1 rounded-full bg-muted overflow-hidden">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all",
-                  occupancyPct >= 70
-                    ? "bg-emerald-500"
-                    : occupancyPct >= 40
-                      ? "bg-amber-500"
-                      : "bg-rose-500/60"
-                )}
-                style={{ width: `${Math.min(100, occupancyPct)}%` }}
-              />
+          {/* Mini occupancy bar — solo en desktop */}
+          {!compact && (
+            <div className="flex flex-col items-end gap-0.5 shrink-0">
+              <span className="text-[9px] font-semibold tabular-nums text-foreground/80">
+                {occupancyPct.toFixed(0)}%
+              </span>
+              <div className="w-10 h-1 rounded-full bg-muted overflow-hidden">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    occupancyPct >= 70
+                      ? "bg-emerald-500"
+                      : occupancyPct >= 40
+                        ? "bg-amber-500"
+                        : "bg-rose-500/60"
+                  )}
+                  style={{ width: `${Math.min(100, occupancyPct)}%` }}
+                />
+              </div>
             </div>
-          </div>
+          )}
         </button>
       </PopoverAnchor>
       <PopoverContent align="start" side="right" className="p-0 w-auto">
@@ -1958,6 +2761,11 @@ function UnitCellHeader({
 
 interface BookingBarProps {
   booking: BookingWithRelations;
+  /** Posición del booking dentro de su lease group (null si no es lease) */
+  leaseInfo: { index: number; total: number } | null;
+  /** Cuotas mensuales de esta booking (para badges 1/N flotantes) */
+  scheduleForBooking?: BookingPaymentSchedule[];
+  accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   windowStart: string;
   windowDays: number;
   cellWidth: number;
@@ -1976,6 +2784,8 @@ interface BookingBarProps {
     e: React.PointerEvent<HTMLDivElement>,
     booking: BookingWithRelations
   ) => void;
+  /** Cancela el long-press si el browser interrumpe (scroll, touch-cancel) */
+  onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => void;
   onRequestDateChange: (
     booking: BookingWithRelations,
     field: "check_in_date" | "check_out_date",
@@ -1983,10 +2793,15 @@ interface BookingBarProps {
   ) => void;
   unitCode: string;
   unitName: string;
+  /** Override del color hex para el status de esta booking (si la org lo configuró). */
+  customStatusHex: string | null;
 }
 
 function BookingBar({
   booking,
+  leaseInfo,
+  scheduleForBooking = [],
+  accounts,
   windowStart,
   windowDays,
   cellWidth,
@@ -1998,33 +2813,25 @@ function BookingBar({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  onPointerCancel,
   onRequestDateChange,
   unitCode,
   unitName,
+  customStatusHex,
 }: BookingBarProps) {
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
-  // (15:00 → +0.625 del día; 11:00 → +0.458 del día). Esto hace que la barra "pise"
+  // (14:00 → +0.583 del día; 10:00 → +0.416 del día). Esto hace que la barra "pise"
   // visualmente el día de salida hasta la hora real de check-out, y deja espacio
   // para una nueva reserva el mismo día por la tarde.
-  const ciFrac = timeToDayFraction(booking.check_in_time, 15 / 24);
-  const coFrac = timeToDayFraction(booking.check_out_time, 11 / 24);
-  let ciOffset = dayOffset(windowStart, booking.check_in_date) + ciFrac;
-  let coOffset = dayOffset(windowStart, booking.check_out_date) + coFrac;
-  let rowOffsetPx = 0;
-
-  if (dragState) {
-    if (dragState.mode === "move") {
-      ciOffset += dragState.dayDelta;
-      coOffset += dragState.dayDelta;
-      rowOffsetPx = dragState.rowDelta * rowHeight;
-    } else if (dragState.mode === "resize-left") {
-      ciOffset += dragState.dayDelta;
-      if (ciOffset >= coOffset - 0.25) ciOffset = coOffset - 0.5;
-    } else if (dragState.mode === "resize-right") {
-      coOffset += dragState.dayDelta;
-      if (coOffset <= ciOffset + 0.25) coOffset = ciOffset + 0.5;
-    }
-  }
+  const ciFrac = timeToDayFraction(booking.check_in_time, 14 / 24);
+  const coFrac = timeToDayFraction(booking.check_out_time, 10 / 24);
+  const ciOffset = dayOffset(windowStart, booking.check_in_date) + ciFrac;
+  const coOffset = dayOffset(windowStart, booking.check_out_date) + coFrac;
+  // Durante un drag activo NO aplicamos el offset del snap acá: la barra se
+  // posiciona pixel-perfect via `style.left/top/width` directos al DOM (escritos
+  // en `syncDragFromPointer` del parent). React sólo re-renderiza la barra
+  // cuando el drag se suelta — ahí la nueva posición del booking ya está en
+  // el state y se aplica naturalmente. Esto da movimiento sin re-renders.
 
   // recorte a ventana visible
   if (coOffset <= 0 || ciOffset >= windowDays) return null;
@@ -2036,6 +2843,15 @@ function BookingBar({
   const rightOverflow = coOffset > windowDays;
 
   const style = BOOKING_BAR_STYLE[booking.status];
+  // Si la org override-eó el color de este status, ignoramos el gradient/border
+  // de Tailwind y derivamos los inline-styles del hex configurado. Mantiene
+  // resto del look (ring, text) inalterado.
+  const customGradientStyle = customStatusHex
+    ? {
+        backgroundImage: `linear-gradient(to right, ${customStatusHex}, ${customStatusHex}CC)`,
+        borderColor: `${customStatusHex}99`,
+      }
+    : null;
   const sourceColor = SOURCE_ACCENT[booking.source];
   const bookingMode: BookingMode = booking.mode ?? "temporario";
   const modeOverlay = BOOKING_MODE_OVERLAY[bookingMode];
@@ -2048,20 +2864,35 @@ function BookingBar({
     <Popover open={isOpen} onOpenChange={onOpenChange}>
       <PopoverAnchor asChild>
         <div
+          data-bar-root
           className={cn(
-            "absolute rounded-md border flex items-stretch overflow-hidden select-none touch-none",
+            // En mobile dejamos pasar el scroll del contenedor (touch-pan-x/y)
+            // hasta que el long-press dispara y entramos en modo drag. En desktop
+            // touch-none bloquea el pan para que el drag con puntero sea perfecto.
+            // Cuando isDragging=true forzamos touch-none también en mobile.
+            "absolute rounded-md border flex items-stretch overflow-hidden select-none",
+            isDragging ? "touch-none" : "touch-pan-x touch-pan-y md:touch-none",
             "bg-gradient-to-r shadow-sm",
-            style.gradient,
-            style.border,
+            !customGradientStyle && style.gradient,
+            !customGradientStyle && style.border,
             style.ring,
             "hover:ring-2 hover:shadow-md hover:z-10",
+            // Transición de la barra: sólo transform/box-shadow por default
+            // (hover, ring, scale). La animación de snap-back de left/top/width
+            // se aplica via inline-style en `unlockGridScroll` durante un
+            // breve window post-drag, así no interfiere con navegación o
+            // shift de windowStart.
             "transition-[transform,box-shadow] duration-150",
-            isDragging && "ring-2 ring-primary z-20 shadow-xl scale-[1.02] cursor-grabbing",
+            // El "scale-[1.02]" durante el drag lo aplicamos via inline
+            // `style.transform` desde syncDragFromPointer (que también
+            // contiene la translate del puntero). Si lo agregamos acá
+            // colisiona con el inline transform.
+            isDragging && "ring-2 ring-primary z-20 shadow-xl cursor-grabbing",
             !isDragging && "cursor-grab",
             booking.status === "cancelada" && "opacity-55"
           )}
           style={{
-            top: rowHeight * 0.14 + rowOffsetPx,
+            top: rowHeight * 0.14,
             height: rowHeight * 0.72,
             left: clippedStart * cellWidth + 2,
             width: width - 4,
@@ -2069,6 +2900,7 @@ function BookingBar({
             borderBottomLeftRadius: leftOverflow ? 0 : undefined,
             borderTopRightRadius: rightOverflow ? 0 : undefined,
             borderBottomRightRadius: rightOverflow ? 0 : undefined,
+            ...(customGradientStyle ?? {}),
           }}
           role="button"
           aria-label={`Reserva de ${booking.guest?.full_name ?? "huésped"} — ${booking.check_in_date} a ${booking.check_out_date}`}
@@ -2080,6 +2912,8 @@ function BookingBar({
           }}
           onPointerMove={onPointerMove}
           onPointerUp={(e) => onPointerUp(e, booking)}
+          onPointerCancel={onPointerCancel}
+          onLostPointerCapture={onPointerCancel}
         >
           {/* Resize handle izquierdo */}
           {!leftOverflow && booking.status !== "cancelada" && (
@@ -2089,6 +2923,8 @@ function BookingBar({
               onPointerDown={(e) => onPointerDown(e, booking, "resize-left")}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => onPointerUp(e, booking)}
+              onPointerCancel={onPointerCancel}
+              onLostPointerCapture={onPointerCancel}
             >
               <div className="h-full w-px bg-white/40 mx-auto opacity-0 group-hover/handle:opacity-100" />
             </div>
@@ -2128,6 +2964,22 @@ function BookingBar({
                     M
                   </span>
                 )}
+                {/* Badge lease group: 1/N — agrupa mensuales del mismo contrato */}
+                {leaseInfo && leaseInfo.total > 1 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        aria-label={`Período ${leaseInfo.index} de ${leaseInfo.total} del contrato`}
+                        className="shrink-0 inline-flex items-center justify-center px-1 h-3.5 rounded-sm bg-violet-700/90 text-white text-[8px] font-bold tabular-nums tracking-tight"
+                      >
+                        {leaseInfo.index}/{leaseInfo.total}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      Período {leaseInfo.index} de {leaseInfo.total} del contrato mensual
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 <span className="truncate">{booking.guest?.full_name ?? "Sin huésped"}</span>
                 {booking.internal_notes && (
                   <Tooltip>
@@ -2155,9 +3007,28 @@ function BookingBar({
                 <span>·</span>
                 <span>{booking.guests_count}p</span>
                 {Number(booking.paid_amount) < Number(booking.total_amount) && (
-                  <span className="ml-auto text-[9px] bg-white/20 rounded px-1">
-                    Saldo
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        aria-label="Saldo pendiente — no se podrá hacer check-out hasta cobrarlo"
+                        className="ml-auto inline-flex items-center gap-0.5 rounded-sm bg-amber-400 text-amber-950 px-1 py-px font-bold tabular-nums shadow-sm ring-1 ring-amber-200/40"
+                      >
+                        <Wallet size={9} strokeWidth={2.5} />
+                        {formatMoney(
+                          Number(booking.total_amount) - Number(booking.paid_amount),
+                          booking.currency
+                        )}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <span className="text-[10px] uppercase tracking-wider opacity-70 block mb-0.5">
+                        Saldo pendiente
+                      </span>
+                      <span>
+                        Cobrá antes del check-out — el sistema bloquea la salida con saldo.
+                      </span>
+                    </TooltipContent>
+                  </Tooltip>
                 )}
               </div>
             </div>
@@ -2171,8 +3042,43 @@ function BookingBar({
               onPointerDown={(e) => onPointerDown(e, booking, "resize-right")}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => onPointerUp(e, booking)}
+              onPointerCancel={onPointerCancel}
+              onLostPointerCapture={onPointerCancel}
             >
               <div className="h-full w-px bg-white/40 mx-auto opacity-0 group-hover/handle:opacity-100" />
+            </div>
+          )}
+
+          {/* Cuota badges flotantes — posicionadas en el due_date exacto */}
+          {bookingMode === "mensual" && scheduleForBooking.length > 0 && (
+            <div
+              aria-hidden={false}
+              className="absolute inset-x-0 -top-2 pointer-events-none"
+            >
+              {scheduleForBooking.map((s) => {
+                // Posición relativa al inicio de la barra (clippedStart en grid coords)
+                const dueOff = dayOffset(windowStart, s.due_date) + 0.5;
+                if (dueOff < clippedStart || dueOff > clippedEnd) return null;
+                const leftPx = (dueOff - clippedStart) * cellWidth;
+                return (
+                  <div
+                    key={s.id}
+                    className="absolute pointer-events-auto"
+                    style={{
+                      left: leftPx,
+                      transform: "translate(-50%, 0)",
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <CuotaBadge
+                      schedule={s}
+                      bookingId={booking.id}
+                      accounts={accounts}
+                      size="sm"
+                    />
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -2182,6 +3088,7 @@ function BookingBar({
           booking={booking}
           unitCode={unitCode}
           unitName={unitName}
+          accounts={accounts}
           onEdit={onEdit}
           onStatusChanged={() => onOpenChange(false)}
           onRequestDateChange={(field, iso) => {
@@ -2282,6 +3189,7 @@ function SortableUnitOrderRow({
 function QuickAddBridge({
   units,
   accounts,
+  existingBookings,
   unitId,
   checkIn,
   checkOut,
@@ -2289,6 +3197,7 @@ function QuickAddBridge({
 }: {
   units: Unit[];
   accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  existingBookings: BookingWithRelations[];
   unitId: string;
   checkIn: string;
   checkOut: string;
@@ -2298,11 +3207,97 @@ function QuickAddBridge({
     <BookingFormDialog
       units={units}
       accounts={accounts}
+      existingBookings={existingBookings}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
       defaultCheckOut={checkOut}
       open
       onOpenChange={(o) => { if (!o) onClose(); }}
     />
+  );
+}
+
+// Chip flotante (fixed bottom-center) que muestra el resultado en vivo del
+// drag: nuevo check-in / check-out, unidad destino y duración. Sólo aparece
+// cuando el usuario ya cruzó el umbral de movimiento (`drag.moved`). Da el
+// "feedback inmediato" del cambio de día/hora antes de soltar — clave para
+// que la operación se sienta predecible y nativa.
+function DragChip({
+  drag,
+  bookings,
+  units,
+}: {
+  drag: DragState;
+  bookings: BookingWithRelations[];
+  units: UnitWithRelations[];
+}) {
+  const booking = bookings.find((b) => b.id === drag.bookingId);
+  if (!booking) return null;
+
+  const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
+    drag,
+    booking,
+    units
+  );
+  const newUnit = units.find((u) => u.id === newUnitId);
+  const unitChanged = newUnitId !== drag.originalUnitId;
+  const datesChanged =
+    newCheckIn !== drag.originalCheckIn || newCheckOut !== drag.originalCheckOut;
+  const noChange = !unitChanged && !datesChanged;
+  const nights = dayOffset(newCheckIn, newCheckOut);
+
+  const modeLabel =
+    drag.mode === "move"
+      ? unitChanged
+        ? "Mover y reasignar"
+        : "Mover"
+      : drag.mode === "resize-left"
+        ? "Cambiar check-in"
+        : "Cambiar check-out";
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] pointer-events-none select-none",
+        "rounded-2xl border bg-card/95 backdrop-blur-md shadow-2xl",
+        "px-4 py-2 sm:py-2.5 flex items-center gap-3 sm:gap-4",
+        "ring-1 max-w-[calc(100vw-32px)]",
+        noChange ? "ring-muted-foreground/20 opacity-80" : "ring-primary/40",
+        // micro-animation: aparece con un pequeño zoom/fade
+        "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150"
+      )}
+    >
+      <div className="flex flex-col items-start min-w-0">
+        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/80 font-semibold">
+          {modeLabel}
+        </span>
+        <span className="text-[13px] sm:text-sm font-semibold tabular-nums whitespace-nowrap">
+          {format(parseISO(newCheckIn), "d MMM", { locale: es })}
+          <span className="opacity-60 mx-1.5">→</span>
+          {format(parseISO(newCheckOut), "d MMM", { locale: es })}
+        </span>
+      </div>
+      <div className="h-7 w-px bg-border shrink-0" />
+      <div className="flex flex-col items-start min-w-0">
+        <span className="text-[9px] uppercase tracking-widest text-muted-foreground/80 font-semibold">
+          {nights} {nights === 1 ? "noche" : "noches"}
+        </span>
+        {unitChanged && newUnit ? (
+          <span className="text-[12px] sm:text-xs font-mono font-semibold text-primary truncate max-w-[140px]">
+            → {newUnit.code}
+          </span>
+        ) : noChange ? (
+          <span className="text-[11px] text-muted-foreground/80">
+            sin cambios
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground/80">
+            misma unidad
+          </span>
+        )}
+      </div>
+    </div>
   );
 }

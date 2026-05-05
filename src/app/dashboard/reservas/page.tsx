@@ -16,17 +16,17 @@ export default async function ReservasPage() {
   ]);
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Reservas</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+    <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-7xl mx-auto">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Reservas</h1>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
             {bookings.length} reservas registradas
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <BookingFormDialog units={units} accounts={accounts}>
-            <Button className="gap-2"><Plus size={16} /> Nueva reserva</Button>
+          <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
+            <Button className="gap-2"><Plus size={16} /> <span className="hidden sm:inline">Nueva reserva</span><span className="sm:hidden">Nueva</span></Button>
           </BookingFormDialog>
         </div>
       </div>

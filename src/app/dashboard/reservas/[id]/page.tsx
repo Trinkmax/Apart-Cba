@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, MapPin, User, Phone, Mail, Edit } from "lucide-react";
-import { getBooking } from "@/lib/actions/bookings";
+import { getBooking, listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
-import { listAccounts } from "@/lib/actions/cash";
+import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +12,8 @@ import { Separator } from "@/components/ui/separator";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingActions } from "@/components/bookings/booking-actions";
 import { ExtensionHistory } from "@/components/bookings/extension-history";
+import { QuickPayCard } from "@/components/bookings/quick-pay-card";
+import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
@@ -23,27 +26,35 @@ type BookingDetail = Booking & {
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [booking, units, accounts] = await Promise.all([
+  const [booking, units, accounts, movements, { role }] = await Promise.all([
     getBooking(id),
     listUnitsEnriched(),
     listAccounts(),
+    listMovementsForBooking(id),
+    getCurrentOrg(),
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
+  const unitBookings = await listBookings({ unitId: b.unit_id });
+  const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
+  const latestAuditByMovement = await listLatestAuditByAccount(
+    "",
+    movements.map((m) => m.id)
+  );
   const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
       <Link href="/dashboard/reservas" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft size={14} /> Volver
       </Link>
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <div className="flex items-center gap-3 flex-wrap">
-            <h1 className="text-2xl font-semibold tracking-tight">Reserva</h1>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Reserva</h1>
             <Badge className="gap-1.5 font-normal" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
               <span className="status-dot" style={{ backgroundColor: sm.color }} />
               {sm.label}
@@ -55,20 +66,20 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               <span className="text-xs text-muted-foreground font-mono">#{b.external_id}</span>
             )}
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             Creada el {formatDate(b.created_at, "dd 'de' MMM yyyy")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <BookingActions booking={b} />
-          <BookingFormDialog booking={b} units={units} accounts={accounts}>
-            <Button variant="outline" className="gap-2"><Edit size={14} /> Editar</Button>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <BookingActions booking={b} role={role} />
+          <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
+            <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
           </BookingFormDialog>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="p-5 lg:col-span-2 space-y-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 md:gap-6">
+        <Card className="p-4 sm:p-5 lg:col-span-2 space-y-4 sm:space-y-5">
           <div>
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Estadía</h2>
             <div className="mt-2 grid grid-cols-2 gap-4">
@@ -152,7 +163,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           <ExtensionHistory bookingId={b.id} />
         </Card>
 
-        <Card className="p-5 space-y-4 h-fit">
+        <Card className="p-4 sm:p-5 space-y-4 h-fit">
           <div>
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Pago</h2>
             <div className="mt-2 space-y-2 text-sm">
@@ -170,6 +181,29 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                   <span className="font-semibold">{formatMoney(b.total_amount - b.paid_amount, b.currency)}</span>
                 </div>
               )}
+
+              {/* Pago rápido — visible salvo que la reserva esté cancelada/no_show */}
+              <div className="pt-1">
+                <QuickPayCard
+                  bookingId={b.id}
+                  currency={b.currency}
+                  totalAmount={Number(b.total_amount)}
+                  paidAmount={Number(b.paid_amount)}
+                  accounts={accounts}
+                  disabled={b.status === "cancelada" || b.status === "no_show"}
+                />
+              </div>
+
+              {/* Movimientos vinculados a esta reserva (incluye cuotas) */}
+              <div className="pt-1">
+                <BookingPaymentsSection
+                  movements={movements}
+                  accounts={accounts}
+                  units={unitsForMovement}
+                  latestAudit={latestAuditByMovement}
+                />
+              </div>
+
               <Separator />
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Comisión Apart Cba</span>

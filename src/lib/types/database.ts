@@ -106,7 +106,34 @@ export type BookingExtensionOperation =
   | "shorten_left"
   | "change_unit";
 
+// Estado de una cuota mensual (booking_payment_schedule).
+export type PaymentScheduleStatus =
+  | "pending"
+  | "partial"
+  | "paid"
+  | "overdue"
+  | "cancelled";
+
+// Tipo de notificación in-app.
+export type NotificationType =
+  | "payment_due"
+  | "payment_overdue"
+  | "payment_received"
+  | "lease_ending_soon"
+  | "lease_split_created"
+  | "task_reminder"
+  | "manual"
+  | "other";
+
+export type NotificationSeverity =
+  | "info"
+  | "warning"
+  | "critical"
+  | "success";
+
 // ─── Tablas ─────────────────────────────────────────────────────────────────
+
+export type BookingStatusColors = Partial<Record<BookingStatus, string>>;
 
 export interface Organization {
   id: string;
@@ -119,6 +146,8 @@ export interface Organization {
   default_commission_pct: number | null;
   logo_url: string | null;
   primary_color: string | null;
+  /** Override de colores por status de reserva (hex). Si null o falta una clave, se usa el default. */
+  booking_status_colors: BookingStatusColors | null;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -263,6 +292,7 @@ export interface Guest {
   email: string | null;
   phone: string | null;
   country: string | null;
+  state_or_province: string | null;
   city: string | null;
   birth_date: string | null;
   notes: string | null;
@@ -302,6 +332,7 @@ export interface Booking {
   security_deposit: number | null;
   monthly_inflation_adjustment_pct: number | null;
   rent_billing_day: number | null;
+  lease_group_id: string | null;
   notes: string | null;
   internal_notes: string | null;
   checked_in_at: string | null;
@@ -354,6 +385,66 @@ export interface MaintenanceTicket {
   updated_at: string;
 }
 
+export type TicketEventType =
+  | "created"
+  | "status_changed"
+  | "updated"
+  | "cost_updated"
+  | "assigned"
+  | "note_added";
+
+export interface TicketEvent {
+  id: string;
+  ticket_id: string;
+  organization_id: string;
+  actor_id: string | null;
+  event_type: TicketEventType;
+  from_status: TicketStatus | null;
+  to_status: TicketStatus | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export type CleaningEventType =
+  | "created"
+  | "status_changed"
+  | "updated"
+  | "assigned"
+  | "checklist_updated"
+  | "cost_updated";
+
+export interface CleaningEvent {
+  id: string;
+  cleaning_task_id: string;
+  organization_id: string;
+  actor_id: string | null;
+  event_type: CleaningEventType;
+  from_status: CleaningStatus | null;
+  to_status: CleaningStatus | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export type ConciergeEventType =
+  | "created"
+  | "status_changed"
+  | "updated"
+  | "assigned"
+  | "cost_updated"
+  | "alert_updated";
+
+export interface ConciergeEvent {
+  id: string;
+  concierge_request_id: string;
+  organization_id: string;
+  actor_id: string | null;
+  event_type: ConciergeEventType;
+  from_status: ConciergeStatus | null;
+  to_status: ConciergeStatus | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface TicketAttachment {
   id: string;
   ticket_id: string;
@@ -403,6 +494,8 @@ export interface CashAccount {
   created_at: string;
 }
 
+export type CashBillableTo = "apartcba" | "owner" | "guest";
+
 export interface CashMovement {
   id: string;
   organization_id: string;
@@ -419,6 +512,7 @@ export interface CashMovement {
   occurred_at: string;
   created_at: string;
   created_by: string | null;
+  billable_to: CashBillableTo;
 }
 
 export interface CashTransfer {
@@ -604,6 +698,66 @@ export interface UnitWithRelations extends Unit {
 export interface BookingWithRelations extends Booking {
   unit?: Pick<Unit, "id" | "code" | "name"> | null;
   guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+}
+
+export interface BookingPaymentSchedule {
+  id: string;
+  organization_id: string;
+  booking_id: string;
+  lease_group_id: string | null;
+  sequence_number: number;
+  total_count: number;
+  due_date: string;
+  expected_amount: number;
+  paid_amount: number;
+  currency: string;
+  status: PaymentScheduleStatus;
+  paid_at: string | null;
+  cash_movement_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookingPaymentScheduleWithBooking extends BookingPaymentSchedule {
+  booking?:
+    | (Pick<
+        Booking,
+        | "id"
+        | "unit_id"
+        | "mode"
+        | "status"
+        | "currency"
+        | "monthly_rent"
+        | "monthly_expenses"
+        | "total_amount"
+        | "paid_amount"
+        | "lease_group_id"
+      > & {
+        guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+        unit?: Pick<Unit, "id" | "code" | "name"> | null;
+      })
+    | null;
+}
+
+export interface Notification {
+  id: string;
+  organization_id: string;
+  type: NotificationType;
+  severity: NotificationSeverity;
+  title: string;
+  body: string | null;
+  ref_type: string | null;
+  ref_id: string | null;
+  target_user_id: string | null;
+  target_role: UserRole | null;
+  action_url: string | null;
+  due_at: string | null;
+  read_at: string | null;
+  dismissed_at: string | null;
+  dedup_key: string | null;
+  created_at: string;
+  created_by: string | null;
 }
 
 export interface OwnerMember {

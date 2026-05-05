@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
@@ -9,6 +9,7 @@ import { formatTimeAgo, formatMoney } from "@/lib/format";
 import { changeTicketStatus } from "@/lib/actions/tickets";
 import { cn } from "@/lib/utils";
 import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/database";
+import type { CurrentOccupancy } from "@/lib/actions/bookings";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { TicketDetailDialog } from "./ticket-detail-dialog";
 import { TicketFormDialog } from "./ticket-form-dialog";
@@ -20,15 +21,17 @@ const COLUMNS: KanbanColumn<TicketStatus>[] = [
   { key: "en_progreso", label: TICKET_STATUS_META.en_progreso.label, color: TICKET_STATUS_META.en_progreso.color, icon: Wrench, emptyText: "Soltá tickets aquí" },
   { key: "esperando_repuesto", label: TICKET_STATUS_META.esperando_repuesto.label, color: TICKET_STATUS_META.esperando_repuesto.color, icon: Package, emptyText: "Soltá tickets aquí" },
   { key: "resuelto", label: TICKET_STATUS_META.resuelto.label, color: TICKET_STATUS_META.resuelto.color, icon: CheckCircle2, emptyText: "Soltá tickets aquí" },
+  { key: "cerrado", label: TICKET_STATUS_META.cerrado.label, color: TICKET_STATUS_META.cerrado.color, icon: Archive, emptyText: "Archivados" },
 ];
 
 interface Props {
   initialTickets: TicketWithUnit[];
   units: Pick<Unit, "id" | "code" | "name">[];
   owners: Owner[];
+  occupancyByUnit: Record<string, CurrentOccupancy>;
 }
 
-export function TicketsBoard({ initialTickets, units, owners }: Props) {
+export function TicketsBoard({ initialTickets, units, owners, occupancyByUnit }: Props) {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
 
@@ -53,6 +56,7 @@ export function TicketsBoard({ initialTickets, units, owners }: Props) {
           if (wA !== wB) return wB - wA;
           return new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime();
         }}
+        xlCols={5}
       />
 
       <TicketDetailDialog
@@ -73,7 +77,7 @@ export function TicketsBoard({ initialTickets, units, owners }: Props) {
       />
 
       {/* FAB siempre visible — vía garantizada para crear tickets */}
-      <TicketFormDialog units={units} owners={owners}>
+      <TicketFormDialog units={units} owners={owners} occupancyByUnit={occupancyByUnit}>
         <Button
           size="lg"
           className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"

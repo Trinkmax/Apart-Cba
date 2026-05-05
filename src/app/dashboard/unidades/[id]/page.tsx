@@ -31,25 +31,25 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
   const meta = UNIT_STATUS_META[u.status];
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
       <Link
         href="/dashboard/unidades"
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
       >
-        <ArrowLeft size={14} /> Volver a Unidades
+        <ArrowLeft size={14} /> Volver
       </Link>
 
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="flex items-start gap-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-start gap-3 sm:gap-4 min-w-0">
           <div
-            className="size-16 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-sm"
+            className="size-12 sm:size-16 rounded-xl flex items-center justify-center text-white font-bold text-base sm:text-xl shadow-sm shrink-0"
             style={{ backgroundColor: meta.color }}
           >
             {u.code.slice(0, 3)}
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-semibold tracking-tight">{u.name}</h1>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight truncate">{u.name}</h1>
               <Badge variant="outline" className="font-mono">{u.code}</Badge>
             </div>
             <Badge
@@ -60,10 +60,12 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
               {meta.label}
             </Badge>
             {u.address && (
-              <div className="flex items-center gap-1.5 mt-2 text-sm text-muted-foreground">
-                <MapPin size={13} />
-                {u.address}
-                {u.neighborhood ? `, ${u.neighborhood}` : ""}
+              <div className="flex items-start gap-1.5 mt-2 text-xs sm:text-sm text-muted-foreground">
+                <MapPin size={13} className="mt-0.5 shrink-0" />
+                <span>
+                  {u.address}
+                  {u.neighborhood ? `, ${u.neighborhood}` : ""}
+                </span>
               </div>
             )}
           </div>
@@ -71,38 +73,38 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
         <EditUnitButton unit={u} />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
         {[
           { icon: Bed, label: "Dormitorios", value: u.bedrooms ?? "—" },
           { icon: Bath, label: "Baños", value: u.bathrooms ?? "—" },
           { icon: Users, label: "Capacidad", value: u.max_guests ?? "—" },
           { icon: Square, label: "Superficie", value: u.size_m2 ? `${u.size_m2} m²` : "—" },
         ].map((s, i) => (
-          <Card key={i} className="p-4 flex items-center gap-3">
-            <div className="size-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+          <Card key={i} className="p-3 sm:p-4 flex items-center gap-2.5 sm:gap-3">
+            <div className="size-8 sm:size-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
               <s.icon size={16} />
             </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{s.label}</div>
-              <div className="font-semibold text-sm">{s.value}</div>
+            <div className="min-w-0">
+              <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-muted-foreground truncate">{s.label}</div>
+              <div className="font-semibold text-sm truncate">{s.value}</div>
             </div>
           </Card>
         ))}
       </div>
 
       <Tabs defaultValue="general">
-        <TabsList>
+        <TabsList className="overflow-x-auto no-scrollbar -mx-3 px-3 sm:mx-0 sm:px-0 max-w-full justify-start">
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="propietarios">Propietarios</TabsTrigger>
           <TabsTrigger value="historial">Historial</TabsTrigger>
         </TabsList>
 
         <TabsContent value="general" className="space-y-4 mt-4">
-          <Card className="p-5">
+          <Card className="p-4 sm:p-5">
             <h2 className="text-sm font-semibold mb-3">Tarifas</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-sm">
               <div>
-                <div className="text-xs text-muted-foreground">Precio base / noche</div>
+                <div className="text-xs text-muted-foreground">Precio / noche</div>
                 <div className="font-medium">{formatMoney(u.base_price, u.base_price_currency ?? "ARS")}</div>
               </div>
               <div>
@@ -110,21 +112,21 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
                 <div className="font-medium">{formatMoney(u.cleaning_fee, u.base_price_currency ?? "ARS")}</div>
               </div>
               <div>
-                <div className="text-xs text-muted-foreground">Comisión Apart Cba</div>
+                <div className="text-xs text-muted-foreground">Comisión</div>
                 <div className="font-medium">{u.default_commission_pct ?? 0}%</div>
               </div>
             </div>
           </Card>
 
           {u.description && (
-            <Card className="p-5">
+            <Card className="p-4 sm:p-5">
               <h2 className="text-sm font-semibold mb-2">Descripción</h2>
               <p className="text-sm text-muted-foreground whitespace-pre-wrap">{u.description}</p>
             </Card>
           )}
 
           {u.notes && (
-            <Card className="p-5">
+            <Card className="p-4 sm:p-5">
               <h2 className="text-sm font-semibold mb-2">Notas internas</h2>
               <p className="text-sm text-muted-foreground whitespace-pre-wrap">{u.notes}</p>
             </Card>

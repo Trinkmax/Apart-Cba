@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition, useEffect } from "react";
-import { CalendarRange, Loader2, UserPlus, Search, House, Wallet } from "lucide-react";
+import { CalendarRange, Loader2, Plus, UserPlus, Search, House, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -37,6 +37,11 @@ import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/b
 import { searchGuests } from "@/lib/actions/guests";
 import { BOOKING_MODE_META, BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
 import { formatNights } from "@/lib/format";
+import {
+  MAX_BOOKING_NIGHTS,
+  nightsBetween,
+  splitBookingSegments,
+} from "@/lib/booking-split";
 import { cn } from "@/lib/utils";
 import type {
   Booking,
@@ -67,12 +72,8 @@ function formatMoneyValue(n: number | null | undefined): string {
   return Number.isInteger(n) ? String(n) : String(n);
 }
 
-function nightsBetween(ciISO: string, coISO: string): number {
-  if (!ciISO || !coISO || coISO <= ciISO) return 0;
-  const a = new Date(ciISO + "T12:00:00").getTime();
-  const b = new Date(coISO + "T12:00:00").getTime();
-  return Math.round((b - a) / 86_400_000);
-}
+// Util compartido (mismo módulo que usa el server action) — mantiene cliente y
+// servidor en sync por construcción. NO duplicar la lógica acá.
 
 type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
 
@@ -87,12 +88,22 @@ type UnitForBookingForm = Pick<
   | "cleaning_fee"
 > & { default_mode?: UnitDefaultMode };
 
+type ExistingBookingForOverlap = {
+  id: string;
+  unit_id: string;
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+};
+
 interface BookingFormDialogProps {
   children?: React.ReactNode;
   booking?: Booking | BookingWithRelations;
   units: UnitForBookingForm[];
   /** Cuentas de caja activas — para registrar el cobro al crear/actualizar la reserva */
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  /** Reservas ya existentes — usadas para detectar overlaps antes de enviar al server */
+  existingBookings?: ExistingBookingForOverlap[];
   defaultUnitId?: string;
   defaultCheckIn?: string;
   defaultCheckOut?: string;
@@ -110,6 +121,7 @@ export function BookingFormDialog({
   booking,
   units,
   accounts = [],
+  existingBookings,
   defaultUnitId,
   defaultCheckIn,
   defaultCheckOut,
@@ -152,6 +164,16 @@ export function BookingFormDialog({
     | "security_deposit"
     | "monthly_inflation_adjustment_pct"
   > & {
+    /**
+     * Precio por noche (modo temporario). NO se persiste — el server recibe
+     * `total_amount` ya calculado como `price_per_night × nights`. La comisión
+     * se decide en liquidaciones, no acá.
+     */
+    price_per_night: string;
+    /**
+     * Total del período (modo mensual). En temporario se calcula en vivo
+     * desde price_per_night × nights y se muestra como display readonly.
+     */
     total_amount: string;
     paid_amount: string;
     commission_pct: string;
@@ -162,7 +184,26 @@ export function BookingFormDialog({
     monthly_inflation_adjustment_pct: string;
     /** Cuenta de caja a la que se imputa el `paid_amount` (no se persiste en bookings) */
     account_id: string | null;
+    /**
+     * En modo edición: importe a SUMAR al `paid_amount` actual (no lo
+     * sobrescribe). En modo creación se ignora — usá `paid_amount` directo.
+     */
+    add_payment: string;
   };
+
+  // Derivar price_per_night inicial: en edición = total / nights del booking;
+  // en creación = vacío (lo rellena el auto-cálculo desde unit.base_price).
+  const initialPricePerNight = (() => {
+    if (!booking) return "";
+    const ci = booking.check_in_date;
+    const co = booking.check_out_date;
+    const n = ci && co ? nightsBetween(ci, co) : 0;
+    const total = Number(booking.total_amount ?? 0);
+    if (n > 0 && total > 0) {
+      return formatMoneyValue(Math.round((total / n) * 100) / 100);
+    }
+    return "";
+  })();
 
   const [form, setForm] = useState<FormShape>({
     unit_id: booking?.unit_id ?? defaultUnitId ?? "",
@@ -172,14 +213,18 @@ export function BookingFormDialog({
     status: booking?.status ?? "confirmada",
     mode: booking?.mode ?? "temporario",
     check_in_date: booking?.check_in_date ?? defaultCheckIn ?? "",
-    check_in_time: booking?.check_in_time ?? "15:00",
+    check_in_time: booking?.check_in_time ?? "14:00",
     check_out_date: booking?.check_out_date ?? defaultCheckOut ?? "",
-    check_out_time: booking?.check_out_time ?? "11:00",
+    check_out_time: booking?.check_out_time ?? "10:00",
     guests_count: booking?.guests_count ?? 2,
     currency: booking?.currency ?? "ARS",
+    price_per_night: initialPricePerNight,
     total_amount: formatMoneyValue(booking?.total_amount),
     paid_amount: formatMoneyValue(booking?.paid_amount),
-    commission_pct: formatMoneyValue(booking?.commission_pct),
+    commission_pct:
+      booking?.commission_pct !== null && booking?.commission_pct !== undefined
+        ? formatMoneyValue(booking.commission_pct)
+        : "20",
     cleaning_fee: formatMoneyValue(booking?.cleaning_fee),
     monthly_rent: formatMoneyValue(booking?.monthly_rent),
     monthly_expenses: formatMoneyValue(booking?.monthly_expenses),
@@ -189,11 +234,24 @@ export function BookingFormDialog({
     notes: booking?.notes ?? "",
     internal_notes: booking?.internal_notes ?? "",
     account_id: null,
+    add_payment: "",
   });
 
-  // Tracking del input "tocado" — si el usuario editó manualmente el total,
-  // dejamos de auto-calcularlo desde base_price.
+  // Importe ya cobrado al abrir el form (snapshot — no muta cuando el usuario
+  // tipea "Agregar pago"). Sólo aplica en modo edición.
+  const previousPaid = Number(booking?.paid_amount ?? 0);
+
+  // Tracking del input "tocado" — si el usuario editó manualmente el precio
+  // (temporario) o el total del período (mensual), dejamos de auto-calcular.
+  const [priceTouched, setPriceTouched] = useState(isEdit);
   const [totalTouched, setTotalTouched] = useState(isEdit);
+  // En "temporario" el form es bidireccional: el último monto que tocó el
+  // usuario manda. Si edita precio/noche → derivamos total = precio × noches.
+  // Si edita total → derivamos precio = total ÷ noches. Cuando cambian las
+  // fechas, el campo "ganador" se mantiene fijo y el otro se recalcula.
+  const [lastTouched, setLastTouched] = useState<"price" | "total" | null>(
+    isEdit ? "price" : null
+  );
 
   function set<K extends keyof FormShape>(k: K, v: FormShape[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -213,27 +271,61 @@ export function BookingFormDialog({
     });
   }
 
-  // ─── Auto-cálculo de Total ───────────────────────────────────────────────
-  // Cuando cambia unit/check_in/check_out y el usuario NO tocó el total,
-  // calculamos total = base_price × noches (modo temporario) o monthly_rent ×
-  // (días/30) (modo mensual). Patrón "ajuste de state durante render" para no
-  // violar la regla react-hooks/set-state-in-effect.
-  const autoKey = `${form.unit_id}|${form.check_in_date}|${form.check_out_date}|${form.mode}|${form.monthly_rent}`;
+  // ─── Auto-cálculo de precio/total ────────────────────────────────────────
+  // Modo mensual: auto-rellena total_amount desde monthly_rent × días/30.
+  // Modo temporario (bidireccional):
+  //   - Si el último editado fue "total" → re-deriva el precio = total ÷ noches
+  //     cuando cambian fechas (mantiene fijo el total que tipeó el usuario).
+  //   - En cualquier otro caso → flujo "price-driven": precio desde
+  //     unit.base_price si !priceTouched, y total = precio × noches.
+  // Patrón "ajuste de state durante render" para no violar
+  // react-hooks/set-state-in-effect.
+  const autoKey = `${form.unit_id}|${form.mode}|${form.monthly_rent}|${form.check_in_date}|${form.check_out_date}`;
   const [prevAutoKey, setPrevAutoKey] = useState(autoKey);
   if (prevAutoKey !== autoKey) {
     setPrevAutoKey(autoKey);
-    if (!totalTouched) {
-      const u = units.find((x) => x.id === form.unit_id);
-      const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
-      let computed: number | null = null;
-      if (form.mode === "mensual") {
+    const u = units.find((x) => x.id === form.unit_id);
+    const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
+    if (form.mode === "mensual") {
+      if (!totalTouched) {
         const rent = parseMoneyInput(form.monthly_rent);
-        if (rent && nightsCount > 0) computed = Math.round((rent / 30) * nightsCount * 100) / 100;
-      } else if (u?.base_price && nightsCount > 0) {
-        computed = Math.round(Number(u.base_price) * nightsCount * 100) / 100;
+        if (rent && nightsCount > 0) {
+          const computed = Math.round((rent / 30) * nightsCount * 100) / 100;
+          setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
+        }
       }
-      if (computed !== null) {
-        setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
+    } else if (lastTouched === "total" && totalTouched && nightsCount > 0) {
+      // Total fijo → re-derivar precio cuando cambian fechas/unidad.
+      const totalParsed = parseMoneyInput(form.total_amount);
+      if (totalParsed && totalParsed > 0) {
+        const computedPrice =
+          Math.round((totalParsed / nightsCount) * 100) / 100;
+        setForm((f) => ({
+          ...f,
+          price_per_night: formatMoneyValue(computedPrice),
+        }));
+      }
+    } else {
+      // Precio fijo → re-derivar total. Si !priceTouched y la unidad tiene
+      // base_price, autorrellenar el precio antes de calcular el total.
+      const basePrice =
+        !priceTouched && u?.base_price ? Number(u.base_price) : null;
+      const priceParsed = parseMoneyInput(form.price_per_night);
+      const price = basePrice ?? priceParsed;
+      if (price && nightsCount > 0) {
+        const computedTotal = Math.round(price * nightsCount * 100) / 100;
+        setForm((f) => ({
+          ...f,
+          ...(basePrice !== null
+            ? { price_per_night: formatMoneyValue(basePrice) }
+            : null),
+          total_amount: formatMoneyValue(computedTotal),
+        }));
+      } else if (basePrice !== null) {
+        setForm((f) => ({
+          ...f,
+          price_per_night: formatMoneyValue(basePrice),
+        }));
       }
     }
   }
@@ -275,20 +367,57 @@ export function BookingFormDialog({
       ? formatNights(form.check_in_date, form.check_out_date)
       : 0;
 
-  const totalNum = parseMoneyInput(form.total_amount) ?? 0;
-  const cleaningNum = parseMoneyInput(form.cleaning_fee) ?? 0;
+  // En mensual el total siempre lo tipea el usuario. En temporario el form es
+  // bidireccional: si el último editado fue "total" usamos lo tipeado, sino
+  // derivamos del precio × noches (flujo clásico).
+  const pricePerNightNum = parseMoneyInput(form.price_per_night) ?? 0;
+  const totalAmountParsed = parseMoneyInput(form.total_amount);
+  const totalNum =
+    form.mode === "mensual"
+      ? totalAmountParsed ?? 0
+      : lastTouched === "total" && totalAmountParsed !== null
+        ? totalAmountParsed
+        : Math.round(pricePerNightNum * nights * 100) / 100;
+  // Comisión ya no se ingresa en este form — se decide en liquidaciones.
+  // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
+  // para no perder data en edición; el server decide el fallback definitivo.
   const commissionPctNum = parseMoneyInput(form.commission_pct);
-  const commissionAmount =
-    commissionPctNum !== null ? (totalNum * commissionPctNum) / 100 : 0;
-  const ownerNet = totalNum - commissionAmount - cleaningNum;
+
+  // ─── Split preview: cualquier reserva > MAX_BOOKING_NIGHTS se divide ───
+  const splitSegments =
+    !isEdit &&
+    form.check_in_date &&
+    form.check_out_date &&
+    form.check_out_date > form.check_in_date
+      ? splitBookingSegments(
+          form.check_in_date,
+          form.check_out_date,
+          MAX_BOOKING_NIGHTS
+        )
+      : [];
+
+  // ─── Warning si la unidad tiene vocación distinta al modo elegido (excepto mixto) ───
+  const selectedUnit = units.find((u) => u.id === form.unit_id);
+  const unitVocation = (selectedUnit?.default_mode ?? "temporario") as UnitDefaultMode;
+  const modeMismatchWarning =
+    selectedUnit && unitVocation !== "mixto" && unitVocation !== form.mode
+      ? `La unidad ${selectedUnit.code} tiene vocación ${unitVocation === "temporario" ? "temporaria" : "mensual"}. Igual podés cargar la reserva, pero confirmá que es lo que querés.`
+      : null;
 
   // Filtrar cuentas por moneda elegida
   const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    // Construir el payload con tipos numéricos
-    const paidAmount = parseMoneyInput(form.paid_amount) ?? 0;
+    // En edición, el delta a cobrar viene de "Agregar pago" y se SUMA al
+    // paid_amount existente. En creación se usa el paid_amount tipeado.
+    const addPayment = isEdit ? parseMoneyInput(form.add_payment) ?? 0 : 0;
+    const paidAmount = isEdit
+      ? previousPaid + addPayment
+      : parseMoneyInput(form.paid_amount) ?? 0;
+    // El "delta" (lo que va a generar movimiento de caja) es lo nuevo: en
+    // edición, sólo el `add_payment`; en creación, el `paid_amount` inicial.
+    const cashDelta = isEdit ? addPayment : paidAmount;
     const payload: BookingInput & { account_id?: string | null } = {
       unit_id: form.unit_id,
       guest_id: form.guest_id,
@@ -302,7 +431,7 @@ export function BookingFormDialog({
       check_out_time: form.check_out_time,
       guests_count: form.guests_count,
       currency: form.currency,
-      total_amount: parseMoneyInput(form.total_amount) ?? 0,
+      total_amount: totalNum,
       paid_amount: paidAmount,
       commission_pct: commissionPctNum,
       cleaning_fee: parseMoneyInput(form.cleaning_fee),
@@ -313,13 +442,35 @@ export function BookingFormDialog({
       rent_billing_day: form.rent_billing_day ?? null,
       notes: form.notes,
       internal_notes: form.internal_notes,
-      account_id: paidAmount > 0 ? form.account_id : null,
+      account_id: cashDelta > 0 ? form.account_id : null,
     };
-    if (paidAmount > 0 && !payload.account_id && accountsForCurrency.length > 0) {
+    if (cashDelta > 0 && !payload.account_id && accountsForCurrency.length > 0) {
       toast.error("Falta seleccionar cuenta de cobro", {
         description: `Elegí en qué cuenta querés registrar el cobro de ${form.currency}`,
       });
       return;
+    }
+    // Pre-check de overlap (mismo unit, status confirmada/check_in, rangos
+    // [in, out) que se solapan). Replica el constraint bookings_no_overlap
+    // del Postgres para dar un mensaje claro antes de pegarle al server,
+    // donde Next.js enmascara el Error.message en producción.
+    if (existingBookings && form.unit_id && form.check_in_date && form.check_out_date) {
+      const conflict = existingBookings.find((b) => {
+        if (b.unit_id !== form.unit_id) return false;
+        if (booking && b.id === booking.id) return false;
+        if (b.status !== "confirmada" && b.status !== "check_in") return false;
+        return (
+          b.check_in_date < form.check_out_date &&
+          b.check_out_date > form.check_in_date
+        );
+      });
+      if (conflict) {
+        const u = units.find((x) => x.id === form.unit_id);
+        toast.error("Ya existe una reserva en esa unidad", {
+          description: `${u?.name ?? "La unidad"} está ocupada del ${conflict.check_in_date} al ${conflict.check_out_date}. Editá esa reserva en lugar de crear una nueva.`,
+        });
+        return;
+      }
     }
     startTransition(async () => {
       try {
@@ -347,7 +498,7 @@ export function BookingFormDialog({
       }}
     >
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar reserva" : "Nueva reserva"}</DialogTitle>
         </DialogHeader>
@@ -363,12 +514,34 @@ export function BookingFormDialog({
               <Select value={form.unit_id} onValueChange={onSelectUnit} required>
                 <SelectTrigger><SelectValue placeholder="Elegí la unidad" /></SelectTrigger>
                 <SelectContent className="max-h-72">
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      <span className="font-mono text-xs mr-2">{u.code}</span>
-                      {u.name}
-                    </SelectItem>
-                  ))}
+                  {units.map((u) => {
+                    const dm: UnitDefaultMode = (u.default_mode ?? "temporario") as UnitDefaultMode;
+                    const dmLabel =
+                      dm === "mixto" ? "Mx" : dm === "mensual" ? "M" : "T";
+                    const dmTone =
+                      dm === "mixto"
+                        ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                        : dm === "mensual"
+                          ? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200"
+                          : "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-200";
+                    return (
+                      <SelectItem key={u.id} value={u.id}>
+                        <span className="flex items-center gap-2">
+                          <span
+                            className={cn(
+                              "inline-flex items-center justify-center size-4 rounded-sm text-[9px] font-bold",
+                              dmTone
+                            )}
+                            title={`Vocación: ${dm}`}
+                          >
+                            {dmLabel}
+                          </span>
+                          <span className="font-mono text-xs">{u.code}</span>
+                          <span className="truncate">{u.name}</span>
+                        </span>
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -445,7 +618,14 @@ export function BookingFormDialog({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="space-y-1.5">
               <Label>Check-in *</Label>
-              <Input type="date" required value={form.check_in_date} onChange={(e) => set("check_in_date", e.target.value)} />
+              <Input
+                type="date"
+                required
+                min="2020-01-01"
+                max="2100-12-31"
+                value={form.check_in_date}
+                onChange={(e) => set("check_in_date", e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Hora</Label>
@@ -453,7 +633,14 @@ export function BookingFormDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Check-out *</Label>
-              <Input type="date" required value={form.check_out_date} onChange={(e) => set("check_out_date", e.target.value)} />
+              <Input
+                type="date"
+                required
+                min={form.check_in_date || "2020-01-01"}
+                max="2100-12-31"
+                value={form.check_out_date}
+                onChange={(e) => set("check_out_date", e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Hora</Label>
@@ -501,15 +688,14 @@ export function BookingFormDialog({
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="monthly_rent">Renta mensual *</Label>
+                  <Label htmlFor="monthly_rent">Renta mensual</Label>
                   <Input
                     id="monthly_rent"
                     type="text"
                     inputMode="decimal"
-                    required
                     value={form.monthly_rent}
                     onChange={(e) => set("monthly_rent", e.target.value)}
-                    placeholder="350000"
+                    placeholder="Opcional — definí después"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -587,139 +773,379 @@ export function BookingFormDialog({
             </div>
           )}
 
-          {/* Money */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-t pt-4">
-            <div className="space-y-1.5">
-              <Label>Moneda</Label>
-              <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ARS">ARS</SelectItem>
-                  <SelectItem value="USD">USD</SelectItem>
-                  <SelectItem value="EUR">EUR</SelectItem>
-                  <SelectItem value="USDT">USDT</SelectItem>
-                </SelectContent>
-              </Select>
+          {/* Warning: vocación de la unidad distinta al modo elegido */}
+          {modeMismatchWarning && (
+            <div className="rounded-lg border border-amber-300/70 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+              <span aria-hidden className="mt-0.5">⚠</span>
+              <span>{modeMismatchWarning}</span>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="total_amount">{form.mode === "mensual" ? "Total del período" : "Total"}</Label>
-              <Input
-                id="total_amount"
-                type="text"
-                inputMode="decimal"
-                value={form.total_amount}
-                onChange={(e) => {
-                  setTotalTouched(true);
-                  set("total_amount", e.target.value);
-                }}
-                placeholder={(() => {
-                  // Placeholder dinámico mostrando el total que se calcularía
-                  const u = units.find((x) => x.id === form.unit_id);
-                  if (form.mode === "mensual") {
-                    const rent = parseMoneyInput(form.monthly_rent);
-                    if (rent && nights > 0) {
-                      return formatMoneyValue(Math.round((rent / 30) * nights * 100) / 100);
-                    }
-                  } else if (u?.base_price && nights > 0) {
-                    return formatMoneyValue(Math.round(Number(u.base_price) * nights * 100) / 100);
-                  }
-                  return "0";
-                })()}
-              />
-              {form.mode === "mensual" && (
-                <p className="text-[10px] text-muted-foreground">
-                  Total cobrado del período.
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="paid_amount">Cobrado</Label>
-              <Input
-                id="paid_amount"
-                type="text"
-                inputMode="decimal"
-                value={form.paid_amount}
-                onChange={(e) => set("paid_amount", e.target.value)}
-                placeholder="0"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="commission_pct">Comisión %</Label>
-              <Input
-                id="commission_pct"
-                type="text"
-                inputMode="decimal"
-                value={form.commission_pct}
-                onChange={(e) => set("commission_pct", e.target.value)}
-                placeholder="20"
-              />
-            </div>
-            <div className="space-y-1.5 col-span-2 sm:col-span-1">
-              <Label htmlFor="cleaning_fee">Fee limpieza</Label>
-              <Input
-                id="cleaning_fee"
-                type="text"
-                inputMode="decimal"
-                value={form.cleaning_fee}
-                onChange={(e) => set("cleaning_fee", e.target.value)}
-                placeholder="0"
-              />
-            </div>
-          </div>
+          )}
 
-          {/* Cuenta de caja para imputar el cobro — sólo si hay paid_amount > 0 */}
-          {(parseMoneyInput(form.paid_amount) ?? 0) > 0 && (
-            <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-1.5">
-              <Label htmlFor="account_id" className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200">
-                <Wallet size={13} /> Cobrar en cuenta *
-              </Label>
-              {accountsForCurrency.length === 0 ? (
-                <p className="text-xs text-amber-800 dark:text-amber-300">
-                  No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
-                </p>
-              ) : (
-                <Select
-                  value={form.account_id ?? undefined}
-                  onValueChange={(v) => set("account_id", v)}
-                >
-                  <SelectTrigger id="account_id">
-                    <SelectValue placeholder={`Elegí cuenta en ${form.currency}…`} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accountsForCurrency.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>
-                        {a.name} <span className="text-[10px] text-muted-foreground ml-1">· {a.type}</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              <p className="text-[10px] text-emerald-800/80 dark:text-emerald-300/80">
-                Se generará un movimiento en caja por {form.currency}{" "}
-                {(parseMoneyInput(form.paid_amount) ?? 0).toLocaleString("es-AR", {
-                  maximumFractionDigits: 2,
-                })}{" "}
-                al guardar.
+          {/* Split preview: la reserva se va a dividir en N períodos */}
+          {splitSegments.length >= 2 && (
+            <div className="rounded-lg border border-violet-300/60 bg-violet-50 dark:bg-violet-950/30 dark:border-violet-800/40 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <House size={14} className="text-violet-700 dark:text-violet-300" />
+                <span className="text-xs font-semibold text-violet-900 dark:text-violet-100">
+                  Esta reserva se dividirá en {splitSegments.length} períodos de hasta {MAX_BOOKING_NIGHTS} noches
+                </span>
+              </div>
+              <p className="text-[11px] text-violet-800/80 dark:text-violet-300/80">
+                Una reserva no puede exceder {MAX_BOOKING_NIGHTS} noches. Cada
+                período se factura, cobra y liquida de forma independiente.
+                Quedan agrupados en el mismo contrato (lease group) y se ven
+                consecutivos en el calendario.
               </p>
+              <ol className="space-y-1 text-[11px]">
+                {splitSegments.map((seg, i) => (
+                  <li
+                    key={`${seg.from}-${seg.to}`}
+                    className="flex items-center justify-between gap-2 rounded bg-background/60 px-2 py-1"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-[10px] text-violet-700 dark:text-violet-300 tabular-nums">
+                        {i + 1}/{splitSegments.length}
+                      </span>
+                      <span className="truncate">
+                        {seg.from} → {seg.to}
+                      </span>
+                    </span>
+                    <span className="font-mono text-muted-foreground tabular-nums shrink-0">
+                      {seg.nights}n
+                    </span>
+                  </li>
+                ))}
+              </ol>
             </div>
           )}
 
-          {totalNum > 0 && (
-            <div className="grid grid-cols-3 gap-3 p-3 bg-muted/40 rounded-lg text-xs">
-              <div>
-                <div className="text-muted-foreground">Comisión Apart Cba</div>
-                <div className="font-medium font-mono">{commissionAmount.toFixed(2)}</div>
+          {/* Money — grid simétrico de 5 cols: labels en una línea, inputs
+              alineados, helper text con altura fija para que todas las
+              columnas tengan exactamente la misma altura visual. */}
+          {(() => {
+            const pendingNum = Math.max(
+              0,
+              totalNum -
+                (isEdit
+                  ? previousPaid
+                  : parseMoneyInput(form.paid_amount) ?? 0)
+            );
+            const labelCls = "whitespace-nowrap text-xs sm:text-sm";
+            const helperCls =
+              "text-[10px] text-muted-foreground min-h-[14px] leading-[14px] whitespace-nowrap overflow-hidden text-ellipsis";
+            const readonlyBoxCls =
+              "flex h-9 w-full items-center rounded-md border border-input bg-muted/40 px-3 py-1 text-sm font-mono tabular-nums text-muted-foreground";
+            return (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 border-t pt-4">
+                {/* 1. Moneda */}
+                <div className="space-y-1.5">
+                  <Label className={labelCls}>Moneda</Label>
+                  <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ARS">ARS</SelectItem>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="EUR">EUR</SelectItem>
+                      <SelectItem value="USDT">USDT</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className={helperCls}>&nbsp;</p>
+                </div>
+
+                {/* 2. Precio/noche (temporario) o Total (mensual) */}
+                {form.mode === "mensual" ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="total_amount" className={labelCls}>Total</Label>
+                    <Input
+                      id="total_amount"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.total_amount}
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setTotalTouched(true);
+                          set("total_amount", "");
+                        }
+                      }}
+                      onChange={(e) => {
+                        setTotalTouched(true);
+                        set("total_amount", e.target.value);
+                      }}
+                      placeholder={(() => {
+                        const rent = parseMoneyInput(form.monthly_rent);
+                        if (rent && nights > 0) {
+                          return formatMoneyValue(Math.round((rent / 30) * nights * 100) / 100);
+                        }
+                        return "0";
+                      })()}
+                    />
+                    <p className={helperCls}>Total del período</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="price_per_night" className={labelCls}>Precio/noche</Label>
+                    <Input
+                      id="price_per_night"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.price_per_night}
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setPriceTouched(true);
+                          setLastTouched("price");
+                          set("price_per_night", "");
+                        }
+                      }}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPriceTouched(true);
+                        setLastTouched("price");
+                        setForm((f) => {
+                          const priceParsed = parseMoneyInput(v);
+                          const nightsCount = nightsBetween(
+                            f.check_in_date,
+                            f.check_out_date
+                          );
+                          if (priceParsed !== null && nightsCount > 0) {
+                            const computedTotal =
+                              Math.round(priceParsed * nightsCount * 100) / 100;
+                            return {
+                              ...f,
+                              price_per_night: v,
+                              total_amount: formatMoneyValue(computedTotal),
+                            };
+                          }
+                          return { ...f, price_per_night: v };
+                        });
+                      }}
+                      placeholder={(() => {
+                        const u = units.find((x) => x.id === form.unit_id);
+                        return u?.base_price ? formatMoneyValue(Number(u.base_price)) : "0";
+                      })()}
+                    />
+                    <p className={helperCls}>
+                      {lastTouched === "total" && totalTouched && nights > 0
+                        ? `Total ÷ ${nights}n`
+                        : "Tarifa por noche"}
+                    </p>
+                  </div>
+                )}
+
+                {/* 3. Cobrado */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="paid_amount" className={labelCls}>Cobrado</Label>
+                  <Input
+                    id="paid_amount"
+                    type="text"
+                    inputMode="decimal"
+                    value={isEdit ? formatMoneyValue(previousPaid) : form.paid_amount}
+                    onFocus={(e) => {
+                      if (!isEdit && e.target.value === "0") set("paid_amount", "");
+                    }}
+                    onChange={(e) => set("paid_amount", e.target.value)}
+                    placeholder="0"
+                    readOnly={isEdit}
+                    disabled={isEdit}
+                    className={isEdit ? "bg-muted/40 cursor-not-allowed" : undefined}
+                  />
+                  <p className={helperCls}>
+                    {isEdit ? "Usá \"Agregar pago\" para sumar más" : "Pagado al ingresar"}
+                  </p>
+                </div>
+
+                {/* 4. Saldo (mensual, readonly) o Total editable (temporario) */}
+                {form.mode === "mensual" ? (
+                  <div className="space-y-1.5">
+                    <Label className={labelCls}>Saldo</Label>
+                    <div className={readonlyBoxCls} aria-label="Saldo pendiente">
+                      {pendingNum > 0
+                        ? pendingNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })
+                        : "—"}
+                    </div>
+                    <p className={helperCls}>Total − cobrado</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="total_amount_temp" className={labelCls}>Total</Label>
+                    <Input
+                      id="total_amount_temp"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.total_amount}
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setTotalTouched(true);
+                          setLastTouched("total");
+                          set("total_amount", "");
+                        }
+                      }}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTotalTouched(true);
+                        setLastTouched("total");
+                        setForm((f) => {
+                          const totalParsed = parseMoneyInput(v);
+                          const nightsCount = nightsBetween(
+                            f.check_in_date,
+                            f.check_out_date
+                          );
+                          if (
+                            totalParsed !== null &&
+                            totalParsed > 0 &&
+                            nightsCount > 0
+                          ) {
+                            const computedPrice =
+                              Math.round((totalParsed / nightsCount) * 100) / 100;
+                            return {
+                              ...f,
+                              total_amount: v,
+                              price_per_night: formatMoneyValue(computedPrice),
+                            };
+                          }
+                          return { ...f, total_amount: v };
+                        });
+                      }}
+                      placeholder={(() => {
+                        if (nights > 0 && pricePerNightNum > 0) {
+                          return formatMoneyValue(
+                            Math.round(pricePerNightNum * nights * 100) / 100
+                          );
+                        }
+                        return "0";
+                      })()}
+                    />
+                    <p className={helperCls}>
+                      {lastTouched === "total" && totalTouched
+                        ? "Total del período"
+                        : nights > 0 && pricePerNightNum > 0
+                          ? `${formatMoneyValue(pricePerNightNum)} × ${nights}n`
+                          : "Total del período"}
+                    </p>
+                  </div>
+                )}
+
+                {/* 5. Limpieza */}
+                <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                  <Label htmlFor="cleaning_fee" className={labelCls}>Limpieza</Label>
+                  <Input
+                    id="cleaning_fee"
+                    type="text"
+                    inputMode="decimal"
+                    value={form.cleaning_fee}
+                    onChange={(e) => set("cleaning_fee", e.target.value)}
+                    placeholder="0"
+                  />
+                  <p className={helperCls}>Fee de limpieza</p>
+                </div>
               </div>
-              <div>
-                <div className="text-muted-foreground">Fee limpieza</div>
-                <div className="font-medium font-mono">{cleaningNum.toFixed(2)}</div>
+            );
+          })()}
+
+          {/* Cobrar en cuenta — siempre visible en creación y edición */}
+          {(() => {
+            const totalNumLocal = totalNum;
+            const pendingBefore = isEdit
+              ? Math.max(0, totalNumLocal - previousPaid)
+              : Math.max(0, totalNumLocal - (parseMoneyInput(form.paid_amount) ?? 0));
+            const addNum = isEdit
+              ? parseMoneyInput(form.add_payment) ?? 0
+              : parseMoneyInput(form.paid_amount) ?? 0;
+            const requireAccount = addNum > 0;
+            return (
+              <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <Label htmlFor="account_id" className="flex items-center gap-1.5 text-emerald-900 dark:text-emerald-200">
+                    <Wallet size={13} /> Cobrar en cuenta {requireAccount && "*"}
+                  </Label>
+                  <div className="text-[10px] text-emerald-900/80 dark:text-emerald-200/80 tabular-nums">
+                    Saldo pendiente:{" "}
+                    <span className="font-semibold">
+                      {form.currency}{" "}
+                      {pendingBefore.toLocaleString("es-AR", { maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+                {accountsForCurrency.length === 0 ? (
+                  <p className="text-xs text-amber-800 dark:text-amber-300">
+                    No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
+                  </p>
+                ) : (
+                  <Select
+                    value={form.account_id ?? undefined}
+                    onValueChange={(v) => set("account_id", v)}
+                  >
+                    <SelectTrigger id="account_id">
+                      <SelectValue placeholder={`Elegí cuenta en ${form.currency}…`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {accountsForCurrency.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name} <span className="text-[10px] text-muted-foreground ml-1">· {a.type}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+                <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                  <div className="space-y-1">
+                    <Label htmlFor={isEdit ? "add_payment" : "create_paid_amount"} className="text-[10px] text-emerald-900/80 dark:text-emerald-200/80">
+                      Importe ({form.currency})
+                    </Label>
+                    <Input
+                      id={isEdit ? "add_payment" : "create_paid_amount"}
+                      type="text"
+                      inputMode="decimal"
+                      value={isEdit ? form.add_payment : form.paid_amount}
+                      onChange={(e) => set(isEdit ? "add_payment" : "paid_amount", e.target.value)}
+                      placeholder={pendingBefore > 0 ? formatMoneyValue(pendingBefore) : "0"}
+                      aria-label="Importe del pago"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-10 gap-1.5 shrink-0"
+                    disabled={pendingBefore <= 0 && addNum === 0}
+                    onClick={() => {
+                      if (pendingBefore > 0) {
+                        set(
+                          isEdit ? "add_payment" : "paid_amount",
+                          formatMoneyValue(
+                            isEdit ? pendingBefore : (parseMoneyInput(form.paid_amount) ?? 0) + pendingBefore
+                          )
+                        );
+                      }
+                    }}
+                  >
+                    <Plus size={14} /> Agregar pago
+                  </Button>
+                </div>
+                <p className="text-[10px] text-emerald-800/80 dark:text-emerald-300/80">
+                  {!isEdit && addNum > 0 && (
+                    <>
+                      Se generará un movimiento en caja por {form.currency}{" "}
+                      {addNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })} al guardar.
+                    </>
+                  )}
+                  {isEdit && addNum > 0 && (
+                    <>
+                      Se agregará un pago de {form.currency}{" "}
+                      {addNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })}. Cobrado total pasará a {form.currency}{" "}
+                      {(previousPaid + addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}{" "}
+                      · Saldo restante: {form.currency}{" "}
+                      {Math.max(0, totalNumLocal - previousPaid - addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}.
+                    </>
+                  )}
+                  {addNum === 0 && pendingBefore > 0 && (
+                    <>Tocá &quot;Agregar pago&quot; para saldar todo, o tipeá un importe parcial.</>
+                  )}
+                  {addNum === 0 && pendingBefore === 0 && totalNumLocal > 0 && (
+                    <>La reserva ya está saldada.</>
+                  )}
+                </p>
               </div>
-              <div>
-                <div className="text-muted-foreground">Neto al propietario</div>
-                <div className="font-semibold font-mono text-emerald-600 dark:text-emerald-400">{ownerNet.toFixed(2)}</div>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           <div className="space-y-1.5">
             <Label>Notas para el huésped</Label>
@@ -730,7 +1156,7 @@ export function BookingFormDialog({
             <Textarea rows={2} value={form.internal_notes ?? ""} onChange={(e) => set("internal_notes", e.target.value)} placeholder="Solo el equipo lo ve" />
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="sm:bg-background sm:border-t sm:px-6 sm:py-3 sm:-mx-6 sm:-mb-6 sm:mt-4">
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isPending}>
               {isPending && <Loader2 className="animate-spin" />}

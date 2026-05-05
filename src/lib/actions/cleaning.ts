@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import type { CleaningTask, CleaningStatus } from "@/lib/types/database";
+import type { CleaningEvent, CleaningStatus, CleaningTask } from "@/lib/types/database";
 
 // Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
 // estaba en status='limpieza' y ya no le quedan tasks pendientes/en_progreso,
@@ -104,7 +104,7 @@ export async function listCleaningTasks(filters?: {
 }
 
 export async function createCleaningTask(input: CleaningInput) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = cleaningSchema.parse(input);
   const checklist = validated.checklist.length > 0
@@ -117,6 +117,16 @@ export async function createCleaningTask(input: CleaningInput) {
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  await admin.from("cleaning_events").insert({
+    cleaning_task_id: (data as CleaningTask).id,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "created",
+    to_status: validated.status,
+    metadata: { scheduled_for: validated.scheduled_for },
+  });
+
   revalidatePath("/dashboard/limpieza");
   return data as CleaningTask;
 }
@@ -125,6 +135,14 @@ export async function changeCleaningStatus(id: string, status: CleaningStatus) {
   const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  const { data: prev } = await admin
+    .from("cleaning_tasks")
+    .select("status, unit_id")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const update: Record<string, unknown> = { status };
   if (status === "verificada") update.verified_by = session.userId;
   const { error } = await admin
@@ -134,16 +152,22 @@ export async function changeCleaningStatus(id: string, status: CleaningStatus) {
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
 
+  if (prev && prev.status !== status) {
+    await admin.from("cleaning_events").insert({
+      cleaning_task_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "status_changed",
+      from_status: prev.status,
+      to_status: status,
+      metadata: { source: "kanban_or_chip" },
+    });
+  }
+
   // Si la task pasa a un estado terminal, intentar liberar la unidad.
   if (status === "completada" || status === "verificada" || status === "cancelada") {
-    const { data: task } = await admin
-      .from("cleaning_tasks")
-      .select("unit_id")
-      .eq("id", id)
-      .eq("organization_id", organization.id)
-      .maybeSingle();
-    if (task?.unit_id) {
-      await releaseUnitIfNoActiveCleaning(task.unit_id, organization.id, id);
+    if (prev?.unit_id) {
+      await releaseUnitIfNoActiveCleaning(prev.unit_id, organization.id, id);
     }
   }
 
@@ -154,7 +178,7 @@ export async function changeCleaningStatus(id: string, status: CleaningStatus) {
 }
 
 export async function assignCleaning(id: string, userId: string | null) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
   const { error } = await admin
@@ -163,11 +187,20 @@ export async function assignCleaning(id: string, userId: string | null) {
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  await admin.from("cleaning_events").insert({
+    cleaning_task_id: id,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "assigned",
+    metadata: { assigned_to: userId },
+  });
+
   revalidatePath("/dashboard/limpieza");
 }
 
 export async function updateCleaningChecklist(id: string, checklist: { item: string; done: boolean; note?: string }[]) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
   const { error } = await admin
@@ -176,14 +209,32 @@ export async function updateCleaningChecklist(id: string, checklist: { item: str
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  const done = checklist.filter((c) => c.done).length;
+  await admin.from("cleaning_events").insert({
+    cleaning_task_id: id,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "checklist_updated",
+    metadata: { done, total: checklist.length },
+  });
+
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/m/limpieza");
 }
 
 export async function updateCleaningTask(id: string, input: Partial<CleaningInput>) {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  const { data: prev } = await admin
+    .from("cleaning_tasks")
+    .select("status")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
   const { data, error } = await admin
     .from("cleaning_tasks")
     .update(input)
@@ -192,8 +243,67 @@ export async function updateCleaningTask(id: string, input: Partial<CleaningInpu
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  const newStatus = input.status;
+  if (prev && newStatus && prev.status !== newStatus) {
+    await admin.from("cleaning_events").insert({
+      cleaning_task_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "status_changed",
+      from_status: prev.status,
+      to_status: newStatus,
+      metadata: { source: "edit_form" },
+    });
+  } else {
+    await admin.from("cleaning_events").insert({
+      cleaning_task_id: id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "updated",
+      metadata: { source: "edit_form" },
+    });
+  }
+
   revalidatePath("/dashboard/limpieza");
   return data as CleaningTask;
+}
+
+export async function listCleaningEvents(taskId: string): Promise<
+  (CleaningEvent & { actor: { full_name: string | null } | null })[]
+> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("cleaning_events")
+    .select("*")
+    .eq("cleaning_task_id", taskId)
+    .eq("organization_id", organization.id)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  const events = (data ?? []) as CleaningEvent[];
+
+  const actorIds = Array.from(
+    new Set(events.map((e) => e.actor_id).filter((v): v is string => !!v))
+  );
+  let byId = new Map<string, { full_name: string | null }>();
+  if (actorIds.length > 0) {
+    const { data: profiles } = await admin
+      .from("user_profiles")
+      .select("user_id, full_name")
+      .in("user_id", actorIds);
+    byId = new Map(
+      (profiles ?? []).map((p) => [
+        p.user_id as string,
+        { full_name: (p.full_name as string | null) ?? null },
+      ])
+    );
+  }
+
+  return events.map((e) => ({
+    ...e,
+    actor: e.actor_id ? byId.get(e.actor_id) ?? { full_name: null } : null,
+  }));
 }
 
 export async function deleteCleaningTask(id: string) {

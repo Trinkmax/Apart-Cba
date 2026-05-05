@@ -118,7 +118,18 @@ export function AccountFormDialog({
           </div>
           <div className="space-y-1.5">
             <Label>Saldo inicial</Label>
-            <Input type="number" step="0.01" value={form.opening_balance} onChange={(e) => set("opening_balance", Number(e.target.value))} />
+            <Input
+              type="number"
+              step="0.01"
+              inputMode="decimal"
+              value={form.opening_balance}
+              onChange={(e) => set("opening_balance", Number(e.target.value))}
+              placeholder="0,00"
+            />
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Saldo de apertura de la cuenta. El saldo actual se calcula sumando los movimientos.
+              {isEdit && " Al modificarlo, el saldo actual se ajusta sin alterar los movimientos históricos."}
+            </p>
           </div>
           {form.type === "banco" && (
             <>

@@ -56,8 +56,8 @@ export function KanbanBoard<T extends { id: string }, S extends string>({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
-  // sync external changes (when parent re-fetches)
-  useStableSync(initialItems, setItems);
+  // sync external changes (when parent re-fetches o cuando se cambia el status fuera del board)
+  useStableSync(initialItems, getStatus, setItems);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
@@ -101,8 +101,14 @@ export function KanbanBoard<T extends { id: string }, S extends string>({
     });
   }
 
+  // En desktop: grid responsive. En mobile: scroll horizontal con snap (tipo Trello).
+  // Esto evita columnas extralargas que obligan al usuario a scrollear sin contexto.
   const gridClass = cn(
-    "grid grid-cols-1 md:grid-cols-2 gap-4",
+    "grid md:grid-cols-2 gap-3 md:gap-4",
+    "grid-flow-col md:grid-flow-row auto-cols-[85vw] md:auto-cols-auto",
+    "overflow-x-auto md:overflow-visible",
+    "snap-x snap-mandatory md:snap-none",
+    "pb-2 md:pb-0 -mx-3 px-3 sm:-mx-4 sm:px-4 md:mx-0 md:px-0 no-scrollbar",
     xlCols === 3 && "lg:grid-cols-3",
     xlCols === 4 && "xl:grid-cols-4",
     xlCols === 5 && "xl:grid-cols-5",
@@ -115,22 +121,24 @@ export function KanbanBoard<T extends { id: string }, S extends string>({
         {columns.map((col) => {
           const list = grouped.get(col.key) ?? [];
           return (
-            <Column key={col.key} column={col} count={list.length}>
-              {list.length === 0 ? (
-                <EmptyColumn text={col.emptyText} />
-              ) : (
-                list.map((it) => (
-                  <DraggableCard
-                    key={it.id}
-                    id={it.id}
-                    isDragging={activeId === it.id}
-                    onClick={onCardClick ? () => onCardClick(it) : undefined}
-                  >
-                    {renderCard(it, { dragging: false })}
-                  </DraggableCard>
-                ))
-              )}
-            </Column>
+            <div key={col.key} className="snap-start md:snap-align-none min-w-0">
+              <Column column={col} count={list.length}>
+                {list.length === 0 ? (
+                  <EmptyColumn text={col.emptyText} />
+                ) : (
+                  list.map((it) => (
+                    <DraggableCard
+                      key={it.id}
+                      id={it.id}
+                      isDragging={activeId === it.id}
+                      onClick={onCardClick ? () => onCardClick(it) : undefined}
+                    >
+                      {renderCard(it, { dragging: false })}
+                    </DraggableCard>
+                  ))
+                )}
+              </Column>
+            </div>
           );
         })}
       </div>
@@ -219,16 +227,19 @@ function DraggableCard({
 }
 
 // ─── Hook helper ───────────────────────────────────────────────────────────
-function useStableSync<T extends { id: string }>(
+// La firma incluye id+status para que cambios de estado externos (p.ej. desde
+// el detail dialog) se reflejen en la grilla aunque la lista tenga el mismo largo.
+function useStableSync<T extends { id: string }, S extends string>(
   externalItems: T[],
+  getStatus: (item: T) => S,
   setItems: React.Dispatch<React.SetStateAction<T[]>>
 ) {
   const stamp = useRef<string>("");
   useEffect(() => {
-    const sig = externalItems.map((x) => x.id).join("|") + ":" + externalItems.length;
+    const sig = externalItems.map((x) => `${x.id}:${getStatus(x)}`).join("|");
     if (sig !== stamp.current) {
       stamp.current = sig;
       setItems(externalItems);
     }
-  }, [externalItems, setItems]);
+  }, [externalItems, getStatus, setItems]);
 }

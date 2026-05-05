@@ -1,7 +1,18 @@
 "use client";
 
 import { useState, useTransition, useMemo } from "react";
-import { Loader2, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import {
+  Loader2,
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Building,
+  Building2,
+  BedDouble,
+  User2,
+  ChevronsUpDown,
+  Check,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -14,9 +25,20 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { createMovement, type MovementInput } from "@/lib/actions/cash";
 import { cn } from "@/lib/utils";
-import type { CashAccount } from "@/lib/types/database";
+import type { CashAccount, Unit } from "@/lib/types/database";
+
+type UnitForMovement = Pick<Unit, "id" | "code" | "name">;
 
 const CATEGORY_LABELS: Record<MovementInput["category"], string> = {
   booking_payment: "Cobro de reserva",
@@ -37,23 +59,48 @@ const CATEGORY_LABELS: Record<MovementInput["category"], string> = {
 interface Props {
   children: React.ReactNode;
   accounts: CashAccount[];
+  /** Unidades disponibles para imputar el movimiento (opcional). */
+  units?: UnitForMovement[];
+  /** Pre-seleccionar dirección al abrir (ej. botón "Egreso"). */
+  defaultDirection?: "in" | "out";
+  /** Pre-seleccionar cuenta al abrir (usado desde el detalle de cuenta). */
+  defaultAccountId?: string;
+  /** Pre-seleccionar categoría al abrir (ej. egreso suele ser maintenance/utilities). */
+  defaultCategory?: MovementInput["category"];
 }
 
-export function MovementFormDialog({ children, accounts }: Props) {
+export function MovementFormDialog({
+  children,
+  accounts,
+  units = [],
+  defaultDirection = "in",
+  defaultAccountId,
+  defaultCategory,
+}: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
+  const initialAccount: CashAccount | undefined =
+    accounts.find((a) => a.id === defaultAccountId) ?? accounts[0];
+
   const [form, setForm] = useState<MovementInput>({
-    account_id: accounts[0]?.id ?? "",
-    direction: "in",
+    account_id: initialAccount?.id ?? "",
+    direction: defaultDirection,
     amount: 0,
-    currency: accounts[0]?.currency ?? "ARS",
-    category: "other",
+    currency: initialAccount?.currency ?? "ARS",
+    category: defaultCategory ?? (defaultDirection === "out" ? "supplies" : "other"),
     unit_id: null,
     owner_id: null,
     description: "",
+    billable_to: "apartcba",
   });
+
+  const [unitPickerOpen, setUnitPickerOpen] = useState(false);
+  const selectedUnit = useMemo(
+    () => units.find((u) => u.id === form.unit_id) ?? null,
+    [units, form.unit_id]
+  );
 
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.id === form.account_id),
@@ -151,6 +198,136 @@ export function MovementFormDialog({ children, accounts }: Props) {
               </Select>
             </div>
           </div>
+
+          {/* Imputación contable: ¿quién absorbe este movimiento? */}
+          <div className="space-y-1.5">
+            <Label className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+              ¿Quién paga / recibe? *
+            </Label>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                { v: "apartcba", label: "Organización", icon: <Building size={14} /> },
+                { v: "owner", label: "Propietario", icon: <User2 size={14} /> },
+                { v: "guest", label: "Huésped", icon: <BedDouble size={14} /> },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => set("billable_to", opt.v)}
+                  className={cn(
+                    "flex flex-col items-center justify-center gap-1 rounded-lg p-2.5 border-2 transition-all text-xs",
+                    form.billable_to === opt.v
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border text-muted-foreground hover:border-primary/40"
+                  )}
+                >
+                  {opt.icon}
+                  <span className="font-medium">{opt.label}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {form.billable_to === "apartcba"
+                ? "Costo/ingreso operativo de la organización."
+                : form.billable_to === "owner"
+                ? "Se descuenta o suma en la liquidación del propietario."
+                : "Se cobra/devuelve al huésped."}
+            </p>
+          </div>
+
+          {/* Unidad — opcional. Permite imputar el movimiento a una unidad puntual
+              (ej.: pintura para Independencia 369). Aparece después en filtros y
+              en la liquidación al propietario si la unidad está vinculada. */}
+          {units.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <Building2 size={13} className="text-muted-foreground" />
+                Unidad
+                <span className="text-[10px] font-normal text-muted-foreground ml-0.5">
+                  (opcional)
+                </span>
+              </Label>
+              <div className="flex gap-1.5">
+                <Popover open={unitPickerOpen} onOpenChange={setUnitPickerOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={unitPickerOpen}
+                      className={cn(
+                        "flex-1 justify-between font-normal",
+                        !selectedUnit && "text-muted-foreground"
+                      )}
+                    >
+                      {selectedUnit ? (
+                        <span className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-xs shrink-0 px-1.5 py-0.5 rounded bg-muted">
+                            {selectedUnit.code}
+                          </span>
+                          <span className="truncate">{selectedUnit.name}</span>
+                        </span>
+                      ) : (
+                        "Sin unidad asignada"
+                      )}
+                      <ChevronsUpDown size={14} className="opacity-50 shrink-0" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="w-[var(--radix-popover-trigger-width)] p-0"
+                    align="start"
+                  >
+                    <Command>
+                      <CommandInput placeholder="Buscar por código o nombre…" />
+                      <CommandList>
+                        <CommandEmpty>Sin coincidencias</CommandEmpty>
+                        <CommandGroup>
+                          {units.map((u) => {
+                            const active = form.unit_id === u.id;
+                            return (
+                              <CommandItem
+                                key={u.id}
+                                value={`${u.code} ${u.name}`}
+                                onSelect={() => {
+                                  set("unit_id", u.id);
+                                  setUnitPickerOpen(false);
+                                }}
+                                className="flex items-center gap-2"
+                              >
+                                <Check
+                                  size={13}
+                                  className={cn(
+                                    "shrink-0",
+                                    active ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                <span className="font-mono text-xs shrink-0 px-1.5 py-0.5 rounded bg-muted">
+                                  {u.code}
+                                </span>
+                                <span className="truncate">{u.name}</span>
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                {selectedUnit && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Quitar unidad"
+                    onClick={() => set("unit_id", null)}
+                    className="shrink-0"
+                  >
+                    <X size={14} />
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label>Descripción</Label>

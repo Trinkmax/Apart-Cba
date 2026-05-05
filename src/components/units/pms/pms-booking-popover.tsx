@@ -10,6 +10,7 @@ import {
   Users,
   DollarSign,
   ExternalLink,
+  Loader2,
   Pencil,
   Phone,
   Mail,
@@ -18,11 +19,14 @@ import {
   LogIn,
   LogOut,
   Ban,
+  Plus,
   StickyNote,
   Pencil as PencilIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Calendar } from "@/components/ui/calendar";
@@ -31,18 +35,39 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatNights, getInitials } from "@/lib/format";
-import { changeBookingStatus } from "@/lib/actions/bookings";
-import type { BookingWithRelations, BookingStatus } from "@/lib/types/database";
+import {
+  addBookingPayment,
+  changeBookingStatus,
+  getUnitReadinessForCheckIn,
+  type UnitReadiness,
+} from "@/lib/actions/bookings";
+import { CheckInReadinessDialog } from "@/components/bookings/check-in-readiness-dialog";
+import type {
+  BookingWithRelations,
+  BookingStatus,
+  CashAccount,
+} from "@/lib/types/database";
 import { cn } from "@/lib/utils";
+
+type AccountLite = Pick<CashAccount, "id" | "name" | "currency" | "type">;
 
 interface PmsBookingPopoverProps {
   booking: BookingWithRelations;
   unitCode: string;
   unitName: string;
+  accounts?: AccountLite[];
   onEdit: () => void;
   onStatusChanged?: (nextStatus: BookingStatus) => void;
+  onPaymentAdded?: (newPaid: number) => void;
   /**
    * Callback al pedir cambio de fecha desde las cards check-in/check-out.
    * El parent (PmsBoard) abre el flujo MoveConfirmDialog con el preview
@@ -58,8 +83,10 @@ export function PmsBookingPopoverContent({
   booking,
   unitCode,
   unitName,
+  accounts = [],
   onEdit,
   onStatusChanged,
+  onPaymentAdded,
   onRequestDateChange,
 }: PmsBookingPopoverProps) {
   const [pending, startTransition] = useTransition();
@@ -68,20 +95,122 @@ export function PmsBookingPopoverContent({
   const nights = formatNights(booking.check_in_date, booking.check_out_date);
   const pendingAmount = Math.max(0, Number(booking.total_amount) - Number(booking.paid_amount));
 
+  const matchingAccounts = accounts.filter((a) => a.currency === booking.currency);
+  const [showPayForm, setShowPayForm] = useState(false);
+  const [payAmount, setPayAmount] = useState<string>("");
+  const [payAccountId, setPayAccountId] = useState<string>("");
+  const [paying, startPaying] = useTransition();
+  const [readinessOpen, setReadinessOpen] = useState(false);
+  const [readiness, setReadiness] = useState<UnitReadiness | null>(null);
+
+  function performCheckIn() {
+    startTransition(async () => {
+      try {
+        await changeBookingStatus(booking.id, "check_in");
+        toast.success(`Reserva marcada como ${BOOKING_STATUS_META.check_in.label}`);
+        setReadinessOpen(false);
+        onStatusChanged?.("check_in");
+      } catch (err) {
+        toast.error("No se pudo actualizar", {
+          description: (err as Error).message,
+        });
+      }
+    });
+  }
+
+  function openPayForm() {
+    setPayAmount(pendingAmount > 0 ? String(pendingAmount) : "");
+    setPayAccountId(matchingAccounts[0]?.id ?? "");
+    setShowPayForm(true);
+  }
+
+  function submitPayment() {
+    const amount = Number(payAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Ingresá un importe válido");
+      return;
+    }
+    if (!payAccountId) {
+      toast.error("Elegí una cuenta de caja");
+      return;
+    }
+    startPaying(async () => {
+      try {
+        const updated = await addBookingPayment(booking.id, amount, payAccountId);
+        toast.success(`Pago de ${formatMoney(amount, booking.currency)} registrado`);
+        setShowPayForm(false);
+        setPayAmount("");
+        onPaymentAdded?.(Number(updated.paid_amount));
+      } catch (e) {
+        toast.error("No se pudo registrar el pago", {
+          description: (e as Error).message,
+        });
+      }
+    });
+  }
+
   function applyStatus(next: BookingStatus, confirmMsg?: string) {
+    // Atajo de UX: si vamos a check_out con saldo pendiente, redirigimos a la
+    // página de detalle (donde está el dialog completo con "Cobrar saldo" o
+    // "Forzar"). El server igual valida si alguien evita este atajo.
+    if (next === "check_out") {
+      const total = Number(booking.total_amount ?? 0);
+      const paid = Number(booking.paid_amount ?? 0);
+      if (total - paid > 0.01) {
+        toast.error("La reserva tiene saldo pendiente", {
+          description: "Te llevamos al detalle para cobrar antes de hacer check-out.",
+        });
+        // Pequeña espera para que el toast sea visible antes del navigate
+        setTimeout(() => {
+          window.location.href = `/dashboard/reservas/${booking.id}`;
+        }, 600);
+        return;
+      }
+    }
     if (confirmMsg && !window.confirm(confirmMsg)) return;
+    if (next === "check_in") {
+      // Verificamos limpieza/mantenimiento antes de avanzar.
+      startTransition(async () => {
+        try {
+          const snap = await getUnitReadinessForCheckIn(booking.unit_id);
+          if (snap.ready) {
+            await changeBookingStatus(booking.id, "check_in");
+            toast.success(
+              `Reserva marcada como ${BOOKING_STATUS_META.check_in.label}`
+            );
+            onStatusChanged?.("check_in");
+            return;
+          }
+          setReadiness(snap);
+          setReadinessOpen(true);
+        } catch (err) {
+          toast.error("No se pudo actualizar", {
+            description: (err as Error).message,
+          });
+        }
+      });
+      return;
+    }
     startTransition(async () => {
       try {
         await changeBookingStatus(booking.id, next);
         toast.success(`Reserva marcada como ${BOOKING_STATUS_META[next].label}`);
         onStatusChanged?.(next);
       } catch (err) {
-        toast.error("No se pudo actualizar", { description: (err as Error).message });
+        const msg = (err as Error).message;
+        if (msg.startsWith("CHECKOUT_PENDING_BALANCE:")) {
+          toast.error("La reserva tiene saldo pendiente", {
+            description: msg.replace("CHECKOUT_PENDING_BALANCE: ", ""),
+          });
+        } else {
+          toast.error("No se pudo actualizar", { description: msg });
+        }
       }
     });
   }
 
   return (
+    <>
     <div className="w-[380px] max-w-[92vw] text-sm">
       {/* Header: status banner */}
       <div
@@ -147,7 +276,7 @@ export function PmsBookingPopoverContent({
             label="Check-in"
             valueISO={booking.check_in_date}
             value={formatDate(booking.check_in_date, "EEE d MMM")}
-            sub={booking.check_in_time?.slice(0, 5) ?? "15:00"}
+            sub={booking.check_in_time?.slice(0, 5) ?? "14:00"}
             // Para check-in: el límite superior es check_out - 1 día
             maxISO={subDaysISO(booking.check_out_date, 1)}
             disabled={
@@ -162,7 +291,7 @@ export function PmsBookingPopoverContent({
             label="Check-out"
             valueISO={booking.check_out_date}
             value={formatDate(booking.check_out_date, "EEE d MMM")}
-            sub={booking.check_out_time?.slice(0, 5) ?? "11:00"}
+            sub={booking.check_out_time?.slice(0, 5) ?? "10:00"}
             // Para check-out: el límite inferior es check_in + 1 día
             minISO={addDaysISO(booking.check_in_date, 1)}
             disabled={
@@ -204,6 +333,94 @@ export function PmsBookingPopoverContent({
             value={formatMoney(Number(booking.cleaning_fee), booking.currency)}
             subtle
           />
+        )}
+
+        {/* Registrar pago */}
+        {pendingAmount > 0 && booking.status !== "cancelada" && (
+          <div className="pt-2">
+            {!showPayForm ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 w-full gap-1.5 text-xs"
+                onClick={openPayForm}
+              >
+                <Plus size={12} /> Registrar pago
+              </Button>
+            ) : (
+              <div className="rounded-lg border bg-muted/30 p-2.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                    Nuevo pago
+                  </span>
+                  <button
+                    type="button"
+                    className="text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPayForm(false)}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+                <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+                  <div className="space-y-1">
+                    <Label className="text-[10px]">Importe ({booking.currency})</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={payAmount}
+                      onChange={(e) => setPayAmount(e.target.value)}
+                      className="h-8 text-xs"
+                      autoFocus
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1 text-xs"
+                    disabled={paying}
+                    onClick={submitPayment}
+                  >
+                    {paying && <Loader2 className="animate-spin" size={12} />}
+                    Cobrar
+                  </Button>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px]">Cuenta de caja</Label>
+                  {matchingAccounts.length === 0 ? (
+                    <div className="text-[10px] text-amber-600 dark:text-amber-400">
+                      No hay cuentas en {booking.currency}. Creá una en{" "}
+                      <Link href="/dashboard/caja" className="underline">
+                        Caja
+                      </Link>
+                      .
+                    </div>
+                  ) : (
+                    <Select value={payAccountId} onValueChange={setPayAccountId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Elegí cuenta" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {matchingAccounts.map((a) => (
+                          <SelectItem key={a.id} value={a.id} className="text-xs">
+                            {a.name} · {a.currency}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <button
+                    type="button"
+                    className="hover:text-foreground underline-offset-2 hover:underline"
+                    onClick={() => setPayAmount(String(pendingAmount))}
+                  >
+                    Saldar {formatMoney(pendingAmount, booking.currency)}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -288,6 +505,15 @@ export function PmsBookingPopoverContent({
         )}
       </div>
     </div>
+
+    <CheckInReadinessDialog
+      open={readinessOpen}
+      onOpenChange={setReadinessOpen}
+      readiness={readiness}
+      isPending={pending}
+      onConfirm={performCheckIn}
+    />
+    </>
   );
 }
 

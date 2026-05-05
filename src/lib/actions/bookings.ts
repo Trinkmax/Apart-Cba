@@ -6,6 +6,11 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
+import {
+  MAX_BOOKING_NIGHTS,
+  nightsBetween,
+  splitBookingSegments,
+} from "@/lib/booking-split";
 import type {
   Booking,
   BookingExtension,
@@ -13,51 +18,51 @@ import type {
   BookingStatus,
 } from "@/lib/types/database";
 
-const bookingSchema = z
-  .object({
-    unit_id: z.string().uuid("Unidad requerida"),
-    guest_id: z.string().uuid().optional().nullable(),
-    source: z.enum([
-      "directo", "airbnb", "booking", "expedia", "vrbo", "whatsapp", "instagram", "otro",
-    ]).default("directo"),
-    external_id: z.string().optional().nullable(),
-    status: z.enum(["pendiente","confirmada","check_in","check_out","cancelada","no_show"]).default("confirmada"),
-    mode: z.enum(["temporario", "mensual"]).default("temporario"),
-    check_in_date: z.string().min(10, "Fecha check-in requerida"),
-    check_in_time: z.string().default("15:00"),
-    check_out_date: z.string().min(10, "Fecha check-out requerida"),
-    check_out_time: z.string().default("11:00"),
-    guests_count: z.coerce.number().int().min(1).default(1),
-    currency: z.string().default("ARS"),
-    total_amount: z.coerce.number().min(0).default(0),
-    paid_amount: z.coerce.number().min(0).default(0),
-    commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
-    cleaning_fee: z.coerce.number().min(0).optional().nullable(),
-    // Mensual
-    monthly_rent: z.coerce.number().min(0).optional().nullable(),
-    monthly_expenses: z.coerce.number().min(0).optional().nullable(),
-    security_deposit: z.coerce.number().min(0).optional().nullable(),
-    monthly_inflation_adjustment_pct: z.coerce
-      .number()
-      .min(0)
-      .max(100)
-      .optional()
-      .nullable(),
-    rent_billing_day: z.coerce.number().int().min(1).max(28).optional().nullable(),
-    notes: z.string().optional().nullable(),
-    internal_notes: z.string().optional().nullable(),
-  })
-  .refine(
-    (data) =>
-      data.mode !== "mensual" ||
-      (data.monthly_rent !== null &&
-        data.monthly_rent !== undefined &&
-        data.monthly_rent > 0),
-    {
-      message: "Las reservas mensuales requieren una renta mensual mayor a 0",
-      path: ["monthly_rent"],
-    }
+// Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
+// en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
+// un error de tipeo y no una reserva real.
+const sanitizedDate = z
+  .string()
+  .regex(
+    /^(20[2-9]\d|2100)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
+    "Fecha inválida"
   );
+
+const bookingSchema = z.object({
+  unit_id: z.string().uuid("Unidad requerida"),
+  guest_id: z.string().uuid().optional().nullable(),
+  source: z.enum([
+    "directo", "airbnb", "booking", "expedia", "vrbo", "whatsapp", "instagram", "otro",
+  ]).default("directo"),
+  external_id: z.string().optional().nullable(),
+  status: z.enum(["pendiente","confirmada","check_in","check_out","cancelada","no_show"]).default("confirmada"),
+  mode: z.enum(["temporario", "mensual"]).default("temporario"),
+  check_in_date: sanitizedDate,
+  check_in_time: z.string().default("14:00"),
+  check_out_date: sanitizedDate,
+  check_out_time: z.string().default("10:00"),
+  guests_count: z.coerce.number().int().min(1).default(1),
+  currency: z.string().default("ARS"),
+  total_amount: z.coerce.number().min(0).default(0),
+  paid_amount: z.coerce.number().min(0).default(0),
+  commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
+  cleaning_fee: z.coerce.number().min(0).optional().nullable(),
+  // Mensual — todos opcionales: la renta puede cargarse después o ajustarse
+  // por cuota; el form no debe forzar al usuario a tipear un monto si todavía
+  // no lo tiene definido.
+  monthly_rent: z.coerce.number().min(0).optional().nullable(),
+  monthly_expenses: z.coerce.number().min(0).optional().nullable(),
+  security_deposit: z.coerce.number().min(0).optional().nullable(),
+  monthly_inflation_adjustment_pct: z.coerce
+    .number()
+    .min(0)
+    .max(100)
+    .optional()
+    .nullable(),
+  rent_billing_day: z.coerce.number().int().min(1).max(28).optional().nullable(),
+  notes: z.string().optional().nullable(),
+  internal_notes: z.string().optional().nullable(),
+});
 
 export type BookingInput = z.infer<typeof bookingSchema>;
 
@@ -105,6 +110,7 @@ async function syncBookingPaymentToCash(params: {
     ref_type: "booking",
     ref_id: params.bookingId,
     unit_id: params.unitId,
+    billable_to: "owner",
     description:
       params.delta > 0
         ? `Cobro de reserva ${params.bookingId.slice(0, 8)}`
@@ -112,6 +118,175 @@ async function syncBookingPaymentToCash(params: {
     occurred_at: new Date().toISOString(),
   });
   if (error) throw new Error(`Error al registrar movimiento de caja: ${error.message}`);
+}
+
+/**
+ * Si una reserva existente quedó con > MAX_BOOKING_NIGHTS (típicamente porque
+ * se la extendió con moveBookingTransaction o updateBooking), la "materializa"
+ * en N reservas back-to-back:
+ *   - La fila original se RECORTA al primer segmento (mismo id, se preserva
+ *     historial de extensiones, payments, etc).
+ *   - Se INSERTAN N-1 filas nuevas con los segmentos restantes.
+ *   - Si ninguna estaba en un lease_group, se crea uno nuevo y todas quedan
+ *     bajo el mismo grupo.
+ *   - total_amount, commission_amount y cleaning_fee se prorratean igual que
+ *     en createBooking (cleaning sólo en el último; paid en el primero).
+ *
+ * Idempotente: si la reserva ya cabe en el cap, no hace nada.
+ *
+ * NO maneja conflictos con otras reservas en la unidad — si el rango chocaba,
+ * la operación previa (UPDATE) ya hubiera fallado por bookings_no_overlap.
+ * Igual capturamos ese error al insertar nuevos segmentos por si el delta
+ * agregó un solapamiento.
+ */
+async function enforceLeaseSplitOnExisting(params: {
+  bookingId: string;
+  organizationId: string;
+  userId: string;
+}): Promise<void> {
+  const admin = createAdminClient();
+  const { data: original, error } = await admin
+    .from("bookings")
+    .select("*")
+    .eq("id", params.bookingId)
+    .eq("organization_id", params.organizationId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!original) return;
+
+  const segments = splitBookingSegments(
+    original.check_in_date,
+    original.check_out_date,
+    MAX_BOOKING_NIGHTS
+  );
+  if (segments.length < 2) return; // ya cabe en el cap
+
+  const totalNights = nightsBetween(
+    original.check_in_date,
+    original.check_out_date
+  );
+  const totalAmount = Number(original.total_amount) || 0;
+  const commissionPctValue = Number(original.commission_pct) || 0;
+  const cleaningFeeOriginal = Number(original.cleaning_fee) || 0;
+  const leaseGroupId = original.lease_group_id ?? crypto.randomUUID();
+
+  // Segmento 0: UPDATE de la fila original (recorte + prorrateo).
+  const seg0 = segments[0];
+  const seg0Share = totalNights > 0 ? seg0.nights / totalNights : 0;
+  const seg0Amount = Math.round(totalAmount * seg0Share * 100) / 100;
+  const seg0Commission =
+    Math.round((seg0Amount * commissionPctValue) / 100 * 100) / 100;
+  // Cleaning fee va al último segmento — la fila original deja de tenerlo
+  // (salvo que originalmente ya fuera el último, lo cual no aplica acá).
+  const { error: errUpd } = await admin
+    .from("bookings")
+    .update({
+      check_out_date: seg0.to,
+      check_out_time: "12:00",
+      total_amount: seg0Amount,
+      commission_amount: seg0Commission,
+      cleaning_fee: 0,
+      lease_group_id: leaseGroupId,
+    })
+    .eq("id", original.id)
+    .eq("organization_id", params.organizationId);
+  if (errUpd) {
+    if (errUpd.message.includes("bookings_no_overlap")) {
+      throw new Error(
+        "Conflicto al recortar la reserva al primer período: ya hay otra reserva en esa unidad"
+      );
+    }
+    throw new Error(errUpd.message);
+  }
+
+  // Segmentos 1..N-1: INSERT de filas nuevas. Si algún insert falla, hacemos
+  // rollback: borramos los nuevos y restauramos check_out_date/montos en la
+  // fila original.
+  const inserted: string[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i];
+    const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
+    const segAmount = Math.round(totalAmount * segShare * 100) / 100;
+    const segCommission =
+      Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
+    const isLast = i === segments.length - 1;
+    const segCleaningFee = isLast ? cleaningFeeOriginal : 0;
+
+    const { data: ins, error: errIns } = await admin
+      .from("bookings")
+      .insert({
+        organization_id: params.organizationId,
+        unit_id: original.unit_id,
+        guest_id: original.guest_id,
+        source: original.source,
+        external_id: null,
+        status: original.status,
+        mode: original.mode,
+        check_in_date: seg.from,
+        check_in_time: "12:00",
+        check_out_date: seg.to,
+        check_out_time: isLast ? original.check_out_time : "12:00",
+        guests_count: original.guests_count,
+        currency: original.currency,
+        total_amount: segAmount,
+        paid_amount: 0,
+        commission_pct: original.commission_pct,
+        commission_amount: segCommission,
+        cleaning_fee: segCleaningFee,
+        monthly_rent: original.monthly_rent,
+        monthly_expenses: original.monthly_expenses,
+        security_deposit: original.security_deposit,
+        monthly_inflation_adjustment_pct:
+          original.monthly_inflation_adjustment_pct,
+        rent_billing_day: original.rent_billing_day,
+        notes: `Período ${i + 1}/${segments.length} del contrato.`,
+        internal_notes: original.internal_notes,
+        lease_group_id: leaseGroupId,
+        created_by: params.userId,
+      })
+      .select("id")
+      .single();
+
+    if (errIns) {
+      // Rollback: borrar los insertados y restaurar la fila original.
+      if (inserted.length > 0) {
+        await admin.from("bookings").delete().in("id", inserted);
+      }
+      await admin
+        .from("bookings")
+        .update({
+          check_out_date: original.check_out_date,
+          check_out_time: original.check_out_time,
+          total_amount: original.total_amount,
+          commission_amount: original.commission_amount,
+          cleaning_fee: original.cleaning_fee,
+          lease_group_id: original.lease_group_id,
+        })
+        .eq("id", original.id)
+        .eq("organization_id", params.organizationId);
+      if (errIns.message.includes("bookings_no_overlap")) {
+        throw new Error(
+          `Conflicto al crear el período ${i + 1}/${segments.length} (${seg.from} → ${seg.to}): ya hay una reserva en esa unidad`
+        );
+      }
+      throw new Error(errIns.message);
+    }
+    inserted.push(ins.id);
+  }
+
+  // Si la original era mensual, regenerar payment_schedule por cada segmento.
+  if (original.mode === "mensual") {
+    const allIds = [original.id, ...inserted];
+    for (const id of allIds) {
+      const { error: schErr } = await admin.rpc(
+        "generate_payment_schedule_for_booking",
+        { p_booking_id: id }
+      );
+      if (schErr) {
+        console.error("generate_payment_schedule_for_booking failed", schErr);
+      }
+    }
+  }
 }
 
 export async function listBookings(filters?: {
@@ -158,6 +333,142 @@ export async function listBookingsInRange(
   return (data as BookingWithRelations[]) ?? [];
 }
 
+/**
+ * Devuelve un mapa unit_id → ocupación actual (si la hay).
+ * "Actual" = today está dentro de [check_in_date, check_out_date) y la reserva
+ * NO está cancelada / no_show. Útil para mostrar "Ocupado por X" en formularios
+ * que necesitan coordinar visitas con el huésped/inquilino (ej. mantenimiento).
+ */
+export type CurrentOccupancy = {
+  guest_id: string | null;
+  guest_name: string | null;
+  guest_phone: string | null;
+  mode: "temporario" | "mensual";
+  check_in_date: string;
+  check_out_date: string;
+  status: BookingStatus;
+};
+
+export async function listCurrentOccupancyByUnit(): Promise<
+  Record<string, CurrentOccupancy>
+> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await admin
+    .from("bookings")
+    .select(
+      "unit_id, mode, status, check_in_date, check_out_date, guest:guests(id, full_name, phone)"
+    )
+    .eq("organization_id", organization.id)
+    .lte("check_in_date", today)
+    .gt("check_out_date", today)
+    .in("status", ["confirmada", "check_in"])
+    .order("check_in_date", { ascending: false });
+  if (error) throw new Error(error.message);
+
+  const map: Record<string, CurrentOccupancy> = {};
+  (data ?? []).forEach((b) => {
+    if (map[b.unit_id]) return;
+    const g = b.guest as unknown as {
+      id?: string;
+      full_name?: string | null;
+      phone?: string | null;
+    } | null;
+    map[b.unit_id] = {
+      guest_id: g?.id ?? null,
+      guest_name: g?.full_name ?? null,
+      guest_phone: g?.phone ?? null,
+      mode: b.mode as "temporario" | "mensual",
+      check_in_date: b.check_in_date,
+      check_out_date: b.check_out_date,
+      status: b.status as BookingStatus,
+    };
+  });
+  return map;
+}
+
+/**
+ * Snapshot del estado operativo de una unidad antes de hacer check-in.
+ * Devuelve `ready: true` cuando la unidad está limpia + sin tickets abiertos
+ * críticos. Se usa para mostrar un warning dialog al usuario y pedir
+ * confirmación antes de mover la reserva a `check_in` cuando la unidad no
+ * está lista (ej. limpieza pendiente del huésped anterior).
+ */
+export type UnitReadiness = {
+  ready: boolean;
+  unit_status:
+    | "disponible"
+    | "reservado"
+    | "ocupado"
+    | "limpieza"
+    | "mantenimiento"
+    | "bloqueado";
+  pending_cleaning: { id: string; scheduled_for: string; status: string }[];
+  open_maintenance: {
+    id: string;
+    title: string;
+    priority: string;
+    status: string;
+  }[];
+};
+
+export async function getUnitReadinessForCheckIn(
+  unitId: string
+): Promise<UnitReadiness> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const [unitRes, cleaningRes, ticketsRes] = await Promise.all([
+    admin
+      .from("units")
+      .select("status")
+      .eq("id", unitId)
+      .eq("organization_id", organization.id)
+      .maybeSingle(),
+    admin
+      .from("cleaning_tasks")
+      .select("id, scheduled_for, status")
+      .eq("unit_id", unitId)
+      .eq("organization_id", organization.id)
+      .in("status", ["pendiente", "en_progreso"])
+      .order("scheduled_for", { ascending: true }),
+    admin
+      .from("maintenance_tickets")
+      .select("id, title, priority, status")
+      .eq("unit_id", unitId)
+      .eq("organization_id", organization.id)
+      .not("status", "in", "(resuelto,cerrado)")
+      .order("opened_at", { ascending: false }),
+  ]);
+
+  const unitStatus = (unitRes.data?.status ?? "disponible") as UnitReadiness["unit_status"];
+  const pending = (cleaningRes.data ?? []) as {
+    id: string;
+    scheduled_for: string;
+    status: string;
+  }[];
+  const tickets = (ticketsRes.data ?? []) as {
+    id: string;
+    title: string;
+    priority: string;
+    status: string;
+  }[];
+
+  // "ready" = la unidad NO está sucia y NO tiene limpieza pendiente.
+  // Los tickets de mantenimiento abiertos los reportamos pero no bloquean
+  // por sí solos (puede ser un arreglo menor). El warning final lo decide
+  // el cliente con base en estos tres campos.
+  const isDirty = unitStatus === "limpieza" || pending.length > 0;
+  return {
+    ready: !isDirty && tickets.length === 0,
+    unit_status: unitStatus,
+    pending_cleaning: pending,
+    open_maintenance: tickets,
+  };
+}
+
 export async function getBooking(id: string) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
@@ -190,9 +501,131 @@ export async function createBooking(
     validated.commission_pct = unit?.default_commission_pct ?? 20;
   }
 
+  const admin = createAdminClient();
+
+  // ─── Split universal: ninguna reserva puede exceder MAX_BOOKING_NIGHTS ───
+  // Aplica a cualquier modo (temporario, mensual, etc). Si excede el cap, se
+  // divide en chunks consecutivos de MAX noches + remanente.
+  const segments = splitBookingSegments(
+    validated.check_in_date,
+    validated.check_out_date,
+    MAX_BOOKING_NIGHTS
+  );
+
+  if (segments.length >= 2) {
+    // Generamos lease_group_id en cliente (UUID v4 via crypto)
+    const leaseGroupId = crypto.randomUUID();
+    const totalNights = nightsBetween(
+      validated.check_in_date,
+      validated.check_out_date
+    );
+    const totalAmount = Number(validated.total_amount) || 0;
+    const commissionPctValue = validated.commission_pct ?? 0;
+
+    const created: Booking[] = [];
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
+      const segAmount = Math.round(totalAmount * segShare * 100) / 100;
+      const segCommission = Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
+      // El cobrado se aplica al primer período (representa la seña/anticipo).
+      const segPaid = i === 0 ? Number(validated.paid_amount) || 0 : 0;
+      // Cleaning fee solo en el último período (al cierre del contrato).
+      const segCleaningFee = i === segments.length - 1 ? validated.cleaning_fee : 0;
+
+      const { data, error } = await admin
+        .from("bookings")
+        .insert({
+          ...validated,
+          check_in_date: seg.from,
+          check_out_date: seg.to,
+          // Las horas del primer/último segmento usan las del input;
+          // los intermedios encadenan con check_out_time del anterior como
+          // check_in_time del siguiente. Mantenemos defaults razonables.
+          check_in_time:
+            i === 0 ? validated.check_in_time : "12:00",
+          check_out_time:
+            i === segments.length - 1 ? validated.check_out_time : "12:00",
+          total_amount: segAmount,
+          paid_amount: segPaid,
+          commission_amount: segCommission,
+          cleaning_fee: segCleaningFee,
+          lease_group_id: leaseGroupId,
+          external_id: validated.external_id || null,
+          notes:
+            i === 0
+              ? validated.notes
+              : `Período ${i + 1}/${segments.length} del contrato.`,
+          internal_notes: validated.internal_notes,
+          organization_id: organization.id,
+          created_by: session.userId,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        // Rollback manual: borramos los segmentos creados antes del fallo.
+        if (created.length > 0) {
+          await admin
+            .from("bookings")
+            .delete()
+            .in("id", created.map((b) => b.id));
+        }
+        if (error.message.includes("bookings_no_overlap")) {
+          throw new Error(
+            `Conflicto en el período ${i + 1}/${segments.length} (${seg.from} → ${seg.to}): ya hay una reserva en esa unidad`
+          );
+        }
+        throw new Error(error.message);
+      }
+      created.push(data as Booking);
+    }
+
+    // Cash movement solo para el seña/anticipo del primer período.
+    if (
+      created.length > 0 &&
+      Number(validated.paid_amount) > 0 &&
+      accountId
+    ) {
+      try {
+        await syncBookingPaymentToCash({
+          bookingId: created[0].id,
+          organizationId: organization.id,
+          unitId: validated.unit_id,
+          currency: validated.currency,
+          delta: Number(validated.paid_amount),
+          accountId,
+        });
+      } catch (e) {
+        console.error("syncBookingPaymentToCash failed (lease)", e);
+        throw e;
+      }
+    }
+
+    // Generar payment schedule (1 cuota por segmento del lease group)
+    if (validated.mode === "mensual") {
+      for (const seg of created) {
+        const { error: scheduleErr } = await admin.rpc(
+          "generate_payment_schedule_for_booking",
+          { p_booking_id: seg.id }
+        );
+        if (scheduleErr) {
+          console.error("generate_payment_schedule_for_booking failed", scheduleErr);
+        }
+      }
+    }
+
+    revalidatePath("/dashboard/reservas");
+    revalidatePath("/dashboard/unidades/kanban");
+    revalidatePath("/dashboard/unidades/calendario/mensual");
+    revalidatePath("/dashboard/caja");
+    revalidatePath("/dashboard/alertas");
+    return created[0];
+  }
+
+  // ─── Single booking (caso normal) ───
   const commission_amount = validated.total_amount * (validated.commission_pct! / 100);
 
-  const admin = createAdminClient();
   const { data, error } = await admin
     .from("bookings")
     .insert({
@@ -205,8 +638,17 @@ export async function createBooking(
     .select()
     .single();
   if (error) {
-    if (error.message.includes("bookings_no_overlap")) {
+    if (
+      error.code === "23P01" ||
+      error.message.includes("bookings_no_overlap")
+    ) {
       throw new Error("Ya hay una reserva en esa unidad para esas fechas");
+    }
+    if (
+      error.code === "23514" ||
+      error.message.includes("bookings_dates_valid")
+    ) {
+      throw new Error("La fecha de check-out debe ser posterior al check-in");
     }
     throw new Error(error.message);
   }
@@ -223,10 +665,19 @@ export async function createBooking(
         accountId,
       });
     } catch (e) {
-      // Si falla el movement no abortamos la creación de la reserva, pero
-      // surfaceamos el error para que el usuario lo vea.
       console.error("syncBookingPaymentToCash failed", e);
       throw e;
+    }
+  }
+
+  // Generar payment schedule si es mensual standalone
+  if (validated.mode === "mensual") {
+    const { error: scheduleErr } = await admin.rpc(
+      "generate_payment_schedule_for_booking",
+      { p_booking_id: (data as Booking).id }
+    );
+    if (scheduleErr) {
+      console.error("generate_payment_schedule_for_booking failed", scheduleErr);
     }
   }
 
@@ -234,6 +685,7 @@ export async function createBooking(
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
   return data as Booking;
 }
 
@@ -241,7 +693,7 @@ export async function updateBooking(
   id: string,
   input: BookingInputWithAccount
 ): Promise<Booking> {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const { account_id: accountId, ...rest } = input;
   const validated = bookingSchema.parse(rest);
@@ -251,10 +703,13 @@ export async function updateBooking(
       : null;
 
   const admin = createAdminClient();
-  // Leemos paid_amount actual para calcular delta antes de update
+  // Leemos paid_amount actual + campos que afectan al schedule para detectar
+  // si hay que regenerar las cuotas.
   const { data: current } = await admin
     .from("bookings")
-    .select("paid_amount, currency, unit_id")
+    .select(
+      "paid_amount, currency, unit_id, mode, monthly_rent, monthly_expenses, rent_billing_day, check_in_date, check_out_date"
+    )
     .eq("id", id)
     .eq("organization_id", organization.id)
     .maybeSingle();
@@ -292,18 +747,170 @@ export async function updateBooking(
     }
   }
 
+  // Regenerar schedule si: cambió mode→mensual, o cambió cualquier campo
+  // que afecte cuotas (renta/expensas/billing_day/fechas).
+  const becameMonthly =
+    validated.mode === "mensual" && current?.mode !== "mensual";
+  const scheduleAffected =
+    validated.mode === "mensual" &&
+    (becameMonthly ||
+      Number(current?.monthly_rent ?? 0) !== Number(validated.monthly_rent ?? 0) ||
+      Number(current?.monthly_expenses ?? 0) !==
+        Number(validated.monthly_expenses ?? 0) ||
+      (current?.rent_billing_day ?? null) !==
+        (validated.rent_billing_day ?? null) ||
+      current?.check_in_date !== validated.check_in_date ||
+      current?.check_out_date !== validated.check_out_date);
+  if (scheduleAffected) {
+    const { error: scheduleErr } = await admin.rpc(
+      "generate_payment_schedule_for_booking",
+      { p_booking_id: id }
+    );
+    if (scheduleErr) {
+      console.error("generate_payment_schedule_for_booking failed", scheduleErr);
+    }
+  }
+  // Si cambió a temporario, anular cuotas pending/overdue (no las paid)
+  if (current?.mode === "mensual" && validated.mode === "temporario") {
+    await admin
+      .from("booking_payment_schedule")
+      .update({ status: "cancelled" })
+      .eq("booking_id", id)
+      .eq("organization_id", organization.id)
+      .in("status", ["pending", "overdue", "partial"]);
+  }
+
+  // Si la edición dejó la reserva con > MAX_BOOKING_NIGHTS, partirla en
+  // segmentos consecutivos. Idempotente: si ya cabe, no hace nada.
+  await enforceLeaseSplitOnExisting({
+    bookingId: id,
+    organizationId: organization.id,
+    userId: session.userId,
+  });
+
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${id}`);
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
+  return data as Booking;
+}
+
+/**
+ * Registra un pago adicional sobre una reserva existente. Suma `amount` al
+ * `paid_amount` actual y crea un cash_movement por ese delta. Usado desde el
+ * popover de la grilla PMS para cobrar saldos pendientes sin re-editar toda
+ * la reserva.
+ */
+export async function addBookingPayment(
+  bookingId: string,
+  amount: number,
+  accountId: string
+): Promise<Booking> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("El importe del pago debe ser mayor a 0");
+  }
+  if (!accountId) {
+    throw new Error("Tenés que elegir una cuenta de caja");
+  }
+  const admin = createAdminClient();
+  const { data: current, error: readErr } = await admin
+    .from("bookings")
+    .select("id, paid_amount, total_amount, currency, unit_id")
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (readErr) throw new Error(readErr.message);
+  if (!current) throw new Error("Reserva no encontrada");
+
+  const previousPaid = Number(current.paid_amount ?? 0);
+  const newPaid = Number((previousPaid + Number(amount)).toFixed(2));
+
+  const { data, error } = await admin
+    .from("bookings")
+    .update({ paid_amount: newPaid })
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+
+  await syncBookingPaymentToCash({
+    bookingId,
+    organizationId: organization.id,
+    unitId: current.unit_id,
+    currency: current.currency,
+    delta: Number(amount),
+    accountId,
+  });
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${bookingId}`);
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   return data as Booking;
 }
 
-export async function changeBookingStatus(id: string, newStatus: BookingStatus, reason?: string) {
+export async function changeBookingStatus(
+  id: string,
+  newStatus: BookingStatus,
+  reason?: string,
+  options?: { force_checkout?: boolean }
+) {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  // ── Bloqueo de check-out con saldo pendiente ──────────────────────────────
+  // Regla de negocio: no se puede dar check_out sin antes haber cobrado todo.
+  // Excepción: admin puede forzar (force_checkout=true) sólo si pasa una razón
+  // explícita; queda registrada en `internal_notes` para auditoría posterior.
+  if (newStatus === "check_out") {
+    const { data: bk, error: bkErr } = await admin
+      .from("bookings")
+      .select("id, total_amount, paid_amount, currency, internal_notes")
+      .eq("id", id)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (bkErr) throw new Error(bkErr.message);
+    if (!bk) throw new Error("Reserva no encontrada");
+
+    const total = Number(bk.total_amount ?? 0);
+    const paid = Number(bk.paid_amount ?? 0);
+    const pending = Number((total - paid).toFixed(2));
+
+    if (pending > 0.01) {
+      if (!options?.force_checkout) {
+        // Mensaje cierra con un código machine-readable que la UI usa para
+        // ofrecer la opción de cobrar el saldo o forzar (sólo admin).
+        throw new Error(
+          `CHECKOUT_PENDING_BALANCE: La reserva tiene un saldo pendiente de ${pending.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${bk.currency}. Cobrá el saldo antes de hacer check-out.`
+        );
+      }
+      // Forzado: requiere razón explícita y rol admin
+      if (role !== "admin") {
+        throw new Error("Solo un administrador puede forzar un check-out con saldo pendiente.");
+      }
+      const trimmedReason = reason?.trim();
+      if (!trimmedReason || trimmedReason.length < 5) {
+        throw new Error("Necesitamos una razón (mínimo 5 caracteres) para forzar el check-out con saldo.");
+      }
+      // Anotar en internal_notes (append) para que quede el rastro
+      const stamp = new Date().toISOString();
+      const note = `[${stamp}] Check-out forzado con saldo pendiente de ${pending} ${bk.currency}. Razón: ${trimmedReason}`;
+      const newNotes = bk.internal_notes ? `${bk.internal_notes}\n${note}` : note;
+      await admin
+        .from("bookings")
+        .update({ internal_notes: newNotes })
+        .eq("id", id)
+        .eq("organization_id", organization.id);
+    }
+  }
+
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "cancelada" && reason) update.cancelled_reason = reason;
   if (newStatus === "check_in") update.checked_in_at = new Date().toISOString();
@@ -518,12 +1125,6 @@ export async function previewBookingChange(input: {
   };
 }
 
-function nightsBetween(ciISO: string, coISO: string): number {
-  const ci = new Date(ciISO + "T12:00:00");
-  const co = new Date(coISO + "T12:00:00");
-  return Math.round((co.getTime() - ci.getTime()) / 86_400_000);
-}
-
 /**
  * Aplica un cambio de fechas/unit a una reserva tras pasar por el modal de
  * confirmación. A diferencia de la versión legacy `moveBooking`, ésta:
@@ -539,7 +1140,7 @@ export async function moveBookingTransaction(input: {
   total_amount?: number | null;
   reason?: string | null;
 }): Promise<Booking> {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "bookings", "update")) {
     throw new Error("No tenés permisos para mover reservas");
@@ -625,6 +1226,14 @@ export async function moveBookingTransaction(input: {
         .eq("id", lastExt.id);
     }
   }
+
+  // Si el move/extend dejó la reserva con > MAX_BOOKING_NIGHTS, partirla.
+  // Idempotente: si ya cabe, no hace nada.
+  await enforceLeaseSplitOnExisting({
+    bookingId: input.id,
+    organizationId: organization.id,
+    userId: session.userId,
+  });
 
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${input.id}`);

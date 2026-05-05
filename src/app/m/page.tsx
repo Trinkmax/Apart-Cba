@@ -27,17 +27,17 @@ export default async function MobileHome() {
   const pendingConcierge = (concierge as { status: string }[]).filter((c) => c.status === "pendiente").length;
 
   return (
-    <div className="p-4 space-y-4">
-      <div className="brand-gradient text-white rounded-2xl p-5">
-        <p className="text-sm opacity-80">{organization.name}</p>
+    <div className="p-4 space-y-4 safe-x">
+      <div className="brand-gradient text-white rounded-2xl p-5 shadow-sm">
+        <p className="text-sm opacity-80 truncate">{organization.name}</p>
         <h1 className="text-2xl font-semibold mt-1">¡Hola, {session.profile.full_name.split(" ")[0]}!</h1>
         <p className="text-xs opacity-80 mt-1 capitalize">{role}</p>
       </div>
 
       <div className="grid grid-cols-1 gap-3">
-        <Link href="/m/limpieza">
-          <Card className="p-4 hover:shadow-md transition-shadow flex items-center gap-3">
-            <div className="size-12 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
+        <Link href="/m/limpieza" className="block tap">
+          <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all flex items-center gap-3">
+            <div className="size-12 rounded-xl bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0">
               <Sparkles size={20} />
             </div>
             <div className="flex-1 min-w-0">
@@ -45,15 +45,15 @@ export default async function MobileHome() {
               <div className="text-xs text-muted-foreground">{myCleaning.length} pendientes hoy</div>
             </div>
             {myCleaning.length > 0 && (
-              <Badge className="bg-cyan-500 text-white">{myCleaning.length}</Badge>
+              <Badge className="bg-cyan-500 text-white shrink-0">{myCleaning.length}</Badge>
             )}
-            <ChevronRight size={16} className="text-muted-foreground" />
+            <ChevronRight size={16} className="text-muted-foreground shrink-0" />
           </Card>
         </Link>
 
-        <Link href="/m/mantenimiento">
-          <Card className="p-4 hover:shadow-md transition-shadow flex items-center gap-3">
-            <div className="size-12 rounded-xl bg-orange-500/15 text-orange-600 dark:text-orange-400 flex items-center justify-center">
+        <Link href="/m/mantenimiento" className="block tap">
+          <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all flex items-center gap-3">
+            <div className="size-12 rounded-xl bg-orange-500/15 text-orange-600 dark:text-orange-400 flex items-center justify-center shrink-0">
               <Wrench size={20} />
             </div>
             <div className="flex-1 min-w-0">
@@ -61,38 +61,38 @@ export default async function MobileHome() {
               <div className="text-xs text-muted-foreground">{myTickets.length} abiertos</div>
             </div>
             {myTickets.length > 0 && (
-              <Badge className="bg-orange-500 text-white">{myTickets.length}</Badge>
+              <Badge className="bg-orange-500 text-white shrink-0">{myTickets.length}</Badge>
             )}
-            <ChevronRight size={16} className="text-muted-foreground" />
+            <ChevronRight size={16} className="text-muted-foreground shrink-0" />
           </Card>
         </Link>
 
-        <Link href="/m/conserjeria">
-          <Card className="p-4 hover:shadow-md transition-shadow flex items-center gap-3">
-            <div className="size-12 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center">
+        <Link href="/m/tareas" className="block tap">
+          <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all flex items-center gap-3">
+            <div className="size-12 rounded-xl bg-purple-500/15 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0">
               <Bell size={20} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-semibold">Pedidos huéspedes</div>
-              <div className="text-xs text-muted-foreground">{pendingConcierge} sin atender</div>
+              <div className="font-semibold">Tareas</div>
+              <div className="text-xs text-muted-foreground">{pendingConcierge} pendientes</div>
             </div>
             {pendingConcierge > 0 && (
-              <Badge className="bg-purple-500 text-white">{pendingConcierge}</Badge>
+              <Badge className="bg-purple-500 text-white shrink-0">{pendingConcierge}</Badge>
             )}
-            <ChevronRight size={16} className="text-muted-foreground" />
+            <ChevronRight size={16} className="text-muted-foreground shrink-0" />
           </Card>
         </Link>
 
-        <Link href="/dashboard">
-          <Card className="p-4 hover:shadow-md transition-shadow flex items-center gap-3 border-dashed">
-            <div className="size-12 rounded-xl bg-muted flex items-center justify-center">
+        <Link href="/dashboard" className="block tap">
+          <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all flex items-center gap-3 border-dashed">
+            <div className="size-12 rounded-xl bg-muted flex items-center justify-center shrink-0">
               <ClipboardList size={20} />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="font-semibold">Ir al dashboard completo</div>
+              <div className="font-semibold">Dashboard completo</div>
               <div className="text-xs text-muted-foreground">Vista de escritorio</div>
             </div>
-            <ChevronRight size={16} className="text-muted-foreground" />
+            <ChevronRight size={16} className="text-muted-foreground shrink-0" />
           </Card>
         </Link>
       </div>

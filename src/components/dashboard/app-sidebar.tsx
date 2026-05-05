@@ -8,15 +8,15 @@ import {
   Users,
   CalendarDays,
   Hotel,
-  House,
   Wrench,
   Sparkles,
   Wallet,
   FileText,
   Cable,
   Boxes,
-  Bell,
+  ListTodo,
   Settings,
+  Palette,
   ShieldCheck,
   MessageSquare,
 } from "lucide-react";
@@ -57,7 +57,6 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, resource: "*" },
       { label: "Calendario", href: "/dashboard/unidades/kanban", icon: Hotel, resource: "units" },
-      { label: "Calendario Mensual", href: "/dashboard/unidades/calendario/mensual", icon: House, resource: "units" },
       { label: "Unidades", href: "/dashboard/unidades", icon: Building2, resource: "units" },
       { label: "Reservas", href: "/dashboard/reservas", icon: CalendarDays, resource: "bookings" },
       { label: "Huéspedes", href: "/dashboard/huespedes", icon: Users, resource: "guests" },
@@ -69,7 +68,7 @@ const NAV: NavGroup[] = [
       { label: "Mensajería", href: "/dashboard/mensajeria", icon: MessageSquare, resource: "messaging" },
       { label: "Mantenimiento", href: "/dashboard/mantenimiento", icon: Wrench, resource: "tickets" },
       { label: "Limpieza", href: "/dashboard/limpieza", icon: Sparkles, resource: "cleaning" },
-      { label: "Conserjería", href: "/dashboard/conserjeria", icon: Bell, resource: "concierge" },
+      { label: "Tareas", href: "/dashboard/tareas", icon: ListTodo, resource: "concierge" },
       { label: "Inventario", href: "/dashboard/inventario", icon: Boxes, resource: "amenities" },
     ],
   },
@@ -111,7 +110,7 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b border-sidebar-border h-16 flex items-center px-4">
+      <SidebarHeader className="border-b border-sidebar-border h-14 md:h-16 flex items-center px-3 md:px-4">
         <Link href="/dashboard" className="flex items-center gap-2 group">
           <Logo size="sm" showWordmark />
         </Link>
@@ -138,7 +137,7 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
                           tooltip={item.label}
                           isActive={active}
                           className={cn(
-                            "transition-all duration-150",
+                            "transition-all duration-150 group-data-[mobile=true]:h-11 group-data-[mobile=true]:text-[15px]",
                             active && "font-medium"
                           )}
                         >
@@ -172,6 +171,14 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
                     <Link href="/dashboard/configuracion/equipo">
                       <Users size={18} />
                       <span>Equipo y permisos</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild tooltip="Colores de reservas" isActive={isActive("/dashboard/configuracion/colores")}>
+                    <Link href="/dashboard/configuracion/colores">
+                      <Palette size={18} />
+                      <span>Colores</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

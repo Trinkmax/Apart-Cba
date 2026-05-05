@@ -44,7 +44,8 @@ export function GuestFormDialog({ children, guest, onCreated }: GuestFormDialogP
     document_number: guest?.document_number ?? "",
     email: guest?.email ?? "",
     phone: guest?.phone ?? "",
-    country: guest?.country ?? "AR",
+    country: guest?.country ?? "Argentina",
+    state_or_province: guest?.state_or_province ?? "",
     city: guest?.city ?? "",
     birth_date: guest?.birth_date ?? "",
     notes: guest?.notes ?? "",
@@ -125,14 +126,33 @@ export function GuestFormDialog({ children, guest, onCreated }: GuestFormDialogP
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <Label>País</Label>
-              <Input value={form.country ?? "AR"} onChange={(e) => set("country", e.target.value)} maxLength={3} />
+              <Label htmlFor="guest_country">País</Label>
+              <Input
+                id="guest_country"
+                value={form.country ?? ""}
+                onChange={(e) => set("country", e.target.value)}
+                placeholder="Argentina"
+              />
             </div>
-            <div className="space-y-1.5 col-span-2">
-              <Label>Ciudad</Label>
-              <Input value={form.city ?? ""} onChange={(e) => set("city", e.target.value)} />
+            <div className="space-y-1.5">
+              <Label htmlFor="guest_state">Provincia / Estado</Label>
+              <Input
+                id="guest_state"
+                value={form.state_or_province ?? ""}
+                onChange={(e) => set("state_or_province", e.target.value)}
+                placeholder="San Juan"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="guest_city">Ciudad</Label>
+              <Input
+                id="guest_city"
+                value={form.city ?? ""}
+                onChange={(e) => set("city", e.target.value)}
+                placeholder="San Juan Capital"
+              />
             </div>
           </div>
 

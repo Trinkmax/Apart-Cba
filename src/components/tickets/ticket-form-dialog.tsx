@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Loader2 } from "lucide-react";
+import { CircleCheck, Loader2, MessageCircle, Phone, UserCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -17,6 +17,7 @@ import {
 import { createTicket, updateTicket, type TicketInput } from "@/lib/actions/tickets";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import type { MaintenanceTicket, Unit, Owner } from "@/lib/types/database";
+import type { CurrentOccupancy } from "@/lib/actions/bookings";
 
 interface Props {
   children: React.ReactNode;
@@ -24,9 +25,10 @@ interface Props {
   units: Pick<Unit, "id" | "code" | "name">[];
   owners: Owner[];
   defaultUnitId?: string;
+  occupancyByUnit?: Record<string, CurrentOccupancy>;
 }
 
-export function TicketFormDialog({ children, ticket, units, owners, defaultUnitId }: Props) {
+export function TicketFormDialog({ children, ticket, units, owners, defaultUnitId, occupancyByUnit }: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -92,6 +94,9 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
                 ))}
               </SelectContent>
             </Select>
+            {form.unit_id && occupancyByUnit && (
+              <OccupancyPanel occupancy={occupancyByUnit[form.unit_id] ?? null} />
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -193,4 +198,86 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
       </DialogContent>
     </Dialog>
   );
+}
+
+function OccupancyPanel({ occupancy }: { occupancy: CurrentOccupancy | null }) {
+  if (!occupancy) {
+    return (
+      <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs dark:border-emerald-900/50 dark:bg-emerald-950/30">
+        <CircleCheck size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+        <span className="font-medium text-emerald-900 dark:text-emerald-200">Disponible</span>
+        <span className="text-emerald-700/70 dark:text-emerald-300/70">— sin huéspedes en el depto</span>
+      </div>
+    );
+  }
+
+  const isMonthly = occupancy.mode === "mensual";
+  const label = isMonthly ? "Inquilino" : "Huésped";
+  const statusLabel = occupancy.status === "check_in" ? "Ocupado" : "Reservado";
+
+  const phone = occupancy.guest_phone?.trim() ?? "";
+  const phoneDigits = phone.replace(/\D/g, "");
+  const waHref = phoneDigits ? `https://wa.me/${phoneDigits}` : null;
+  const telHref = phone ? `tel:${phone}` : null;
+
+  return (
+    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
+      <div className="flex items-center gap-2">
+        <UserCheck size={14} className="text-amber-700 dark:text-amber-400 shrink-0" />
+        <span className="font-semibold text-amber-900 dark:text-amber-200">{statusLabel}</span>
+        <span className="text-amber-700/70 dark:text-amber-300/70">
+          · {label} hasta {formatShortDate(occupancy.check_out_date)}
+        </span>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2 pl-6">
+        <div className="min-w-0">
+          <div className="font-medium text-foreground truncate">
+            {occupancy.guest_name ?? "Sin nombre"}
+          </div>
+          {phone ? (
+            <div className="text-muted-foreground tabular-nums">{phone}</div>
+          ) : (
+            <div className="italic text-muted-foreground">Sin teléfono cargado</div>
+          )}
+        </div>
+        {phone && (
+          <div className="flex items-center gap-1 shrink-0">
+            {telHref && (
+              <Button
+                asChild
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 px-2 text-[11px]"
+                title="Llamar"
+              >
+                <a href={telHref}>
+                  <Phone size={12} /> Llamar
+                </a>
+              </Button>
+            )}
+            {waHref && (
+              <Button
+                asChild
+                size="sm"
+                className="h-7 gap-1 bg-[#25D366] px-2 text-[11px] text-white hover:bg-[#1fb955]"
+                title="Coordinar por WhatsApp"
+              >
+                <a href={waHref} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle size={12} /> WhatsApp
+                </a>
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+      <p className="mt-2 pl-6 text-[11px] leading-snug text-amber-800/70 dark:text-amber-300/70">
+        Coordiná día y horario del arreglo directamente con {isMonthly ? "el inquilino" : "el huésped"}.
+      </p>
+    </div>
+  );
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  return d.toLocaleDateString("es-AR", { day: "2-digit", month: "short" });
 }

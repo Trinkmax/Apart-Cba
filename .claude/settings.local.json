@@ -39,7 +39,38 @@
       "Bash(kill -9 102661)",
       "Bash(disown)",
       "Bash(curl -s -o /tmp/r1.txt -w \"HTTP %{http_code}\\\\n\" \"http://localhost:3001/api/webhooks/meta/whatsapp?hub.mode=subscribe&hub.verify_token=token_falso&hub.challenge=test_challenge_abc\")",
-      "Bash(curl -s -o /tmp/rfinal.txt -w \"HTTP %{http_code}\\\\n\" \"http://localhost:3001/api/webhooks/meta/whatsapp?hub.mode=subscribe&hub.verify_token=e0ee336f9922472c8635682671c9f35b&hub.challenge=test_challenge_apartcba_999\")"
+      "Bash(curl -s -o /tmp/rfinal.txt -w \"HTTP %{http_code}\\\\n\" \"http://localhost:3001/api/webhooks/meta/whatsapp?hub.mode=subscribe&hub.verify_token=e0ee336f9922472c8635682671c9f35b&hub.challenge=test_challenge_apartcba_999\")",
+      "Bash(git rm *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(grep -E \"^\\(tsc|eslint|next\\)$\")",
+      "mcp__supabase-msb__list_migrations",
+      "mcp__supabase-msb__apply_migration",
+      "Bash(curl -sf -I http://localhost:3001/login -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/m -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/m -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/kanban -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/calendario/mensual -m 8)",
+      "Bash(curl -sI http://localhost:3001/dashboard/unidades/kanban -m 10)",
+      "Bash(curl -sf -I \"http://localhost:3001/login\" -m 5)",
+      "Bash(curl -sf -I http://localhost:3001/login -m 8)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/kanban -m 15)",
+      "Bash(curl -sf -I http://localhost:3001/dashboard/unidades/calendario/mensual -m 15)",
+      "Bash(xargs cat *)",
+      "Bash(cat)",
+      "Bash(npx tsx *)",
+      "Bash(xargs basename *)",
+      "Bash(brew --prefix imagemagick)",
+      "Bash(tee /tmp/pms-dev.log)",
+      "Bash(claude mcp *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ],
+  "enableAllProjectMcpServers": true
 }

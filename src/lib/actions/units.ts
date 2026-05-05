@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { can } from "@/lib/permissions";
 import type {
   Unit,
   UnitStatus,
@@ -181,10 +182,38 @@ export async function updateUnit(id: string, input: UnitInput): Promise<Unit> {
   return data as Unit;
 }
 
+/**
+ * "Borrar" unidad = soft delete. La marcamos como `active=false` para que
+ * desaparezca del listado pero se conserve la historia de reservas, tickets y
+ * liquidaciones que la referencian (FK).
+ *
+ * Refusa si hay reservas activas o futuras no canceladas. El usuario debe
+ * cancelarlas o reasignarlas antes — evitamos huérfanos en el calendario.
+ */
 export async function archiveUnit(id: string) {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "delete")) {
+    throw new Error("Solo un administrador puede eliminar unidades");
+  }
   const admin = createAdminClient();
+
+  // Bloquear si hay reservas vigentes (check_out_date >= hoy, no canceladas).
+  const today = new Date().toISOString().slice(0, 10);
+  const { count, error: errCount } = await admin
+    .from("bookings")
+    .select("id", { count: "exact", head: true })
+    .eq("unit_id", id)
+    .eq("organization_id", organization.id)
+    .gte("check_out_date", today)
+    .not("status", "in", "(cancelada,no_show)");
+  if (errCount) throw new Error(errCount.message);
+  if (count && count > 0) {
+    throw new Error(
+      `No se puede eliminar: la unidad tiene ${count} reserva${count === 1 ? "" : "s"} activa${count === 1 ? "" : "s"} o futura${count === 1 ? "" : "s"}. Cancelá o reasignalas primero.`
+    );
+  }
+
   const { error } = await admin
     .from("units")
     .update({ active: false })
@@ -192,6 +221,7 @@ export async function archiveUnit(id: string) {
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/unidades");
+  revalidatePath("/dashboard/unidades/kanban");
 }
 
 /**

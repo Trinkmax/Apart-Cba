@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Sparkles } from "lucide-react";
+import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CLEANING_STATUS_META } from "@/lib/constants";
 import { formatDateTime } from "@/lib/format";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils";
 import type { CleaningStatus, CleaningTask, Unit } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { CleaningDetailDialog } from "./cleaning-detail-dialog";
+import { CleaningFormDialog } from "./cleaning-form-dialog";
 
 type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
 
@@ -18,9 +20,15 @@ const COLUMNS: KanbanColumn<CleaningStatus>[] = [
   { key: "en_progreso", label: CLEANING_STATUS_META.en_progreso.label, color: CLEANING_STATUS_META.en_progreso.color, icon: Sparkles, emptyText: "Soltá tareas aquí" },
   { key: "completada", label: CLEANING_STATUS_META.completada.label, color: CLEANING_STATUS_META.completada.color, icon: CheckCircle2, emptyText: "Soltá tareas aquí" },
   { key: "verificada", label: CLEANING_STATUS_META.verificada.label, color: CLEANING_STATUS_META.verificada.color, icon: BadgeCheck, emptyText: "Soltá tareas aquí" },
+  { key: "cancelada", label: CLEANING_STATUS_META.cancelada.label, color: CLEANING_STATUS_META.cancelada.color, icon: X, emptyText: "Canceladas" },
 ];
 
-export function CleaningBoard({ initialTasks }: { initialTasks: CT[] }) {
+interface Props {
+  initialTasks: CT[];
+  units: Pick<Unit, "id" | "code" | "name">[];
+}
+
+export function CleaningBoard({ initialTasks, units }: Props) {
   const [tasks, setTasks] = useState<CT[]>(initialTasks);
   const [openId, setOpenId] = useState<string | null>(null);
   const open = openId ? tasks.find((t) => t.id === openId) ?? null : null;
@@ -39,6 +47,7 @@ export function CleaningBoard({ initialTasks }: { initialTasks: CT[] }) {
         onCardClick={(t) => setOpenId(t.id)}
         renderCard={(t, { dragging }) => <CleaningCard task={t} dragging={dragging} />}
         sortFn={(a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime()}
+        xlCols={5}
       />
 
       <CleaningDetailDialog
@@ -55,6 +64,16 @@ export function CleaningBoard({ initialTasks }: { initialTasks: CT[] }) {
           setOpenId(null);
         }}
       />
+
+      {/* FAB siempre visible — vía garantizada para crear tickets de limpieza */}
+      <CleaningFormDialog units={units}>
+        <Button
+          size="lg"
+          className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"
+        >
+          <Plus size={18} /> Nuevo ticket
+        </Button>
+      </CleaningFormDialog>
     </>
   );
 }

@@ -112,13 +112,13 @@ export function BookingsListClient({ bookings: initialBookings, organizationId }
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="flex gap-3 flex-wrap items-center">
-        <div className="relative flex-1 max-w-md">
+      <div className="flex gap-2 sm:gap-3 flex-wrap items-center">
+        <div className="relative flex-1 min-w-[200px] sm:max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input placeholder="Buscar por unidad, huésped, ID externo…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9 h-10" />
+          <Input placeholder="Buscar unidad, huésped…" value={query} onChange={(e) => setQuery(e.target.value)} className="pl-9 h-10" />
         </div>
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as BookingStatus | "all")}>
-          <SelectTrigger className="w-44 h-10"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-full xs:w-44 sm:w-44 h-10 flex-1 sm:flex-none min-w-[120px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Todos los estados</SelectItem>
             {Object.entries(BOOKING_STATUS_META).map(([k, m]) => (
@@ -136,7 +136,7 @@ export function BookingsListClient({ bookings: initialBookings, organizationId }
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "ml-auto flex items-center gap-1.5 text-[11px] font-medium px-2.5 h-8 rounded-md",
+                "hidden sm:flex ml-auto items-center gap-1.5 text-[11px] font-medium px-2.5 h-8 rounded-md",
                 realtimeConnected
                   ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                   : "bg-muted text-muted-foreground"
@@ -178,38 +178,79 @@ export function BookingsListClient({ bookings: initialBookings, organizationId }
                 <Link
                   key={b.id}
                   href={`/dashboard/reservas/${b.id}`}
-                  className="grid grid-cols-12 items-center gap-3 p-3 hover:bg-accent/30 transition-colors group"
+                  className="block hover:bg-accent/30 transition-colors group"
                 >
-                  <div className="col-span-3 min-w-0">
-                    <div className="font-mono text-xs text-muted-foreground">{b.unit?.code}</div>
-                    <div className="font-medium text-sm truncate group-hover:text-primary transition-colors">{b.unit?.name}</div>
-                  </div>
-                  <div className="col-span-3 min-w-0">
-                    <div className="flex items-center gap-1.5 text-sm font-medium truncate">
-                      <User size={12} className="text-muted-foreground" />
-                      {b.guest?.full_name ?? "Sin huésped"}
-                    </div>
-                    <div className="text-xs text-muted-foreground">{b.guests_count} {b.guests_count === 1 ? "persona" : "personas"}</div>
-                  </div>
-                  <div className="col-span-3">
-                    <div className="text-sm font-medium">
-                      {formatDate(b.check_in_date)} → {formatDate(b.check_out_date)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">{nights} {nights === 1 ? "noche" : "noches"}</div>
-                  </div>
-                  <div className="col-span-2 text-right">
-                    <div className="text-sm font-semibold">{formatMoney(b.total_amount, b.currency)}</div>
-                    {b.paid_amount < b.total_amount && (
-                      <div className="text-[10px] text-amber-600 dark:text-amber-400">
-                        Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
+                  {/* MOBILE: tarjeta stackeada — info densa pero legible */}
+                  <div className="md:hidden p-3 flex items-start gap-3">
+                    <div
+                      className="w-1 self-stretch rounded-full shrink-0"
+                      style={{ backgroundColor: sm.color }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="font-mono text-[10px] text-muted-foreground">{b.unit?.code}</div>
+                          <div className="font-medium text-sm truncate group-hover:text-primary transition-colors">
+                            {b.guest?.full_name ?? "Sin huésped"}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-sm font-semibold tabular-nums">{formatMoney(b.total_amount, b.currency)}</div>
+                          <Badge className="font-normal text-[9px] gap-1 mt-0.5" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
+                            {sm.label}
+                          </Badge>
+                        </div>
                       </div>
-                    )}
+                      <div className="flex items-center justify-between gap-2 mt-1.5 text-[11px] text-muted-foreground">
+                        <div className="flex items-center gap-1 truncate">
+                          <CalendarDays size={11} className="shrink-0" />
+                          <span className="truncate">
+                            {formatDate(b.check_in_date)} → {formatDate(b.check_out_date)}
+                          </span>
+                        </div>
+                        <span className="shrink-0">{nights}n · {b.guests_count}p</span>
+                      </div>
+                      {b.paid_amount < b.total_amount && (
+                        <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                          Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="col-span-1 flex flex-col items-end gap-1">
-                    <Badge className="font-normal text-[10px] gap-1" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
-                      {sm.label}
-                    </Badge>
-                    <span className="text-[10px] text-muted-foreground">{src.label}</span>
+
+                  {/* DESKTOP: grilla de 12 columnas */}
+                  <div className="hidden md:grid grid-cols-12 items-center gap-3 p-3">
+                    <div className="col-span-3 min-w-0">
+                      <div className="font-mono text-xs text-muted-foreground">{b.unit?.code}</div>
+                      <div className="font-medium text-sm truncate group-hover:text-primary transition-colors">{b.unit?.name}</div>
+                    </div>
+                    <div className="col-span-3 min-w-0">
+                      <div className="flex items-center gap-1.5 text-sm font-medium truncate">
+                        <User size={12} className="text-muted-foreground" />
+                        {b.guest?.full_name ?? "Sin huésped"}
+                      </div>
+                      <div className="text-xs text-muted-foreground">{b.guests_count} {b.guests_count === 1 ? "persona" : "personas"}</div>
+                    </div>
+                    <div className="col-span-3">
+                      <div className="text-sm font-medium">
+                        {formatDate(b.check_in_date)} → {formatDate(b.check_out_date)}
+                      </div>
+                      <div className="text-xs text-muted-foreground">{nights} {nights === 1 ? "noche" : "noches"}</div>
+                    </div>
+                    <div className="col-span-2 text-right">
+                      <div className="text-sm font-semibold">{formatMoney(b.total_amount, b.currency)}</div>
+                      {b.paid_amount < b.total_amount && (
+                        <div className="text-[10px] text-amber-600 dark:text-amber-400">
+                          Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="col-span-1 flex flex-col items-end gap-1">
+                      <Badge className="font-normal text-[10px] gap-1" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
+                        {sm.label}
+                      </Badge>
+                      <span className="text-[10px] text-muted-foreground">{src.label}</span>
+                    </div>
                   </div>
                 </Link>
               );

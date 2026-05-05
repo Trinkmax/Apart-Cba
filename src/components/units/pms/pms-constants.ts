@@ -11,7 +11,16 @@ export const ZOOM_CONFIG: Record<
   amplio: { cellWidth: 88, rowHeight: 76, dayLabel: "full", label: "Amplio" },
 };
 
-export const SIDEBAR_WIDTH = 232; // ancho del panel fijo izquierdo
+// Mobile preset — celdas ultra compactas y sidebar de unidad reducido para
+// poder ver ~6 días de un vistazo en pantallas de 360px y 7-8 en 414px.
+export const MOBILE_ZOOM: { cellWidth: number; rowHeight: number; dayLabel: "narrow" } = {
+  cellWidth: 38,
+  rowHeight: 48,
+  dayLabel: "narrow",
+};
+
+export const SIDEBAR_WIDTH = 232; // ancho del panel fijo izquierdo (desktop)
+export const SIDEBAR_WIDTH_MOBILE = 96; // panel izquierdo angosto en mobile
 export const HEADER_HEIGHT = 56; // ancho del header de días + mes
 
 // ─── Paleta de reservas ─────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ const guestSchema = z.object({
   email: z.string().email("Email inválido").optional().or(z.literal("")).nullable(),
   phone: z.string().optional().nullable(),
   country: z.string().default("AR"),
+  state_or_province: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
   birth_date: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),

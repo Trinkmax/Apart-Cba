@@ -21,8 +21,8 @@ export function RevenueChart({ data }: { data: Array<{ date: string; amount: num
   }));
 
   return (
-    <ResponsiveContainer width="100%" height={200}>
-      <AreaChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+    <ResponsiveContainer width="100%" height={180} minWidth={0}>
+      <AreaChart data={chartData} margin={{ top: 5, right: 8, left: 0, bottom: 5 }}>
         <defs>
           <linearGradient id="brandGrad" x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor="oklch(0.45 0.10 195)" stopOpacity={0.3} />
@@ -36,14 +36,14 @@ export function RevenueChart({ data }: { data: Array<{ date: string; amount: num
           axisLine={false}
           tickLine={false}
           interval="preserveStartEnd"
-          minTickGap={20}
+          minTickGap={32}
         />
         <YAxis
           tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
           axisLine={false}
           tickLine={false}
           tickFormatter={(v) => formatMoneyShort(v, "ARS")}
-          width={60}
+          width={50}
         />
         <Tooltip
           contentStyle={{

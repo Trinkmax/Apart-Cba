@@ -1,8 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, Clock, Sparkles, X } from "lucide-react";
+import {
+  Bell,
+  CalendarClock,
+  CheckCircle2,
+  Clock,
+  MinusCircle,
+  Plus,
+  Sparkles,
+  User2,
+  X,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { changeConciergeStatus } from "@/lib/actions/concierge";
 import { formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -15,11 +26,23 @@ import type {
 } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { ConciergeDetailDialog } from "./concierge-detail-dialog";
+import { ConciergeFormDialog } from "./concierge-form-dialog";
+
+type Member = { user_id: string; full_name: string | null };
 
 type CR = ConciergeRequest & {
   unit: Pick<Unit, "id" | "code" | "name"> | null;
   guest: Pick<Guest, "id" | "full_name"> | null;
+  assignee?: Member | null;
+  has_alert?: boolean;
 };
+
+function formatScheduled(iso: string): string {
+  const d = new Date(iso);
+  const datePart = d.toLocaleDateString("es-AR", { day: "2-digit", month: "short" });
+  const timePart = d.toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+  return `${datePart} · ${timePart}`;
+}
 
 const STATUS_META: Record<ConciergeStatus, { label: string; color: string }> = {
   pendiente: { label: "Pendiente", color: "#94a3b8" },
@@ -37,18 +60,20 @@ const PRIORITY_META: Record<ConciergePriority, { color: string; weight: number }
 };
 
 const COLUMNS: KanbanColumn<ConciergeStatus>[] = [
-  { key: "pendiente", label: STATUS_META.pendiente.label, color: STATUS_META.pendiente.color, icon: Clock, emptyText: "Sin pedidos pendientes" },
-  { key: "en_progreso", label: STATUS_META.en_progreso.label, color: STATUS_META.en_progreso.color, icon: Sparkles, emptyText: "Soltá pedidos aquí" },
-  { key: "completada", label: STATUS_META.completada.label, color: STATUS_META.completada.color, icon: CheckCircle2, emptyText: "Soltá pedidos aquí" },
+  { key: "pendiente", label: STATUS_META.pendiente.label, color: STATUS_META.pendiente.color, icon: Clock, emptyText: "Sin tareas pendientes" },
+  { key: "en_progreso", label: STATUS_META.en_progreso.label, color: STATUS_META.en_progreso.color, icon: Sparkles, emptyText: "Soltá tareas aquí" },
+  { key: "completada", label: STATUS_META.completada.label, color: STATUS_META.completada.color, icon: CheckCircle2, emptyText: "Soltá tareas aquí" },
   { key: "rechazada", label: STATUS_META.rechazada.label, color: STATUS_META.rechazada.color, icon: X, emptyText: "Rechazadas" },
+  { key: "cancelada", label: STATUS_META.cancelada.label, color: STATUS_META.cancelada.color, icon: MinusCircle, emptyText: "Canceladas" },
 ];
 
 interface Props {
   initialRequests: CR[];
   units: Pick<Unit, "id" | "code" | "name">[];
+  members?: Member[];
 }
 
-export function ConciergeBoard({ initialRequests, units }: Props) {
+export function ConciergeBoard({ initialRequests, units, members = [] }: Props) {
   const [requests, setRequests] = useState<CR[]>(initialRequests);
   const [openId, setOpenId] = useState<string | null>(null);
   const open = openId ? requests.find((r) => r.id === openId) ?? null : null;
@@ -72,17 +97,32 @@ export function ConciergeBoard({ initialRequests, units }: Props) {
           if (wA !== wB) return wB - wA;
           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
         }}
+        xlCols={5}
       />
 
       <ConciergeDetailDialog
         request={open}
         units={units}
+        members={members}
         open={!!open}
         onOpenChange={(o) => !o && setOpenId(null)}
         onUpdated={(updated) =>
           setRequests((cur) =>
             cur.map((r) =>
-              r.id === updated.id ? { ...r, ...updated, unit: r.unit, guest: r.guest } : r
+              r.id === updated.id
+                ? {
+                    ...r,
+                    ...updated,
+                    unit: r.unit,
+                    guest: r.guest,
+                    assignee:
+                      updated.assigned_to && updated.assigned_to !== r.assigned_to
+                        ? members.find((m) => m.user_id === updated.assigned_to) ?? null
+                        : updated.assigned_to
+                          ? r.assignee ?? null
+                          : null,
+                  }
+                : r
             )
           )
         }
@@ -91,6 +131,16 @@ export function ConciergeBoard({ initialRequests, units }: Props) {
           setOpenId(null);
         }}
       />
+
+      {/* FAB siempre visible — vía garantizada para crear tareas */}
+      <ConciergeFormDialog units={units} members={members}>
+        <Button
+          size="lg"
+          className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"
+        >
+          <Plus size={18} /> Nueva tarea
+        </Button>
+      </ConciergeFormDialog>
     </>
   );
 }
@@ -111,13 +161,42 @@ function ConciergeCard({ request, dragging }: { request: CR; dragging: boolean }
         style={{ backgroundColor: pm.color }}
         aria-hidden
       />
+      {request.has_alert && (
+        <span
+          className="absolute right-2 top-2 flex items-center justify-center size-5 rounded-full bg-primary/15 text-primary shadow-sm"
+          title="Esta tarea tiene una alerta activa"
+        >
+          <Bell size={11} />
+        </span>
+      )}
       <div className="p-3 pl-4">
-        <div className="font-medium text-sm leading-snug line-clamp-2">{request.description}</div>
+        <div className={cn(
+          "font-medium text-sm leading-snug line-clamp-2",
+          request.has_alert && "pr-7"
+        )}>{request.description}</div>
         {(request.unit || request.guest) && (
           <div className="flex items-center gap-2 mt-2 text-[11px] text-muted-foreground">
             {request.unit && <span className="font-mono font-medium">{request.unit.code}</span>}
             {request.unit && request.guest && <span>·</span>}
             {request.guest && <span className="truncate">{request.guest.full_name}</span>}
+          </div>
+        )}
+        {(request.assignee || request.scheduled_for) && (
+          <div className="flex items-center gap-3 mt-2 text-[11px] flex-wrap">
+            {request.assignee && (
+              <span className="flex items-center gap-1 text-foreground/80">
+                <User2 size={11} className="text-muted-foreground" />
+                <span className="font-medium truncate max-w-[120px]">
+                  {request.assignee.full_name ?? "—"}
+                </span>
+              </span>
+            )}
+            {request.scheduled_for && (
+              <span className="flex items-center gap-1 text-foreground/80">
+                <CalendarClock size={11} className="text-muted-foreground" />
+                <span className="tabular-nums">{formatScheduled(request.scheduled_for)}</span>
+              </span>
+            )}
           </div>
         )}
         <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50 text-[10px] text-muted-foreground">

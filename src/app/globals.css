@@ -153,11 +153,57 @@
     @apply bg-background text-foreground antialiased;
     overflow-x: hidden;
     font-feature-settings: "ss01", "cv11", "cv02";
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html {
+    /* Evita "salto" del viewport cuando aparece teclado virtual */
+    height: -webkit-fill-available;
+  }
+  body {
+    min-height: 100svh;
+    min-width: 320px;
   }
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
   }
+
+  /* Mobile inputs: 16px+ evita zoom de iOS al hacer focus */
+  @media (max-width: 767px) {
+    input, textarea, select {
+      font-size: 16px !important;
+    }
+  }
+
+  /* Touch-friendly targets */
+  button, [role="button"], a, label, summary {
+    -webkit-touch-callout: none;
+  }
 }
+
+/* ─────────────── Safe area insets (iOS notch / home bar) ─────────────── */
+@supports (padding: max(0px)) {
+  .safe-top    { padding-top:    max(env(safe-area-inset-top, 0px), 0.25rem); }
+  .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.25rem); }
+  .safe-left   { padding-left:   max(env(safe-area-inset-left, 0px), 0px); }
+  .safe-right  { padding-right:  max(env(safe-area-inset-right, 0px), 0px); }
+  .safe-x      { padding-left:   max(env(safe-area-inset-left, 0px), 0px);
+                 padding-right:  max(env(safe-area-inset-right, 0px), 0px); }
+  .safe-mb     { margin-bottom:  env(safe-area-inset-bottom, 0px); }
+}
+
+/* ─────────────── Page container helper ─────────────── */
+/* Padding progresivo: ahogado en mobile, generoso en desktop. */
+.page-x { padding-left: 0.875rem; padding-right: 0.875rem; }
+.page-y { padding-top: 0.875rem; padding-bottom: 0.875rem; }
+@media (min-width: 640px)  { .page-x { padding-left: 1rem; padding-right: 1rem; } .page-y { padding-top: 1rem; padding-bottom: 1rem; } }
+@media (min-width: 768px)  { .page-x { padding-left: 1.5rem; padding-right: 1.5rem; } .page-y { padding-top: 1.5rem; padding-bottom: 1.5rem; } }
+@media (min-width: 1024px) { .page-x { padding-left: 2rem; padding-right: 2rem; } .page-y { padding-top: 2rem; padding-bottom: 2rem; } }
+
+/* ─────────────── Touch-friendly tap target ─────────────── */
+.tap { min-height: 44px; min-width: 44px; }
+@media (min-width: 768px) { .tap { min-height: 0; min-width: 0; } }
 
 /* ─────────────────── Animaciones premium ─────────────────── */
 
@@ -258,6 +304,23 @@
   background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
   background-clip: padding-box;
 }
+/* En mobile escondemos los scrollbars: gana espacio + se siente nativo */
+@media (max-width: 767px) {
+  ::-webkit-scrollbar { width: 0; height: 0; }
+  * { scrollbar-width: none; }
+}
+
+/* ─────────────── Scroll snap horizontal (chips / tabs / pills) ─────────────── */
+.scroll-snap-x {
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+.scroll-snap-x > * { scroll-snap-align: start; }
+
+/* Hide scrollbar utility (para nav chips de filtros, tabs, etc.) */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
@@ -266,4 +329,40 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ─────────────── PMS cell click-overlay ─────────────────────────────────────
+   El click-overlay del calendario PMS reemplaza ~30 botones absolutos por
+   fila. El "+" que aparecía sobre la celda hovereada lo dibujamos con un
+   ::after que se mueve siguiendo el puntero via la CSS variable --pms-cell-x
+   (escrita por React en pointermove). Sin esta solución, mostrar el "+"
+   requeriría re-render por cada move (caro). */
+/* Esta regla vive en una capa "unlayered" — fuera de @layer utilities donde
+   Tailwind v4 mete `.absolute`. Las unlayered ganan a las layered en cascada,
+   así que NO declaramos `position` acá: dejamos que `absolute inset-0` del
+   className mande. El ::after del "+" se posiciona absoluto respecto al
+   contenedor (la fila), que ya es `relative`. */
+.pms-cell-overlay {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.pms-cell-overlay:hover::after,
+.pms-cell-overlay:focus-visible::after {
+  content: "+";
+  position: absolute;
+  top: 50%;
+  left: var(--pms-cell-x, -100px);
+  transform: translate(-50%, -50%);
+  color: var(--primary);
+  opacity: 0.55;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+  /* Sin transición sobre `left`: la posición se actualiza ~60 veces/seg
+     siguiendo al puntero, una transición se vería como "lag". */
+  transition: opacity 100ms ease;
+}
+.pms-cell-overlay:active {
+  background-color: rgba(var(--primary-rgb, 59, 130, 246), 0.06);
 }

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   AlertTriangle,
+  Archive,
   Building2,
   CheckCircle2,
   Clock,
@@ -37,14 +38,26 @@ import {
 import {
   changeTicketStatus,
   deleteTicket,
+  listTicketEvents,
   updateTicket,
   type TicketInput,
 } from "@/lib/actions/tickets";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { EventTimeline } from "@/components/shared/event-timeline";
 import { TicketPhotosSection } from "./ticket-photos-section";
-import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/database";
+import type {
+  MaintenanceTicket,
+  Owner,
+  TicketEvent,
+  TicketStatus,
+  Unit,
+} from "@/lib/types/database";
+
+type TicketEventWithActor = TicketEvent & {
+  actor: { full_name: string | null } | null;
+};
 
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
 
@@ -63,7 +76,7 @@ const STATUS_ICON: Record<TicketStatus, React.ComponentType<{ size?: number; cla
   en_progreso: Wrench,
   esperando_repuesto: Package,
   resuelto: CheckCircle2,
-  cerrado: CheckCircle2,
+  cerrado: Archive,
 };
 
 export function TicketDetailDialog({
@@ -99,12 +112,33 @@ export function TicketDetailDialog({
   const [isPending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState<TicketInput | null>(() => buildForm(ticket));
+  // null = aún no se hizo fetch (o se cerró/cambió de ticket); [] = fetched sin eventos.
+  const [events, setEvents] = useState<TicketEventWithActor[] | null>(null);
   if (ticket && ticket.id !== prevTicketId) {
     setPrevTicketId(ticket.id);
     setForm(buildForm(ticket));
     setIsEditing(false);
     setConfirmDelete(false);
+    setEvents(null);
   }
+
+  // Cargamos el historial cuando el dialog se abre o tras una mutación.
+  // El loading state lo derivamos de `events === null` en vez de un setState síncrono.
+  const ticketId = ticket?.id;
+  useEffect(() => {
+    if (!open || !ticketId) return;
+    let cancelled = false;
+    listTicketEvents(ticketId)
+      .then((rows) => {
+        if (!cancelled) setEvents(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setEvents([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, ticketId, isPending]);
 
   if (!ticket || !form) return null;
 
@@ -463,11 +497,26 @@ export function TicketDetailDialog({
             </Field>
           )}
 
+          <EventTimeline
+            events={events}
+            getDotColor={(ev) =>
+              ev.event_type === "status_changed" && ev.to_status
+                ? TICKET_STATUS_META[ev.to_status].color
+                : ev.event_type === "created"
+                  ? "#10b981"
+                  : "#94a3b8"
+            }
+            renderDescription={(ev) => <TicketEventDescription event={ev} />}
+          />
+
           {/* Meta */}
           <div className="text-[11px] text-muted-foreground flex items-center gap-3 pt-1">
             <span>Abierto: {formatDate(ticket.opened_at)}</span>
             {ticket.resolved_at && (
               <span>· Resuelto: {formatDate(ticket.resolved_at)}</span>
+            )}
+            {ticket.closed_at && (
+              <span>· Cerrado: {formatDate(ticket.closed_at)}</span>
             )}
           </div>
         </div>
@@ -543,4 +592,33 @@ function Field({
       {children}
     </div>
   );
+}
+
+function TicketEventDescription({ event }: { event: TicketEventWithActor }) {
+  switch (event.event_type) {
+    case "created":
+      return <span className="text-muted-foreground">creó el ticket</span>;
+    case "status_changed": {
+      const fromLabel = event.from_status ? TICKET_STATUS_META[event.from_status].label : "—";
+      const toLabel = event.to_status ? TICKET_STATUS_META[event.to_status].label : "—";
+      const toColor = event.to_status ? TICKET_STATUS_META[event.to_status].color : undefined;
+      return (
+        <span className="text-muted-foreground">
+          movió de <span className="font-medium text-foreground">{fromLabel}</span> a{" "}
+          <span className="font-medium" style={{ color: toColor }}>
+            {toLabel}
+          </span>
+        </span>
+      );
+    }
+    case "cost_updated":
+      return <span className="text-muted-foreground">actualizó el costo</span>;
+    case "assigned":
+      return <span className="text-muted-foreground">cambió el asignado</span>;
+    case "note_added":
+      return <span className="text-muted-foreground">agregó una nota</span>;
+    case "updated":
+    default:
+      return <span className="text-muted-foreground">editó el ticket</span>;
+  }
 }

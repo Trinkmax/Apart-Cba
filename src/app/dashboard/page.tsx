@@ -4,42 +4,35 @@ import {
   LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet,
 } from "lucide-react";
 import { getDashboardKPIs } from "@/lib/actions/kpis";
-import { getCurrentOrg } from "@/lib/actions/org";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import { DashboardGreeting } from "@/components/dashboard/dashboard-greeting";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default async function DashboardHome() {
-  const [{ organization, role }, kpis] = await Promise.all([getCurrentOrg(), getDashboardKPIs()]);
+  const kpis = await getDashboardKPIs();
 
   return (
-    <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
+    <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
       {/* Hero */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            Hola, <span className="brand-text-gradient">{organization.name}</span>
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {formatDate(new Date(), "EEEE d 'de' MMMM, yyyy")} · Rol: {role}
-          </p>
-        </div>
-        <Card className="px-5 py-3 flex items-center gap-3">
-          <div className="size-10 rounded-lg bg-primary/15 text-primary flex items-center justify-center">
+      <div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
+        <DashboardGreeting />
+        <Card className="px-3 sm:px-5 py-2.5 sm:py-3 flex items-center gap-2.5 sm:gap-3 shrink-0">
+          <div className="size-9 sm:size-10 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
             <TrendingUp size={18} />
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Ocupación 30d</div>
-            <div className="text-2xl font-bold tabular-nums">{kpis.occupancy_pct_30d.toFixed(1)}%</div>
+            <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-muted-foreground">Ocupación 30d</div>
+            <div className="text-xl sm:text-2xl font-bold tabular-nums">{kpis.occupancy_pct_30d.toFixed(1)}%</div>
           </div>
         </Card>
       </div>
 
-      {/* Status grid de units */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {/* Status grid de units — 2 columnas en mobile, denso pero legible */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
         {[
           { status: "disponible", count: kpis.totals.available_units },
           { status: "reservado", count: 0 },
@@ -50,16 +43,16 @@ export default async function DashboardHome() {
           const meta = UNIT_STATUS_META[status as keyof typeof UNIT_STATUS_META];
           return (
             <Link key={status} href="/dashboard/unidades/kanban">
-              <Card className="p-4 hover:shadow-md hover:border-primary/30 transition-all cursor-pointer group">
+              <Card className="p-3 sm:p-4 hover:shadow-md hover:border-primary/30 transition-all cursor-pointer group h-full">
                 <div className="flex items-center gap-2">
                   <span className="status-dot" style={{ backgroundColor: meta.color }} />
-                  <span className="text-xs uppercase tracking-wider text-muted-foreground">{meta.label}</span>
+                  <span className="text-[10px] sm:text-xs uppercase tracking-wider text-muted-foreground truncate">{meta.label}</span>
                 </div>
-                <div className="text-3xl font-bold mt-2 tabular-nums" style={{ color: meta.color }}>
+                <div className="text-2xl sm:text-3xl font-bold mt-1.5 sm:mt-2 tabular-nums" style={{ color: meta.color }}>
                   {count}
                 </div>
-                <div className="text-[10px] text-muted-foreground mt-1">
-                  de {kpis.totals.units} unidades
+                <div className="text-[9px] sm:text-[10px] text-muted-foreground mt-0.5 sm:mt-1">
+                  de {kpis.totals.units} {kpis.totals.units === 1 ? "unidad" : "unidades"}
                 </div>
               </Card>
             </Link>
@@ -67,17 +60,17 @@ export default async function DashboardHome() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
         {/* Revenue chart */}
-        <Card className="lg:col-span-2 p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Revenue 30 días</h2>
-              <div className="flex gap-4 mt-2">
+        <Card className="lg:col-span-2 p-4 sm:p-5">
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
+            <div className="min-w-0 w-full">
+              <h2 className="text-xs sm:text-sm font-semibold uppercase tracking-wider text-muted-foreground">Revenue 30 días</h2>
+              <div className="flex gap-3 sm:gap-4 mt-2 flex-wrap">
                 {Object.entries(kpis.finance.revenue_30d_by_currency).map(([cur, val]) => (
                   <div key={cur}>
                     <div className="text-[10px] text-muted-foreground">{cur}</div>
-                    <div className="text-lg font-semibold tabular-nums">{formatMoney(val, cur)}</div>
+                    <div className="text-base sm:text-lg font-semibold tabular-nums">{formatMoney(val, cur)}</div>
                   </div>
                 ))}
                 {Object.keys(kpis.finance.revenue_30d_by_currency).length === 0 && (
@@ -90,7 +83,7 @@ export default async function DashboardHome() {
         </Card>
 
         {/* Atención requerida */}
-        <Card className="p-5 space-y-3">
+        <Card className="p-4 sm:p-5 space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Atención requerida</h2>
           <div className="space-y-2">
             {kpis.service.urgent_tickets > 0 && (
@@ -116,10 +109,10 @@ export default async function DashboardHome() {
               </div>
               <Badge variant="secondary">{kpis.service.cleaning_pending}</Badge>
             </Link>
-            <Link href="/dashboard/conserjeria" className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/30 transition-colors">
+            <Link href="/dashboard/tareas" className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/30 transition-colors">
               <div className="flex items-center gap-2">
                 <Bell size={16} className="text-purple-500" />
-                <span className="text-sm">Conserjería pendiente</span>
+                <span className="text-sm">Tareas pendientes</span>
               </div>
               <Badge variant="secondary">{kpis.service.concierge_pending}</Badge>
             </Link>
@@ -136,7 +129,7 @@ export default async function DashboardHome() {
         </Card>
 
         {/* Next check-ins */}
-        <Card className="p-5">
+        <Card className="p-4 sm:p-5">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
               <LogIn size={14} className="text-emerald-500" />

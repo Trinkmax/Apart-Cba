@@ -49,6 +49,14 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
   const linkedIds = new Set(unitOwners.map((uo) => uo.owner_id));
   const selectableOwners = availableOwners.filter((o) => !linkedIds.has(o.id));
 
+  function preserveScrollAcrossRefresh() {
+    if (typeof window === "undefined") return;
+    const scrollY = window.scrollY;
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => window.scrollTo({ top: scrollY, behavior: "instant" as ScrollBehavior }))
+    );
+  }
+
   function handleAdd() {
     if (!selectedOwner || pct <= 0) {
       toast.error("Completá los datos");
@@ -73,6 +81,7 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
         setPct(100);
         setOverride("");
         router.refresh();
+        preserveScrollAcrossRefresh();
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -86,6 +95,7 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
         await unlinkOwnerFromUnit(unitOwnerId, unitId);
         toast.success("Propietario quitado");
         router.refresh();
+        preserveScrollAcrossRefresh();
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -107,7 +117,10 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
               <Plus size={14} /> Agregar
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-md">
+          <DialogContent
+            className="max-w-md"
+            onCloseAutoFocus={(e) => e.preventDefault()}
+          >
             <DialogHeader>
               <DialogTitle>Agregar propietario</DialogTitle>
             </DialogHeader>
