@@ -337,8 +337,12 @@
    ::after que se mueve siguiendo el puntero via la CSS variable --pms-cell-x
    (escrita por React en pointermove). Sin esta solución, mostrar el "+"
    requeriría re-render por cada move (caro). */
+/* Esta regla vive en una capa "unlayered" — fuera de @layer utilities donde
+   Tailwind v4 mete `.absolute`. Las unlayered ganan a las layered en cascada,
+   así que NO declaramos `position` acá: dejamos que `absolute inset-0` del
+   className mande. El ::after del "+" se posiciona absoluto respecto al
+   contenedor (la fila), que ya es `relative`. */
 .pms-cell-overlay {
-  position: relative;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }

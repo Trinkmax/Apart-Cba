@@ -57,7 +57,12 @@
       "Bash(grep -n \"^    </div>$\\\\|^  \\);\\\\|^}$\" /Users/ignaciobaldovino/Apart-Cba/src/components/units/pms/pms-booking-popover.tsx)",
       "Bash(xargs basename *)",
       "Bash(brew --prefix imagemagick)",
-      "Bash(tee /tmp/pms-dev.log)"
+      "Bash(tee /tmp/pms-dev.log)",
+      "Bash(claude mcp *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "supabase"
+  ],
+  "enableAllProjectMcpServers": true
 }

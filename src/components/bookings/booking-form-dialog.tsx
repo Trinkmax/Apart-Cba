@@ -245,6 +245,13 @@ export function BookingFormDialog({
   // (temporario) o el total del período (mensual), dejamos de auto-calcular.
   const [priceTouched, setPriceTouched] = useState(isEdit);
   const [totalTouched, setTotalTouched] = useState(isEdit);
+  // En "temporario" el form es bidireccional: el último monto que tocó el
+  // usuario manda. Si edita precio/noche → derivamos total = precio × noches.
+  // Si edita total → derivamos precio = total ÷ noches. Cuando cambian las
+  // fechas, el campo "ganador" se mantiene fijo y el otro se recalcula.
+  const [lastTouched, setLastTouched] = useState<"price" | "total" | null>(
+    isEdit ? "price" : null
+  );
 
   function set<K extends keyof FormShape>(k: K, v: FormShape[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -265,9 +272,12 @@ export function BookingFormDialog({
   }
 
   // ─── Auto-cálculo de precio/total ────────────────────────────────────────
-  // Modo temporario: auto-rellena price_per_night desde unit.base_price si el
-  // usuario no lo tocó. El total se deriva en vivo (price × nights).
   // Modo mensual: auto-rellena total_amount desde monthly_rent × días/30.
+  // Modo temporario (bidireccional):
+  //   - Si el último editado fue "total" → re-deriva el precio = total ÷ noches
+  //     cuando cambian fechas (mantiene fijo el total que tipeó el usuario).
+  //   - En cualquier otro caso → flujo "price-driven": precio desde
+  //     unit.base_price si !priceTouched, y total = precio × noches.
   // Patrón "ajuste de state durante render" para no violar
   // react-hooks/set-state-in-effect.
   const autoKey = `${form.unit_id}|${form.mode}|${form.monthly_rent}|${form.check_in_date}|${form.check_out_date}`;
@@ -276,17 +286,47 @@ export function BookingFormDialog({
     setPrevAutoKey(autoKey);
     const u = units.find((x) => x.id === form.unit_id);
     const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
-    if (form.mode === "mensual" && !totalTouched) {
-      const rent = parseMoneyInput(form.monthly_rent);
-      if (rent && nightsCount > 0) {
-        const computed = Math.round((rent / 30) * nightsCount * 100) / 100;
-        setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
+    if (form.mode === "mensual") {
+      if (!totalTouched) {
+        const rent = parseMoneyInput(form.monthly_rent);
+        if (rent && nightsCount > 0) {
+          const computed = Math.round((rent / 30) * nightsCount * 100) / 100;
+          setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
+        }
       }
-    } else if (form.mode !== "mensual" && !priceTouched && u?.base_price) {
-      setForm((f) => ({
-        ...f,
-        price_per_night: formatMoneyValue(Number(u.base_price)),
-      }));
+    } else if (lastTouched === "total" && totalTouched && nightsCount > 0) {
+      // Total fijo → re-derivar precio cuando cambian fechas/unidad.
+      const totalParsed = parseMoneyInput(form.total_amount);
+      if (totalParsed && totalParsed > 0) {
+        const computedPrice =
+          Math.round((totalParsed / nightsCount) * 100) / 100;
+        setForm((f) => ({
+          ...f,
+          price_per_night: formatMoneyValue(computedPrice),
+        }));
+      }
+    } else {
+      // Precio fijo → re-derivar total. Si !priceTouched y la unidad tiene
+      // base_price, autorrellenar el precio antes de calcular el total.
+      const basePrice =
+        !priceTouched && u?.base_price ? Number(u.base_price) : null;
+      const priceParsed = parseMoneyInput(form.price_per_night);
+      const price = basePrice ?? priceParsed;
+      if (price && nightsCount > 0) {
+        const computedTotal = Math.round(price * nightsCount * 100) / 100;
+        setForm((f) => ({
+          ...f,
+          ...(basePrice !== null
+            ? { price_per_night: formatMoneyValue(basePrice) }
+            : null),
+          total_amount: formatMoneyValue(computedTotal),
+        }));
+      } else if (basePrice !== null) {
+        setForm((f) => ({
+          ...f,
+          price_per_night: formatMoneyValue(basePrice),
+        }));
+      }
     }
   }
 
@@ -327,12 +367,17 @@ export function BookingFormDialog({
       ? formatNights(form.check_in_date, form.check_out_date)
       : 0;
 
-  // En temporario: total = precio/noche × noches. En mensual: total tipeado.
+  // En mensual el total siempre lo tipea el usuario. En temporario el form es
+  // bidireccional: si el último editado fue "total" usamos lo tipeado, sino
+  // derivamos del precio × noches (flujo clásico).
   const pricePerNightNum = parseMoneyInput(form.price_per_night) ?? 0;
+  const totalAmountParsed = parseMoneyInput(form.total_amount);
   const totalNum =
     form.mode === "mensual"
-      ? parseMoneyInput(form.total_amount) ?? 0
-      : Math.round(pricePerNightNum * nights * 100) / 100;
+      ? totalAmountParsed ?? 0
+      : lastTouched === "total" && totalAmountParsed !== null
+        ? totalAmountParsed
+        : Math.round(pricePerNightNum * nights * 100) / 100;
   // Comisión ya no se ingresa en este form — se decide en liquidaciones.
   // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
   // para no perder data en edición; el server decide el fallback definitivo.
@@ -847,19 +892,42 @@ export function BookingFormDialog({
                       onFocus={(e) => {
                         if (e.target.value === "0") {
                           setPriceTouched(true);
+                          setLastTouched("price");
                           set("price_per_night", "");
                         }
                       }}
                       onChange={(e) => {
+                        const v = e.target.value;
                         setPriceTouched(true);
-                        set("price_per_night", e.target.value);
+                        setLastTouched("price");
+                        setForm((f) => {
+                          const priceParsed = parseMoneyInput(v);
+                          const nightsCount = nightsBetween(
+                            f.check_in_date,
+                            f.check_out_date
+                          );
+                          if (priceParsed !== null && nightsCount > 0) {
+                            const computedTotal =
+                              Math.round(priceParsed * nightsCount * 100) / 100;
+                            return {
+                              ...f,
+                              price_per_night: v,
+                              total_amount: formatMoneyValue(computedTotal),
+                            };
+                          }
+                          return { ...f, price_per_night: v };
+                        });
                       }}
                       placeholder={(() => {
                         const u = units.find((x) => x.id === form.unit_id);
                         return u?.base_price ? formatMoneyValue(Number(u.base_price)) : "0";
                       })()}
                     />
-                    <p className={helperCls}>Tarifa por noche</p>
+                    <p className={helperCls}>
+                      {lastTouched === "total" && totalTouched && nights > 0
+                        ? `Total ÷ ${nights}n`
+                        : "Tarifa por noche"}
+                    </p>
                   </div>
                 )}
 
@@ -885,31 +953,76 @@ export function BookingFormDialog({
                   </p>
                 </div>
 
-                {/* 4. Total (temporario, calculado) o Saldo (mensual, calculado) */}
-                <div className="space-y-1.5">
-                  <Label className={labelCls}>
-                    {form.mode === "mensual" ? "Saldo" : "Total"}
-                  </Label>
-                  <div
-                    className={readonlyBoxCls}
-                    aria-label={form.mode === "mensual" ? "Saldo pendiente" : "Total calculado"}
-                  >
-                    {form.mode === "mensual"
-                      ? pendingNum > 0
+                {/* 4. Saldo (mensual, readonly) o Total editable (temporario) */}
+                {form.mode === "mensual" ? (
+                  <div className="space-y-1.5">
+                    <Label className={labelCls}>Saldo</Label>
+                    <div className={readonlyBoxCls} aria-label="Saldo pendiente">
+                      {pendingNum > 0
                         ? pendingNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })
-                        : "—"
-                      : totalNum > 0
-                        ? totalNum.toLocaleString("es-AR", { maximumFractionDigits: 2 })
                         : "—"}
+                    </div>
+                    <p className={helperCls}>Total − cobrado</p>
                   </div>
-                  <p className={helperCls}>
-                    {form.mode === "mensual"
-                      ? "Total − cobrado"
-                      : nights > 0 && pricePerNightNum > 0
-                        ? `${formatMoneyValue(pricePerNightNum)} × ${nights}n`
-                        : "Precio × noches"}
-                  </p>
-                </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="total_amount_temp" className={labelCls}>Total</Label>
+                    <Input
+                      id="total_amount_temp"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.total_amount}
+                      onFocus={(e) => {
+                        if (e.target.value === "0") {
+                          setTotalTouched(true);
+                          setLastTouched("total");
+                          set("total_amount", "");
+                        }
+                      }}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setTotalTouched(true);
+                        setLastTouched("total");
+                        setForm((f) => {
+                          const totalParsed = parseMoneyInput(v);
+                          const nightsCount = nightsBetween(
+                            f.check_in_date,
+                            f.check_out_date
+                          );
+                          if (
+                            totalParsed !== null &&
+                            totalParsed > 0 &&
+                            nightsCount > 0
+                          ) {
+                            const computedPrice =
+                              Math.round((totalParsed / nightsCount) * 100) / 100;
+                            return {
+                              ...f,
+                              total_amount: v,
+                              price_per_night: formatMoneyValue(computedPrice),
+                            };
+                          }
+                          return { ...f, total_amount: v };
+                        });
+                      }}
+                      placeholder={(() => {
+                        if (nights > 0 && pricePerNightNum > 0) {
+                          return formatMoneyValue(
+                            Math.round(pricePerNightNum * nights * 100) / 100
+                          );
+                        }
+                        return "0";
+                      })()}
+                    />
+                    <p className={helperCls}>
+                      {lastTouched === "total" && totalTouched
+                        ? "Total del período"
+                        : nights > 0 && pricePerNightNum > 0
+                          ? `${formatMoneyValue(pricePerNightNum)} × ${nights}n`
+                          : "Total del período"}
+                    </p>
+                  </div>
+                )}
 
                 {/* 5. Limpieza */}
                 <div className="space-y-1.5 col-span-2 sm:col-span-1">
