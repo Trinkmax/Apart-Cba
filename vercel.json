@@ -8,8 +8,8 @@
       "schedule": "0 3 * * *"
     },
     {
-      "path": "/api/cron/hourly-tick",
-      "schedule": "0 * * * *"
+      "path": "/api/cron/parte-diario-draft",
+      "schedule": "0 23 * * *"
     }
   ],
   "functions": {
@@ -25,7 +25,7 @@
     "src/app/api/cron/from-pg/route.ts": {
       "maxDuration": 60
     },
-    "src/app/api/cron/hourly-tick/route.ts": {
+    "src/app/api/cron/parte-diario-draft/route.ts": {
       "maxDuration": 60
     },
     "src/app/api/webhooks/whatsapp/route.ts": {

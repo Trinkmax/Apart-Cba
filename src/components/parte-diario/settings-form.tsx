@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Loader2, MessageSquareText, Clock, Sparkles, Wand2 } from "lucide-react";
+import { Loader2, MessageSquareText, Clock, Sparkles, Wand2, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -38,8 +38,6 @@ const TIMEZONES = [
 export function SettingsForm({ initial, channels, organizationName }: SettingsFormProps) {
   const [enabled, setEnabled] = useState(initial.enabled);
   const [timezone, setTimezone] = useState(initial.timezone);
-  const [draftHour, setDraftHour] = useState(initial.draft_hour);
-  const [reminderHour, setReminderHour] = useState<number | null>(initial.reminder_hour);
   const [channelId, setChannelId] = useState<string>(initial.channel_id ?? "");
   const [templateName, setTemplateName] = useState(initial.template_name);
   const [templateLang, setTemplateLang] = useState(initial.template_language);
@@ -55,8 +53,6 @@ export function SettingsForm({ initial, channels, organizationName }: SettingsFo
         await updateParteDiarioSettings({
           enabled,
           timezone,
-          draft_hour: draftHour,
-          reminder_hour: reminderHour,
           channel_id: channelId || null,
           template_name: templateName,
           template_language: templateLang,
@@ -103,7 +99,7 @@ export function SettingsForm({ initial, channels, organizationName }: SettingsFo
 
       {/* Bloque: timing */}
       <Card icon={<Clock className="size-4 text-amber-500" />} title="Horarios">
-        <Row label="Zona horaria">
+        <Row label="Zona horaria" hint="Define qué fecha cuenta como 'mañana' al armar el parte.">
           <Select value={timezone} onValueChange={setTimezone}>
             <SelectTrigger className="max-w-xs">
               <SelectValue />
@@ -117,22 +113,7 @@ export function SettingsForm({ initial, channels, organizationName }: SettingsFo
             </SelectContent>
           </Select>
         </Row>
-        <Row
-          label="Hora local de generación del borrador"
-          hint="Recomendado 20:00 — te da tiempo de revisar antes de dormir."
-        >
-          <HourSelect value={draftHour} onChange={(v) => setDraftHour(v ?? 20)} />
-        </Row>
-        <Row
-          label="Hora local del recordatorio"
-          hint="Si el borrador sigue sin enviarse, te llega un aviso. Dejalo vacío para no recordar."
-        >
-          <HourSelect
-            value={reminderHour}
-            onChange={setReminderHour}
-            allowNull
-          />
-        </Row>
+        <ScheduleInfo timezone={timezone} />
       </Card>
 
       {/* Bloque: automatismos */}
@@ -254,33 +235,62 @@ function Row({
   );
 }
 
-function HourSelect({
-  value,
-  onChange,
-  allowNull,
-}: {
-  value: number | null;
-  onChange: (v: number | null) => void;
-  allowNull?: boolean;
-}) {
+function ScheduleInfo({ timezone }: { timezone: string }) {
+  // Vercel Hobby restringe crons a "una vez por día". Los disparamos a horas
+  // UTC fijas y mostramos el equivalente local de cada org acá.
+  const draftLocal = utcHourToLocal(23, timezone);
+  const reminderLocal = utcHourToLocal(3, timezone);
   return (
-    <Select
-      value={value === null ? "__none__" : String(value)}
-      onValueChange={(v) => onChange(v === "__none__" ? null : Number(v))}
-    >
-      <SelectTrigger className="w-[120px] tabular-nums">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {allowNull ? <SelectItem value="__none__">Sin recordatorio</SelectItem> : null}
-        {Array.from({ length: 24 }, (_, h) => (
-          <SelectItem key={h} value={String(h)}>
-            {String(h).padStart(2, "0")}:00
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="px-5 py-3.5 bg-muted/20 border-t border-dashed">
+      <div className="flex items-start gap-2 text-xs">
+        <Info className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
+        <div className="space-y-1.5">
+          <p className="text-foreground">
+            <span className="font-medium">Horarios automáticos</span> (configurados por la
+            plataforma — Hobby permite una corrida diaria por cron):
+          </p>
+          <ul className="space-y-0.5 text-muted-foreground">
+            <li>
+              · <span className="font-medium text-foreground">Borrador del parte</span>: 23:00 UTC
+              {" → "}
+              <span className="tabular-nums font-medium">{draftLocal}</span> hora local
+            </li>
+            <li>
+              · <span className="font-medium text-foreground">Recordatorio</span>: 03:00 UTC
+              {" → "}
+              <span className="tabular-nums font-medium">{reminderLocal}</span> hora local (si
+              sigue en borrador)
+            </li>
+          </ul>
+          <p className="text-muted-foreground/80">
+            Para otros horarios usá <span className="font-medium">Generar borrador ahora</span>{" "}
+            abajo.
+          </p>
+        </div>
+      </div>
+    </div>
   );
+}
+
+function utcHourToLocal(utcHour: number, timezone: string): string {
+  // Construyo un Date arbitrario hoy a la hora UTC y formateo en la tz local.
+  const today = new Date();
+  const probe = new Date(
+    Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth(),
+      today.getUTCDate(),
+      utcHour,
+      0,
+      0,
+    ),
+  );
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(probe);
 }
 
 function TemplateGuide({ templateName, language }: { templateName: string; language: string }) {

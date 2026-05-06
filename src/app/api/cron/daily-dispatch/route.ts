@@ -176,6 +176,38 @@ export async function GET(req: Request) {
     results.templates_refreshed = { error: (err as Error).message };
   }
 
+  // 6. Reminder de parte diario en borrador (corre 4h después del cron de
+  //    draft → si el admin no envió en esa ventana, ping in-app).
+  try {
+    const admin = createAdminClient();
+    const { data: enabledOrgs } = await admin
+      .from("parte_diario_settings")
+      .select("organization_id, timezone")
+      .eq("enabled", true);
+    const { fireParteDiarioReminder } = await import("@/lib/actions/parte-diario");
+    let reminders = 0;
+    for (const s of (enabledOrgs ?? []) as {
+      organization_id: string;
+      timezone: string;
+    }[]) {
+      const localYmd = new Intl.DateTimeFormat("en-CA", {
+        timeZone: s.timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+      try {
+        const res = await fireParteDiarioReminder(s.organization_id, localYmd);
+        if (!res.skipped) reminders += 1;
+      } catch (err) {
+        console.warn("[cron/daily-dispatch] parte-diario reminder failed", err);
+      }
+    }
+    results.parte_diario_reminders = { fired: reminders };
+  } catch (err) {
+    results.parte_diario_reminders = { error: (err as Error).message };
+  }
+
   const duration_ms = Date.now() - startedAt;
   console.log(`[cron/daily-dispatch] completed in ${duration_ms}ms`, results);
   return NextResponse.json({ ok: true, duration_ms, ...results });
