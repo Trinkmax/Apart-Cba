@@ -27,6 +27,16 @@ npm run dev                         # http://localhost:3001
 | `SUPABASE_SERVICE_ROLE_KEY` | solo server | Clave `service_role` (bypasea RLS) |
 | `NEXT_PUBLIC_APP_URL` | client + server | URL pública (ej. `https://apartcba.vercel.app`) |
 
+### Spec 2 — Resend (emails sistema y huésped)
+
+| Variable | Dónde | Descripción |
+|---|---|---|
+| `RESEND_API_KEY` | solo server | API key de [Resend](https://resend.com) para enviar mails (auth + huésped) |
+| `SYSTEM_EMAIL_FROM` | solo server | Dirección `from` para emails del sistema (2FA, cambio de email, recovery) — ej. `auth@apartcba.com` |
+| `SYSTEM_EMAIL_FROM_NAME` | solo server | Nombre visible del remitente sistema — ej. `"Apart Cba Seguridad"` |
+| `APART_CBA_FALLBACK_FROM` | solo server | Dirección `from` fallback cuando una org no tiene su propio dominio verificado |
+| `APART_CBA_FALLBACK_FROM_NAME` | solo server | Nombre visible del remitente fallback — ej. `"Apart Cba"` |
+
 ⚠️ **Nunca** pegar la `service_role` en un slot `NEXT_PUBLIC_*`: quedaría expuesta en el navegador.
 
 ## Deploy a Vercel
