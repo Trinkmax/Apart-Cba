@@ -233,7 +233,75 @@ export async function listMovements(filters?: {
   if (filters?.category) q = q.eq("category", filters.category);
   const { data, error } = await q.order("occurred_at", { ascending: false }).limit(filters?.limit ?? 200);
   if (error) throw new Error(error.message);
-  return data ?? [];
+  const rows = (data ?? []) as Array<{
+    id: string;
+    category: string;
+    ref_type: string | null;
+    ref_id: string | null;
+    [k: string]: unknown;
+  }>;
+  if (rows.length === 0) return rows;
+
+  // Resolvemos el guest_name del huésped pagador para movimientos de
+  // booking_payment. Hacemos 2 queries extra (bookings + schedules)
+  // para evitar N+1: ya teníamos los movements en memoria, juntamos los
+  // ids y traemos las relaciones en batch.
+  const bookingMovs = rows.filter(
+    (r) => r.category === "booking_payment" && r.ref_id
+  );
+  const directBookingIds = bookingMovs
+    .filter((r) => r.ref_type === "booking")
+    .map((r) => r.ref_id as string);
+  const scheduleIds = bookingMovs
+    .filter((r) => r.ref_type === "payment_schedule")
+    .map((r) => r.ref_id as string);
+
+  const [bookingsRes, schedulesRes] = await Promise.all([
+    directBookingIds.length
+      ? admin
+          .from("bookings")
+          .select("id, guest:guests(full_name)")
+          .in("id", directBookingIds)
+          .eq("organization_id", organization.id)
+      : Promise.resolve({ data: [] as Array<{ id: string; guest: { full_name: string } | null }> }),
+    scheduleIds.length
+      ? admin
+          .from("booking_payment_schedule")
+          .select("id, booking_id, booking:bookings(guest:guests(full_name))")
+          .in("id", scheduleIds)
+          .eq("organization_id", organization.id)
+      : Promise.resolve({
+          data: [] as Array<{
+            id: string;
+            booking_id: string;
+            booking: { guest: { full_name: string } | null } | null;
+          }>,
+        }),
+  ]);
+
+  const guestByBookingId = new Map<string, string | null>();
+  for (const bk of (bookingsRes.data ?? []) as Array<{ id: string; guest: { full_name: string } | null }>) {
+    guestByBookingId.set(bk.id, bk.guest?.full_name ?? null);
+  }
+  const guestByScheduleId = new Map<string, string | null>();
+  for (const sch of (schedulesRes.data ?? []) as Array<{
+    id: string;
+    booking: { guest: { full_name: string } | null } | null;
+  }>) {
+    guestByScheduleId.set(sch.id, sch.booking?.guest?.full_name ?? null);
+  }
+
+  return rows.map((r) => {
+    let guest_name: string | null = null;
+    if (r.category === "booking_payment" && r.ref_id) {
+      if (r.ref_type === "booking") {
+        guest_name = guestByBookingId.get(r.ref_id as string) ?? null;
+      } else if (r.ref_type === "payment_schedule") {
+        guest_name = guestByScheduleId.get(r.ref_id as string) ?? null;
+      }
+    }
+    return { ...r, linked_guest_name: guest_name };
+  });
 }
 
 export async function createAccount(input: AccountInput) {
