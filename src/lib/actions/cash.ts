@@ -183,6 +183,37 @@ export async function getAccountBalance(accountId: string): Promise<number> {
   return Number(acc.opening_balance) + delta;
 }
 
+/**
+ * Devuelve todos los balances de las cuentas de la org en 2 queries totales,
+ * evitando el N+1 que tenía /dashboard/caja al llamar getAccountBalance por
+ * cada cuenta. El resultado es un map { account_id → balance }; las cuentas
+ * sin movimientos quedan con su opening_balance.
+ */
+export async function getAccountBalances(): Promise<Record<string, number>> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const [{ data: accounts }, { data: movements }] = await Promise.all([
+    admin
+      .from("cash_accounts")
+      .select("id, opening_balance")
+      .eq("organization_id", organization.id),
+    admin
+      .from("cash_movements")
+      .select("account_id, direction, amount")
+      .eq("organization_id", organization.id),
+  ]);
+  const map: Record<string, number> = {};
+  for (const a of accounts ?? []) {
+    map[a.id] = Number(a.opening_balance ?? 0);
+  }
+  for (const m of movements ?? []) {
+    const delta = m.direction === "in" ? Number(m.amount) : -Number(m.amount);
+    map[m.account_id] = (map[m.account_id] ?? 0) + delta;
+  }
+  return map;
+}
+
 export async function listMovements(filters?: {
   accountId?: string;
   fromDate?: string;
