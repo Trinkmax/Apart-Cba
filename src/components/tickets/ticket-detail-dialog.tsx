@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -79,6 +79,28 @@ const STATUS_ICON: Record<TicketStatus, React.ComponentType<{ size?: number; cla
   cerrado: Archive,
 };
 
+// Definida fuera del componente para que sea estable y satisfaga
+// react-hooks/exhaustive-deps en el useEffect que resetea el form.
+function buildForm(t: Props["ticket"]): TicketInput | null {
+  return t
+    ? {
+        unit_id: t.unit_id,
+        title: t.title,
+        description: t.description ?? "",
+        category: t.category ?? "",
+        priority: t.priority,
+        status: t.status,
+        assigned_to: t.assigned_to ?? null,
+        estimated_cost: t.estimated_cost ?? null,
+        actual_cost: t.actual_cost ?? null,
+        cost_currency: t.cost_currency ?? "ARS",
+        billable_to: t.billable_to,
+        related_owner_id: t.related_owner_id ?? null,
+        notes: t.notes ?? "",
+      }
+    : null;
+}
+
 export function TicketDetailDialog({
   ticket,
   units,
@@ -88,39 +110,25 @@ export function TicketDetailDialog({
   onUpdated,
   onDeleted,
 }: Props) {
-  // Inicialización derivada del prop `ticket` con patrón "previous value".
-  const buildForm = (t: typeof ticket): TicketInput | null =>
-    t
-      ? {
-          unit_id: t.unit_id,
-          title: t.title,
-          description: t.description ?? "",
-          category: t.category ?? "",
-          priority: t.priority,
-          status: t.status,
-          assigned_to: t.assigned_to ?? null,
-          estimated_cost: t.estimated_cost ?? null,
-          actual_cost: t.actual_cost ?? null,
-          cost_currency: t.cost_currency ?? "ARS",
-          billable_to: t.billable_to,
-          related_owner_id: t.related_owner_id ?? null,
-          notes: t.notes ?? "",
-        }
-      : null;
-  const [prevTicketId, setPrevTicketId] = useState<string | null>(ticket?.id ?? null);
   const [isEditing, setIsEditing] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState<TicketInput | null>(() => buildForm(ticket));
   // null = aún no se hizo fetch (o se cerró/cambió de ticket); [] = fetched sin eventos.
   const [events, setEvents] = useState<TicketEventWithActor[] | null>(null);
-  if (ticket && ticket.id !== prevTicketId) {
-    setPrevTicketId(ticket.id);
+
+  // Resetear el estado local cuando cambia de ticket. Antes esto estaba
+  // como setState durante render — válido pero frágil con React Compiler.
+  const lastTicketIdRef = useRef<string | null>(ticket?.id ?? null);
+  useEffect(() => {
+    const newId = ticket?.id ?? null;
+    if (newId === lastTicketIdRef.current) return;
+    lastTicketIdRef.current = newId;
     setForm(buildForm(ticket));
     setIsEditing(false);
     setConfirmDelete(false);
     setEvents(null);
-  }
+  }, [ticket]);
 
   // Cargamos el historial cuando el dialog se abre o cambia de ticket.
   // Tras una mutación local, refrescamos manualmente desde los handlers
