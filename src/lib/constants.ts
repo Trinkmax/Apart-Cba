@@ -193,6 +193,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     settlements: ["view"],
     concierge: ["view", "create", "update"],
     messaging: ["view", "create", "update"],
+    crm_inbox: ["view", "create", "update"],
+    crm_rapidos: ["view"],
   },
   mantenimiento: {
     units: ["view"],

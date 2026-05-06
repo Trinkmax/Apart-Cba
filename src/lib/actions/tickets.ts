@@ -84,6 +84,20 @@ export async function createTicket(input: TicketInput) {
 
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath("/dashboard/unidades/kanban");
+
+  try {
+    const { publishCrmEvent } = await import("@/lib/crm/events");
+    await publishCrmEvent({
+      organizationId: organization.id,
+      eventType: "ticket.created",
+      payload: { ticket_id: (data as MaintenanceTicket).id, unit_id: validated.unit_id, priority: validated.priority, title: validated.title },
+      refType: "ticket",
+      refId: (data as MaintenanceTicket).id,
+    });
+  } catch (e) {
+    console.warn("[tickets/createTicket] crm publish failed", e);
+  }
+
   return data as MaintenanceTicket;
 }
 
@@ -213,6 +227,21 @@ export async function changeTicketStatus(id: string, status: TicketStatus) {
 
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath(`/dashboard/mantenimiento/${id}`);
+
+  if (status === "cerrado" || status === "resuelto") {
+    try {
+      const { publishCrmEvent } = await import("@/lib/crm/events");
+      await publishCrmEvent({
+        organizationId: organization.id,
+        eventType: "ticket.closed",
+        payload: { ticket_id: id, status },
+        refType: "ticket",
+        refId: id,
+      });
+    } catch (e) {
+      console.warn("[tickets/changeTicketStatus] crm publish failed", e);
+    }
+  }
 }
 
 export async function listTicketEvents(ticketId: string): Promise<

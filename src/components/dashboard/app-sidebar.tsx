@@ -19,6 +19,12 @@ import {
   Palette,
   ShieldCheck,
   MessageSquare,
+  MessageSquareText,
+  GitBranch,
+  Zap,
+  Sliders,
+  Megaphone,
+  BellRing,
 } from "lucide-react";
 import {
   Sidebar,
@@ -78,6 +84,16 @@ const NAV: NavGroup[] = [
       { label: "Caja", href: "/dashboard/caja", icon: Wallet, resource: "cash" },
       { label: "Liquidaciones", href: "/dashboard/liquidaciones", icon: FileText, resource: "settlements" },
       { label: "Propietarios", href: "/dashboard/propietarios", icon: ShieldCheck, resource: "owners" },
+    ],
+  },
+  {
+    label: "CRM",
+    items: [
+      { label: "Inbox", href: "/dashboard/crm/inbox", icon: MessageSquareText, resource: "crm_inbox" },
+      { label: "Difusiones", href: "/dashboard/crm/difusiones", icon: Megaphone, resource: "crm_workflows" },
+      { label: "Workflows", href: "/dashboard/crm/workflows", icon: GitBranch, resource: "crm_workflows" },
+      { label: "Alertas", href: "/dashboard/crm/alertas", icon: BellRing, resource: "crm_inbox" },
+      { label: "Rápidos", href: "/dashboard/crm/rapidos", icon: Zap, resource: "crm_rapidos" },
     ],
   },
   {
@@ -187,6 +203,14 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
                     <Link href="/dashboard/configuracion/general">
                       <Settings size={18} />
                       <span>General</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild tooltip="CRM" isActive={isActive("/dashboard/crm/config")}>
+                    <Link href="/dashboard/crm/config">
+                      <Sliders size={18} />
+                      <span>CRM</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

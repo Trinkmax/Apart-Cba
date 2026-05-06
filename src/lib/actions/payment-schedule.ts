@@ -299,6 +299,19 @@ export async function markScheduleAsPaid(
   revalidatePath("/dashboard/alertas");
   revalidatePath("/dashboard");
 
+  try {
+    const { publishCrmEvent } = await import("@/lib/crm/events");
+    await publishCrmEvent({
+      organizationId: organization.id,
+      eventType: "payment.received",
+      payload: { schedule_id: schedule.id, booking_id: booking.id, amount: validated.amount, status: newStatus },
+      refType: "booking_payment_schedule",
+      refId: schedule.id,
+    });
+  } catch (e) {
+    console.warn("[payment-schedule/markScheduleAsPaid] crm publish failed", e);
+  }
+
   return updated as BookingPaymentSchedule;
 }
 

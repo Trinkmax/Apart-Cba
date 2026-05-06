@@ -66,11 +66,20 @@
       "Bash(xargs basename *)",
       "Bash(brew --prefix imagemagick)",
       "Bash(tee /tmp/pms-dev.log)",
-      "Bash(claude mcp *)"
+      "Bash(claude mcp *)",
+      "Bash(grep -E '\\\\.ts$')",
+      "Bash(awk '{print $NF}')",
+      "mcp__supabase-apartcba__list_extensions",
+      "Bash(jq -r '.[0].text' \"/Users/ignaciobaldovino/.claude/projects/-Users-ignaciobaldovino-Apart-Cba/e1e0fa1a-b0fd-4720-bfbb-a3c34d7ad050/tool-results/toolu_01PmWCiPV3f9TdoPgt66H6jN.json\")",
+      "Read(//tmp/**)",
+      "mcp__supabase-apartcba__apply_migration",
+      "mcp__supabase-apartcba__execute_sql",
+      "mcp__supabase-apartcba__generate_typescript_types",
+      "Bash(git pull *)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

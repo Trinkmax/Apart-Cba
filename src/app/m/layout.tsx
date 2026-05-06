@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, Wrench, ListTodo, LogOut, Building2 } from "lucide-react";
+import { Sparkles, Wrench, ListTodo, LogOut, Building2, MessageSquareText } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { signOut } from "@/lib/actions/auth";
@@ -31,9 +31,10 @@ export default async function MobileLayout({ children }: { children: React.React
 
       {/* Bottom nav */}
       <nav className="fixed bottom-0 inset-x-0 z-20 bg-background/95 backdrop-blur-xl border-t safe-bottom safe-x">
-        <div className="grid grid-cols-4 max-w-md mx-auto">
+        <div className={`grid max-w-md mx-auto ${["admin", "recepcion"].includes(role) ? "grid-cols-5" : "grid-cols-4"}`}>
           {[
             { href: "/m", icon: Building2, label: "Inicio" },
+            { href: "/m/crm/inbox", icon: MessageSquareText, label: "CRM", roles: ["admin", "recepcion"] },
             { href: "/m/limpieza", icon: Sparkles, label: "Limpieza", roles: ["admin", "limpieza", "recepcion"] },
             { href: "/m/mantenimiento", icon: Wrench, label: "Tickets", roles: ["admin", "mantenimiento", "recepcion"] },
             { href: "/m/tareas", icon: ListTodo, label: "Tareas", roles: ["admin", "recepcion"] },
