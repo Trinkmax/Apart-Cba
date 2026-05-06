@@ -3,6 +3,7 @@ import autoTable from "jspdf-autotable";
 import type {
   ParteDiarioBookingRow,
   ParteDiarioCleaningRow,
+  ParteDiarioConciergeRow,
   ParteDiarioMaintenanceRow,
   ParteDiarioSnapshot,
 } from "@/lib/types/database";
@@ -32,6 +33,13 @@ const CONTENT_W = PAGE_W - MARGIN_X * 2;
 const PRIORITY_LABEL: Record<ParteDiarioMaintenanceRow["priority"], string> = {
   baja: "Baja",
   media: "Media",
+  alta: "Alta",
+  urgente: "Urgente",
+};
+
+const CONCIERGE_PRIORITY_LABEL: Record<ParteDiarioConciergeRow["priority"], string> = {
+  baja: "Baja",
+  normal: "Normal",
   alta: "Alta",
   urgente: "Urgente",
 };
@@ -259,40 +267,56 @@ function renderMaintenanceSection(
   color: [number, number, number],
   rows: ParteDiarioMaintenanceRow[],
   emptyMessage: string,
-  showPriority: boolean,
 ): number {
   y = ensureSpace(doc, y, 24);
   y = drawSectionHeader(doc, y, short, full, color, rows.length);
   if (rows.length === 0) return drawEmptyState(doc, y, emptyMessage);
 
-  if (showPriority) {
-    return tableAfterSection(
-      doc,
-      y,
-      [["Unidad", "Tarea", "Prioridad", "Asignado"]],
-      rows.map((r) => [
-        r.unit_code,
-        r.title,
-        PRIORITY_LABEL[r.priority],
-        r.assigned_to_name ?? "—",
-      ]),
-      color,
-      {
-        0: { cellWidth: 28 },
-        2: { cellWidth: 24 },
-        3: { cellWidth: 38 },
-      },
-    );
-  }
   return tableAfterSection(
     doc,
     y,
-    [["Unidad", "Tarea", "Asignado"]],
-    rows.map((r) => [r.unit_code, r.title, r.assigned_to_name ?? "—"]),
+    [["Unidad", "Tarea", "Prioridad", "Asignado"]],
+    rows.map((r) => [
+      r.unit_code,
+      r.title,
+      PRIORITY_LABEL[r.priority],
+      r.assigned_to_name ?? "—",
+    ]),
     color,
     {
       0: { cellWidth: 28 },
-      2: { cellWidth: 38 },
+      2: { cellWidth: 24 },
+      3: { cellWidth: 38 },
+    },
+  );
+}
+
+function renderTareasSection(
+  doc: jsPDF,
+  y: number,
+  rows: ParteDiarioConciergeRow[],
+): number {
+  const color = SECTION_RGB.tareas_pendientes;
+  y = ensureSpace(doc, y, 24);
+  y = drawSectionHeader(doc, y, "TAREAS", "Tareas pendientes", color, rows.length);
+  if (rows.length === 0)
+    return drawEmptyState(doc, y, "Sin tareas pendientes desde el módulo Tareas.");
+
+  return tableAfterSection(
+    doc,
+    y,
+    [["Unidad", "Tarea", "Prioridad", "Asignado"]],
+    rows.map((r) => [
+      r.unit_code ?? "—",
+      r.description,
+      CONCIERGE_PRIORITY_LABEL[r.priority],
+      r.assigned_to_name ?? "—",
+    ]),
+    color,
+    {
+      0: { cellWidth: 28 },
+      2: { cellWidth: 24 },
+      3: { cellWidth: 38 },
     },
   );
 }
@@ -346,25 +370,15 @@ export function generateParteDiarioPDFDoc(snapshot: ParteDiarioSnapshot): jsPDF 
     "Sin check-ins hoy.",
   );
   y = renderSuciosSection(doc, y, snapshot.sucios);
-  y = renderMaintenanceSection(
-    doc,
-    y,
-    "TAREAS",
-    "Tareas pendientes",
-    SECTION_RGB.tareas_pendientes,
-    snapshot.tareas_pendientes,
-    "Sin tareas menores pendientes.",
-    false,
-  );
+  y = renderTareasSection(doc, y, snapshot.tareas_pendientes);
   renderMaintenanceSection(
     doc,
     y,
     "ARREGLOS",
-    "Mantenimiento mayor",
+    "Mantenimiento",
     SECTION_RGB.arreglos,
     snapshot.arreglos,
     "Sin arreglos pendientes.",
-    true,
   );
 
   drawFooter(doc);

@@ -14,6 +14,7 @@ import { StatusPill } from "@/components/parte-diario/status-pill";
 import { BookingsSection } from "@/components/parte-diario/bookings-section";
 import { SuciosSection } from "@/components/parte-diario/sucios-section";
 import { MaintenanceSection } from "@/components/parte-diario/maintenance-section";
+import { TareasSection } from "@/components/parte-diario/tareas-section";
 import { ActionBar } from "@/components/parte-diario/action-bar";
 import { DateNav } from "@/components/parte-diario/date-nav";
 
@@ -129,11 +130,9 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
             />
           </div>
           <div className="space-y-4">
-            <MaintenanceSection
-              sectionKey="tareas_pendientes"
+            <TareasSection
               rows={payload.tareas_pendientes}
-              showPriority={false}
-              emptyMessage="Sin tareas menores pendientes."
+              emptyMessage="Sin tareas pendientes desde el módulo Tareas."
             />
             <MaintenanceSection
               sectionKey="arreglos"

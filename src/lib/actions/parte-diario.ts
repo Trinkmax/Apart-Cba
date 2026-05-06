@@ -13,6 +13,7 @@ import type {
   ParteDiarioBookingRow,
   ParteDiarioCleaningRow,
   ParteDiarioCleanerLoad,
+  ParteDiarioConciergeRow,
   ParteDiarioMaintenanceRow,
   ParteDiarioPayload,
   ParteDiarioRecipient,
@@ -354,17 +355,33 @@ async function buildSnapshot(
     a.unit_code.localeCompare(b.unit_code),
   );
 
-  // ─── Mantenimiento: split por priority en el PDF/UI ─────────────────────
-  const { data: tickets } = await admin
-    .from("maintenance_tickets")
-    .select(
-      `id, unit_id, title, priority, status, opened_at, assigned_to,
-       unit:units(id, code, name)`,
-    )
-    .eq("organization_id", orgId)
-    .in("status", ["abierto", "en_progreso", "esperando_repuesto"])
-    .order("priority", { ascending: false })
-    .order("opened_at", { ascending: false });
+  // ─── ARREGLOS = maintenance_tickets abiertos (sin filtro de priority) ────
+  // ─── TAREAS PENDIENTES = concierge_requests abiertas (módulo "Tareas") ──
+  // Esta separación matchea el sidebar (Mantenimiento vs Tareas) y mantiene
+  // semántica clara: "Arreglos" = repair work, "Tareas" = pedidos operativos.
+  const [{ data: tickets }, { data: requests }] = await Promise.all([
+    admin
+      .from("maintenance_tickets")
+      .select(
+        `id, unit_id, title, priority, status, opened_at, assigned_to,
+         unit:units(id, code, name)`,
+      )
+      .eq("organization_id", orgId)
+      .in("status", ["abierto", "en_progreso", "esperando_repuesto"])
+      .order("priority", { ascending: false })
+      .order("opened_at", { ascending: false }),
+    admin
+      .from("concierge_requests")
+      .select(
+        `id, unit_id, description, request_type, status, priority,
+         scheduled_for, assigned_to, created_at,
+         unit:units(id, code, name)`,
+      )
+      .eq("organization_id", orgId)
+      .in("status", ["pendiente", "en_progreso"])
+      .order("priority", { ascending: false })
+      .order("created_at", { ascending: false }),
+  ]);
 
   type TicketJoin = {
     id: string;
@@ -376,27 +393,43 @@ async function buildSnapshot(
     assigned_to: string | null;
     unit: { id: string; code: string; name: string } | null;
   };
+  type ConciergeJoin = {
+    id: string;
+    unit_id: string | null;
+    description: string;
+    request_type: string | null;
+    status: ParteDiarioConciergeRow["status"];
+    priority: ParteDiarioConciergeRow["priority"];
+    scheduled_for: string | null;
+    assigned_to: string | null;
+    created_at: string;
+    unit: { id: string; code: string; name: string } | null;
+  };
   const ticketRows = (tickets ?? []) as unknown as TicketJoin[];
+  const conciergeRows = (requests ?? []) as unknown as ConciergeJoin[];
 
-  // Nombres de assigned_to del mantenimiento
-  const tAssigneeIds = Array.from(
-    new Set(ticketRows.map((t) => t.assigned_to).filter((v): v is string => !!v)),
+  // Resolver nombres de assigned_to en una sola query para ambos sets.
+  const allAssigneeIds = Array.from(
+    new Set([
+      ...ticketRows.map((t) => t.assigned_to),
+      ...conciergeRows.map((c) => c.assigned_to),
+    ].filter((v): v is string => !!v)),
   );
-  const tNameById = new Map<string, string>();
-  if (tAssigneeIds.length > 0) {
+  const nameById = new Map<string, string>();
+  if (allAssigneeIds.length > 0) {
     const { data: profs } = await admin
       .from("user_profiles")
       .select("user_id, full_name")
-      .in("user_id", tAssigneeIds);
+      .in("user_id", allAssigneeIds);
     for (const p of profs ?? []) {
-      tNameById.set(
+      nameById.set(
         (p as { user_id: string }).user_id,
         ((p as { full_name: string | null }).full_name) ?? "Sin nombre",
       );
     }
   }
 
-  const mapTicket = (t: TicketJoin): ParteDiarioMaintenanceRow => ({
+  const arreglos: ParteDiarioMaintenanceRow[] = ticketRows.map((t) => ({
     ticket_id: t.id,
     unit_id: t.unit_id,
     unit_code: t.unit?.code ?? "—",
@@ -406,15 +439,23 @@ async function buildSnapshot(
     status: t.status,
     opened_at: t.opened_at,
     assigned_to: t.assigned_to,
-    assigned_to_name: t.assigned_to ? tNameById.get(t.assigned_to) ?? null : null,
-  });
+    assigned_to_name: t.assigned_to ? nameById.get(t.assigned_to) ?? null : null,
+  }));
 
-  const tareasPendientes = ticketRows
-    .filter((t) => t.priority === "baja" || t.priority === "media")
-    .map(mapTicket);
-  const arreglos = ticketRows
-    .filter((t) => t.priority === "alta" || t.priority === "urgente")
-    .map(mapTicket);
+  const tareasPendientes: ParteDiarioConciergeRow[] = conciergeRows.map((c) => ({
+    request_id: c.id,
+    unit_id: c.unit_id,
+    unit_code: c.unit?.code ?? null,
+    unit_name: c.unit?.name ?? null,
+    description: c.description,
+    request_type: c.request_type,
+    status: c.status,
+    priority: c.priority,
+    scheduled_for: c.scheduled_for,
+    assigned_to: c.assigned_to,
+    assigned_to_name: c.assigned_to ? nameById.get(c.assigned_to) ?? null : null,
+    created_at: c.created_at,
+  }));
 
   const cleanerLoads = await loadCleanerLoads(orgId, reportDate);
 
@@ -473,34 +514,42 @@ export async function getParteDiarioForUser(
 
   const admin = createAdminClient();
 
-  const [{ data: cleaningRows }, { data: tickets }, { data: profile }] = await Promise.all([
-    admin
-      .from("cleaning_tasks")
-      .select(
-        `id, unit_id, scheduled_for, status, assigned_to, booking_out_id,
+  const [{ data: cleaningRows }, { data: tickets }, { data: requests }, { data: profile }] =
+    await Promise.all([
+      admin
+        .from("cleaning_tasks")
+        .select(
+          `id, unit_id, scheduled_for, status, assigned_to, booking_out_id,
          unit:units(id, code, name)`,
-      )
-      .eq("organization_id", organization.id)
-      .eq("assigned_to", targetUser)
-      .eq("scheduled_for", reportDate)
-      .in("status", ["pendiente", "en_progreso", "completada"])
-      .order("scheduled_for"),
-    admin
-      .from("maintenance_tickets")
-      .select(
-        `id, unit_id, title, priority, status, opened_at, assigned_to,
+        )
+        .eq("organization_id", organization.id)
+        .eq("assigned_to", targetUser)
+        .eq("scheduled_for", reportDate)
+        .in("status", ["pendiente", "en_progreso", "completada"])
+        .order("scheduled_for"),
+      admin
+        .from("maintenance_tickets")
+        .select(
+          `id, unit_id, title, priority, status, opened_at, assigned_to,
          unit:units(id, code, name)`,
-      )
-      .eq("organization_id", organization.id)
-      .eq("assigned_to", targetUser)
-      .in("status", ["abierto", "en_progreso", "esperando_repuesto"])
-      .order("priority", { ascending: false }),
-    admin
-      .from("user_profiles")
-      .select("full_name")
-      .eq("user_id", targetUser)
-      .maybeSingle(),
-  ]);
+        )
+        .eq("organization_id", organization.id)
+        .eq("assigned_to", targetUser)
+        .in("status", ["abierto", "en_progreso", "esperando_repuesto"])
+        .order("priority", { ascending: false }),
+      admin
+        .from("concierge_requests")
+        .select(
+          `id, unit_id, description, request_type, status, priority,
+         scheduled_for, assigned_to, created_at,
+         unit:units(id, code, name)`,
+        )
+        .eq("organization_id", organization.id)
+        .eq("assigned_to", targetUser)
+        .in("status", ["pendiente", "en_progreso"])
+        .order("priority", { ascending: false }),
+      admin.from("user_profiles").select("full_name").eq("user_id", targetUser).maybeSingle(),
+    ]);
 
   type CleaningJoin = {
     id: string;
@@ -519,6 +568,18 @@ export async function getParteDiarioForUser(
     status: ParteDiarioMaintenanceRow["status"];
     opened_at: string;
     assigned_to: string | null;
+    unit: { id: string; code: string; name: string } | null;
+  };
+  type ConciergeJoin = {
+    id: string;
+    unit_id: string | null;
+    description: string;
+    request_type: string | null;
+    status: ParteDiarioConciergeRow["status"];
+    priority: ParteDiarioConciergeRow["priority"];
+    scheduled_for: string | null;
+    assigned_to: string | null;
+    created_at: string;
     unit: { id: string; code: string; name: string } | null;
   };
 
@@ -582,6 +643,23 @@ export async function getParteDiarioForUser(
     }),
   );
 
+  const tareas: ParteDiarioConciergeRow[] = ((requests ?? []) as unknown as ConciergeJoin[]).map(
+    (c) => ({
+      request_id: c.id,
+      unit_id: c.unit_id,
+      unit_code: c.unit?.code ?? null,
+      unit_name: c.unit?.name ?? null,
+      description: c.description,
+      request_type: c.request_type,
+      status: c.status,
+      priority: c.priority,
+      scheduled_for: c.scheduled_for,
+      assigned_to: c.assigned_to,
+      assigned_to_name: null,
+      created_at: c.created_at,
+    }),
+  );
+
   const completed = cleanings.filter((c) => c.status === "completada").length;
 
   const fullName =
@@ -596,6 +674,7 @@ export async function getParteDiarioForUser(
     greeting_name: firstName,
     cleanings,
     maintenance,
+    tareas,
     completed_cleanings: completed,
     total_cleanings: cleanings.length,
   };

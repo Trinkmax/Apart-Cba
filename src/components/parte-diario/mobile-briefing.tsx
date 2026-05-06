@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { Check, Loader2, Sparkles, Wrench } from "lucide-react";
+import { Check, Loader2, ListTodo, Sparkles, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CLEANING_STATUS_META, TICKET_PRIORITY_META } from "@/lib/constants";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
@@ -10,7 +10,22 @@ import { MobileProgressRing } from "./mobile-progress-ring";
 import type {
   MobileParteDiarioPayload,
   ParteDiarioCleaningRow,
+  ParteDiarioConciergeRow,
 } from "@/lib/types/database";
+
+const CONCIERGE_PRIORITY_COLOR: Record<ParteDiarioConciergeRow["priority"], string> = {
+  baja: "#64748b",
+  normal: "#3b82f6",
+  alta: "#f59e0b",
+  urgente: "#ef4444",
+};
+
+const CONCIERGE_PRIORITY_LABEL: Record<ParteDiarioConciergeRow["priority"], string> = {
+  baja: "Baja",
+  normal: "Normal",
+  alta: "Alta",
+  urgente: "Urgente",
+};
 
 interface MobileBriefingProps {
   payload: MobileParteDiarioPayload;
@@ -107,6 +122,48 @@ export function MobileBriefing({ payload }: MobileBriefingProps) {
         </section>
       ) : null}
 
+      {/* Tareas (concierge requests) asignadas */}
+      {payload.tareas.length > 0 ? (
+        <section className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <ListTodo className="size-4 text-slate-500" />
+            <h2 className="text-sm font-semibold uppercase tracking-wide">Tareas</h2>
+            <span className="text-xs text-muted-foreground tabular-nums ml-auto">
+              {payload.tareas.length}
+            </span>
+          </div>
+          <ul className="space-y-2">
+            {payload.tareas.map((t) => (
+              <li
+                key={t.request_id}
+                className="rounded-2xl border bg-card p-4 active:bg-muted/30 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  {t.unit_code ? (
+                    <span className="text-sm font-semibold tabular-nums">{t.unit_code}</span>
+                  ) : null}
+                  {t.priority !== "normal" && t.priority !== "baja" ? (
+                    <span
+                      className="ml-auto inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ring-1 ring-current/30"
+                      style={{
+                        color: CONCIERGE_PRIORITY_COLOR[t.priority],
+                        backgroundColor: CONCIERGE_PRIORITY_COLOR[t.priority] + "1a",
+                      }}
+                    >
+                      {CONCIERGE_PRIORITY_LABEL[t.priority]}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-sm font-medium mt-1.5">{t.description}</p>
+                {t.unit_name ? (
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">{t.unit_name}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       {/* Mantenimiento asignado */}
       {payload.maintenance.length > 0 ? (
         <section className="space-y-2">
@@ -143,7 +200,9 @@ export function MobileBriefing({ payload }: MobileBriefingProps) {
         </section>
       ) : null}
 
-      {cleanings.length === 0 && payload.maintenance.length === 0 ? (
+      {cleanings.length === 0 &&
+      payload.maintenance.length === 0 &&
+      payload.tareas.length === 0 ? (
         <div className="rounded-2xl border border-dashed bg-card p-10 text-center">
           <Sparkles className="size-8 mx-auto text-muted-foreground/40" />
           <p className="mt-3 text-sm text-muted-foreground">

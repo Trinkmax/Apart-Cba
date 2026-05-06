@@ -1319,6 +1319,24 @@ export interface ParteDiarioMaintenanceRow {
   assigned_to_name: string | null;
 }
 
+// Tareas pendientes vienen del módulo "Tareas" (concierge_requests). Mantienen
+// la misma forma estructural que la fila de mantenimiento para reusar UI, pero
+// usan la enum de status y priority de concierge.
+export interface ParteDiarioConciergeRow {
+  request_id: string;
+  unit_id: string | null;
+  unit_code: string | null;
+  unit_name: string | null;
+  description: string;
+  request_type: string | null;
+  status: ConciergeStatus;
+  priority: ConciergePriority;
+  scheduled_for: string | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  created_at: string;
+}
+
 export interface ParteDiarioCleanerLoad {
   user_id: string;
   full_name: string;
@@ -1335,7 +1353,9 @@ export interface ParteDiarioSnapshot {
   check_outs: ParteDiarioBookingRow[];
   check_ins: ParteDiarioBookingRow[];
   sucios: ParteDiarioCleaningRow[];
-  tareas_pendientes: ParteDiarioMaintenanceRow[];
+  /** "Tareas pendientes" del parte = concierge_requests abiertas. */
+  tareas_pendientes: ParteDiarioConciergeRow[];
+  /** "Arreglos" del parte = maintenance_tickets abiertos sin filtrar prioridad. */
   arreglos: ParteDiarioMaintenanceRow[];
   cleaner_loads: ParteDiarioCleanerLoad[];
 }
@@ -1351,6 +1371,7 @@ export interface MobileParteDiarioPayload {
   greeting_name: string;
   cleanings: ParteDiarioCleaningRow[];
   maintenance: ParteDiarioMaintenanceRow[];
+  tareas: ParteDiarioConciergeRow[];
   /** Cantidad de cleanings completadas hoy del set asignado. */
   completed_cleanings: number;
   total_cleanings: number;
