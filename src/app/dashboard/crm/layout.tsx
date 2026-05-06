@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { canAny } from "@/lib/permissions";
+import { CrmRail } from "@/components/crm/crm-rail";
 
 export default async function CrmLayout({
   children,
@@ -18,5 +19,10 @@ export default async function CrmLayout({
 
   if (!allowed) redirect("/sin-acceso");
 
-  return <>{children}</>;
+  return (
+    <div className="flex min-h-[calc(100dvh-3.5rem)] md:min-h-[calc(100dvh-4rem)]">
+      <CrmRail role={role} />
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  );
 }

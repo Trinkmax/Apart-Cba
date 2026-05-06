@@ -7,19 +7,19 @@ export default async function ColoresPage() {
   if (role !== "admin") redirect("/dashboard");
 
   return (
-    <div className="page-x page-y space-y-6 max-w-3xl mx-auto">
-      <div>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">
+    <section className="space-y-5">
+      <header>
+        <h2 className="text-lg sm:text-xl font-semibold tracking-tight">
           Colores de reservas
-        </h1>
+        </h2>
         <p className="text-xs sm:text-sm text-muted-foreground mt-1">
           Personalizá el color de cada estado de reserva. Aplica a la leyenda,
           los badges y las barras del calendario PMS.
         </p>
-      </div>
+      </header>
       <BookingStatusColorsForm
         initialColors={organization.booking_status_colors ?? null}
       />
-    </div>
+    </section>
   );
 }
