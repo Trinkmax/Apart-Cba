@@ -1,13 +1,15 @@
 import { ListTodo, Plus, Sparkles } from "lucide-react";
 import { listConciergeRequests, listAssignableMembers } from "@/lib/actions/concierge";
 import { listUnitsEnriched } from "@/lib/actions/units";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConciergeBoard } from "@/components/concierge/concierge-board";
 import { ConciergeFormDialog } from "@/components/concierge/concierge-form-dialog";
 
 export default async function TareasPage() {
-  const [requests, units, members] = await Promise.all([
+  const [{ organization }, requests, units, members] = await Promise.all([
+    getCurrentOrg(),
     listConciergeRequests(),
     listUnitsEnriched(),
     listAssignableMembers(),
@@ -63,7 +65,7 @@ export default async function TareasPage() {
         </Card>
       )}
 
-      <ConciergeBoard initialRequests={requests as never} units={unitsLite} members={members} />
+      <ConciergeBoard organizationId={organization.id} initialRequests={requests as never} units={unitsLite} members={members} />
     </div>
   );
 }

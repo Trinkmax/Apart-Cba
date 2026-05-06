@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   Bell,
   CalendarClock,
@@ -25,6 +25,7 @@ import type {
   Unit,
 } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
+import { useRealtimeRows } from "@/hooks/use-realtime-rows";
 import { ConciergeDetailDialog } from "./concierge-detail-dialog";
 import { ConciergeFormDialog } from "./concierge-form-dialog";
 
@@ -68,14 +69,83 @@ const COLUMNS: KanbanColumn<ConciergeStatus>[] = [
 ];
 
 interface Props {
+  organizationId: string;
   initialRequests: CR[];
   units: Pick<Unit, "id" | "code" | "name">[];
   members?: Member[];
 }
 
-export function ConciergeBoard({ initialRequests, units, members = [] }: Props) {
+export function ConciergeBoard({ organizationId, initialRequests, units, members = [] }: Props) {
   const [requests, setRequests] = useState<CR[]>(initialRequests);
   const [openId, setOpenId] = useState<string | null>(null);
+
+  const unitsById = useMemo(() => {
+    const m = new Map<string, Pick<Unit, "id" | "code" | "name">>();
+    for (const u of units) m.set(u.id, u);
+    return m;
+  }, [units]);
+
+  const membersById = useMemo(() => {
+    const m = new Map<string, Member>();
+    for (const x of members) m.set(x.user_id, x);
+    return m;
+  }, [members]);
+
+  const enrich = useCallback(
+    (row: ConciergeRequest): CR => ({
+      ...row,
+      unit: row.unit_id ? unitsById.get(row.unit_id) ?? null : null,
+      // El payload de realtime no trae el join de guests; lo hidratará la
+      // prop en la próxima revalidación. No hacemos un fetch puntual para
+      // mantener el path crítico instantáneo.
+      guest: null,
+      assignee: row.assigned_to ? membersById.get(row.assigned_to) ?? null : null,
+      has_alert: false,
+    }),
+    [unitsById, membersById]
+  );
+
+  const onInsert = useCallback(
+    (row: ConciergeRequest) => {
+      setRequests((cur) => (cur.some((r) => r.id === row.id) ? cur : [enrich(row), ...cur]));
+    },
+    [enrich]
+  );
+  const onUpdate = useCallback(
+    (row: ConciergeRequest) => {
+      setRequests((cur) =>
+        cur.map((r) => {
+          if (r.id !== row.id) return r;
+          const assigneeChanged = r.assigned_to !== row.assigned_to;
+          return {
+            ...r,
+            ...row,
+            unit: row.unit_id ? unitsById.get(row.unit_id) ?? r.unit : null,
+            guest: r.guest,
+            assignee: assigneeChanged
+              ? row.assigned_to
+                ? membersById.get(row.assigned_to) ?? null
+                : null
+              : r.assignee,
+            has_alert: r.has_alert,
+          };
+        })
+      );
+    },
+    [unitsById, membersById]
+  );
+  const onDelete = useCallback((id: string) => {
+    setRequests((cur) => cur.filter((r) => r.id !== id));
+  }, []);
+
+  useRealtimeRows<ConciergeRequest>({
+    table: "concierge_requests",
+    organizationId,
+    onInsert,
+    onUpdate,
+    onDelete,
+  });
+
   const open = openId ? requests.find((r) => r.id === openId) ?? null : null;
 
   return (

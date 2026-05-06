@@ -1,6 +1,7 @@
 import { Plus, Sparkles } from "lucide-react";
 import { listCleaningTasks } from "@/lib/actions/cleaning";
 import { listUnitsEnriched } from "@/lib/actions/units";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { CleaningBoard } from "@/components/cleaning/cleaning-board";
 import { CleaningFormDialog } from "@/components/cleaning/cleaning-form-dialog";
@@ -9,7 +10,8 @@ import type { CleaningTask, Unit } from "@/lib/types/database";
 type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
 
 export default async function LimpiezaPage() {
-  const [tasks, units] = await Promise.all([
+  const [{ organization }, tasks, units] = await Promise.all([
+    getCurrentOrg(),
     listCleaningTasks() as Promise<CT[]>,
     listUnitsEnriched(),
   ]);
@@ -37,7 +39,7 @@ export default async function LimpiezaPage() {
         </CleaningFormDialog>
       </div>
 
-      <CleaningBoard initialTasks={tasks} units={unitsLite} />
+      <CleaningBoard organizationId={organization.id} initialTasks={tasks} units={unitsLite} />
     </div>
   );
 }

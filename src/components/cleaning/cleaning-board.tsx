@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { changeCleaningStatus } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
 import type { CleaningStatus, CleaningTask, Unit } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
+import { useRealtimeRows } from "@/hooks/use-realtime-rows";
 import { CleaningDetailDialog } from "./cleaning-detail-dialog";
 import { CleaningFormDialog } from "./cleaning-form-dialog";
 
@@ -24,13 +25,55 @@ const COLUMNS: KanbanColumn<CleaningStatus>[] = [
 ];
 
 interface Props {
+  organizationId: string;
   initialTasks: CT[];
   units: Pick<Unit, "id" | "code" | "name">[];
 }
 
-export function CleaningBoard({ initialTasks, units }: Props) {
+export function CleaningBoard({ organizationId, initialTasks, units }: Props) {
   const [tasks, setTasks] = useState<CT[]>(initialTasks);
   const [openId, setOpenId] = useState<string | null>(null);
+
+  const unitsById = useMemo(() => {
+    const m = new Map<string, Pick<Unit, "id" | "code" | "name">>();
+    for (const u of units) m.set(u.id, u);
+    return m;
+  }, [units]);
+
+  const enrich = useCallback(
+    (row: CleaningTask): CT => ({
+      ...row,
+      unit: unitsById.get(row.unit_id) ?? { id: row.unit_id, code: "", name: "" },
+    }),
+    [unitsById]
+  );
+
+  const onInsert = useCallback(
+    (row: CleaningTask) => {
+      setTasks((cur) => (cur.some((t) => t.id === row.id) ? cur : [enrich(row), ...cur]));
+    },
+    [enrich]
+  );
+  const onUpdate = useCallback(
+    (row: CleaningTask) => {
+      setTasks((cur) =>
+        cur.map((t) => (t.id === row.id ? { ...t, ...row, unit: t.unit ?? enrich(row).unit } : t))
+      );
+    },
+    [enrich]
+  );
+  const onDelete = useCallback((id: string) => {
+    setTasks((cur) => cur.filter((t) => t.id !== id));
+  }, []);
+
+  useRealtimeRows<CleaningTask>({
+    table: "cleaning_tasks",
+    organizationId,
+    onInsert,
+    onUpdate,
+    onDelete,
+  });
+
   const open = openId ? tasks.find((t) => t.id === openId) ?? null : null;
 
   return (

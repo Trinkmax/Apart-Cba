@@ -20,7 +20,7 @@ export default async function CrmLayout({
   if (!allowed) redirect("/sin-acceso");
 
   return (
-    <div className="flex min-h-[calc(100dvh-3.5rem)] md:min-h-[calc(100dvh-4rem)]">
+    <div className="flex min-h-[calc(100dvh_-_3.5rem)] md:min-h-[calc(100dvh_-_4rem)]">
       <CrmRail role={role} />
       <div className="flex-1 min-w-0">{children}</div>
     </div>

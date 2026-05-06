@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { AlertTriangle, Archive, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/database";
 import type { CurrentOccupancy } from "@/lib/actions/bookings";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
+import { useRealtimeRows } from "@/hooks/use-realtime-rows";
 import { TicketDetailDialog } from "./ticket-detail-dialog";
 import { TicketFormDialog } from "./ticket-form-dialog";
 
@@ -25,15 +26,56 @@ const COLUMNS: KanbanColumn<TicketStatus>[] = [
 ];
 
 interface Props {
+  organizationId: string;
   initialTickets: TicketWithUnit[];
   units: Pick<Unit, "id" | "code" | "name">[];
   owners: Owner[];
   occupancyByUnit: Record<string, CurrentOccupancy>;
 }
 
-export function TicketsBoard({ initialTickets, units, owners, occupancyByUnit }: Props) {
+export function TicketsBoard({ organizationId, initialTickets, units, owners, occupancyByUnit }: Props) {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
+
+  const unitsById = useMemo(() => {
+    const m = new Map<string, Pick<Unit, "id" | "code" | "name">>();
+    for (const u of units) m.set(u.id, u);
+    return m;
+  }, [units]);
+
+  const enrich = useCallback(
+    (row: MaintenanceTicket): TicketWithUnit => ({
+      ...row,
+      unit: unitsById.get(row.unit_id) ?? { id: row.unit_id, code: "", name: "" },
+    }),
+    [unitsById]
+  );
+
+  const onInsert = useCallback(
+    (row: MaintenanceTicket) => {
+      setTickets((cur) => (cur.some((t) => t.id === row.id) ? cur : [enrich(row), ...cur]));
+    },
+    [enrich]
+  );
+  const onUpdate = useCallback(
+    (row: MaintenanceTicket) => {
+      setTickets((cur) =>
+        cur.map((t) => (t.id === row.id ? { ...t, ...row, unit: t.unit ?? enrich(row).unit } : t))
+      );
+    },
+    [enrich]
+  );
+  const onDelete = useCallback((id: string) => {
+    setTickets((cur) => cur.filter((t) => t.id !== id));
+  }, []);
+
+  useRealtimeRows<MaintenanceTicket>({
+    table: "maintenance_tickets",
+    organizationId,
+    onInsert,
+    onUpdate,
+    onDelete,
+  });
 
   const openTicket = openTicketId ? tickets.find((t) => t.id === openTicketId) ?? null : null;
 

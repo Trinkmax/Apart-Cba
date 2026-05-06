@@ -37,8 +37,8 @@ export function CrmRail({ role }: { role: UserRole }) {
     <aside
       aria-label="Mensajería"
       className={cn(
-        "sticky top-14 md:top-16 self-start shrink-0 z-10",
-        "h-[calc(100dvh-3.5rem)] md:h-[calc(100dvh-4rem)]",
+        "sticky top-0 self-start shrink-0 z-10",
+        "h-[calc(100dvh_-_3.5rem)] md:h-[calc(100dvh_-_4rem)]",
         "w-[68px] border-r border-border bg-sidebar/60 backdrop-blur-sm",
       )}
     >
