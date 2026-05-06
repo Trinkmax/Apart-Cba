@@ -32,7 +32,8 @@ export function TicketPhotosSection({
     initialAttachments ?? []
   );
   const [loading, setLoading] = useState(initialAttachments === undefined);
-  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const uploading = uploadProgress !== null;
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [, startTransition] = useTransition();
@@ -58,23 +59,39 @@ export function TicketPhotosSection({
 
   async function handleFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
-    setUploading(true);
-    try {
-      for (const file of Array.from(files)) {
+    const list = Array.from(files);
+    setUploadProgress({ done: 0, total: list.length });
+    let succeeded = 0;
+    const errors: string[] = [];
+    await Promise.all(
+      list.map(async (file) => {
         const fd = new FormData();
         fd.append("file", file);
-        const att = await uploadTicketPhoto(ticketId, fd);
-        setAttachments((cur) => [att, ...cur]);
-      }
+        try {
+          const att = await uploadTicketPhoto(ticketId, fd);
+          setAttachments((cur) => [att, ...cur]);
+          succeeded += 1;
+          setUploadProgress((p) =>
+            p ? { done: p.done + 1, total: p.total } : null
+          );
+        } catch (e) {
+          errors.push((e as Error).message);
+        }
+      })
+    );
+    if (succeeded > 0) {
       toast.success(
-        files.length === 1 ? "Foto subida" : `${files.length} fotos subidas`
+        succeeded === 1 ? "Foto subida" : `${succeeded} fotos subidas`
       );
-    } catch (e) {
-      toast.error("Error al subir", { description: (e as Error).message });
-    } finally {
-      setUploading(false);
-      if (inputRef.current) inputRef.current.value = "";
     }
+    if (errors.length > 0) {
+      toast.error(
+        errors.length === 1 ? "Error al subir 1 foto" : `Error al subir ${errors.length} fotos`,
+        { description: errors[0] }
+      );
+    }
+    setUploadProgress(null);
+    if (inputRef.current) inputRef.current.value = "";
   }
 
   function handleDelete(id: string) {
@@ -115,7 +132,7 @@ export function TicketPhotosSection({
           type="button"
           size="sm"
           variant="outline"
-          className="gap-1.5 h-8"
+          className="gap-1.5 h-8 tabular-nums"
           disabled={uploading}
           onClick={() => inputRef.current?.click()}
         >
@@ -124,7 +141,9 @@ export function TicketPhotosSection({
           ) : (
             <Plus size={13} />
           )}
-          {uploading ? "Subiendo…" : "Agregar"}
+          {uploading
+            ? `Subiendo ${uploadProgress!.done}/${uploadProgress!.total}…`
+            : "Agregar"}
         </Button>
       </div>
 
