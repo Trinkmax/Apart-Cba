@@ -122,8 +122,10 @@ export function TicketDetailDialog({
     setEvents(null);
   }
 
-  // Cargamos el historial cuando el dialog se abre o tras una mutación.
-  // El loading state lo derivamos de `events === null` en vez de un setState síncrono.
+  // Cargamos el historial cuando el dialog se abre o cambia de ticket.
+  // Tras una mutación local, refrescamos manualmente desde los handlers
+  // (ver handleStatusChange / handleSave) en vez de re-disparar el effect
+  // con isPending — eso causaba doble fetch y flicker.
   const ticketId = ticket?.id;
   useEffect(() => {
     if (!open || !ticketId) return;
@@ -138,7 +140,7 @@ export function TicketDetailDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, ticketId, isPending]);
+  }, [open, ticketId]);
 
   if (!ticket || !form) return null;
 
@@ -151,11 +153,20 @@ export function TicketDetailDialog({
 
   function handleStatusChange(next: TicketStatus) {
     if (!ticket) return;
+    const ticketId = ticket.id;
     startTransition(async () => {
       try {
-        await changeTicketStatus(ticket.id, next);
+        await changeTicketStatus(ticketId, next);
         onUpdated?.({ ...ticket, status: next });
         toast.success("Estado actualizado");
+        // Refrescamos el timeline manualmente (antes lo hacía un useEffect
+        // con isPending en deps, que disparaba doble fetch).
+        try {
+          const fresh = await listTicketEvents(ticketId);
+          setEvents(fresh);
+        } catch {
+          // si falla el refresh del timeline, no es crítico
+        }
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -164,12 +175,19 @@ export function TicketDetailDialog({
 
   function handleSave() {
     if (!ticket || !form) return;
+    const ticketId = ticket.id;
     startTransition(async () => {
       try {
-        const updated = await updateTicket(ticket.id, form);
+        const updated = await updateTicket(ticketId, form);
         onUpdated?.(updated);
         toast.success("Ticket actualizado");
         setIsEditing(false);
+        try {
+          const fresh = await listTicketEvents(ticketId);
+          setEvents(fresh);
+        } catch {
+          // refresh no crítico
+        }
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
