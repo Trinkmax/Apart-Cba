@@ -254,34 +254,33 @@ export function TicketDetailDialog({
         <Separator />
 
         <div className="px-6 py-5 space-y-5">
-          {/* Cambio rápido de estado (chips) */}
+          {/* Cambio rápido de estado (chips) — solo estados de destino */}
           {!isEditing && (
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs text-muted-foreground mr-1">Mover a:</span>
-              {(Object.keys(TICKET_STATUS_META) as TicketStatus[]).map((s) => {
-                const m = TICKET_STATUS_META[s];
-                const isCurrent = ticket.status === s;
-                return (
-                  <button
-                    key={s}
-                    disabled={isCurrent || isPending}
-                    onClick={() => handleStatusChange(s)}
-                    className={cn(
-                      "px-2.5 py-1 rounded-md text-xs font-medium transition-all border",
-                      isCurrent
-                        ? "opacity-50 cursor-default"
-                        : "hover:scale-[1.03] active:scale-95"
-                    )}
-                    style={{
-                      backgroundColor: isCurrent ? m.color + "20" : m.color + "0d",
-                      color: m.color,
-                      borderColor: m.color + (isCurrent ? "60" : "30"),
-                    }}
-                  >
-                    {m.label}
-                  </button>
-                );
-              })}
+              {(Object.keys(TICKET_STATUS_META) as TicketStatus[])
+                .filter((s) => s !== ticket.status)
+                .map((s) => {
+                  const m = TICKET_STATUS_META[s];
+                  return (
+                    <button
+                      key={s}
+                      disabled={isPending}
+                      onClick={() => handleStatusChange(s)}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md text-xs font-medium border transition-all",
+                        "hover:scale-[1.03] active:scale-95 disabled:opacity-50 disabled:hover:scale-100"
+                      )}
+                      style={{
+                        backgroundColor: m.color + "0d",
+                        color: m.color,
+                        borderColor: m.color + "30",
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
             </div>
           )}
 
