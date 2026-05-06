@@ -66,11 +66,27 @@
       "Bash(xargs basename *)",
       "Bash(brew --prefix imagemagick)",
       "Bash(tee /tmp/pms-dev.log)",
-      "Bash(claude mcp *)"
+      "Bash(claude mcp *)",
+      "Bash(git -c commit.gpgsign=false commit -m ' *)",
+      "Bash(git -c commit.gpgsign=false -c user.name=Claude -c user.email=noreply@anthropic.com commit -m ' *)",
+      "Read(//mnt/c/Users/Agust/.claude/**)",
+      "Read(//mnt/c/Users/Agust/.claude/plugins/**)",
+      "Bash(git diff *)",
+      "Bash(git config *)",
+      "Bash(git reset *)",
+      "Bash(cp src/lib/actions/cash.ts /tmp/cash.task8and9.ts)",
+      "Bash(cp src/components/cash/movements-list.tsx /tmp/movements-list.task9partial.tsx)",
+      "Bash(git restore *)",
+      "Bash(cp src/components/tickets/ticket-detail-dialog.tsx /tmp/ticket-detail.task3and4.tsx)",
+      "Read(//tmp/**)",
+      "Bash(git checkout *)",
+      "Bash(git -c commit.gpgsign=false commit --amend --no-edit)",
+      "Bash(git log *)",
+      "Bash(git branch *)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "supabase"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }
