@@ -202,6 +202,7 @@ async function buildSnapshot(
       .from("bookings")
       .select(
         `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
+         check_in_time, check_out_time,
          unit:units(id, code, name),
          guest:guests(id, full_name)`,
       )
@@ -212,6 +213,7 @@ async function buildSnapshot(
       .from("bookings")
       .select(
         `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
+         check_in_time, check_out_time,
          unit:units(id, code, name),
          guest:guests(id, full_name)`,
       )
@@ -228,6 +230,8 @@ async function buildSnapshot(
     mode: ParteDiarioBookingRow["mode"];
     check_in_date: string;
     check_out_date: string;
+    check_in_time: string | null;
+    check_out_time: string | null;
     unit: { id: string; code: string; name: string } | null;
     guest: { id: string; full_name: string } | null;
   };
@@ -242,14 +246,25 @@ async function buildSnapshot(
     is_owner_use: b.guest_id === null,
     check_in_date: b.check_in_date,
     check_out_date: b.check_out_date,
+    check_in_time: b.check_in_time,
+    check_out_time: b.check_out_time,
   });
 
+  // CH IN ordenado por hora (los más tempranos primero), luego por unit_code.
+  // CH OUT idem por check-out time.
+  const sortByTime = (
+    timeKey: "check_in_time" | "check_out_time",
+  ) => (a: ParteDiarioBookingRow, b: ParteDiarioBookingRow) => {
+    const ta = a[timeKey] ?? "99:99:99";
+    const tb = b[timeKey] ?? "99:99:99";
+    return ta.localeCompare(tb) || a.unit_code.localeCompare(b.unit_code);
+  };
   const checkOuts = ((outRes.data ?? []) as unknown as BookingJoin[])
     .map(mapBooking)
-    .sort((a, b) => a.unit_code.localeCompare(b.unit_code));
+    .sort(sortByTime("check_out_time"));
   const checkIns = ((inRes.data ?? []) as unknown as BookingJoin[])
     .map(mapBooking)
-    .sort((a, b) => a.unit_code.localeCompare(b.unit_code));
+    .sort(sortByTime("check_in_time"));
 
   // ─── SUCIOS = cleaning_tasks programadas para reportDate ─────────────────
   // Más "ghost rows" para check-outs sin cleaning_task creada todavía.
@@ -1140,6 +1155,23 @@ export async function removeParteDiarioRecipient(id: string) {
 export async function listAssignableCleaners(): Promise<
   { user_id: string; full_name: string; role: UserRole }[]
 > {
+  return listAssignableMembersByRoles(ASSIGNABLE_CLEANING_ROLES);
+}
+
+const ASSIGNABLE_MAINTENANCE_ROLES: UserRole[] = ["admin", "mantenimiento", "recepcion"];
+const ASSIGNABLE_TAREAS_ROLES: UserRole[] = ["admin", "recepcion", "mantenimiento", "limpieza"];
+
+export async function listAssignableForMaintenance() {
+  return listAssignableMembersByRoles(ASSIGNABLE_MAINTENANCE_ROLES);
+}
+
+export async function listAssignableForTareas() {
+  return listAssignableMembersByRoles(ASSIGNABLE_TAREAS_ROLES);
+}
+
+async function listAssignableMembersByRoles(
+  roles: UserRole[],
+): Promise<{ user_id: string; full_name: string; role: UserRole }[]> {
   await requireSession();
   const { organization, role: currentRole } = await getCurrentOrg();
   if (!can(currentRole, "parte_diario", "view")) throw new Error("Sin permisos");
@@ -1150,7 +1182,7 @@ export async function listAssignableCleaners(): Promise<
     .select("user_id, role")
     .eq("organization_id", organization.id)
     .eq("active", true)
-    .in("role", ASSIGNABLE_CLEANING_ROLES);
+    .in("role", roles);
   const memberRows = (members ?? []) as { user_id: string; role: UserRole }[];
   if (memberRows.length === 0) return [];
 
@@ -1172,6 +1204,62 @@ export async function listAssignableCleaners(): Promise<
       role: m.role,
     }))
     .sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+
+// ─── Asignación inline desde el parte: tickets + tareas ─────────────────────
+// Reusan el patrón de assignCleaningInDraft: update + revalidate paths.
+
+export async function assignTicketInDraft(ticketId: string, userId: string | null) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "parte_diario", "update")) throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("maintenance_tickets")
+    .update({ assigned_to: userId })
+    .eq("id", ticketId)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+
+  await admin.from("ticket_events").insert({
+    ticket_id: ticketId,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "assigned",
+    metadata: { assigned_to: userId, source: "parte_diario" },
+  });
+
+  revalidatePath("/dashboard/parte-diario");
+  revalidatePath("/dashboard/mantenimiento");
+  revalidatePath("/m/parte-diario");
+  revalidatePath("/m/mantenimiento");
+}
+
+export async function assignTareaInDraft(requestId: string, userId: string | null) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "parte_diario", "update")) throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("concierge_requests")
+    .update({ assigned_to: userId })
+    .eq("id", requestId)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+
+  await admin.from("concierge_events").insert({
+    concierge_request_id: requestId,
+    organization_id: organization.id,
+    actor_id: session.userId,
+    event_type: "assigned",
+    metadata: { assigned_to: userId, source: "parte_diario" },
+  });
+
+  revalidatePath("/dashboard/parte-diario");
+  revalidatePath("/dashboard/tareas");
+  revalidatePath("/m/parte-diario");
 }
 
 // ─── ENVÍO: el botón rojo. Genera PDF, sube, fan-out por WA ─────────────────

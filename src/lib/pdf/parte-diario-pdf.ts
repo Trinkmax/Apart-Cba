@@ -210,6 +210,7 @@ function renderBookingsSection(
   color: [number, number, number],
   rows: ParteDiarioBookingRow[],
   emptyMessage: string,
+  timeKey: "check_in_time" | "check_out_time",
 ): number {
   y = ensureSpace(doc, y, 24);
   y = drawSectionHeader(doc, y, short, full, color, rows.length);
@@ -217,16 +218,18 @@ function renderBookingsSection(
   return tableAfterSection(
     doc,
     y,
-    [["Unidad", "Huésped / detalle", "Modo"]],
+    [["Hora", "Unidad", "Huésped / detalle", "Modo"]],
     rows.map((r) => [
+      r[timeKey] ? r[timeKey]!.slice(0, 5) : "—",
       `${r.unit_code}  ${r.unit_name}`,
       describeBookingGuest(r),
       BOOKING_MODE_LABEL[r.mode],
     ]),
     color,
     {
-      0: { cellWidth: 60 },
-      2: { cellWidth: 22, halign: "right" },
+      0: { cellWidth: 18, halign: "center" },
+      1: { cellWidth: 56 },
+      3: { cellWidth: 22, halign: "right" },
     },
   );
 }
@@ -351,15 +354,7 @@ export function generateParteDiarioPDFDoc(snapshot: ParteDiarioSnapshot): jsPDF 
   drawHeader(doc, snapshot);
 
   let y = 45;
-  y = renderBookingsSection(
-    doc,
-    y,
-    "CH OUT",
-    "Salidas del día",
-    SECTION_RGB.check_outs,
-    snapshot.check_outs,
-    "Sin check-outs hoy. Día tranquilo.",
-  );
+  // CH IN primero (matches dashboard layout: izquierda = ingresos del día).
   y = renderBookingsSection(
     doc,
     y,
@@ -368,6 +363,17 @@ export function generateParteDiarioPDFDoc(snapshot: ParteDiarioSnapshot): jsPDF 
     SECTION_RGB.check_ins,
     snapshot.check_ins,
     "Sin check-ins hoy.",
+    "check_in_time",
+  );
+  y = renderBookingsSection(
+    doc,
+    y,
+    "CH OUT",
+    "Salidas del día",
+    SECTION_RGB.check_outs,
+    snapshot.check_outs,
+    "Sin check-outs hoy. Día tranquilo.",
+    "check_out_time",
   );
   y = renderSuciosSection(doc, y, snapshot.sucios);
   y = renderTareasSection(doc, y, snapshot.tareas_pendientes);

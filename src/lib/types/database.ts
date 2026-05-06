@@ -1287,6 +1287,9 @@ export interface ParteDiarioBookingRow {
   is_owner_use: boolean;
   check_in_date: string;
   check_out_date: string;
+  /** Hora "HH:MM:SS" del check-in / check-out según se haya configurado en el booking. */
+  check_in_time: string | null;
+  check_out_time: string | null;
 }
 
 export interface ParteDiarioCleaningRow {

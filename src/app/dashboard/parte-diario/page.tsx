@@ -5,8 +5,9 @@ import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import {
   getParteDiario,
+  listAssignableForMaintenance,
+  listAssignableForTareas,
   listParteDiarioRecipients,
-  listAssignableCleaners,
 } from "@/lib/actions/parte-diario";
 import { Button } from "@/components/ui/button";
 import { SummaryChips } from "@/components/parte-diario/summary-chips";
@@ -15,6 +16,7 @@ import { BookingsSection } from "@/components/parte-diario/bookings-section";
 import { SuciosSection } from "@/components/parte-diario/sucios-section";
 import { MaintenanceSection } from "@/components/parte-diario/maintenance-section";
 import { TareasSection } from "@/components/parte-diario/tareas-section";
+import { CleanerLoadsBanner } from "@/components/parte-diario/cleaner-loads-banner";
 import { ActionBar } from "@/components/parte-diario/action-bar";
 import { DateNav } from "@/components/parte-diario/date-nav";
 
@@ -45,12 +47,13 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
   if (!can(role, "parte_diario", "view")) redirect("/dashboard");
   const canEdit = can(role, "parte_diario", "update");
 
-  const params = await searchParams;
-  const requestedDate = params.date ?? undefined;
+  const sp = await searchParams;
+  const requestedDate = sp.date ?? undefined;
   const payload = await getParteDiario(requestedDate);
-  const [recipients, cleaners] = await Promise.all([
+  const [recipients, maintenanceAssignables, tareasAssignables] = await Promise.all([
     listParteDiarioRecipients().catch(() => []),
-    listAssignableCleaners().catch(() => []),
+    listAssignableForMaintenance().catch(() => []),
+    listAssignableForTareas().catch(() => []),
   ]);
 
   const now = new Date();
@@ -61,7 +64,7 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
 
   return (
     <div className="flex flex-col min-h-[calc(100svh-4rem)]">
-      <div className="flex-1 px-4 sm:px-6 py-6 space-y-6">
+      <div className="flex-1 px-4 sm:px-6 py-6 space-y-5">
         {/* Header */}
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div className="space-y-1">
@@ -70,11 +73,10 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
               <span>·</span>
               <StatusPill status={status} />
             </div>
-            <h1 className="text-2xl font-semibold text-foreground">
-              {payload.date_label}
-            </h1>
+            <h1 className="text-2xl font-semibold text-foreground">{payload.date_label}</h1>
             <p className="text-sm text-muted-foreground">
-              {payload.organization_name} · {payload.settings.timezone.split("/").pop()?.replace("_", " ")}
+              {payload.organization_name} ·{" "}
+              {payload.settings.timezone.split("/").pop()?.replace("_", " ")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -108,46 +110,48 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
           ]}
         />
 
-        {/* Grid: a partir de lg ponemos 2 columnas. CH OUT/IN/SUCIOS a la izq,
-            TAREAS/ARREGLOS a la der. SUCIOS es la columna interactiva (asignación). */}
+        {/* Fila 1: CH IN (izquierda) | CH OUT (derecha) — paralelos para
+            comparar movimientos del día de un vistazo */}
         <div className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-4">
-            <BookingsSection
-              sectionKey="check_outs"
-              rows={payload.check_outs}
-              emptyMessage="Sin check-outs."
-            />
-            <BookingsSection
-              sectionKey="check_ins"
-              rows={payload.check_ins}
-              emptyMessage="Sin check-ins."
-            />
-            <SuciosSection
-              date={payload.date}
-              rows={payload.sucios}
-              cleaners={payload.cleaner_loads}
-              canEdit={canEdit}
-            />
-          </div>
-          <div className="space-y-4">
-            <TareasSection
-              rows={payload.tareas_pendientes}
-              emptyMessage="Sin tareas pendientes desde el módulo Tareas."
-            />
-            <MaintenanceSection
-              sectionKey="arreglos"
-              rows={payload.arreglos}
-              showPriority={true}
-              emptyMessage="Sin arreglos pendientes."
-            />
-            {/* Mini panel de carga del equipo — útil para ver el balance al asignar. */}
-            {payload.cleaner_loads.length > 0 ? (
-              <CleanerLoads loads={payload.cleaner_loads} />
-            ) : null}
-          </div>
+          <BookingsSection
+            sectionKey="check_ins"
+            rows={payload.check_ins}
+            emptyMessage="Sin check-ins."
+          />
+          <BookingsSection
+            sectionKey="check_outs"
+            rows={payload.check_outs}
+            emptyMessage="Sin check-outs."
+          />
         </div>
 
-        {/* Aviso de configuración faltante */}
+        {/* Banner: Carga del equipo — full-width, da contexto antes de asignar */}
+        <CleanerLoadsBanner loads={payload.cleaner_loads} />
+
+        {/* Fila 2: Mantenimiento | Sucios | Tareas. SUCIOS al centro porque
+            es la columna con más interacción y mayor prioridad operativa
+            (asignación de limpieza). */}
+        <div className="grid gap-4 lg:grid-cols-3">
+          <MaintenanceSection
+            rows={payload.arreglos}
+            assignables={maintenanceAssignables}
+            canEdit={canEdit}
+            emptyMessage="Sin arreglos pendientes."
+          />
+          <SuciosSection
+            date={payload.date}
+            rows={payload.sucios}
+            cleaners={payload.cleaner_loads}
+            canEdit={canEdit}
+          />
+          <TareasSection
+            rows={payload.tareas_pendientes}
+            assignables={tareasAssignables}
+            canEdit={canEdit}
+            emptyMessage="Sin tareas pendientes desde el módulo Tareas."
+          />
+        </div>
+
         {!payload.settings.enabled || !payload.settings.channel_id ? (
           <ConfigCallout
             enabled={payload.settings.enabled}
@@ -164,44 +168,7 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
         recipients={recipients}
         canEdit={canEdit}
       />
-
-      {/* hidden — lo usamos para que TS no marque cleaners como unused si se reusara. */}
-      <div className="hidden" aria-hidden>
-        {cleaners.length}
-      </div>
     </div>
-  );
-}
-
-function CleanerLoads({
-  loads,
-}: {
-  loads: { user_id: string; full_name: string; count: number }[];
-}) {
-  const max = Math.max(...loads.map((l) => l.count), 1);
-  return (
-    <section className="rounded-2xl border bg-card overflow-hidden">
-      <header className="flex items-center justify-between gap-3 px-5 py-3 border-b bg-muted/30">
-        <h2 className="text-sm font-semibold">Carga del equipo</h2>
-        <span className="text-xs text-muted-foreground">Tareas asignadas para el día</span>
-      </header>
-      <ul className="divide-y">
-        {loads.map((l) => (
-          <li key={l.user_id} className="flex items-center gap-3 px-5 py-2.5">
-            <span className="text-sm font-medium flex-1 truncate">{l.full_name}</span>
-            <div className="flex items-center gap-2 w-40">
-              <div className="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-cyan-500 transition-all"
-                  style={{ width: `${(l.count / max) * 100}%` }}
-                />
-              </div>
-              <span className="text-xs tabular-nums w-6 text-right">{l.count}</span>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
   );
 }
 
