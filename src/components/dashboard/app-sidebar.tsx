@@ -18,6 +18,7 @@ import {
   Settings,
   ShieldCheck,
   MessageSquareText,
+  ScrollText,
 } from "lucide-react";
 import {
   Sidebar,
@@ -70,6 +71,7 @@ const NAV: NavGroup[] = [
   {
     label: "Servicio",
     items: [
+      { label: "Parte diario", href: "/dashboard/parte-diario", icon: ScrollText, resource: "parte_diario" },
       { label: "Mantenimiento", href: "/dashboard/mantenimiento", icon: Wrench, resource: "tickets" },
       { label: "Limpieza", href: "/dashboard/limpieza", icon: Sparkles, resource: "cleaning" },
       { label: "Tareas", href: "/dashboard/tareas", icon: ListTodo, resource: "concierge" },

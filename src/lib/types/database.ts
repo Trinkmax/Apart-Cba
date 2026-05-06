@@ -1216,3 +1216,142 @@ export interface CrmContactWithLinks extends CrmContact {
     | null;
 }
 
+// ─── Parte Diario ───────────────────────────────────────────────────────────
+
+export type DailyReportStatus = "borrador" | "revisado" | "enviado";
+export type DailyReportGeneratedKind = "auto" | "manual";
+
+export interface ParteDiarioSettings {
+  organization_id: string;
+  enabled: boolean;
+  timezone: string;
+  /** Hora local (0–23) en la que se genera el borrador para el día siguiente. */
+  draft_hour: number;
+  /** Hora local opcional para recordar al admin si el parte sigue en borrador. */
+  reminder_hour: number | null;
+  channel_id: string | null;
+  template_name: string;
+  template_language: string;
+  auto_create_cleaning_tasks: boolean;
+  auto_assign_cleaning: boolean;
+  organization_label: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailyReport {
+  id: string;
+  organization_id: string;
+  /** Fecha que cubre el parte (typicamente "mañana" cuando se genera a las 20:00). */
+  report_date: string;
+  status: DailyReportStatus;
+  generated_at: string;
+  generated_by: string | null;
+  generated_kind: DailyReportGeneratedKind;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  sent_at: string | null;
+  sent_by: string | null;
+  pdf_url: string | null;
+  pdf_storage_path: string | null;
+  wa_message_ids: string[];
+  payload: ParteDiarioSnapshot | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ParteDiarioRecipient {
+  id: string;
+  organization_id: string;
+  contact_id: string | null;
+  user_id: string | null;
+  phone: string;
+  label: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Composiciones que arma getParteDiario al vuelo ─────────────────────────
+
+export interface ParteDiarioBookingRow {
+  booking_id: string;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string;
+  guest_name: string | null;
+  mode: BookingMode;
+  status: BookingStatus;
+  /** "uso prop" cuando el guest_id es null o se marca como uso propietario. */
+  is_owner_use: boolean;
+  check_in_date: string;
+  check_out_date: string;
+}
+
+export interface ParteDiarioCleaningRow {
+  /** Si task_id es null, es un "ghost" — hay check-out pero todavía no hay tarea creada. */
+  task_id: string | null;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string;
+  scheduled_for: string;
+  status: CleaningStatus | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  /** Source booking que disparó esta limpieza, si la conocemos. */
+  booking_out_id: string | null;
+  guest_name: string | null;
+  /** Hora aproximada de check-out para priorizar la cola de limpieza. */
+  check_out_time: string | null;
+}
+
+export interface ParteDiarioMaintenanceRow {
+  ticket_id: string;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string;
+  title: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  opened_at: string;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+}
+
+export interface ParteDiarioCleanerLoad {
+  user_id: string;
+  full_name: string;
+  role: UserRole;
+  /** Cantidad de tareas asignadas a este limpiador para report_date. */
+  count: number;
+}
+
+export interface ParteDiarioSnapshot {
+  date: string;
+  /** Pretty label en español para el header del PDF. Ej: "Miércoles 7 de mayo". */
+  date_label: string;
+  organization_name: string;
+  check_outs: ParteDiarioBookingRow[];
+  check_ins: ParteDiarioBookingRow[];
+  sucios: ParteDiarioCleaningRow[];
+  tareas_pendientes: ParteDiarioMaintenanceRow[];
+  arreglos: ParteDiarioMaintenanceRow[];
+  cleaner_loads: ParteDiarioCleanerLoad[];
+}
+
+export interface ParteDiarioPayload extends ParteDiarioSnapshot {
+  report: DailyReport | null;
+  settings: ParteDiarioSettings;
+}
+
+export interface MobileParteDiarioPayload {
+  date: string;
+  date_label: string;
+  greeting_name: string;
+  cleanings: ParteDiarioCleaningRow[];
+  maintenance: ParteDiarioMaintenanceRow[];
+  /** Cantidad de cleanings completadas hoy del set asignado. */
+  completed_cleanings: number;
+  total_cleanings: number;
+}

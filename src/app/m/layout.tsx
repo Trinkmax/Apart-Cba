@@ -1,16 +1,58 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Sparkles, Wrench, ListTodo, LogOut, Building2, MessageSquareText } from "lucide-react";
+import {
+  Sparkles,
+  Wrench,
+  ListTodo,
+  LogOut,
+  Building2,
+  MessageSquareText,
+  ScrollText,
+} from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { signOut } from "@/lib/actions/auth";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
+import type { UserRole } from "@/lib/types/database";
+
+interface MobileNavItem {
+  href: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  roles?: UserRole[];
+}
+
+const MOBILE_NAV: MobileNavItem[] = [
+  { href: "/m", icon: Building2, label: "Inicio" },
+  {
+    href: "/m/parte-diario",
+    icon: ScrollText,
+    label: "Parte",
+    roles: ["admin", "recepcion", "limpieza", "mantenimiento"],
+  },
+  { href: "/m/crm/inbox", icon: MessageSquareText, label: "CRM", roles: ["admin", "recepcion"] },
+  {
+    href: "/m/limpieza",
+    icon: Sparkles,
+    label: "Limpieza",
+    roles: ["admin", "limpieza", "recepcion"],
+  },
+  {
+    href: "/m/mantenimiento",
+    icon: Wrench,
+    label: "Tickets",
+    roles: ["admin", "mantenimiento", "recepcion"],
+  },
+  { href: "/m/tareas", icon: ListTodo, label: "Tareas", roles: ["admin", "recepcion"] },
+];
 
 export default async function MobileLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
   const { role } = await getCurrentOrg();
+
+  const visibleItems = MOBILE_NAV.filter((it) => !it.roles || it.roles.includes(role));
 
   return (
     <div className="min-h-svh bg-background flex flex-col">
@@ -29,16 +71,14 @@ export default async function MobileLayout({ children }: { children: React.React
       {/* Content — pb compensa la bottom nav + safe area */}
       <main className="flex-1 pb-[calc(5rem+env(safe-area-inset-bottom))]">{children}</main>
 
-      {/* Bottom nav */}
+      {/* Bottom nav — usamos gridTemplateColumns inline para ser flexible al
+          número de items visibles según rol (3 a 6). */}
       <nav className="fixed bottom-0 inset-x-0 z-20 bg-background/95 backdrop-blur-xl border-t safe-bottom safe-x">
-        <div className={`grid max-w-md mx-auto ${["admin", "recepcion"].includes(role) ? "grid-cols-5" : "grid-cols-4"}`}>
-          {[
-            { href: "/m", icon: Building2, label: "Inicio" },
-            { href: "/m/crm/inbox", icon: MessageSquareText, label: "CRM", roles: ["admin", "recepcion"] },
-            { href: "/m/limpieza", icon: Sparkles, label: "Limpieza", roles: ["admin", "limpieza", "recepcion"] },
-            { href: "/m/mantenimiento", icon: Wrench, label: "Tickets", roles: ["admin", "mantenimiento", "recepcion"] },
-            { href: "/m/tareas", icon: ListTodo, label: "Tareas", roles: ["admin", "recepcion"] },
-          ].filter((it) => !it.roles || it.roles.includes(role)).map((it) => {
+        <div
+          className="grid max-w-md mx-auto"
+          style={{ gridTemplateColumns: `repeat(${visibleItems.length}, minmax(0, 1fr))` }}
+        >
+          {visibleItems.map((it) => {
             const Icon = it.icon;
             return (
               <Link
