@@ -104,19 +104,19 @@ export const UNIT_OVERLAY_STYLE: Partial<
 > = {
   limpieza: {
     pattern:
-      "repeating-linear-gradient(135deg, rgba(6,182,212,0.18) 0 8px, rgba(6,182,212,0.06) 8px 16px)",
+      "linear-gradient(rgba(6,182,212,0.10), rgba(6,182,212,0.10)), repeating-linear-gradient(135deg, rgba(6,182,212,0.40) 0 8px, rgba(6,182,212,0.14) 8px 16px)",
     label: "Limpieza",
     hex: "#06b6d4",
   },
   mantenimiento: {
     pattern:
-      "repeating-linear-gradient(135deg, rgba(249,115,22,0.18) 0 8px, rgba(249,115,22,0.06) 8px 16px)",
+      "linear-gradient(rgba(249,115,22,0.10), rgba(249,115,22,0.10)), repeating-linear-gradient(135deg, rgba(249,115,22,0.40) 0 8px, rgba(249,115,22,0.14) 8px 16px)",
     label: "Mantenimiento",
     hex: "#f97316",
   },
   bloqueado: {
     pattern:
-      "repeating-linear-gradient(135deg, rgba(100,116,139,0.25) 0 8px, rgba(100,116,139,0.08) 8px 16px)",
+      "linear-gradient(rgba(100,116,139,0.10), rgba(100,116,139,0.10)), repeating-linear-gradient(135deg, rgba(100,116,139,0.50) 0 8px, rgba(100,116,139,0.18) 8px 16px)",
     label: "Bloqueado",
     hex: "#64748b",
   },
@@ -137,9 +137,9 @@ export const BOOKING_MODE_OVERLAY: Record<
     badgeRing: "ring-sky-300/60 dark:ring-sky-700/60",
   },
   mensual: {
-    // Pattern sutil: líneas verticales tenues cada ~20px
+    // Pattern: líneas verticales legibles cada ~19px
     stripePattern:
-      "repeating-linear-gradient(0deg, transparent 0 19px, rgba(255,255,255,0.16) 19px 20px)",
+      "repeating-linear-gradient(0deg, transparent 0 17px, rgba(255,255,255,0.42) 17px 19px)",
     sideAccent: "#7c3aed", // violeta — borde izquierdo finito
     badgeBg: "bg-violet-100 dark:bg-violet-900/60",
     badgeText: "text-violet-700 dark:text-violet-100",

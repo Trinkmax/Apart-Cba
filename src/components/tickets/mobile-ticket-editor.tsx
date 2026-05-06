@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Loader2, Save, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -49,9 +49,15 @@ export function MobileTicketEditor({
   const [currency, setCurrency] = useState<string>(initialCostCurrency);
   const [statusPending, startStatusTransition] = useTransition();
   const [costPending, startCostTransition] = useTransition();
+  // Guarda síncrona contra doble-tap. statusPending tiene un delay de un
+  // render antes de propagarse al disabled de los botones, por lo que un
+  // tap muy rápido podía iniciar dos transitions en paralelo.
+  const inflightStatus = useRef(false);
 
   function handleStatusChange(next: TicketStatus) {
+    if (inflightStatus.current) return;
     if (next === status) return;
+    inflightStatus.current = true;
     const prev = status;
     setStatus(next);
     startStatusTransition(async () => {
@@ -62,6 +68,8 @@ export function MobileTicketEditor({
       } catch (e) {
         setStatus(prev);
         toast.error("Error", { description: (e as Error).message });
+      } finally {
+        inflightStatus.current = false;
       }
     });
   }

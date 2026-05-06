@@ -17,6 +17,8 @@ interface Movement {
   account: { id: string; name: string; currency: string; color: string | null } | null;
   unit: { id: string; code: string; name: string } | null;
   owner: { id: string; full_name: string } | null;
+  /** Inyectado por listMovements para mostrar el nombre del huésped en cobros de reserva. */
+  linked_guest_name?: string | null;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -63,6 +65,10 @@ export function MovementsList({ movements }: { movements: Movement[] }) {
             isIn ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
           );
           const icon = isTransfer ? <ArrowRightLeft size={14} /> : isIn ? <ArrowDownToLine size={14} /> : <ArrowUpFromLine size={14} />;
+          const title =
+            m.category === "booking_payment" && m.linked_guest_name
+              ? `Cobro · ${m.linked_guest_name}`
+              : m.description ?? CATEGORY_LABELS[m.category] ?? m.category;
           return (
             <div key={m.id} className="hover:bg-accent/30 transition-colors">
               {/* MOBILE */}
@@ -70,9 +76,7 @@ export function MovementsList({ movements }: { movements: Movement[] }) {
                 <div className={iconCls}>{icon}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm font-medium truncate">
-                      {m.description ?? CATEGORY_LABELS[m.category] ?? m.category}
-                    </div>
+                    <div className="text-sm font-medium truncate">{title}</div>
                     <div className={cn(amountCls, "text-sm shrink-0")}>
                       {isIn ? "+" : "−"} {formatMoney(m.amount, m.currency)}
                     </div>
@@ -100,7 +104,7 @@ export function MovementsList({ movements }: { movements: Movement[] }) {
                   <div className={iconCls}>{icon}</div>
                 </div>
                 <div className="col-span-4 min-w-0">
-                  <div className="text-sm font-medium truncate">{m.description ?? CATEGORY_LABELS[m.category] ?? m.category}</div>
+                  <div className="text-sm font-medium truncate">{title}</div>
                   <div className="text-xs text-muted-foreground">{formatDateTime(m.occurred_at)}</div>
                 </div>
                 <div className="col-span-3">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -79,6 +79,28 @@ const STATUS_ICON: Record<TicketStatus, React.ComponentType<{ size?: number; cla
   cerrado: Archive,
 };
 
+// Definida fuera del componente para que sea estable y satisfaga
+// react-hooks/exhaustive-deps en el useEffect que resetea el form.
+function buildForm(t: Props["ticket"]): TicketInput | null {
+  return t
+    ? {
+        unit_id: t.unit_id,
+        title: t.title,
+        description: t.description ?? "",
+        category: t.category ?? "",
+        priority: t.priority,
+        status: t.status,
+        assigned_to: t.assigned_to ?? null,
+        estimated_cost: t.estimated_cost ?? null,
+        actual_cost: t.actual_cost ?? null,
+        cost_currency: t.cost_currency ?? "ARS",
+        billable_to: t.billable_to,
+        related_owner_id: t.related_owner_id ?? null,
+        notes: t.notes ?? "",
+      }
+    : null;
+}
+
 export function TicketDetailDialog({
   ticket,
   units,
@@ -88,42 +110,30 @@ export function TicketDetailDialog({
   onUpdated,
   onDeleted,
 }: Props) {
-  // Inicialización derivada del prop `ticket` con patrón "previous value".
-  const buildForm = (t: typeof ticket): TicketInput | null =>
-    t
-      ? {
-          unit_id: t.unit_id,
-          title: t.title,
-          description: t.description ?? "",
-          category: t.category ?? "",
-          priority: t.priority,
-          status: t.status,
-          assigned_to: t.assigned_to ?? null,
-          estimated_cost: t.estimated_cost ?? null,
-          actual_cost: t.actual_cost ?? null,
-          cost_currency: t.cost_currency ?? "ARS",
-          billable_to: t.billable_to,
-          related_owner_id: t.related_owner_id ?? null,
-          notes: t.notes ?? "",
-        }
-      : null;
-  const [prevTicketId, setPrevTicketId] = useState<string | null>(ticket?.id ?? null);
   const [isEditing, setIsEditing] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState<TicketInput | null>(() => buildForm(ticket));
   // null = aún no se hizo fetch (o se cerró/cambió de ticket); [] = fetched sin eventos.
   const [events, setEvents] = useState<TicketEventWithActor[] | null>(null);
-  if (ticket && ticket.id !== prevTicketId) {
-    setPrevTicketId(ticket.id);
+
+  // Resetear el estado local cuando cambia de ticket. Antes esto estaba
+  // como setState durante render — válido pero frágil con React Compiler.
+  const lastTicketIdRef = useRef<string | null>(ticket?.id ?? null);
+  useEffect(() => {
+    const newId = ticket?.id ?? null;
+    if (newId === lastTicketIdRef.current) return;
+    lastTicketIdRef.current = newId;
     setForm(buildForm(ticket));
     setIsEditing(false);
     setConfirmDelete(false);
     setEvents(null);
-  }
+  }, [ticket]);
 
-  // Cargamos el historial cuando el dialog se abre o tras una mutación.
-  // El loading state lo derivamos de `events === null` en vez de un setState síncrono.
+  // Cargamos el historial cuando el dialog se abre o cambia de ticket.
+  // Tras una mutación local, refrescamos manualmente desde los handlers
+  // (ver handleStatusChange / handleSave) en vez de re-disparar el effect
+  // con isPending — eso causaba doble fetch y flicker.
   const ticketId = ticket?.id;
   useEffect(() => {
     if (!open || !ticketId) return;
@@ -138,7 +148,7 @@ export function TicketDetailDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, ticketId, isPending]);
+  }, [open, ticketId]);
 
   if (!ticket || !form) return null;
 
@@ -151,11 +161,20 @@ export function TicketDetailDialog({
 
   function handleStatusChange(next: TicketStatus) {
     if (!ticket) return;
+    const ticketId = ticket.id;
     startTransition(async () => {
       try {
-        await changeTicketStatus(ticket.id, next);
+        await changeTicketStatus(ticketId, next);
         onUpdated?.({ ...ticket, status: next });
         toast.success("Estado actualizado");
+        // Refrescamos el timeline manualmente (antes lo hacía un useEffect
+        // con isPending en deps, que disparaba doble fetch).
+        try {
+          const fresh = await listTicketEvents(ticketId);
+          setEvents(fresh);
+        } catch {
+          // si falla el refresh del timeline, no es crítico
+        }
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -164,12 +183,19 @@ export function TicketDetailDialog({
 
   function handleSave() {
     if (!ticket || !form) return;
+    const ticketId = ticket.id;
     startTransition(async () => {
       try {
-        const updated = await updateTicket(ticket.id, form);
+        const updated = await updateTicket(ticketId, form);
         onUpdated?.(updated);
         toast.success("Ticket actualizado");
         setIsEditing(false);
+        try {
+          const fresh = await listTicketEvents(ticketId);
+          setEvents(fresh);
+        } catch {
+          // refresh no crítico
+        }
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -254,34 +280,33 @@ export function TicketDetailDialog({
         <Separator />
 
         <div className="px-6 py-5 space-y-5">
-          {/* Cambio rápido de estado (chips) */}
+          {/* Cambio rápido de estado (chips) — solo estados de destino */}
           {!isEditing && (
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs text-muted-foreground mr-1">Mover a:</span>
-              {(Object.keys(TICKET_STATUS_META) as TicketStatus[]).map((s) => {
-                const m = TICKET_STATUS_META[s];
-                const isCurrent = ticket.status === s;
-                return (
-                  <button
-                    key={s}
-                    disabled={isCurrent || isPending}
-                    onClick={() => handleStatusChange(s)}
-                    className={cn(
-                      "px-2.5 py-1 rounded-md text-xs font-medium transition-all border",
-                      isCurrent
-                        ? "opacity-50 cursor-default"
-                        : "hover:scale-[1.03] active:scale-95"
-                    )}
-                    style={{
-                      backgroundColor: isCurrent ? m.color + "20" : m.color + "0d",
-                      color: m.color,
-                      borderColor: m.color + (isCurrent ? "60" : "30"),
-                    }}
-                  >
-                    {m.label}
-                  </button>
-                );
-              })}
+              {(Object.keys(TICKET_STATUS_META) as TicketStatus[])
+                .filter((s) => s !== ticket.status)
+                .map((s) => {
+                  const m = TICKET_STATUS_META[s];
+                  return (
+                    <button
+                      key={s}
+                      disabled={isPending}
+                      onClick={() => handleStatusChange(s)}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md text-xs font-medium border transition-all",
+                        "hover:scale-[1.03] active:scale-95 disabled:opacity-50 disabled:hover:scale-100"
+                      )}
+                      style={{
+                        backgroundColor: m.color + "0d",
+                        color: m.color,
+                        borderColor: m.color + "30",
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
             </div>
           )}
 

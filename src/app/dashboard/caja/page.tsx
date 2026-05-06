@@ -1,5 +1,5 @@
 import { Plus, Wallet, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
-import { listAccounts, listMovements, getAccountBalance } from "@/lib/actions/cash";
+import { listAccounts, listMovements, getAccountBalances } from "@/lib/actions/cash";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
@@ -14,13 +14,14 @@ import { ExportMovementsDialog } from "@/components/cash/export-movements-dialog
 import { formatMoney } from "@/lib/format";
 
 export default async function CajaPage() {
-  const [accounts, movements, units, { role }] = await Promise.all([
+  const [accounts, movements, units, { role }, balancesMap] = await Promise.all([
     listAccounts(),
     listMovements({ limit: 100 }),
     listUnitsEnriched(),
     getCurrentOrg(),
+    getAccountBalances(),
   ]);
-  const balances = await Promise.all(accounts.map((a) => getAccountBalance(a.id)));
+  const balances = accounts.map((a) => balancesMap[a.id] ?? 0);
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
   const canManageAccounts = can(role, "cash", "update") && can(role, "cash", "delete");
 
