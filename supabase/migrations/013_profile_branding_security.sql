@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS apartcba.user_2fa_recovery_codes (
 CREATE INDEX IF NOT EXISTS idx_recovery_codes_user_active
   ON apartcba.user_2fa_recovery_codes(user_id) WHERE used_at IS NULL;
 
+ALTER TABLE apartcba.user_2fa_recovery_codes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS recovery_codes_all ON apartcba.user_2fa_recovery_codes;
+CREATE POLICY recovery_codes_all ON apartcba.user_2fa_recovery_codes
+  FOR ALL USING (true) WITH CHECK (true);
+
+COMMENT ON TABLE apartcba.user_2fa_recovery_codes IS
+  'Códigos de recuperación 2FA hasheados con bcrypt. Single-use (used_at se setea al consumir).';
+
 -- ════════════════════════════════════════════════════════════════════════
 -- 3. Tabla email_change_requests
 -- ════════════════════════════════════════════════════════════════════════
@@ -56,6 +64,11 @@ CREATE INDEX IF NOT EXISTS idx_email_change_user_open
   ON apartcba.email_change_requests(user_id)
   WHERE confirmed_at IS NULL AND cancelled_at IS NULL;
 
+ALTER TABLE apartcba.email_change_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS email_change_requests_all ON apartcba.email_change_requests;
+CREATE POLICY email_change_requests_all ON apartcba.email_change_requests
+  FOR ALL USING (true) WITH CHECK (true);
+
 -- ════════════════════════════════════════════════════════════════════════
 -- 4. Tabla org_message_templates
 -- ════════════════════════════════════════════════════════════════════════
@@ -75,6 +88,14 @@ CREATE TABLE IF NOT EXISTS apartcba.org_message_templates (
 
 CREATE INDEX IF NOT EXISTS idx_org_templates_lookup
   ON apartcba.org_message_templates(organization_id, event_type, channel);
+
+ALTER TABLE apartcba.org_message_templates ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS org_message_templates_all ON apartcba.org_message_templates;
+CREATE POLICY org_message_templates_all ON apartcba.org_message_templates
+  FOR ALL USING (true) WITH CHECK (true);
+
+COMMENT ON COLUMN apartcba.org_message_templates.is_default IS
+  'true cuando es el contenido seedeado original; el código setea false al primer UPDATE del admin.';
 
 -- ════════════════════════════════════════════════════════════════════════
 -- 5. Enum + tabla security_audit_log
@@ -100,13 +121,21 @@ CREATE TABLE IF NOT EXISTS apartcba.security_audit_log (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   event_type apartcba.security_event_type NOT NULL,
   metadata jsonb,
-  ip text,
+  ip inet,
   user_agent text,
   occurred_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_security_audit_user_time
   ON apartcba.security_audit_log(user_id, occurred_at DESC);
+
+ALTER TABLE apartcba.security_audit_log ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS security_audit_log_all ON apartcba.security_audit_log;
+CREATE POLICY security_audit_log_all ON apartcba.security_audit_log
+  FOR ALL USING (true) WITH CHECK (true);
+
+COMMENT ON TABLE apartcba.security_audit_log IS
+  'Audit log inmutable de eventos de seguridad por usuario (cambios password, email, 2FA).';
 
 -- ════════════════════════════════════════════════════════════════════════
 -- 6. Columna nueva en bookings
@@ -145,8 +174,17 @@ ON CONFLICT (organization_id, event_type, channel) DO NOTHING;
 -- 8. Trigger para seedear templates al crear org nueva
 -- ════════════════════════════════════════════════════════════════════════
 
+-- NOTA: el contenido del template default está duplicado entre el seed inicial
+-- (sección 7) y este trigger (sección 8) para auto-seedear orgs futuras.
+-- Si actualizás el copy del template, hacelo en los DOS lugares para mantener
+-- consistencia. (Las orgs existentes no se actualizan automáticamente; usar
+-- UPDATE manual o una migration follow-up si querés re-sembrar.)
 CREATE OR REPLACE FUNCTION apartcba.seed_default_templates_for_org()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = apartcba, public
+AS $$
 BEGIN
   INSERT INTO apartcba.org_message_templates (organization_id, event_type, channel, subject, body, is_default)
   VALUES
@@ -160,29 +198,23 @@ BEGIN
   ON CONFLICT DO NOTHING;
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 DROP TRIGGER IF EXISTS trg_seed_templates_for_new_org ON apartcba.organizations;
-CREATE TRIGGER trg_seed_templates_for_new_org
+DROP TRIGGER IF EXISTS trg_messaging_seed_on_org_create ON apartcba.organizations;
+CREATE TRIGGER trg_messaging_seed_on_org_create
   AFTER INSERT ON apartcba.organizations
   FOR EACH ROW EXECUTE FUNCTION apartcba.seed_default_templates_for_org();
 
 -- ════════════════════════════════════════════════════════════════════════
 -- 9. Trigger para actualizar updated_at en org_message_templates
 -- ════════════════════════════════════════════════════════════════════════
-
-CREATE OR REPLACE FUNCTION apartcba.touch_template_updated_at()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+-- Reusamos apartcba.tg_set_updated_at() definida en migration 001.
 
 DROP TRIGGER IF EXISTS trg_touch_template_updated_at ON apartcba.org_message_templates;
 CREATE TRIGGER trg_touch_template_updated_at
   BEFORE UPDATE ON apartcba.org_message_templates
-  FOR EACH ROW EXECUTE FUNCTION apartcba.touch_template_updated_at();
+  FOR EACH ROW EXECUTE FUNCTION apartcba.tg_set_updated_at();
 
 -- ════════════════════════════════════════════════════════════════════════
 -- Final: comentarios sobre RLS de Storage (se aplica en Task 2)
