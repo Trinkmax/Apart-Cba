@@ -686,6 +686,21 @@ export async function createBooking(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   revalidatePath("/dashboard/alertas");
+
+  // CRM event publisher (best-effort; no falla si CRM no está configurado)
+  try {
+    const { publishCrmEvent } = await import("@/lib/crm/events");
+    await publishCrmEvent({
+      organizationId: organization.id,
+      eventType: "booking.created",
+      payload: { booking_id: data.id, unit_id: data.unit_id, guest_id: data.guest_id, status: data.status, mode: data.mode },
+      refType: "booking",
+      refId: data.id,
+    });
+  } catch (e) {
+    console.warn("[bookings/createBooking] crm publish failed", e);
+  }
+
   return data as Booking;
 }
 
@@ -924,6 +939,40 @@ export async function changeBookingStatus(
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
+
+  // CRM event publisher
+  try {
+    const { publishCrmEvent } = await import("@/lib/crm/events");
+    const eventMap: Record<string, string> = {
+      confirmada: "booking.confirmed",
+      check_in: "booking.checkin_today",
+      check_out: "booking.checkout_today",
+      cancelada: "booking.cancelled",
+      no_show: "booking.cancelled",
+    };
+    const eventType = eventMap[newStatus];
+    if (eventType) {
+      const { data: bookingFull } = await admin
+        .from("bookings")
+        .select("unit_id,guest_id")
+        .eq("id", id)
+        .single();
+      await publishCrmEvent({
+        organizationId: organization.id,
+        eventType,
+        payload: {
+          booking_id: id,
+          unit_id: bookingFull?.unit_id,
+          guest_id: bookingFull?.guest_id,
+          status: newStatus,
+        },
+        refType: "booking",
+        refId: id,
+      });
+    }
+  } catch (e) {
+    console.warn("[bookings/changeBookingStatus] crm publish failed", e);
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

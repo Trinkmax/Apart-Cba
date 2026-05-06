@@ -1,0 +1,250 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { requireSession } from "./auth";
+import { getCurrentOrg } from "./org";
+import { createAdminClient } from "@/lib/supabase/server";
+import { createSecret, updateSecret } from "@/lib/crm/encryption";
+import type { CrmChannel } from "@/lib/types/database";
+
+export async function listChannels(): Promise<CrmChannel[]> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("crm_channels")
+    .select("*")
+    .eq("organization_id", organization.id)
+    .order("created_at", { ascending: false });
+  return (data ?? []) as CrmChannel[];
+}
+
+const upsertSchema = z.object({
+  id: z.string().uuid().optional(),
+  provider: z.enum(["meta_cloud", "meta_instagram"]).default("meta_cloud"),
+  displayName: z.string().min(1).max(100),
+  // WA fields
+  phoneNumber: z.string().optional(),
+  phoneNumberId: z.string().optional(),
+  wabaId: z.string().optional(),
+  // IG fields
+  instagramBusinessAccountId: z.string().optional(),
+  pageId: z.string().optional(),
+  instagramUsername: z.string().optional(),
+  // Comunes
+  appId: z.string().optional(),
+  accessToken: z.string().min(10).optional(),
+  appSecret: z.string().min(8).optional(),
+  webhookVerifyToken: z.string().min(8).optional(),
+}).refine((data) => {
+  if (data.provider === "meta_cloud") {
+    return !!(data.phoneNumber && data.phoneNumberId && data.wabaId);
+  }
+  if (data.provider === "meta_instagram") {
+    return !!(data.instagramBusinessAccountId);
+  }
+  return true;
+}, { message: "Faltan campos requeridos del proveedor" });
+
+export async function upsertChannel(input: z.infer<typeof upsertSchema>) {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") throw new Error("Sin permisos");
+
+  const v = upsertSchema.parse(input);
+  const admin = createAdminClient();
+
+  let accessTokenSecretId: string | undefined;
+  let appSecretSecretId: string | undefined;
+  let verifyTokenSecretId: string | undefined;
+
+  if (v.id) {
+    // Update existing — rotar secrets si vienen
+    const { data: existing } = await admin
+      .from("crm_channels")
+      .select("access_token_secret_id,app_secret_secret_id,webhook_verify_token_secret_id")
+      .eq("id", v.id)
+      .eq("organization_id", organization.id)
+      .single();
+    if (!existing) throw new Error("Channel no encontrado");
+
+    if (v.accessToken) {
+      if (existing.access_token_secret_id) {
+        await updateSecret(existing.access_token_secret_id, v.accessToken);
+        accessTokenSecretId = existing.access_token_secret_id;
+      } else {
+        accessTokenSecretId = await createSecret(`crm_channel_${v.id}_access_token`, v.accessToken);
+      }
+    }
+    if (v.appSecret) {
+      if (existing.app_secret_secret_id) {
+        await updateSecret(existing.app_secret_secret_id, v.appSecret);
+        appSecretSecretId = existing.app_secret_secret_id;
+      } else {
+        appSecretSecretId = await createSecret(`crm_channel_${v.id}_app_secret`, v.appSecret);
+      }
+    }
+    if (v.webhookVerifyToken) {
+      if (existing.webhook_verify_token_secret_id) {
+        await updateSecret(existing.webhook_verify_token_secret_id, v.webhookVerifyToken);
+        verifyTokenSecretId = existing.webhook_verify_token_secret_id;
+      } else {
+        verifyTokenSecretId = await createSecret(`crm_channel_${v.id}_verify_token`, v.webhookVerifyToken);
+      }
+    }
+
+    const update: Record<string, unknown> = {
+      provider: v.provider,
+      display_name: v.displayName,
+      phone_number: v.phoneNumber ?? null,
+      phone_number_id: v.phoneNumberId ?? null,
+      waba_id: v.wabaId ?? null,
+      instagram_business_account_id: v.instagramBusinessAccountId ?? null,
+      page_id: v.pageId ?? null,
+      instagram_username: v.instagramUsername ?? null,
+      app_id: v.appId,
+    };
+    if (accessTokenSecretId) update.access_token_secret_id = accessTokenSecretId;
+    if (appSecretSecretId) update.app_secret_secret_id = appSecretSecretId;
+    if (verifyTokenSecretId) update.webhook_verify_token_secret_id = verifyTokenSecretId;
+
+    await admin.from("crm_channels").update(update).eq("id", v.id);
+  } else {
+    // Create new
+    const { data: created, error } = await admin
+      .from("crm_channels")
+      .insert({
+        organization_id: organization.id,
+        provider: v.provider,
+        display_name: v.displayName,
+        phone_number: v.phoneNumber ?? null,
+        phone_number_id: v.phoneNumberId ?? null,
+        waba_id: v.wabaId ?? null,
+        instagram_business_account_id: v.instagramBusinessAccountId ?? null,
+        page_id: v.pageId ?? null,
+        instagram_username: v.instagramUsername ?? null,
+        app_id: v.appId,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+    if (error || !created) throw new Error(error?.message ?? "create_failed");
+
+    if (v.accessToken) {
+      const sid = await createSecret(`crm_channel_${created.id}_access_token`, v.accessToken);
+      await admin.from("crm_channels").update({ access_token_secret_id: sid }).eq("id", created.id);
+    }
+    if (v.appSecret) {
+      const sid = await createSecret(`crm_channel_${created.id}_app_secret`, v.appSecret);
+      await admin.from("crm_channels").update({ app_secret_secret_id: sid }).eq("id", created.id);
+    }
+    if (v.webhookVerifyToken) {
+      const sid = await createSecret(`crm_channel_${created.id}_verify_token`, v.webhookVerifyToken);
+      await admin.from("crm_channels").update({ webhook_verify_token_secret_id: sid }).eq("id", created.id);
+    }
+  }
+
+  revalidatePath("/dashboard/crm/config");
+}
+
+export async function setChannelStatus(id: string, status: "active" | "disabled") {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  await admin
+    .from("crm_channels")
+    .update({ status })
+    .eq("id", id)
+    .eq("organization_id", organization.id);
+  revalidatePath("/dashboard/crm/config");
+}
+
+export async function deleteChannel(id: string) {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  await admin.from("crm_channels").delete().eq("id", id).eq("organization_id", organization.id);
+  revalidatePath("/dashboard/crm/config");
+}
+
+/**
+ * Health check: valida que las credenciales del canal funcionen contra Meta API.
+ * Hace GET a /{phone_number_id} y verifica que devuelva 200.
+ */
+export async function testChannelHealth(id: string): Promise<{ ok: boolean; message: string; details?: Record<string, unknown> }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  const { data: channel, error } = await admin
+    .from("crm_channels")
+    .select("*")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .single();
+  if (error || !channel) throw new Error("Canal no encontrado");
+
+  const { getSecret } = await import("@/lib/crm/encryption");
+  const accessToken = await getSecret(channel.access_token_secret_id);
+  if (!accessToken) {
+    await admin
+      .from("crm_channels")
+      .update({ status: "error", last_error: "Access token no configurado", last_health_check_at: new Date().toISOString() })
+      .eq("id", id);
+    return { ok: false, message: "Access token no configurado" };
+  }
+
+  const apiVersion = process.env.META_GRAPH_API_VERSION || "v22.0";
+  // Endpoint distinto según provider
+  const url = channel.provider === "meta_instagram"
+    ? `https://graph.facebook.com/${apiVersion}/${channel.instagram_business_account_id}?fields=username,name,profile_picture_url,followers_count`
+    : `https://graph.facebook.com/${apiVersion}/${channel.phone_number_id}?fields=display_phone_number,verified_name,quality_rating,platform_type`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = (await res.json().catch(() => null)) as
+      | { display_phone_number?: string; verified_name?: string; quality_rating?: string; error?: { message?: string; code?: number } }
+      | null;
+
+    if (!res.ok) {
+      const errMsg = data?.error?.message ?? `HTTP ${res.status}`;
+      await admin
+        .from("crm_channels")
+        .update({ status: "error", last_error: errMsg, last_health_check_at: new Date().toISOString() })
+        .eq("id", id);
+      revalidatePath("/dashboard/crm/config");
+      return { ok: false, message: errMsg };
+    }
+
+    await admin
+      .from("crm_channels")
+      .update({ status: "active", last_error: null, last_health_check_at: new Date().toISOString() })
+      .eq("id", id);
+    revalidatePath("/dashboard/crm/config");
+    const success = channel.provider === "meta_instagram"
+      ? `IG @${(data as { username?: string })?.username ?? "?"} · ${(data as { followers_count?: number })?.followers_count ?? "?"} followers`
+      : `WA ${(data as { display_phone_number?: string })?.display_phone_number ?? "?"} · ${(data as { verified_name?: string })?.verified_name ?? "?"} · quality: ${(data as { quality_rating?: string })?.quality_rating ?? "?"}`;
+    return {
+      ok: true,
+      message: `Conectado · ${success}`,
+      details: data ?? undefined,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await admin
+      .from("crm_channels")
+      .update({ status: "error", last_error: message, last_health_check_at: new Date().toISOString() })
+      .eq("id", id);
+    revalidatePath("/dashboard/crm/config");
+    return { ok: false, message };
+  }
+}

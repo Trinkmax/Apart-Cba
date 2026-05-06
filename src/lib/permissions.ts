@@ -16,7 +16,12 @@ export type Resource =
   | "amenities"
   | "ical"
   | "messaging"
-  | "users";
+  | "users"
+  | "crm_inbox"
+  | "crm_workflows"
+  | "crm_rapidos"
+  | "crm_config"
+  | "parte_diario";
 
 export function can(role: UserRole, resource: Resource, action: Action = "view"): boolean {
   const perms = DEFAULT_ROLE_PERMISSIONS[role];

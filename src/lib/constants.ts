@@ -168,6 +168,92 @@ export const CLEANING_STATUS_META: Record<CleaningStatus, { label: string; color
   cancelada: { label: "Cancelada", color: "#ef4444" },
 };
 
+// Estados del parte diario. El cromático va de slate (work in progress) a
+// emerald (cerrado y enviado), pasando por amber (pendiente de revisar).
+export const DAILY_REPORT_STATUS_META: Record<
+  "borrador" | "revisado" | "enviado",
+  { label: string; color: string; bgClass: string; ringClass: string; dotClass: string; textClass: string }
+> = {
+  borrador: {
+    label: "Borrador",
+    color: "#64748b",
+    bgClass: "bg-slate-500/10",
+    ringClass: "ring-slate-500/30",
+    dotClass: "bg-slate-500",
+    textClass: "text-slate-700 dark:text-slate-300",
+  },
+  revisado: {
+    label: "Revisado",
+    color: "#f59e0b",
+    bgClass: "bg-amber-500/10",
+    ringClass: "ring-amber-500/30",
+    dotClass: "bg-amber-500",
+    textClass: "text-amber-700 dark:text-amber-300",
+  },
+  enviado: {
+    label: "Enviado",
+    color: "#10b981",
+    bgClass: "bg-emerald-500/10",
+    ringClass: "ring-emerald-500/30",
+    dotClass: "bg-emerald-500",
+    textClass: "text-emerald-700 dark:text-emerald-300",
+  },
+};
+
+// Paleta semántica para las secciones del parte. Misma escala cromática que
+// UNIT_STATUS_META para que los staff lean el parte como una extensión del
+// tablero de unidades. Cada sección define un color base hex (PDF / chart) y
+// las clases Tailwind para chips/cards en el dashboard.
+export const PARTE_DIARIO_SECTION_META = {
+  check_outs: {
+    label: "Check-outs",
+    short: "CH OUT",
+    color: "#ef4444",
+    bgClass: "bg-rose-500/10",
+    ringClass: "ring-rose-500/30",
+    dotClass: "bg-rose-500",
+    textClass: "text-rose-600 dark:text-rose-400",
+  },
+  check_ins: {
+    label: "Check-ins",
+    short: "CH IN",
+    color: "#10b981",
+    bgClass: "bg-emerald-500/10",
+    ringClass: "ring-emerald-500/30",
+    dotClass: "bg-emerald-500",
+    textClass: "text-emerald-600 dark:text-emerald-400",
+  },
+  sucios: {
+    label: "Sucios",
+    short: "SUCIOS",
+    color: "#06b6d4",
+    bgClass: "bg-cyan-500/10",
+    ringClass: "ring-cyan-500/30",
+    dotClass: "bg-cyan-500",
+    textClass: "text-cyan-600 dark:text-cyan-400",
+  },
+  tareas_pendientes: {
+    label: "Tareas pendientes",
+    short: "TAREAS",
+    color: "#64748b",
+    bgClass: "bg-slate-500/10",
+    ringClass: "ring-slate-500/30",
+    dotClass: "bg-slate-500",
+    textClass: "text-slate-600 dark:text-slate-400",
+  },
+  arreglos: {
+    label: "Arreglos",
+    short: "ARREGLOS",
+    color: "#f59e0b",
+    bgClass: "bg-amber-500/10",
+    ringClass: "ring-amber-500/30",
+    dotClass: "bg-amber-500",
+    textClass: "text-amber-600 dark:text-amber-400",
+  },
+} as const;
+
+export type ParteDiarioSectionKey = keyof typeof PARTE_DIARIO_SECTION_META;
+
 export const ROLE_META: Record<UserRole, { label: string; description: string; color: string }> = {
   admin: { label: "Administrador", description: "Acceso completo", color: "#0f766e" },
   recepcion: { label: "Recepción", description: "Reservas, huéspedes, check-in/out", color: "#3b82f6" },
@@ -193,15 +279,20 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     settlements: ["view"],
     concierge: ["view", "create", "update"],
     messaging: ["view", "create", "update"],
+    crm_inbox: ["view", "create", "update"],
+    crm_rapidos: ["view"],
+    parte_diario: ["view", "update", "create"],
   },
   mantenimiento: {
     units: ["view"],
     tickets: ["view", "create", "update"],
     cleaning: ["view"],
+    parte_diario: ["view"],
   },
   limpieza: {
     units: ["view"],
     cleaning: ["view", "update"],
+    parte_diario: ["view"],
   },
   owner_view: {
     units: ["view"],

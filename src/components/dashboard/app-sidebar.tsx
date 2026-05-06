@@ -16,9 +16,9 @@ import {
   Boxes,
   ListTodo,
   Settings,
-  Palette,
   ShieldCheck,
-  MessageSquare,
+  MessageSquareText,
+  ScrollText,
 } from "lucide-react";
 import {
   Sidebar,
@@ -53,6 +53,12 @@ interface NavGroup {
 
 const NAV: NavGroup[] = [
   {
+    label: "Mensajería",
+    items: [
+      { label: "Mensajería", href: "/dashboard/crm", icon: MessageSquareText, resource: "crm_inbox" },
+    ],
+  },
+  {
     label: "Operación",
     items: [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, resource: "*" },
@@ -65,7 +71,7 @@ const NAV: NavGroup[] = [
   {
     label: "Servicio",
     items: [
-      { label: "Mensajería", href: "/dashboard/mensajeria", icon: MessageSquare, resource: "messaging" },
+      { label: "Parte diario", href: "/dashboard/parte-diario", icon: ScrollText, resource: "parte_diario" },
       { label: "Mantenimiento", href: "/dashboard/mantenimiento", icon: Wrench, resource: "tickets" },
       { label: "Limpieza", href: "/dashboard/limpieza", icon: Sparkles, resource: "cleaning" },
       { label: "Tareas", href: "/dashboard/tareas", icon: ListTodo, resource: "concierge" },
@@ -122,9 +128,12 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
             (item) => item.resource === "*" || can(currentRole, item.resource as Resource, "view")
           );
           if (visibleItems.length === 0) return null;
+          // Si el grupo tiene un único ítem con el mismo nombre que el grupo,
+          // ocultamos el label para no duplicar texto (caso "Mensajería").
+          const hideLabel = visibleItems.length === 1 && visibleItems[0].label === group.label;
           return (
             <SidebarGroup key={group.label}>
-              <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+              {!hideLabel && <SidebarGroupLabel>{group.label}</SidebarGroupLabel>}
               <SidebarGroupContent>
                 <SidebarMenu>
                   {visibleItems.map((item) => {
@@ -161,39 +170,40 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
           );
         })}
 
-        {isAdmin && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Configuración</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild tooltip="Equipo y permisos" isActive={isActive("/dashboard/configuracion/equipo")}>
-                    <Link href="/dashboard/configuracion/equipo">
-                      <Users size={18} />
-                      <span>Equipo y permisos</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild tooltip="Colores de reservas" isActive={isActive("/dashboard/configuracion/colores")}>
-                    <Link href="/dashboard/configuracion/colores">
-                      <Palette size={18} />
-                      <span>Colores</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild tooltip="Configuración" isActive={isActive("/dashboard/configuracion/general")}>
-                    <Link href="/dashboard/configuracion/general">
-                      <Settings size={18} />
-                      <span>General</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+        {isAdmin && (() => {
+          const onEquipo =
+            pathname === "/dashboard/configuracion/equipo" ||
+            pathname.startsWith("/dashboard/configuracion/equipo/");
+          const onConfig =
+            !onEquipo &&
+            (pathname === "/dashboard/configuracion" ||
+              pathname.startsWith("/dashboard/configuracion/"));
+          return (
+            <SidebarGroup>
+              <SidebarGroupLabel>Configuración</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Equipo y permisos" isActive={onEquipo}>
+                      <Link href="/dashboard/configuracion/equipo">
+                        <Users size={18} className={cn("transition-colors", onEquipo && "text-sidebar-primary")} />
+                        <span>Equipo y permisos</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Configuración" isActive={onConfig}>
+                      <Link href="/dashboard/configuracion">
+                        <Settings size={18} className={cn("transition-colors", onConfig && "text-sidebar-primary")} />
+                        <span>Configuración</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })()}
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-3">

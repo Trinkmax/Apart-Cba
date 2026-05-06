@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { Download, Loader2, ChevronDown } from "lucide-react";
+import { Download, FileText, Loader2, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -31,6 +31,7 @@ import {
 import { exportMovements, type ExportMovementsFilters } from "@/lib/actions/cash";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { formatDateTime } from "@/lib/format";
+import { generateCashMovementsPDF } from "@/lib/pdf/cash-movements-pdf";
 import type { CashAccount, MovementCategory } from "@/lib/types/database";
 
 type RangePreset =
@@ -99,6 +100,7 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
   const [direction, setDirection] = useState<"all" | "in" | "out">("all");
   const [billableTo, setBillableTo] = useState<"all" | "apartcba" | "owner" | "guest">("all");
   const [isPending, startTransition] = useTransition();
+  const [pendingFormat, setPendingFormat] = useState<"csv" | "pdf" | null>(null);
 
   const accountById = useMemo(() => {
     const m = new Map<string, CashAccount>();
@@ -118,7 +120,7 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
     setBillableTo("all");
   }
 
-  function handleExport() {
+  function handleExport(format: "csv" | "pdf") {
     if (!range) {
       toast.error("Seleccioná un rango de fechas válido");
       return;
@@ -133,6 +135,7 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
       billableTo,
     };
 
+    setPendingFormat(format);
     startTransition(async () => {
       try {
         const rows = await exportMovements(filters);
@@ -141,16 +144,29 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
           return;
         }
 
-        const csv = buildCsv(rows);
         const filenameSuffix = accountId
           ? sanitize(accountById.get(accountId)?.name ?? "cuenta")
           : "todas";
-        const filename = `movimientos_${filenameSuffix}_${range.fromLabel}_a_${range.toLabel}.csv`;
-        downloadCsv(filename, csv);
+
+        if (format === "csv") {
+          const csv = buildCsv(rows);
+          const filename = `movimientos_${filenameSuffix}_${range.fromLabel}_a_${range.toLabel}.csv`;
+          downloadCsv(filename, csv);
+        } else {
+          generateCashMovementsPDF(rows, {
+            fromLabel: range.fromLabel,
+            toLabel: range.toLabel,
+            rangeSummary: range.summary,
+            filenameSuffix,
+          });
+        }
+
         toast.success(`Se exportaron ${rows.length.toLocaleString("es-AR")} movimientos`);
         setOpen(false);
       } catch (e) {
         toast.error("Error al exportar", { description: (e as Error).message });
+      } finally {
+        setPendingFormat(null);
       }
     });
   }
@@ -286,12 +302,35 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="gap-2 sm:gap-2">
           <Button type="button" variant="outline" onClick={() => setOpen(false)}>
             Cancelar
           </Button>
-          <Button onClick={handleExport} disabled={!range || isPending} className="gap-1.5">
-            {isPending ? <Loader2 className="animate-spin" size={15} /> : <Download size={15} />}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => handleExport("pdf")}
+            disabled={!range || isPending}
+            className="gap-1.5"
+          >
+            {pendingFormat === "pdf" ? (
+              <Loader2 className="animate-spin" size={15} />
+            ) : (
+              <FileText size={15} />
+            )}
+            Exportar PDF
+          </Button>
+          <Button
+            type="button"
+            onClick={() => handleExport("csv")}
+            disabled={!range || isPending}
+            className="gap-1.5"
+          >
+            {pendingFormat === "csv" ? (
+              <Loader2 className="animate-spin" size={15} />
+            ) : (
+              <Download size={15} />
+            )}
             Exportar CSV
           </Button>
         </DialogFooter>
@@ -326,6 +365,7 @@ function MultiSelectPopover({
   function toggle(v: string) {
     onChange(selected.includes(v) ? selected.filter((s) => s !== v) : [...selected, v]);
   }
+  const allSelected = items.length > 0 && selected.length === items.length;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -340,28 +380,38 @@ function MultiSelectPopover({
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        // Estructura: el container limita la altura total y reparte espacio
-        // entre el header sticky ("Limpiar selección") y la lista scrolleable.
-        // `collisionPadding` reserva 16px alrededor para que Radix flipée
-        // hacia arriba cuando el trigger está cerca del bottom del viewport
-        // (caso típico dentro de un Dialog).
-        className="p-0 w-[var(--radix-popover-trigger-width)] max-h-[min(320px,60svh)] overflow-hidden flex flex-col"
+        // Altura fija con max-height explícito en el contenedor scrolleable.
+        // Se evita el patrón flex-1 + min-h-0 porque es frágil cuando el
+        // popover se renderiza dentro de un Dialog en algunos navegadores.
+        className="p-0 w-[var(--radix-popover-trigger-width)]"
         align="start"
         side="bottom"
         sideOffset={4}
         collisionPadding={16}
         avoidCollisions
       >
-        <button
-          type="button"
-          onClick={() => onChange([])}
-          className="shrink-0 w-full px-3 py-2 text-xs text-left text-muted-foreground hover:bg-accent border-b"
+        <div className="flex items-center justify-between gap-2 border-b px-2 py-1.5">
+          <button
+            type="button"
+            onClick={() => onChange(allSelected ? [] : items.map((i) => i.value))}
+            className="text-xs font-medium hover:text-primary"
+          >
+            {allSelected ? "Deseleccionar todos" : "Seleccionar todos"}
+          </button>
+          {selected.length > 0 && !allSelected && (
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              Limpiar
+            </button>
+          )}
+        </div>
+        <div
+          className="overflow-y-auto overscroll-contain p-1.5 space-y-0.5"
+          style={{ maxHeight: "min(280px, 50svh)" }}
         >
-          Limpiar selección
-        </button>
-        {/* Lista scrolleable. `min-h-0` es crítico para que un flex child
-            herede el max-height del padre (sin esto el child no scrollea). */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-1.5 space-y-0.5">
           {items.map((it) => {
             const checked = selected.includes(it.value);
             return (

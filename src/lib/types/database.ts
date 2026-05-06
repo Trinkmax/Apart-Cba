@@ -769,3 +769,589 @@ export interface OwnerMember {
   avatar_url: string | null;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Messaging (legacy stack — usado por /api/webhooks/meta/[channel]/route.ts)
+// Coexiste con CRM (más abajo). Ambos stacks viven en paralelo.
+// ════════════════════════════════════════════════════════════════════════════
+
+export type MessagingChannelType = "whatsapp" | "instagram";
+
+export type MessagingContentType =
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "document"
+  | "location"
+  | "contacts"
+  | "sticker"
+  | "system"
+  | "unsupported";
+
+// ════════════════════════════════════════════════════════════════════════════
+// CRM (migration 010)
+// ════════════════════════════════════════════════════════════════════════════
+
+export type CrmChannelProvider = "meta_cloud" | "meta_instagram";
+export type CrmChannelStatus = "pending" | "active" | "disabled" | "error";
+
+export interface CrmChannel {
+  id: string;
+  organization_id: string;
+  provider: CrmChannelProvider;
+  display_name: string;
+  // WA fields (null si provider = meta_instagram)
+  phone_number: string | null;
+  phone_number_id: string | null;
+  waba_id: string | null;
+  // IG fields (null si provider = meta_cloud)
+  instagram_business_account_id: string | null;
+  page_id: string | null;
+  instagram_username: string | null;
+  // Comunes
+  app_id: string | null;
+  access_token_secret_id: string | null;
+  app_secret_secret_id: string | null;
+  webhook_verify_token_secret_id: string | null;
+  status: CrmChannelStatus;
+  last_error: string | null;
+  last_health_check_at: string | null;
+  webhook_subscribed_fields: string[];
+  provider_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmContactKind = "lead" | "guest" | "owner" | "staff" | "other";
+export type CrmContactExternalKind = "phone" | "igsid" | "fb_psid";
+
+export interface CrmContact {
+  id: string;
+  organization_id: string;
+  external_id: string;             // E.164 phone OR IGSID
+  external_kind: CrmContactExternalKind;
+  phone: string | null;            // null si external_kind != 'phone'
+  instagram_username: string | null;
+  name: string | null;
+  avatar_url: string | null;
+  guest_id: string | null;
+  owner_id: string | null;
+  contact_kind: CrmContactKind;
+  preferred_locale: string | null;
+  metadata: Record<string, unknown>;
+  blocked: boolean;
+  last_message_at: string | null;
+  first_seen_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmConversationStatus = "open" | "closed" | "archived" | "snoozed";
+export type CrmConversationClosedReason =
+  | "auto_24h"
+  | "manual"
+  | "workflow"
+  | null;
+
+export interface CrmConversation {
+  id: string;
+  organization_id: string;
+  contact_id: string;
+  channel_id: string;
+  status: CrmConversationStatus;
+  assigned_to: string | null;
+  unread_count: number;
+  last_message_at: string | null;
+  last_message_preview: string | null;
+  last_customer_message_at: string | null;
+  last_outbound_message_at: string | null;
+  closed_at: string | null;
+  closed_reason: CrmConversationClosedReason;
+  snoozed_until: string | null;
+  ai_summary: string | null;
+  ai_summary_generated_at: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmMessageDirection = "in" | "out";
+export type CrmMessageType =
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "document"
+  | "location"
+  | "contacts"
+  | "sticker"
+  | "template"
+  | "interactive_buttons"
+  | "interactive_list"
+  | "reaction"
+  | "system"
+  | "unsupported"
+  | "story_reply"
+  | "story_mention"
+  | "share"
+  | "postback"
+  | "quick_reply";
+export type CrmMessageStatus =
+  | "received"
+  | "queued"
+  | "sending"
+  | "sent"
+  | "delivered"
+  | "read"
+  | "failed"
+  | "deleted";
+export type CrmMessageSenderKind = "human" | "workflow" | "ai" | "contact" | "system";
+
+export interface CrmMessage {
+  id: string;
+  organization_id: string;
+  conversation_id: string;
+  contact_id: string;
+  channel_id: string;
+  direction: CrmMessageDirection;
+  type: CrmMessageType;
+  body: string | null;
+  media_storage_path: string | null;
+  media_url: string | null;
+  media_mime: string | null;
+  media_size_bytes: number | null;
+  media_duration_ms: number | null;
+  media_filename: string | null;
+  media_thumbnail_path: string | null;
+  transcription_text: string | null;
+  transcription_language: string | null;
+  payload: Record<string, unknown> | null;
+  template_name: string | null;
+  template_variables: Record<string, unknown> | null;
+  reply_to_message_id: string | null;
+  sender_user_id: string | null;
+  sender_kind: CrmMessageSenderKind | null;
+  workflow_run_id: string | null;
+  wa_message_id: string | null;
+  status: CrmMessageStatus;
+  status_updated_at: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  starred: boolean;
+  ai_classified_tags: string[] | null;
+  created_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+}
+
+export interface CrmTag {
+  id: string;
+  organization_id: string;
+  slug: string;
+  name: string;
+  color: string;
+  description: string | null;
+  is_system: boolean;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export type CrmConversationTagAddedVia = "manual" | "ai" | "workflow" | "system";
+
+export interface CrmConversationTag {
+  conversation_id: string;
+  tag_id: string;
+  added_via: CrmConversationTagAddedVia;
+  added_by: string | null;
+  added_at: string;
+}
+
+export interface CrmQuickReply {
+  id: string;
+  organization_id: string;
+  shortcut: string;
+  title: string;
+  body: string;
+  variables: string[];
+  visible_to_roles: UserRole[];
+  usage_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmWorkflowStatus = "inactive" | "active" | "draft" | "archived";
+export type CrmWorkflowTriggerType =
+  | "message_received"
+  | "conversation_closed"
+  | "pms_event"
+  | "scheduled"
+  | "manual";
+
+export interface CrmWorkflowGraph {
+  nodes: CrmWorkflowNode[];
+  edges: CrmWorkflowEdge[];
+}
+
+export interface CrmWorkflowNode {
+  id: string;
+  type: string; // matches NodeDefinition.type, e.g. "send_message", "condition"
+  position: { x: number; y: number };
+  data: {
+    label?: string;
+    config: Record<string, unknown>;
+  };
+}
+
+export interface CrmWorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
+  label?: string;
+  data?: Record<string, unknown>;
+}
+
+export interface CrmWorkflow {
+  id: string;
+  organization_id: string;
+  name: string;
+  description: string | null;
+  status: CrmWorkflowStatus;
+  trigger_type: CrmWorkflowTriggerType;
+  trigger_config: Record<string, unknown>;
+  graph: CrmWorkflowGraph;
+  variables: Record<string, unknown>;
+  version: number;
+  active_version: number | null;
+  validation_errors: Record<string, unknown> | null;
+  last_executed_at: string | null;
+  runs_count: number;
+  success_count: number;
+  failure_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmWorkflowRunStatus =
+  | "queued"
+  | "running"
+  | "success"
+  | "failed"
+  | "cancelled"
+  | "suspended";
+
+export interface CrmWorkflowRun {
+  id: string;
+  organization_id: string;
+  workflow_id: string;
+  workflow_version: number;
+  status: CrmWorkflowRunStatus;
+  trigger_payload: Record<string, unknown>;
+  conversation_id: string | null;
+  contact_id: string | null;
+  current_node_id: string | null;
+  variables: Record<string, unknown>;
+  steps_executed: number;
+  resume_at: string | null;
+  resume_reason: string | null;
+  error: string | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+export type CrmWorkflowStepLogStatus = "success" | "failed" | "skipped" | "pending";
+
+export interface CrmWorkflowStepLog {
+  id: string;
+  run_id: string;
+  organization_id: string;
+  node_id: string;
+  node_type: string;
+  status: CrmWorkflowStepLogStatus;
+  input_snapshot: Record<string, unknown> | null;
+  output_snapshot: Record<string, unknown> | null;
+  error: string | null;
+  duration_ms: number | null;
+  created_at: string;
+}
+
+export interface CrmWorkflowSchedule {
+  id: string;
+  organization_id: string;
+  workflow_id: string;
+  cron_expression: string;
+  timezone: string;
+  next_run_at: string;
+  last_run_at: string | null;
+  active: boolean;
+}
+
+export type CrmTemplateCategory = "MARKETING" | "UTILITY" | "AUTHENTICATION";
+export type CrmTemplateHeaderType = "NONE" | "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT";
+export type CrmTemplateMetaStatus =
+  | "draft"
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "paused"
+  | "disabled";
+
+export interface CrmTemplateButton {
+  type: "QUICK_REPLY" | "URL" | "PHONE_NUMBER";
+  text: string;
+  url?: string;
+  phone_number?: string;
+}
+
+export interface CrmWhatsAppTemplate {
+  id: string;
+  organization_id: string;
+  channel_id: string;
+  name: string;
+  language: string;
+  category: CrmTemplateCategory;
+  header_type: CrmTemplateHeaderType | null;
+  header_text: string | null;
+  header_media_url: string | null;
+  body: string;
+  body_example: Record<string, unknown> | null;
+  footer: string | null;
+  buttons: CrmTemplateButton[] | null;
+  variables_count: number;
+  meta_status: CrmTemplateMetaStatus;
+  meta_template_id: string | null;
+  meta_rejection_reason: string | null;
+  submitted_at: string | null;
+  approved_at: string | null;
+  last_polled_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmAiChatProvider = "anthropic" | "openai" | "vercel_gateway";
+
+export interface CrmAiSettings {
+  organization_id: string;
+  chat_provider: CrmAiChatProvider;
+  chat_default_model: string;
+  chat_api_key_secret_id: string | null;
+  transcription_provider: "openai";
+  transcription_api_key_secret_id: string | null;
+  transcribe_audio_min_seconds: number;
+  transcribe_audio_max_seconds: number;
+  monthly_token_budget: number | null;
+  tokens_used_this_month: number;
+  cost_used_this_month_usd: number;
+  budget_period_started_at: string;
+  enabled_models: string[];
+  updated_at: string;
+}
+
+export type CrmOutboxStatus = "pending" | "sending" | "sent" | "failed" | "cancelled";
+
+export interface CrmMessageOutbox {
+  id: string;
+  organization_id: string;
+  conversation_id: string;
+  message_id: string;
+  channel_id: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  max_attempts: number;
+  next_attempt_at: string;
+  status: CrmOutboxStatus;
+  last_error: string | null;
+  created_at: string;
+  sent_at: string | null;
+}
+
+export interface CrmEvent {
+  id: string;
+  organization_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  conversation_id: string | null;
+  contact_id: string | null;
+  ref_type: string | null;
+  ref_id: string | null;
+  dispatched: boolean;
+  dispatched_at: string | null;
+  created_at: string;
+}
+
+// ─── Composite types para queries con joins ─────────────────────────────────
+
+export interface CrmConversationListItem extends CrmConversation {
+  contact: CrmContact;
+  channel: Pick<CrmChannel, "id" | "provider" | "display_name">;
+  tags: CrmTag[];
+  assigned_user?: { id: string; full_name: string; avatar_url: string | null } | null;
+}
+
+export interface CrmConversationDetail extends CrmConversationListItem {
+  messages: CrmMessage[];
+}
+
+export interface CrmContactWithLinks extends CrmContact {
+  guest?:
+    | (Pick<Guest, "id" | "full_name" | "email" | "phone" | "document_number" | "total_bookings"> & {
+        active_booking?: Pick<
+          Booking,
+          "id" | "unit_id" | "check_in_date" | "check_out_date" | "status" | "total_amount" | "paid_amount"
+        > & {
+          unit?: Pick<Unit, "id" | "code" | "name"> | null;
+        };
+      })
+    | null;
+  owner?:
+    | (Pick<Owner, "id" | "full_name" | "email" | "phone" | "preferred_currency"> & {
+        units?: Pick<Unit, "id" | "code" | "name">[];
+      })
+    | null;
+}
+
+// ─── Parte Diario ───────────────────────────────────────────────────────────
+
+export type DailyReportStatus = "borrador" | "revisado" | "enviado";
+export type DailyReportGeneratedKind = "auto" | "manual";
+
+export interface ParteDiarioSettings {
+  organization_id: string;
+  enabled: boolean;
+  timezone: string;
+  /** Hora local (0–23) en la que se genera el borrador para el día siguiente. */
+  draft_hour: number;
+  /** Hora local opcional para recordar al admin si el parte sigue en borrador. */
+  reminder_hour: number | null;
+  channel_id: string | null;
+  template_name: string;
+  template_language: string;
+  auto_create_cleaning_tasks: boolean;
+  auto_assign_cleaning: boolean;
+  organization_label: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DailyReport {
+  id: string;
+  organization_id: string;
+  /** Fecha que cubre el parte (typicamente "mañana" cuando se genera a las 20:00). */
+  report_date: string;
+  status: DailyReportStatus;
+  generated_at: string;
+  generated_by: string | null;
+  generated_kind: DailyReportGeneratedKind;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  sent_at: string | null;
+  sent_by: string | null;
+  pdf_url: string | null;
+  pdf_storage_path: string | null;
+  wa_message_ids: string[];
+  payload: ParteDiarioSnapshot | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ParteDiarioRecipient {
+  id: string;
+  organization_id: string;
+  contact_id: string | null;
+  user_id: string | null;
+  phone: string;
+  label: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Composiciones que arma getParteDiario al vuelo ─────────────────────────
+
+export interface ParteDiarioBookingRow {
+  booking_id: string;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string;
+  guest_name: string | null;
+  mode: BookingMode;
+  status: BookingStatus;
+  /** "uso prop" cuando el guest_id es null o se marca como uso propietario. */
+  is_owner_use: boolean;
+  check_in_date: string;
+  check_out_date: string;
+}
+
+export interface ParteDiarioCleaningRow {
+  /** Si task_id es null, es un "ghost" — hay check-out pero todavía no hay tarea creada. */
+  task_id: string | null;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string;
+  scheduled_for: string;
+  status: CleaningStatus | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  /** Source booking que disparó esta limpieza, si la conocemos. */
+  booking_out_id: string | null;
+  guest_name: string | null;
+  /** Hora aproximada de check-out para priorizar la cola de limpieza. */
+  check_out_time: string | null;
+}
+
+export interface ParteDiarioMaintenanceRow {
+  ticket_id: string;
+  unit_id: string;
+  unit_code: string;
+  unit_name: string;
+  title: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  opened_at: string;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+}
+
+export interface ParteDiarioCleanerLoad {
+  user_id: string;
+  full_name: string;
+  role: UserRole;
+  /** Cantidad de tareas asignadas a este limpiador para report_date. */
+  count: number;
+}
+
+export interface ParteDiarioSnapshot {
+  date: string;
+  /** Pretty label en español para el header del PDF. Ej: "Miércoles 7 de mayo". */
+  date_label: string;
+  organization_name: string;
+  check_outs: ParteDiarioBookingRow[];
+  check_ins: ParteDiarioBookingRow[];
+  sucios: ParteDiarioCleaningRow[];
+  tareas_pendientes: ParteDiarioMaintenanceRow[];
+  arreglos: ParteDiarioMaintenanceRow[];
+  cleaner_loads: ParteDiarioCleanerLoad[];
+}
+
+export interface ParteDiarioPayload extends ParteDiarioSnapshot {
+  report: DailyReport | null;
+  settings: ParteDiarioSettings;
+}
+
+export interface MobileParteDiarioPayload {
+  date: string;
+  date_label: string;
+  greeting_name: string;
+  cleanings: ParteDiarioCleaningRow[];
+  maintenance: ParteDiarioMaintenanceRow[];
+  /** Cantidad de cleanings completadas hoy del set asignado. */
+  completed_cleanings: number;
+  total_cleanings: number;
+}

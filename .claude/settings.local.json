@@ -82,7 +82,17 @@
       "Bash(git checkout *)",
       "Bash(git -c commit.gpgsign=false commit --amend --no-edit)",
       "Bash(git log *)",
-      "Bash(git branch *)"
+      "Bash(git branch *)",
+      "Bash(grep -E '\\.ts$')",
+      "Bash(awk '{print $NF}')",
+      "mcp__supabase-apartcba__list_extensions",
+      "Bash(jq -r '.[0].text' \"/Users/ignaciobaldovino/.claude/projects/-Users-ignaciobaldovino-Apart-Cba/e1e0fa1a-b0fd-4720-bfbb-a3c34d7ad050/tool-results/toolu_01PmWCiPV3f9TdoPgt66H6jN.json\")",
+      "mcp__supabase-apartcba__apply_migration",
+      "mcp__supabase-apartcba__execute_sql",
+      "mcp__supabase-apartcba__generate_typescript_types",
+      "Bash(git pull *)",
+      "Bash(sqlite3 :memory: \".schema\")",
+      "mcp__supabase-apartcba__list_tables"
     ]
   },
   "enableAllProjectMcpServers": true,

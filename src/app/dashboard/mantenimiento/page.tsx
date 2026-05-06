@@ -3,6 +3,7 @@ import { listTickets } from "@/lib/actions/tickets";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
 import { listCurrentOccupancyByUnit } from "@/lib/actions/bookings";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { TicketFormDialog } from "@/components/tickets/ticket-form-dialog";
 import { TicketsBoard } from "@/components/tickets/tickets-board";
@@ -11,7 +12,8 @@ import type { MaintenanceTicket, Unit } from "@/lib/types/database";
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
 
 export default async function MantenimientoPage() {
-  const [tickets, units, owners, occupancyByUnit] = await Promise.all([
+  const [{ organization }, tickets, units, owners, occupancyByUnit] = await Promise.all([
+    getCurrentOrg(),
     listTickets(),
     listUnitsEnriched(),
     listOwners(),
@@ -40,6 +42,7 @@ export default async function MantenimientoPage() {
       </div>
 
       <TicketsBoard
+        organizationId={organization.id}
         initialTickets={tickets as TicketWithUnit[]}
         units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}
         owners={owners}

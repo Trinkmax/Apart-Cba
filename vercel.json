@@ -4,19 +4,31 @@
   "regions": ["gru1"],
   "crons": [
     {
-      "path": "/api/cron/sync-ical",
+      "path": "/api/cron/daily-dispatch",
       "schedule": "0 3 * * *"
     },
     {
-      "path": "/api/cron/payment-reminders",
-      "schedule": "0 9 * * *"
+      "path": "/api/cron/parte-diario-draft",
+      "schedule": "0 23 * * *"
     }
   ],
   "functions": {
+    "src/app/api/cron/daily-dispatch/route.ts": {
+      "maxDuration": 300
+    },
     "src/app/api/cron/sync-ical/route.ts": {
       "maxDuration": 300
     },
     "src/app/api/cron/payment-reminders/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/cron/from-pg/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/cron/parte-diario-draft/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/webhooks/whatsapp/route.ts": {
       "maxDuration": 60
     }
   }

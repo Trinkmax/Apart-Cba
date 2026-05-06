@@ -128,6 +128,20 @@ export async function createCleaningTask(input: CleaningInput) {
   });
 
   revalidatePath("/dashboard/limpieza");
+
+  try {
+    const { publishCrmEvent } = await import("@/lib/crm/events");
+    await publishCrmEvent({
+      organizationId: organization.id,
+      eventType: "cleaning.assigned",
+      payload: { cleaning_task_id: (data as CleaningTask).id, unit_id: validated.unit_id, scheduled_for: validated.scheduled_for },
+      refType: "cleaning",
+      refId: (data as CleaningTask).id,
+    });
+  } catch (e) {
+    console.warn("[cleaning/createCleaningTask] crm publish failed", e);
+  }
+
   return data as CleaningTask;
 }
 
@@ -175,6 +189,21 @@ export async function changeCleaningStatus(id: string, status: CleaningStatus) {
   revalidatePath("/m/limpieza");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades");
+
+  if (status === "completada" || status === "verificada") {
+    try {
+      const { publishCrmEvent } = await import("@/lib/crm/events");
+      await publishCrmEvent({
+        organizationId: organization.id,
+        eventType: "cleaning.completed",
+        payload: { cleaning_task_id: id, unit_id: prev?.unit_id, status },
+        refType: "cleaning",
+        refId: id,
+      });
+    } catch (e) {
+      console.warn("[cleaning/changeCleaningStatus] crm publish failed", e);
+    }
+  }
 }
 
 export async function assignCleaning(id: string, userId: string | null) {
