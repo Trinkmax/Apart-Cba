@@ -32,10 +32,9 @@ export default async function DashboardHome() {
       </div>
 
       {/* Status grid de units — 2 columnas en mobile, denso pero legible */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
         {[
           { status: "disponible", count: kpis.totals.available_units },
-          { status: "reservado", count: 0 },
           { status: "ocupado", count: kpis.totals.occupied_units },
           { status: "limpieza", count: kpis.totals.cleaning_units },
           { status: "mantenimiento", count: kpis.totals.maintenance_units },
