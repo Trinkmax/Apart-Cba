@@ -66,10 +66,25 @@ function parseMoneyInput(v: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function formatMoneyValue(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "";
-  // Mostrar con punto decimal (consistente con type="text" + inputMode decimal)
-  return Number.isInteger(n) ? String(n) : String(n);
+// Postgres devuelve `numeric` como string ("0.00", "1500.50") via PostgREST,
+// aunque las types de la app lo declaren como `number`. Acepta ambos para
+// evitar bugs de display tipo "0.00" ocupando un input editable.
+function formatMoneyValue(n: number | string | null | undefined): string {
+  if (n === null || n === undefined || n === "") return "";
+  const num = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(num)) return "";
+  return String(num);
+}
+
+// Forma display para inputs *editables*: trata 0 como "no cargado" (igual que
+// null) para que el placeholder se muestre y el usuario pueda tipear sin tener
+// que borrar el "0" existente. Para read-only o porcentajes con 0 explícito
+// (ej. comisión 0%), usar formatMoneyValue.
+function formatMoneyEditable(n: number | string | null | undefined): string {
+  if (n === null || n === undefined || n === "") return "";
+  const num = typeof n === "number" ? n : Number(n);
+  if (!Number.isFinite(num) || num === 0) return "";
+  return String(num);
 }
 
 // Util compartido (mismo módulo que usa el server action) — mantiene cliente y
@@ -219,17 +234,17 @@ export function BookingFormDialog({
     guests_count: booking?.guests_count ?? 2,
     currency: booking?.currency ?? "ARS",
     price_per_night: initialPricePerNight,
-    total_amount: formatMoneyValue(booking?.total_amount),
-    paid_amount: formatMoneyValue(booking?.paid_amount),
+    total_amount: formatMoneyEditable(booking?.total_amount),
+    paid_amount: formatMoneyEditable(booking?.paid_amount),
     commission_pct:
       booking?.commission_pct !== null && booking?.commission_pct !== undefined
         ? formatMoneyValue(booking.commission_pct)
         : "20",
-    cleaning_fee: formatMoneyValue(booking?.cleaning_fee),
-    monthly_rent: formatMoneyValue(booking?.monthly_rent),
-    monthly_expenses: formatMoneyValue(booking?.monthly_expenses),
-    security_deposit: formatMoneyValue(booking?.security_deposit),
-    monthly_inflation_adjustment_pct: formatMoneyValue(booking?.monthly_inflation_adjustment_pct),
+    cleaning_fee: formatMoneyEditable(booking?.cleaning_fee),
+    monthly_rent: formatMoneyEditable(booking?.monthly_rent),
+    monthly_expenses: formatMoneyEditable(booking?.monthly_expenses),
+    security_deposit: formatMoneyEditable(booking?.security_deposit),
+    monthly_inflation_adjustment_pct: formatMoneyEditable(booking?.monthly_inflation_adjustment_pct),
     rent_billing_day: booking?.rent_billing_day ?? null,
     notes: booking?.notes ?? "",
     internal_notes: booking?.internal_notes ?? "",
@@ -694,6 +709,9 @@ export function BookingFormDialog({
                     type="text"
                     inputMode="decimal"
                     value={form.monthly_rent}
+                    onFocus={(e) => {
+                      if (parseMoneyInput(e.target.value) === 0) set("monthly_rent", "");
+                    }}
                     onChange={(e) => set("monthly_rent", e.target.value)}
                     placeholder="Opcional — definí después"
                   />
@@ -705,6 +723,9 @@ export function BookingFormDialog({
                     type="text"
                     inputMode="decimal"
                     value={form.monthly_expenses}
+                    onFocus={(e) => {
+                      if (parseMoneyInput(e.target.value) === 0) set("monthly_expenses", "");
+                    }}
                     onChange={(e) => set("monthly_expenses", e.target.value)}
                     placeholder="0"
                   />
@@ -716,6 +737,9 @@ export function BookingFormDialog({
                     type="text"
                     inputMode="decimal"
                     value={form.security_deposit}
+                    onFocus={(e) => {
+                      if (parseMoneyInput(e.target.value) === 0) set("security_deposit", "");
+                    }}
                     onChange={(e) => set("security_deposit", e.target.value)}
                     placeholder="0"
                   />
@@ -862,7 +886,7 @@ export function BookingFormDialog({
                       inputMode="decimal"
                       value={form.total_amount}
                       onFocus={(e) => {
-                        if (e.target.value === "0") {
+                        if (parseMoneyInput(e.target.value) === 0) {
                           setTotalTouched(true);
                           set("total_amount", "");
                         }
@@ -890,7 +914,7 @@ export function BookingFormDialog({
                       inputMode="decimal"
                       value={form.price_per_night}
                       onFocus={(e) => {
-                        if (e.target.value === "0") {
+                        if (parseMoneyInput(e.target.value) === 0) {
                           setPriceTouched(true);
                           setLastTouched("price");
                           set("price_per_night", "");
@@ -940,7 +964,7 @@ export function BookingFormDialog({
                     inputMode="decimal"
                     value={isEdit ? formatMoneyValue(previousPaid) : form.paid_amount}
                     onFocus={(e) => {
-                      if (!isEdit && e.target.value === "0") set("paid_amount", "");
+                      if (!isEdit && parseMoneyInput(e.target.value) === 0) set("paid_amount", "");
                     }}
                     onChange={(e) => set("paid_amount", e.target.value)}
                     placeholder="0"
@@ -973,7 +997,7 @@ export function BookingFormDialog({
                       inputMode="decimal"
                       value={form.total_amount}
                       onFocus={(e) => {
-                        if (e.target.value === "0") {
+                        if (parseMoneyInput(e.target.value) === 0) {
                           setTotalTouched(true);
                           setLastTouched("total");
                           set("total_amount", "");
@@ -1032,6 +1056,9 @@ export function BookingFormDialog({
                     type="text"
                     inputMode="decimal"
                     value={form.cleaning_fee}
+                    onFocus={(e) => {
+                      if (parseMoneyInput(e.target.value) === 0) set("cleaning_fee", "");
+                    }}
                     onChange={(e) => set("cleaning_fee", e.target.value)}
                     placeholder="0"
                   />
