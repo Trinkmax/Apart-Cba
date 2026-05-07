@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { changeSettlementStatus, generateSettlement } from "@/lib/actions/settlements";
+import { getOrganizationBranding } from "@/lib/actions/org";
 import { generateSettlementPDF } from "@/lib/pdf/settlement-pdf";
 import type { OwnerSettlement, Owner, SettlementLine, Unit } from "@/lib/types/database";
 
@@ -48,11 +49,14 @@ export function SettlementActions({ settlement }: { settlement: SettlementDetail
   }
 
   function handlePdf() {
-    try {
-      generateSettlementPDF(settlement);
-    } catch (e) {
-      toast.error("Error generando PDF", { description: (e as Error).message });
-    }
+    startTransition(async () => {
+      try {
+        const branding = await getOrganizationBranding();
+        await generateSettlementPDF(settlement, branding);
+      } catch (e) {
+        toast.error("Error generando PDF", { description: (e as Error).message });
+      }
+    });
   }
 
   return (

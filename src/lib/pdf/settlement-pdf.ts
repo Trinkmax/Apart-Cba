@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { formatMoney, formatDate } from "@/lib/format";
+import { drawOrgBrandHeader, drawOrgFooter, type OrgBranding } from "@/lib/pdf/org-header";
 import type { OwnerSettlement, Owner, SettlementLine, Unit } from "@/lib/types/database";
 
 type SettlementDetail = OwnerSettlement & {
@@ -23,67 +24,75 @@ const LINE_TYPE_LABELS: Record<SettlementLine["line_type"], string> = {
   expenses_fraction: "Expensas",
 };
 
-export function generateSettlementPDF(settlement: SettlementDetail) {
+const PAGE_W = 210;
+const PAGE_H = 297;
+const MARGIN_X = 14;
+const HEADER_H = 38;
+
+export async function generateSettlementPDF(
+  settlement: SettlementDetail,
+  org: OrgBranding,
+) {
   const doc = new jsPDF();
 
-  // Header
-  doc.setFillColor(15, 118, 110); // brand teal
-  doc.rect(0, 0, 210, 35, "F");
+  const { brand } = await drawOrgBrandHeader(doc, org, {
+    pageWidth: PAGE_W,
+    headerHeight: HEADER_H,
+    marginX: MARGIN_X,
+    showFiscalInfo: true,
+    nameFontSize: 16,
+  });
 
+  // Right side: title + período
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(20);
   doc.setFont("helvetica", "bold");
-  doc.text("APART CBA", 14, 15);
-  doc.setFontSize(9);
+  doc.setFontSize(11);
+  doc.text("LIQUIDACIÓN A PROPIETARIO", PAGE_W - MARGIN_X, 13, { align: "right" });
   doc.setFont("helvetica", "normal");
-  doc.text("Departamentos temporales · Córdoba, Argentina", 14, 21);
-
-  doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
-  doc.text("LIQUIDACIÓN A PROPIETARIO", 14, 30);
+  doc.setFontSize(9);
+  doc.text(
+    `${MONTHS[settlement.period_month - 1]} ${settlement.period_year}`,
+    PAGE_W - MARGIN_X,
+    19,
+    { align: "right" },
+  );
 
   // Reset color
   doc.setTextColor(0, 0, 0);
   doc.setFontSize(10);
 
   // Datos owner
-  let y = 45;
+  let y = HEADER_H + 12;
   doc.setFont("helvetica", "bold");
-  doc.text("Propietario:", 14, y);
+  doc.text("Propietario:", MARGIN_X, y);
   doc.setFont("helvetica", "normal");
-  doc.text(settlement.owner.full_name, 45, y);
+  doc.text(settlement.owner.full_name, MARGIN_X + 31, y);
 
   y += 6;
   doc.setFont("helvetica", "bold");
-  doc.text("Período:", 14, y);
+  doc.text("Generada:", MARGIN_X, y);
   doc.setFont("helvetica", "normal");
-  doc.text(`${MONTHS[settlement.period_month - 1]} ${settlement.period_year}`, 45, y);
+  doc.text(formatDate(settlement.generated_at, "dd/MM/yyyy HH:mm"), MARGIN_X + 31, y);
 
   y += 6;
   doc.setFont("helvetica", "bold");
-  doc.text("Generada:", 14, y);
+  doc.text("Moneda:", MARGIN_X, y);
   doc.setFont("helvetica", "normal");
-  doc.text(formatDate(settlement.generated_at, "dd/MM/yyyy HH:mm"), 45, y);
-
-  y += 6;
-  doc.setFont("helvetica", "bold");
-  doc.text("Moneda:", 14, y);
-  doc.setFont("helvetica", "normal");
-  doc.text(settlement.currency, 45, y);
+  doc.text(settlement.currency, MARGIN_X + 31, y);
 
   if (settlement.owner.cbu) {
     y += 6;
     doc.setFont("helvetica", "bold");
-    doc.text("CBU:", 14, y);
+    doc.text("CBU:", MARGIN_X, y);
     doc.setFont("helvetica", "normal");
-    doc.text(settlement.owner.cbu, 45, y);
+    doc.text(settlement.owner.cbu, MARGIN_X + 31, y);
   }
   if (settlement.owner.alias_cbu) {
     y += 6;
     doc.setFont("helvetica", "bold");
-    doc.text("Alias:", 14, y);
+    doc.text("Alias:", MARGIN_X, y);
     doc.setFont("helvetica", "normal");
-    doc.text(settlement.owner.alias_cbu, 45, y);
+    doc.text(settlement.owner.alias_cbu, MARGIN_X + 31, y);
   }
 
   // Tabla de líneas
@@ -98,7 +107,7 @@ export function generateSettlementPDF(settlement: SettlementDetail) {
       `${l.sign === "+" ? "+" : "−"} ${formatMoney(l.amount, settlement.currency)}`,
     ]),
     theme: "striped",
-    headStyles: { fillColor: [15, 118, 110], textColor: [255, 255, 255], fontStyle: "bold" },
+    headStyles: { fillColor: brand, textColor: [255, 255, 255], fontStyle: "bold" },
     columnStyles: {
       3: { halign: "right", cellWidth: 35 },
       0: { cellWidth: 30 },
@@ -125,25 +134,24 @@ export function generateSettlementPDF(settlement: SettlementDetail) {
   doc.text("− Gastos", 114, finalY + 18);
   doc.text(formatMoney(settlement.deductions_amount, settlement.currency), 192, finalY + 18, { align: "right" });
 
-  doc.setDrawColor(15, 118, 110);
+  doc.setDrawColor(brand[0], brand[1], brand[2]);
   doc.line(114, finalY + 22, 192, finalY + 22);
 
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(15, 118, 110);
+  doc.setTextColor(brand[0], brand[1], brand[2]);
   doc.text("NETO A TRANSFERIR", 114, finalY + 30);
   doc.text(formatMoney(settlement.net_payable, settlement.currency), 192, finalY + 30, { align: "right" });
 
-  // Footer
-  doc.setFontSize(8);
-  doc.setTextColor(120, 120, 120);
-  doc.setFont("helvetica", "italic");
-  doc.text(
-    "Documento generado automáticamente por Apart Cba PMS",
-    105,
-    285,
-    { align: "center" }
-  );
+  // Footer compartido
+  drawOrgFooter(doc, org, {
+    pageWidth: PAGE_W,
+    pageHeight: PAGE_H,
+    marginX: MARGIN_X,
+    extraLines: ["Documento generado automáticamente."],
+  });
 
-  doc.save(`liquidacion-${settlement.owner.full_name.replace(/\s+/g, "_")}-${settlement.period_year}-${String(settlement.period_month).padStart(2, "0")}.pdf`);
+  doc.save(
+    `liquidacion-${settlement.owner.full_name.replace(/\s+/g, "_")}-${settlement.period_year}-${String(settlement.period_month).padStart(2, "0")}.pdf`,
+  );
 }

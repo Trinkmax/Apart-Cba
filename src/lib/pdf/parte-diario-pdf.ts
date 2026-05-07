@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { drawOrgBrandHeader, type OrgBranding } from "@/lib/pdf/org-header";
 import type {
   ParteDiarioBookingRow,
   ParteDiarioCleaningRow,
@@ -21,7 +22,6 @@ const SECTION_RGB: Record<
   arreglos: [245, 158, 11], //  amber
 };
 
-const BRAND_TEAL: [number, number, number] = [15, 118, 110];
 const TEXT_INK: [number, number, number] = [15, 23, 42];
 const TEXT_MUTED: [number, number, number] = [100, 116, 139];
 const ROW_STRIPE: [number, number, number] = [248, 250, 252];
@@ -29,6 +29,17 @@ const ROW_STRIPE: [number, number, number] = [248, 250, 252];
 const PAGE_W = 210;
 const MARGIN_X = 14;
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
+const HEADER_H = 38;
+
+function brandingFromSnapshot(snapshot: ParteDiarioSnapshot): OrgBranding {
+  return {
+    name: snapshot.organization_name,
+    legal_name: snapshot.organization_legal_name ?? null,
+    tax_id: snapshot.organization_tax_id ?? null,
+    logo_url: snapshot.organization_logo_url ?? null,
+    primary_color: snapshot.organization_primary_color ?? null,
+  };
+}
 
 const PRIORITY_LABEL: Record<ParteDiarioMaintenanceRow["priority"], string> = {
   baja: "Baja",
@@ -62,25 +73,27 @@ function describeBookingGuest(b: ParteDiarioBookingRow): string {
   return b.guest_name ?? "Sin huésped";
 }
 
-function drawHeader(doc: jsPDF, snapshot: ParteDiarioSnapshot) {
-  // Banda superior teal (35 mm) con typo blanca
-  doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, 0, PAGE_W, 35, "F");
+async function drawHeader(doc: jsPDF, snapshot: ParteDiarioSnapshot) {
+  // Banda con branding de la org (logo + nombre, sin razón social ni CUIT)
+  await drawOrgBrandHeader(doc, brandingFromSnapshot(snapshot), {
+    pageWidth: PAGE_W,
+    headerHeight: HEADER_H,
+    marginX: MARGIN_X,
+    showFiscalInfo: false,
+    nameFontSize: 16,
+  });
 
+  // Subtítulo "Parte diario operativo · <fecha>" en la zona derecha del header
   doc.setTextColor(255, 255, 255);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
-  doc.text(snapshot.organization_name.toUpperCase(), MARGIN_X, 15);
+  doc.setFontSize(11);
+  doc.text("PARTE DIARIO", PAGE_W - MARGIN_X, 13, { align: "right" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
-  doc.text("Parte diario operativo", MARGIN_X, 21);
+  doc.text(snapshot.date_label, PAGE_W - MARGIN_X, 18, { align: "right" });
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(snapshot.date_label, MARGIN_X, 30);
-
-  // Resumen a la derecha (chips de conteo)
+  // Chips de conteo justo debajo, alineados a la derecha
   const chips: { label: string; count: number; color: [number, number, number] }[] = [
     { label: "CH OUT", count: snapshot.check_outs.length, color: SECTION_RGB.check_outs },
     { label: "CH IN", count: snapshot.check_ins.length, color: SECTION_RGB.check_ins },
@@ -93,7 +106,6 @@ function drawHeader(doc: jsPDF, snapshot: ParteDiarioSnapshot) {
     { label: "ARREGLOS", count: snapshot.arreglos.length, color: SECTION_RGB.arreglos },
   ];
 
-  // Render chips a la derecha del header — 5 chips horizontales
   let x = PAGE_W - MARGIN_X;
   doc.setFontSize(8);
   for (let i = chips.length - 1; i >= 0; i--) {
@@ -103,9 +115,9 @@ function drawHeader(doc: jsPDF, snapshot: ParteDiarioSnapshot) {
     const w = doc.getTextWidth(text) + 6;
     x -= w + 2;
     doc.setFillColor(255, 255, 255);
-    doc.roundedRect(x, 22, w, 8, 1.5, 1.5, "F");
+    doc.roundedRect(x, 24, w, 8, 1.5, 1.5, "F");
     doc.setTextColor(...chip.color);
-    doc.text(text, x + 3, 27.5);
+    doc.text(text, x + 3, 29.5);
   }
 
   doc.setTextColor(...TEXT_INK);
@@ -348,12 +360,14 @@ function drawFooter(doc: jsPDF) {
 
 // ─── Builder + outputs ──────────────────────────────────────────────────────
 
-export function generateParteDiarioPDFDoc(snapshot: ParteDiarioSnapshot): jsPDF {
+export async function generateParteDiarioPDFDoc(
+  snapshot: ParteDiarioSnapshot,
+): Promise<jsPDF> {
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
 
-  drawHeader(doc, snapshot);
+  await drawHeader(doc, snapshot);
 
-  let y = 45;
+  let y = HEADER_H + 10;
   // CH IN primero (matches dashboard layout: izquierda = ingresos del día).
   y = renderBookingsSection(
     doc,
@@ -392,14 +406,19 @@ export function generateParteDiarioPDFDoc(snapshot: ParteDiarioSnapshot): jsPDF 
 }
 
 /** Para descargar desde el browser. */
-export function generateParteDiarioPDF(snapshot: ParteDiarioSnapshot, filename?: string) {
-  const doc = generateParteDiarioPDFDoc(snapshot);
+export async function generateParteDiarioPDF(
+  snapshot: ParteDiarioSnapshot,
+  filename?: string,
+): Promise<void> {
+  const doc = await generateParteDiarioPDFDoc(snapshot);
   doc.save(filename ?? `parte-diario-${snapshot.date}.pdf`);
 }
 
 /** Para subir a storage desde el server (sendParteDiario). */
-export function generateParteDiarioPDFBytes(snapshot: ParteDiarioSnapshot): Uint8Array {
-  const doc = generateParteDiarioPDFDoc(snapshot);
+export async function generateParteDiarioPDFBytes(
+  snapshot: ParteDiarioSnapshot,
+): Promise<Uint8Array> {
+  const doc = await generateParteDiarioPDFDoc(snapshot);
   const buffer = doc.output("arraybuffer") as ArrayBuffer;
   return new Uint8Array(buffer);
 }

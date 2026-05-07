@@ -1,6 +1,7 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 import { formatMoney, formatDateTime } from "@/lib/format";
+import { drawOrgBrandHeader, drawOrgFooter, type OrgBranding } from "@/lib/pdf/org-header";
 import type { ExportMovementRow } from "@/lib/actions/cash";
 import type { MovementCategory } from "@/lib/types/database";
 
@@ -31,6 +32,11 @@ const BILLABLE_LABEL: Record<"apartcba" | "owner" | "guest", string> = {
   guest: "Huésped",
 };
 
+const PAGE_W = 297; // landscape A4
+const PAGE_H = 210;
+const MARGIN_X = 14;
+const HEADER_H = 32;
+
 export interface CashMovementsPdfMeta {
   fromLabel: string;
   toLabel: string;
@@ -38,36 +44,42 @@ export interface CashMovementsPdfMeta {
   filenameSuffix: string;
 }
 
-export function generateCashMovementsPDF(
+export async function generateCashMovementsPDF(
   rows: ExportMovementRow[],
-  meta: CashMovementsPdfMeta
+  meta: CashMovementsPdfMeta,
+  org: OrgBranding,
 ) {
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
 
-  doc.setFillColor(15, 118, 110);
-  doc.rect(0, 0, 297, 28, "F");
+  const { brand } = await drawOrgBrandHeader(doc, org, {
+    pageWidth: PAGE_W,
+    headerHeight: HEADER_H,
+    marginX: MARGIN_X,
+    showFiscalInfo: true,
+    nameFontSize: 16,
+    logoSize: 18,
+  });
 
+  // Right side: title + range + count
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
-  doc.text("APART CBA", 14, 13);
+  doc.setFontSize(12);
+  doc.text("MOVIMIENTOS DE CAJA", PAGE_W - MARGIN_X, 12, { align: "right" });
 
-  doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
-  doc.text("Departamentos temporales · Córdoba, Argentina", 14, 18);
-
-  doc.setFontSize(13);
-  doc.setFont("helvetica", "bold");
-  doc.text("MOVIMIENTOS DE CAJA", 14, 24);
+  doc.setFontSize(9);
+  doc.text(meta.rangeSummary, PAGE_W - MARGIN_X, 18, { align: "right" });
+  doc.text(
+    `Total: ${rows.length.toLocaleString("es-AR")} movimientos`,
+    PAGE_W - MARGIN_X,
+    23,
+    { align: "right" },
+  );
 
   doc.setTextColor(0, 0, 0);
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.text(meta.rangeSummary, 200, 13);
-  doc.text(`Total: ${rows.length.toLocaleString("es-AR")} movimientos`, 200, 18);
 
   autoTable(doc, {
-    startY: 34,
+    startY: HEADER_H + 8,
     head: [
       [
         "Fecha",
@@ -98,7 +110,7 @@ export function generateCashMovementsPDF(
     ]),
     theme: "striped",
     headStyles: {
-      fillColor: [15, 118, 110],
+      fillColor: brand,
       textColor: [255, 255, 255],
       fontStyle: "bold",
       fontSize: 8,
@@ -130,7 +142,7 @@ export function generateCashMovementsPDF(
   });
 
   // @ts-expect-error - jspdf-autotable adds lastAutoTable
-  const finalY = (doc.lastAutoTable?.finalY as number) ?? 34;
+  const finalY = (doc.lastAutoTable?.finalY as number) ?? HEADER_H + 8;
 
   const byCurrency = new Map<
     string,
@@ -161,7 +173,7 @@ export function generateCashMovementsPDF(
       body: summaryRows,
       theme: "grid",
       headStyles: {
-        fillColor: [15, 118, 110],
+        fillColor: brand,
         textColor: [255, 255, 255],
         fontStyle: "bold",
         fontSize: 9,
@@ -174,26 +186,25 @@ export function generateCashMovementsPDF(
         3: { cellWidth: 40, halign: "right", textColor: [185, 28, 28] },
         4: { cellWidth: 40, halign: "right", fontStyle: "bold" },
       },
-      margin: { left: 14 },
+      margin: { left: MARGIN_X },
       tableWidth: 182,
     });
   }
 
+  // Footer + paginación
   const pageCount = doc.getNumberOfPages();
   for (let i = 1; i <= pageCount; i++) {
     doc.setPage(i);
-    doc.setFontSize(8);
-    doc.setTextColor(120, 120, 120);
-    doc.setFont("helvetica", "italic");
-    doc.text(
-      `Apart Cba PMS · Página ${i} de ${pageCount}`,
-      148.5,
-      205,
-      { align: "center" }
-    );
+    drawOrgFooter(doc, org, {
+      pageWidth: PAGE_W,
+      pageHeight: PAGE_H,
+      marginX: MARGIN_X,
+      extraLines:
+        pageCount > 1 ? [`Página ${i} de ${pageCount}`] : ["Reporte de movimientos de caja"],
+    });
   }
 
   doc.save(
-    `movimientos_${meta.filenameSuffix}_${meta.fromLabel}_a_${meta.toLabel}.pdf`
+    `movimientos_${meta.filenameSuffix}_${meta.fromLabel}_a_${meta.toLabel}.pdf`,
   );
 }

@@ -1353,6 +1353,11 @@ export interface ParteDiarioSnapshot {
   /** Pretty label en español para el header del PDF. Ej: "Miércoles 7 de mayo". */
   date_label: string;
   organization_name: string;
+  /** Branding extra para el PDF (logo, color, info fiscal). Opcional para retrocompatibilidad. */
+  organization_logo_url?: string | null;
+  organization_primary_color?: string | null;
+  organization_legal_name?: string | null;
+  organization_tax_id?: string | null;
   check_outs: ParteDiarioBookingRow[];
   check_ins: ParteDiarioBookingRow[];
   sucios: ParteDiarioCleaningRow[];

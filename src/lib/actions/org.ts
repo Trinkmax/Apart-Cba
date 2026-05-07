@@ -244,6 +244,24 @@ export async function uploadOrganizationLogo(formData: FormData): Promise<string
   return publicUrl.publicUrl;
 }
 
+export async function getOrganizationBranding(): Promise<{
+  name: string;
+  legal_name: string | null;
+  tax_id: string | null;
+  logo_url: string | null;
+  primary_color: string | null;
+}> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  return {
+    name: organization.name,
+    legal_name: organization.legal_name,
+    tax_id: organization.tax_id,
+    logo_url: organization.logo_url,
+    primary_color: organization.primary_color,
+  };
+}
+
 export async function removeOrganizationLogo(): Promise<void> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();

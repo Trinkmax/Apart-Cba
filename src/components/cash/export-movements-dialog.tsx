@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { exportMovements, type ExportMovementsFilters } from "@/lib/actions/cash";
+import { getOrganizationBranding } from "@/lib/actions/org";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { formatDateTime } from "@/lib/format";
 import { generateCashMovementsPDF } from "@/lib/pdf/cash-movements-pdf";
@@ -153,12 +154,17 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
           const filename = `movimientos_${filenameSuffix}_${range.fromLabel}_a_${range.toLabel}.csv`;
           downloadCsv(filename, csv);
         } else {
-          generateCashMovementsPDF(rows, {
-            fromLabel: range.fromLabel,
-            toLabel: range.toLabel,
-            rangeSummary: range.summary,
-            filenameSuffix,
-          });
+          const branding = await getOrganizationBranding();
+          await generateCashMovementsPDF(
+            rows,
+            {
+              fromLabel: range.fromLabel,
+              toLabel: range.toLabel,
+              rangeSummary: range.summary,
+              filenameSuffix,
+            },
+            branding,
+          );
         }
 
         toast.success(`Se exportaron ${rows.length.toLocaleString("es-AR")} movimientos`);

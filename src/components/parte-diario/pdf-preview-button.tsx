@@ -25,14 +25,19 @@ export function PdfPreviewButton({ snapshot }: PdfPreviewButtonProps) {
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState<string | null>(null);
 
-  const buildBlob = () => {
-    const doc = generateParteDiarioPDFDoc(snapshot);
+  const buildBlob = async () => {
+    const doc = await generateParteDiarioPDFDoc(snapshot);
     const blob = doc.output("blob");
     return URL.createObjectURL(blob);
   };
 
-  const handleOpenChange = (next: boolean) => {
-    if (next && !url) setUrl(buildBlob());
+  const handleOpenChange = async (next: boolean) => {
+    if (next && !url) {
+      setOpen(true);
+      const built = await buildBlob();
+      setUrl(built);
+      return;
+    }
     if (!next && url) {
       URL.revokeObjectURL(url);
       setUrl(null);
@@ -69,7 +74,9 @@ export function PdfPreviewButton({ snapshot }: PdfPreviewButtonProps) {
           </Button>
           <Button
             size="sm"
-            onClick={() => generateParteDiarioPDF(snapshot)}
+            onClick={() => {
+              void generateParteDiarioPDF(snapshot);
+            }}
             className="gap-1.5"
           >
             <FileText className="size-3.5" />

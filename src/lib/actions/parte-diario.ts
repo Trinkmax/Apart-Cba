@@ -187,11 +187,21 @@ async function loadCleanerLoads(
   }));
 }
 
+type OrgBrandingForSnapshot = {
+  id: string;
+  name: string;
+  legal_name: string | null;
+  tax_id: string | null;
+  logo_url: string | null;
+  primary_color: string | null;
+};
+
 async function buildSnapshot(
-  orgId: string,
+  org: OrgBrandingForSnapshot,
   organizationName: string,
   reportDate: string,
 ): Promise<ParteDiarioSnapshot> {
+  const orgId = org.id;
   const admin = createAdminClient();
 
   // ─── Bookings que aplican al reportDate ──────────────────────────────────
@@ -478,6 +488,10 @@ async function buildSnapshot(
     date: reportDate,
     date_label: dateLabelEs(reportDate),
     organization_name: organizationName,
+    organization_logo_url: org.logo_url,
+    organization_primary_color: org.primary_color,
+    organization_legal_name: org.legal_name,
+    organization_tax_id: org.tax_id,
     check_outs: checkOuts,
     check_ins: checkIns,
     sucios,
@@ -505,7 +519,7 @@ export async function getParteDiario(date?: string): Promise<ParteDiarioPayload>
     .eq("report_date", reportDate)
     .maybeSingle();
 
-  const snapshot = await buildSnapshot(organization.id, organization.name, reportDate);
+  const snapshot = await buildSnapshot(organization, organization.name, reportDate);
 
   return {
     ...snapshot,
@@ -1208,7 +1222,7 @@ export async function sendParteDiario(date: string): Promise<{ sent: number; fai
   }
 
   const snapshot = await buildSnapshot(
-    organization.id,
+    organization,
     settings.organization_label ?? organization.name,
     date,
   );
@@ -1217,7 +1231,7 @@ export async function sendParteDiario(date: string): Promise<{ sent: number; fai
 
   // 1. PDF en memoria
   const { generateParteDiarioPDFBytes } = await import("@/lib/pdf/parte-diario-pdf");
-  const pdfBytes = generateParteDiarioPDFBytes(snapshot);
+  const pdfBytes = await generateParteDiarioPDFBytes(snapshot);
 
   // 2. Upload a Supabase Storage (bucket público; el path UUID actúa como token)
   const objectPath = `${organization.id}/${date}/${crypto.randomUUID()}.pdf`;
