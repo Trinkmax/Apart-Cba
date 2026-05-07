@@ -109,3 +109,129 @@ export async function updateBookingStatusColors(
   if (error) throw new Error(error.message);
   revalidatePath("/", "layout");
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Spec 2 — Identidad + Branding + Resend dominio + Templates
+// ════════════════════════════════════════════════════════════════════════
+
+const orgIdentitySchema = z.object({
+  name: z.string().min(2).max(120),
+  description: z.string().max(2000).optional().nullable(),
+  address: z.string().max(500).optional().nullable(),
+  contact_phone: z.string().max(40).optional().nullable(),
+  contact_email: z.string().email().max(200).optional().nullable().or(z.literal("")),
+});
+
+export type OrgIdentityInput = z.infer<typeof orgIdentitySchema>;
+
+export async function updateOrgIdentity(
+  input: OrgIdentityInput
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const parsed = orgIdentitySchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("organizations")
+    .update({
+      name: parsed.data.name,
+      description: parsed.data.description ?? null,
+      address: parsed.data.address ?? null,
+      contact_phone: parsed.data.contact_phone ?? null,
+      contact_email: parsed.data.contact_email || null,
+    })
+    .eq("id", organization.id);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard", "layout");
+  return { ok: true };
+}
+
+const ALLOWED_LOGO_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/svg+xml",
+];
+const MAX_LOGO_BYTES = 5 * 1024 * 1024;
+
+export async function uploadOrgLogo(
+  formData: FormData
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const file = formData.get("file");
+  if (!(file instanceof File)) return { ok: false, error: "No se recibió archivo" };
+  if (!ALLOWED_LOGO_TYPES.includes(file.type)) {
+    return { ok: false, error: "Tipo no soportado (JPG/PNG/WebP/SVG)" };
+  }
+  if (file.size > MAX_LOGO_BYTES) {
+    return { ok: false, error: "Archivo > 5 MB" };
+  }
+
+  const admin = createAdminClient();
+  const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin";
+  const path = `${organization.id}/${Date.now()}.${ext}`;
+
+  const { data: prevOrg } = await admin
+    .from("organizations")
+    .select("logo_url")
+    .eq("id", organization.id)
+    .maybeSingle();
+  if (prevOrg?.logo_url) {
+    const prevPath = extractPathFromPublicUrl(prevOrg.logo_url, "org-logos");
+    if (prevPath) {
+      await admin.storage.from("org-logos").remove([prevPath]).catch(() => null);
+    }
+  }
+
+  const buf = await file.arrayBuffer();
+  const { error: uploadError } = await admin.storage
+    .from("org-logos")
+    .upload(path, buf, { contentType: file.type, upsert: false });
+  if (uploadError) return { ok: false, error: uploadError.message };
+
+  const { data: publicData } = admin.storage.from("org-logos").getPublicUrl(path);
+  const publicUrl = publicData.publicUrl;
+
+  const { error: updateError } = await admin
+    .from("organizations")
+    .update({ logo_url: publicUrl })
+    .eq("id", organization.id);
+  if (updateError) return { ok: false, error: updateError.message };
+
+  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard", "layout");
+  return { ok: true, url: publicUrl };
+}
+
+export async function deleteOrgLogo(): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const { data: org } = await admin
+    .from("organizations")
+    .select("logo_url")
+    .eq("id", organization.id)
+    .maybeSingle();
+  if (org?.logo_url) {
+    const prev = extractPathFromPublicUrl(org.logo_url, "org-logos");
+    if (prev) await admin.storage.from("org-logos").remove([prev]).catch(() => null);
+  }
+  await admin.from("organizations").update({ logo_url: null }).eq("id", organization.id);
+
+  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard", "layout");
+  return { ok: true };
+}
+
+function extractPathFromPublicUrl(url: string, bucket: string): string | null {
+  const idx = url.indexOf(`/${bucket}/`);
+  if (idx === -1) return null;
+  return url.slice(idx + bucket.length + 2);
+}
