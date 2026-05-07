@@ -60,7 +60,8 @@ export const triggerPmsEvent = defineNode({
   configSchema: z.object({
     pmsEvent: z.enum([
       "booking.created", "booking.confirmed", "booking.cancelled",
-      "booking.checkin_today", "booking.checkout_today", "booking.checkin_tomorrow",
+      "booking.checkin_today", "booking.checkout_today",
+      "booking.checkin_tomorrow", "booking.checkout_tomorrow",
       "ticket.created", "ticket.closed",
       "cleaning.assigned", "cleaning.completed",
       "payment.received", "payment.overdue",

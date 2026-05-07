@@ -103,6 +103,102 @@ export async function listCleaningTasks(filters?: {
   return data ?? [];
 }
 
+/**
+ * Idempotente: por cada booking con check_out_date = `date` que aún no tenga
+ * una cleaning_task agendada para esa fecha, la crea en estado "pendiente".
+ *
+ * No requiere session (se llama desde crons). El caller debe encargarse de la
+ * autorización (CRON_SECRET o requireSession + permission check).
+ *
+ * Devuelve la lista de tasks creadas para que el caller pueda emitir
+ * notificaciones / eventos CRM con metadata (unit_id, booking_id).
+ */
+export async function ensureCleaningTasksForCheckouts(
+  organizationId: string,
+  date: string,
+  actorId: string | null = null,
+): Promise<
+  Array<{
+    cleaning_task_id: string;
+    unit_id: string;
+    booking_out_id: string;
+  }>
+> {
+  const admin = createAdminClient();
+
+  const { data: outs } = await admin
+    .from("bookings")
+    .select("id, unit_id")
+    .eq("organization_id", organizationId)
+    .eq("check_out_date", date)
+    .in("status", ["confirmada", "check_in", "check_out"]);
+
+  const bookingsByUnit = new Map<string, string>();
+  for (const b of (outs ?? []) as Array<{ id: string; unit_id: string }>) {
+    bookingsByUnit.set(b.unit_id, b.id);
+  }
+  if (bookingsByUnit.size === 0) return [];
+
+  const { data: existing } = await admin
+    .from("cleaning_tasks")
+    .select("unit_id")
+    .eq("organization_id", organizationId)
+    .eq("scheduled_for", date);
+  const existingUnitIds = new Set(
+    (existing ?? []).map((r) => (r as { unit_id: string }).unit_id),
+  );
+
+  const created: Array<{
+    cleaning_task_id: string;
+    unit_id: string;
+    booking_out_id: string;
+  }> = [];
+
+  for (const [unitId, bookingId] of bookingsByUnit.entries()) {
+    if (existingUnitIds.has(unitId)) continue;
+    const checklist = DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
+    const { data: ins, error } = await admin
+      .from("cleaning_tasks")
+      .insert({
+        organization_id: organizationId,
+        unit_id: unitId,
+        booking_out_id: bookingId,
+        scheduled_for: date,
+        status: "pendiente",
+        checklist,
+      })
+      .select("id")
+      .single();
+    if (error || !ins) {
+      console.warn(
+        "[cleaning/ensureCleaningTasksForCheckouts] insert falló",
+        error?.message,
+      );
+      continue;
+    }
+    await admin.from("cleaning_events").insert({
+      cleaning_task_id: (ins as { id: string }).id,
+      organization_id: organizationId,
+      actor_id: actorId,
+      event_type: "created",
+      to_status: "pendiente",
+      metadata: { source: "checkout_tomorrow_auto", booking_out_id: bookingId },
+    });
+    created.push({
+      cleaning_task_id: (ins as { id: string }).id,
+      unit_id: unitId,
+      booking_out_id: bookingId,
+    });
+  }
+
+  if (created.length > 0) {
+    revalidatePath("/dashboard/limpieza");
+    revalidatePath("/dashboard/parte-diario");
+  }
+
+  return created;
+}
+
 export async function createCleaningTask(input: CleaningInput) {
   const session = await requireSession();
   const { organization } = await getCurrentOrg();

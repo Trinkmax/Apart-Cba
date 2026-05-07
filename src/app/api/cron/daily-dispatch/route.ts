@@ -109,6 +109,14 @@ export async function GET(req: Request) {
       .eq("check_in_date", tomorrow)
       .eq("status", "confirmada");
 
+    const { data: checkoutsTomorrow } = await admin
+      .from("bookings")
+      .select(
+        "id,organization_id,unit_id,guest_id,status,check_out_date,check_out_time, unit:units(code,name), guest:guests(full_name)"
+      )
+      .eq("check_out_date", tomorrow)
+      .in("status", ["confirmada", "check_in"]);
+
     let crmEventsPublished = 0;
     for (const b of checkinsToday ?? []) {
       await dispatchEvent({
@@ -140,7 +148,95 @@ export async function GET(req: Request) {
       });
       crmEventsPublished += 1;
     }
-    results.crm_pms_events = { published: crmEventsPublished };
+
+    // Check-outs de mañana: publicamos evento CRM, generamos cleaning task
+    // (idempotente vía ensureCleaningTasksForCheckouts) y dejamos un task_reminder
+    // in-app para que el equipo de limpieza los vea apenas abre el dashboard.
+    const checkoutsTomorrowList = (checkoutsTomorrow ?? []) as unknown as Array<{
+      id: string;
+      organization_id: string;
+      unit_id: string;
+      guest_id: string | null;
+      check_out_date: string;
+      check_out_time: string | null;
+      unit: { code: string; name: string } | null;
+      guest: { full_name: string } | null;
+    }>;
+
+    for (const b of checkoutsTomorrowList) {
+      await dispatchEvent({
+        organizationId: b.organization_id,
+        eventType: "booking.checkout_tomorrow",
+        payload: { booking_id: b.id, unit_id: b.unit_id, guest_id: b.guest_id },
+        refType: "booking",
+        refId: b.id,
+      });
+      crmEventsPublished += 1;
+    }
+
+    // Auto-crear cleaning tasks por organización (1 query batch por org).
+    const orgIdsTomorrow = Array.from(
+      new Set(checkoutsTomorrowList.map((b) => b.organization_id))
+    );
+    let cleaningTasksCreated = 0;
+    let checkoutNotifications = 0;
+
+    if (orgIdsTomorrow.length > 0) {
+      const { ensureCleaningTasksForCheckouts } = await import(
+        "@/lib/actions/cleaning"
+      );
+      const { notifyOrg } = await import("@/lib/actions/notifications");
+      for (const orgId of orgIdsTomorrow) {
+        try {
+          const created = await ensureCleaningTasksForCheckouts(
+            orgId,
+            tomorrow,
+            null
+          );
+          cleaningTasksCreated += created.length;
+
+          // Notificación in-app por cada limpieza creada (dedup_key por unit+date)
+          for (const c of created) {
+            const bk = checkoutsTomorrowList.find(
+              (x) => x.id === c.booking_out_id
+            );
+            const unitLabel = bk?.unit
+              ? `${bk.unit.code} · ${bk.unit.name}`
+              : "Unidad";
+            const guestLabel = bk?.guest?.full_name
+              ? ` · ${bk.guest.full_name}`
+              : "";
+            const checkoutTime = bk?.check_out_time
+              ? bk.check_out_time.slice(0, 5)
+              : "11:00";
+            await notifyOrg(orgId, {
+              type: "task_reminder",
+              severity: "info",
+              title: `Limpieza programada · ${unitLabel}`,
+              body: `Check-out mañana ${checkoutTime}${guestLabel}. Tarea de limpieza creada automáticamente.`,
+              ref_type: "cleaning_task",
+              ref_id: c.cleaning_task_id,
+              action_url: `/dashboard/limpieza`,
+              dedup_key: `cleaning_auto:${c.unit_id}:${tomorrow}`,
+            });
+            checkoutNotifications += 1;
+          }
+        } catch (err) {
+          console.warn(
+            "[cron/daily-dispatch] checkout_tomorrow auto-cleaning falló",
+            orgId,
+            (err as Error).message
+          );
+        }
+      }
+    }
+
+    results.crm_pms_events = {
+      published: crmEventsPublished,
+      checkouts_tomorrow: checkoutsTomorrowList.length,
+      cleaning_tasks_created: cleaningTasksCreated,
+      notifications_created: checkoutNotifications,
+    };
   } catch (err) {
     results.crm_pms_events = { error: (err as Error).message };
   }

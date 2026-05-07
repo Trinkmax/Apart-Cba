@@ -1300,7 +1300,7 @@ export type PaymentReceiptData = {
 export async function getPaymentReceiptData(
   movementId: string
 ): Promise<PaymentReceiptData> {
-  await requireSession();
+  const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
 
@@ -1446,16 +1446,8 @@ export async function getPaymentReceiptData(
     };
   }
 
-  // Issued by
-  let issuedByName: string | null = null;
-  if (m.created_by) {
-    const { data: prof } = await admin
-      .from("user_profiles")
-      .select("full_name")
-      .eq("user_id", m.created_by)
-      .maybeSingle();
-    issuedByName = prof?.full_name ?? null;
-  }
+  // Issued by: usuario que descarga el comprobante (sesión actual), no quien creó el movimiento
+  const issuedByName: string | null = session.profile.full_name ?? null;
 
   // Numero de comprobante: REC-YYYYMM-XXXXXX (deterministico, basado en id)
   const issuedAt = new Date();

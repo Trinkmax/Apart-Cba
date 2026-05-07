@@ -760,18 +760,6 @@ export async function bulkReassignCleanings(input: { taskId: string; userId: str
 
 // ─── Crear tareas faltantes para los CH OUT del día ─────────────────────────
 
-const DEFAULT_CHECKLIST = [
-  "Cocina (vajilla, electrodomésticos)",
-  "Baño (sanitarios, ducha, espejos)",
-  "Dormitorios (cambio de sábanas)",
-  "Living / comedor",
-  "Pisos (aspirar / trapear)",
-  "Toallas y blanquería",
-  "Reposición amenities (papel, jabón, café)",
-  "Ventilación / olores",
-  "Verificación de inventario",
-];
-
 export async function createMissingCleaningTasksForDate(date: string): Promise<{ created: number }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
@@ -784,64 +772,9 @@ async function createMissingCleaningTasksForDateInternal(
   date: string,
   actorId: string | null,
 ): Promise<{ created: number }> {
-  const admin = createAdminClient();
-
-  // Bookings con check-out en `date`.
-  const { data: outs } = await admin
-    .from("bookings")
-    .select("id, unit_id")
-    .eq("organization_id", orgId)
-    .eq("check_out_date", date)
-    .in("status", ["confirmada", "check_in", "check_out"]);
-  const bookingsByUnit = new Map<string, string>();
-  for (const b of outs ?? []) {
-    const row = b as { id: string; unit_id: string };
-    bookingsByUnit.set(row.unit_id, row.id);
-  }
-  if (bookingsByUnit.size === 0) return { created: 0 };
-
-  // Cleaning tasks ya existentes para esa fecha
-  const { data: existing } = await admin
-    .from("cleaning_tasks")
-    .select("unit_id")
-    .eq("organization_id", orgId)
-    .eq("scheduled_for", date);
-  const existingUnitIds = new Set((existing ?? []).map((r) => (r as { unit_id: string }).unit_id));
-
-  let created = 0;
-  for (const [unitId, bookingId] of bookingsByUnit.entries()) {
-    if (existingUnitIds.has(unitId)) continue;
-    const checklist = DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
-    const { data: ins, error } = await admin
-      .from("cleaning_tasks")
-      .insert({
-        organization_id: orgId,
-        unit_id: unitId,
-        booking_out_id: bookingId,
-        scheduled_for: date,
-        status: "pendiente",
-        checklist,
-      })
-      .select("id")
-      .single();
-    if (error) {
-      console.warn("[parte-diario] no pude crear cleaning_task", error.message);
-      continue;
-    }
-    await admin.from("cleaning_events").insert({
-      cleaning_task_id: (ins as { id: string }).id,
-      organization_id: orgId,
-      actor_id: actorId,
-      event_type: "created",
-      to_status: "pendiente",
-      metadata: { source: "parte_diario_auto", booking_out_id: bookingId },
-    });
-    created += 1;
-  }
-
-  revalidatePath("/dashboard/parte-diario");
-  revalidatePath("/dashboard/limpieza");
-  return { created };
+  const { ensureCleaningTasksForCheckouts } = await import("./cleaning");
+  const created = await ensureCleaningTasksForCheckouts(orgId, date, actorId);
+  return { created: created.length };
 }
 
 // ─── Auto-asignación balanceada por carga ───────────────────────────────────
