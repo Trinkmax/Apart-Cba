@@ -171,10 +171,14 @@ export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
         })}
 
         {isAdmin && (() => {
+          const onOrganizacion =
+            pathname === "/dashboard/configuracion/organizacion" ||
+            pathname.startsWith("/dashboard/configuracion/organizacion/");
           const onEquipo =
             pathname === "/dashboard/configuracion/equipo" ||
             pathname.startsWith("/dashboard/configuracion/equipo/");
           const onConfig =
+            !onOrganizacion &&
             !onEquipo &&
             (pathname === "/dashboard/configuracion" ||
               pathname.startsWith("/dashboard/configuracion/"));
@@ -183,6 +187,14 @@ export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
               <SidebarGroupLabel>Configuración</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Organización" isActive={onOrganizacion}>
+                      <Link href="/dashboard/configuracion/organizacion">
+                        <Building2 size={18} className={cn("transition-colors", onOrganizacion && "text-sidebar-primary")} />
+                        <span>Organización</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild tooltip="Equipo y permisos" isActive={onEquipo}>
                       <Link href="/dashboard/configuracion/equipo">
