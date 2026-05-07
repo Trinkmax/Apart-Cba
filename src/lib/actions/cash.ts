@@ -1244,6 +1244,256 @@ export async function exportMovements(input: ExportMovementsFilters): Promise<Ex
   });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Comprobante de pago — datos para PDF
+// ════════════════════════════════════════════════════════════════════════════
+
+export type PaymentReceiptData = {
+  receipt_number: string;
+  issued_at: string;
+  organization: {
+    id: string;
+    name: string;
+    legal_name: string | null;
+    tax_id: string | null;
+    logo_url: string | null;
+    primary_color: string | null;
+  };
+  movement: {
+    id: string;
+    amount: number;
+    currency: string;
+    direction: MovementDirection;
+    category: MovementCategory;
+    occurred_at: string;
+    description: string | null;
+    billable_to: "apartcba" | "owner" | "guest";
+  };
+  account: { id: string; name: string; type: string } | null;
+  unit: { id: string; code: string; name: string; address: string | null } | null;
+  payer: {
+    kind: "guest" | "owner" | "organization";
+    name: string;
+    document: string | null;
+    email: string | null;
+    phone: string | null;
+  };
+  booking: {
+    id: string;
+    check_in_date: string;
+    check_out_date: string;
+    nights: number;
+    total_amount: number;
+    paid_amount: number;
+    currency: string;
+    guests_count: number;
+  } | null;
+  schedule: {
+    sequence_number: number;
+    total_count: number;
+    expected_amount: number;
+    due_date: string;
+  } | null;
+  issued_by_name: string | null;
+};
+
+export async function getPaymentReceiptData(
+  movementId: string
+): Promise<PaymentReceiptData> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const { data: m, error } = await admin
+    .from("cash_movements")
+    .select(
+      `id, amount, currency, direction, category, occurred_at, description,
+       billable_to, ref_type, ref_id, unit_id, owner_id, created_by,
+       account:cash_accounts(id, name, type),
+       unit:units(id, code, name, address),
+       owner:owners(id, full_name, email, phone, document_number, document_type)`
+    )
+    .eq("id", movementId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!m) throw new Error("Movimiento no encontrado");
+
+  const acc = m.account as unknown as { id: string; name: string; type: string } | null;
+  const unitRaw = m.unit as unknown as
+    | { id: string; code: string; name: string; address: string | null }
+    | null;
+  const ownerRaw = m.owner as unknown as
+    | {
+        id: string;
+        full_name: string;
+        email: string | null;
+        phone: string | null;
+        document_number: string | null;
+        document_type: string | null;
+      }
+    | null;
+
+  // Resolver booking + schedule + huésped
+  let bookingId: string | null = null;
+  let schedule: PaymentReceiptData["schedule"] = null;
+
+  if (m.ref_type === "booking" && m.ref_id) {
+    bookingId = m.ref_id;
+  } else if (m.ref_type === "payment_schedule" && m.ref_id) {
+    const { data: sch } = await admin
+      .from("booking_payment_schedule")
+      .select("booking_id, sequence_number, total_count, expected_amount, due_date")
+      .eq("id", m.ref_id)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (sch) {
+      bookingId = sch.booking_id;
+      schedule = {
+        sequence_number: sch.sequence_number,
+        total_count: sch.total_count,
+        expected_amount: Number(sch.expected_amount),
+        due_date: sch.due_date,
+      };
+    }
+  }
+
+  let booking: PaymentReceiptData["booking"] = null;
+  let guest:
+    | {
+        full_name: string;
+        document_number: string | null;
+        document_type: string | null;
+        email: string | null;
+        phone: string | null;
+      }
+    | null = null;
+  let bookingUnit: PaymentReceiptData["unit"] = unitRaw;
+
+  if (bookingId) {
+    const { data: bk } = await admin
+      .from("bookings")
+      .select(
+        `id, check_in_date, check_out_date, total_amount, paid_amount, currency,
+         guests_count, unit_id,
+         guest:guests(full_name, document_number, document_type, email, phone),
+         unit:units(id, code, name, address)`
+      )
+      .eq("id", bookingId)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (bk) {
+      const g = bk.guest as unknown as {
+        full_name: string;
+        document_number: string | null;
+        document_type: string | null;
+        email: string | null;
+        phone: string | null;
+      } | null;
+      const u = bk.unit as unknown as
+        | { id: string; code: string; name: string; address: string | null }
+        | null;
+      const ci = new Date(bk.check_in_date);
+      const co = new Date(bk.check_out_date);
+      const nights = Math.max(
+        1,
+        Math.round((co.getTime() - ci.getTime()) / 86400000)
+      );
+      booking = {
+        id: bk.id,
+        check_in_date: bk.check_in_date,
+        check_out_date: bk.check_out_date,
+        nights,
+        total_amount: Number(bk.total_amount),
+        paid_amount: Number(bk.paid_amount),
+        currency: bk.currency,
+        guests_count: bk.guests_count,
+      };
+      guest = g;
+      if (u) bookingUnit = u;
+    }
+  }
+
+  // Resolver pagador
+  let payer: PaymentReceiptData["payer"];
+  if (guest && (m.billable_to === "guest" || bookingId)) {
+    payer = {
+      kind: "guest",
+      name: guest.full_name,
+      document: guest.document_number
+        ? `${guest.document_type ?? "Doc"} ${guest.document_number}`
+        : null,
+      email: guest.email,
+      phone: guest.phone,
+    };
+  } else if (ownerRaw && m.billable_to === "owner") {
+    payer = {
+      kind: "owner",
+      name: ownerRaw.full_name,
+      document: ownerRaw.document_number
+        ? `${ownerRaw.document_type ?? "Doc"} ${ownerRaw.document_number}`
+        : null,
+      email: ownerRaw.email,
+      phone: ownerRaw.phone,
+    };
+  } else {
+    payer = {
+      kind: "organization",
+      name: organization.name,
+      document: organization.tax_id,
+      email: null,
+      phone: null,
+    };
+  }
+
+  // Issued by
+  let issuedByName: string | null = null;
+  if (m.created_by) {
+    const { data: prof } = await admin
+      .from("user_profiles")
+      .select("full_name")
+      .eq("user_id", m.created_by)
+      .maybeSingle();
+    issuedByName = prof?.full_name ?? null;
+  }
+
+  // Numero de comprobante: REC-YYYYMM-XXXXXX (deterministico, basado en id)
+  const issuedAt = new Date();
+  const yyyy = issuedAt.getFullYear();
+  const mm = String(issuedAt.getMonth() + 1).padStart(2, "0");
+  const shortId = m.id.replace(/-/g, "").slice(0, 6).toUpperCase();
+  const receiptNumber = `REC-${yyyy}${mm}-${shortId}`;
+
+  return {
+    receipt_number: receiptNumber,
+    issued_at: issuedAt.toISOString(),
+    organization: {
+      id: organization.id,
+      name: organization.name,
+      legal_name: organization.legal_name,
+      tax_id: organization.tax_id,
+      logo_url: organization.logo_url,
+      primary_color: organization.primary_color,
+    },
+    movement: {
+      id: m.id,
+      amount: Number(m.amount),
+      currency: m.currency,
+      direction: m.direction as MovementDirection,
+      category: m.category as MovementCategory,
+      occurred_at: m.occurred_at,
+      description: m.description,
+      billable_to: m.billable_to as "apartcba" | "owner" | "guest",
+    },
+    account: acc,
+    unit: bookingUnit,
+    payer,
+    booking,
+    schedule,
+    issued_by_name: issuedByName,
+  };
+}
+
 function mapRpcErrorToSpanish(raw: string): string {
   if (raw.includes("TRANSFER_REQUIRES_CONFIRM"))
     return "Esta es una transferencia: confirmá que querés eliminar ambos movimientos.";

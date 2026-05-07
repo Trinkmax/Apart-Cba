@@ -61,6 +61,7 @@ import { formatDateTime, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CashAccount, Unit } from "@/lib/types/database";
 import { MovementDeleteAlert } from "./movement-delete-alert";
+import { DownloadReceiptButton } from "./download-receipt-button";
 
 const CATEGORY_LABELS: Record<UpdateMovementInput["category"], string> = {
   booking_payment: "Cobro de reserva",
@@ -275,13 +276,18 @@ function SheetBody({
               </Button>
             }
           />
-          <Button onClick={() => setTab("editar")} className="gap-1.5">
-            <Edit size={14} /> Editar
-          </Button>
+          <div className="flex items-center gap-2">
+            <DownloadReceiptButton movementId={detail.id} />
+            <Button onClick={() => setTab("editar")} className="gap-1.5">
+              <Edit size={14} /> Editar
+            </Button>
+          </div>
         </div>
       )}
       {tab === "detalle" && isLockedSettlement && detail.linked_settlement && (
-        <div className="border-t px-5 py-3" />
+        <div className="border-t px-5 py-3 flex items-center justify-end">
+          <DownloadReceiptButton movementId={detail.id} />
+        </div>
       )}
     </>
   );

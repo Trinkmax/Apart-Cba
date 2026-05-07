@@ -92,7 +92,8 @@
       "mcp__supabase-apartcba__generate_typescript_types",
       "Bash(git pull *)",
       "Bash(sqlite3 :memory: \".schema\")",
-      "mcp__supabase-apartcba__list_tables"
+      "mcp__supabase-apartcba__list_tables",
+      "Bash(echo \"EXIT: $?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
