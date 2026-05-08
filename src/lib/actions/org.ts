@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { Resend } from "resend";
 import { requireSession } from "./auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { BOOKING_STATUS_META } from "@/lib/constants";
@@ -11,6 +12,7 @@ import type {
   BookingStatus,
   BookingStatusColors,
   Organization,
+  ResendDnsRecord,
   UserRole,
 } from "@/lib/types/database";
 
@@ -234,4 +236,84 @@ function extractPathFromPublicUrl(url: string, bucket: string): string | null {
   const idx = url.indexOf(`/${bucket}/`);
   if (idx === -1) return null;
   return url.slice(idx + bucket.length + 2);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Spec 2 — Resend domain management (Task 19+)
+// ════════════════════════════════════════════════════════════════════════
+
+let resendClient: Resend | null = null;
+function getResendForOrg(): Resend {
+  if (resendClient) return resendClient;
+  const key = process.env.RESEND_API_KEY;
+  if (!key) throw new Error("RESEND_API_KEY no configurada");
+  resendClient = new Resend(key);
+  return resendClient;
+}
+
+const domainSchema = z.object({
+  domain: z
+    .string()
+    .min(3)
+    .max(253)
+    .regex(
+      /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i,
+      "Dominio inválido"
+    ),
+  sender_name: z.string().min(1).max(120),
+  sender_local_part: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[a-z0-9._-]+$/i, "Local part inválida"),
+});
+
+export type CreateOrgDomainInput = z.infer<typeof domainSchema>;
+
+export async function createOrgDomain(
+  input: CreateOrgDomainInput
+): Promise<{ ok: true; dns_records: ResendDnsRecord[] } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const parsed = domainSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Inputs inválidos" };
+  }
+
+  const admin = createAdminClient();
+  const { data: org } = await admin
+    .from("organizations")
+    .select("email_domain")
+    .eq("id", organization.id)
+    .maybeSingle();
+  if (org?.email_domain) {
+    return {
+      ok: false,
+      error: "Ya hay un dominio configurado. Reiniciá la configuración primero.",
+    };
+  }
+
+  let createResult;
+  try {
+    createResult = await getResendForOrg().domains.create({ name: parsed.data.domain });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (createResult.error) return { ok: false, error: createResult.error.message };
+  const dnsRecords = (createResult.data?.records ?? []) as unknown as ResendDnsRecord[];
+
+  const { error: updateError } = await admin
+    .from("organizations")
+    .update({
+      email_domain: parsed.data.domain,
+      email_sender_name: parsed.data.sender_name,
+      email_sender_local_part: parsed.data.sender_local_part,
+      email_domain_dns_records: dnsRecords,
+      email_domain_verified_at: null,
+    })
+    .eq("id", organization.id);
+  if (updateError) return { ok: false, error: updateError.message };
+
+  revalidatePath("/dashboard/configuracion/organizacion");
+  return { ok: true, dns_records: dnsRecords };
 }
