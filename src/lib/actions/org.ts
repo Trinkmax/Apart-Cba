@@ -317,3 +317,76 @@ export async function createOrgDomain(
   revalidatePath("/dashboard/configuracion/organizacion");
   return { ok: true, dns_records: dnsRecords };
 }
+
+export async function verifyOrgDomain(): Promise<
+  { ok: true; verified: boolean } | { ok: false; error: string }
+> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data: org } = await admin
+    .from("organizations")
+    .select("email_domain")
+    .eq("id", organization.id)
+    .maybeSingle();
+  if (!org?.email_domain) return { ok: false, error: "No hay dominio configurado" };
+
+  let listResult;
+  try {
+    listResult = await getResendForOrg().domains.list();
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (listResult.error) return { ok: false, error: listResult.error.message };
+  const found = listResult.data?.data?.find((d) => d.name === org.email_domain);
+  if (!found) return { ok: false, error: "Dominio no encontrado en Resend (¿lo borraste?)" };
+
+  const verified = found.status === "verified";
+  if (verified) {
+    await admin
+      .from("organizations")
+      .update({ email_domain_verified_at: new Date().toISOString() })
+      .eq("id", organization.id);
+  }
+  revalidatePath("/dashboard/configuracion/organizacion");
+  return { ok: true, verified };
+}
+
+export async function deleteOrgDomain(): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const { data: org } = await admin
+    .from("organizations")
+    .select("email_domain")
+    .eq("id", organization.id)
+    .maybeSingle();
+  if (!org?.email_domain) return { ok: true };  // nada que borrar
+
+  // Buscar el ID del dominio en Resend para borrarlo
+  try {
+    const list = await getResendForOrg().domains.list();
+    const found = list.data?.data?.find((d) => d.name === org.email_domain);
+    if (found?.id) {
+      await getResendForOrg().domains.remove(found.id);
+    }
+  } catch (e) {
+    // si falla el delete remoto, igual limpiamos local
+    console.warn("Error borrando dominio en Resend:", e);
+  }
+
+  await admin
+    .from("organizations")
+    .update({
+      email_domain: null,
+      email_sender_name: null,
+      email_sender_local_part: null,
+      email_domain_dns_records: null,
+      email_domain_verified_at: null,
+    })
+    .eq("id", organization.id);
+
+  revalidatePath("/dashboard/configuracion/organizacion");
+  return { ok: true };
+}
