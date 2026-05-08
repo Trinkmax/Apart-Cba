@@ -8,6 +8,7 @@ import { Resend } from "resend";
 import { requireSession } from "./auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { BOOKING_STATUS_META } from "@/lib/constants";
+import { findInvalidVariables } from "@/lib/email/templates/variables";
 import type {
   BookingStatus,
   BookingStatusColors,
@@ -386,6 +387,62 @@ export async function deleteOrgDomain(): Promise<{ ok: true } | { ok: false; err
       email_domain_verified_at: null,
     })
     .eq("id", organization.id);
+
+  revalidatePath("/dashboard/configuracion/organizacion");
+  return { ok: true };
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Spec 2 — Templates de mensajes (Task 22)
+// ════════════════════════════════════════════════════════════════════════
+
+const updateTemplateSchema = z.object({
+  id: z.string().uuid(),
+  subject: z.string().max(300).optional().nullable(),
+  body: z.string().min(1).max(10000),
+});
+
+export type UpdateTemplateInput = z.infer<typeof updateTemplateSchema>;
+
+export async function updateOrgTemplate(
+  input: UpdateTemplateInput
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const parsed = updateTemplateSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+
+  const admin = createAdminClient();
+  const { data: tpl, error: lookupError } = await admin
+    .from("org_message_templates")
+    .select("id, organization_id, event_type, channel")
+    .eq("id", parsed.data.id)
+    .maybeSingle();
+  if (lookupError) return { ok: false, error: lookupError.message };
+  if (!tpl) return { ok: false, error: "Template no encontrado" };
+  if (tpl.organization_id !== organization.id) {
+    return { ok: false, error: "Template no pertenece a tu organización" };
+  }
+
+  const invalid = findInvalidVariables(parsed.data.body, tpl.event_type);
+  if (invalid.length > 0) {
+    return {
+      ok: false,
+      error: `Variables no válidas: ${invalid.map((v) => `{{${v}}}`).join(", ")}`,
+    };
+  }
+
+  const { error: updateError } = await admin
+    .from("org_message_templates")
+    .update({
+      subject: parsed.data.subject ?? null,
+      body: parsed.data.body,
+      is_default: false,
+    })
+    .eq("id", parsed.data.id);
+  if (updateError) return { ok: false, error: updateError.message };
 
   revalidatePath("/dashboard/configuracion/organizacion");
   return { ok: true };
