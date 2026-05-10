@@ -55,7 +55,13 @@ function renderBody(m: CrmMessage) {
         <div className="space-y-1">
           {m.media_url ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={m.media_url} alt={m.body ?? ""} className="rounded max-h-60" />
+            <img
+              src={m.media_url}
+              alt={m.body ?? ""}
+              loading="lazy"
+              decoding="async"
+              className="rounded max-h-60"
+            />
           ) : (
             <div className="flex items-center gap-2 text-xs opacity-70"><ImageIcon className="size-3" /> Imagen</div>
           )}

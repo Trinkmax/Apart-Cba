@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
@@ -28,16 +29,16 @@ export async function createClient() {
   );
 }
 
-export function createAdminClient() {
-  return createSupabaseClient(
+export const createAdminClient = cache(() =>
+  createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
       db: { schema: "apartcba" },
       auth: { persistSession: false, autoRefreshToken: false },
     }
-  );
-}
+  )
+);
 
 /**
  * Cliente admin que apunta al schema 'public'/'auth' (para operaciones que

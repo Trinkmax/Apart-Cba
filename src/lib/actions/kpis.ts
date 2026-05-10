@@ -57,6 +57,11 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
   in30.setDate(today.getDate() + 30);
   const back30 = new Date(today);
   back30.setDate(today.getDate() - 30);
+  const in30Str = in30.toISOString().slice(0, 10);
+  const back30Str = back30.toISOString().slice(0, 10);
+
+  const bookingFields =
+    "id, status, currency, total_amount, paid_amount, check_in_date, check_in_time, check_out_date, check_out_time, guests_count, unit:units(code, name), guest:guests(full_name)";
 
   const [
     { data: units },
@@ -69,18 +74,18 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
     admin.from("units").select("id, status").eq("organization_id", organization.id).eq("active", true),
     admin
       .from("bookings")
-      .select("*, unit:units(code, name), guest:guests(full_name)")
+      .select(bookingFields)
       .eq("organization_id", organization.id)
       .gte("check_in_date", todayStr)
-      .lte("check_in_date", in30.toISOString().slice(0, 10))
+      .lte("check_in_date", in30Str)
       .in("status", ["confirmada", "check_in"])
       .order("check_in_date"),
     admin
       .from("bookings")
-      .select("*, unit:units(code, name), guest:guests(full_name)")
+      .select(bookingFields)
       .eq("organization_id", organization.id)
-      .gte("check_out_date", back30.toISOString().slice(0, 10))
-      .lte("check_out_date", in30.toISOString().slice(0, 10)),
+      .gte("check_out_date", back30Str)
+      .lte("check_out_date", in30Str),
     admin
       .from("maintenance_tickets")
       .select("id, status, priority")

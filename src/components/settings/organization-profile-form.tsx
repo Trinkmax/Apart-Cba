@@ -129,7 +129,6 @@ export function OrganizationProfileForm({
                 width={80}
                 height={80}
                 className="size-full object-contain"
-                unoptimized
               />
             ) : (
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">

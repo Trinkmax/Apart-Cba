@@ -10,7 +10,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { generateParteDiarioPDF, generateParteDiarioPDFDoc } from "@/lib/pdf/parte-diario-pdf";
 import type { ParteDiarioSnapshot } from "@/lib/types/database";
 
 interface PdfPreviewButtonProps {
@@ -26,6 +25,7 @@ export function PdfPreviewButton({ snapshot }: PdfPreviewButtonProps) {
   const [url, setUrl] = useState<string | null>(null);
 
   const buildBlob = async () => {
+    const { generateParteDiarioPDFDoc } = await import("@/lib/pdf/parte-diario-pdf");
     const doc = await generateParteDiarioPDFDoc(snapshot);
     const blob = doc.output("blob");
     return URL.createObjectURL(blob);
@@ -75,7 +75,10 @@ export function PdfPreviewButton({ snapshot }: PdfPreviewButtonProps) {
           <Button
             size="sm"
             onClick={() => {
-              void generateParteDiarioPDF(snapshot);
+              void (async () => {
+                const { generateParteDiarioPDF } = await import("@/lib/pdf/parte-diario-pdf");
+                await generateParteDiarioPDF(snapshot);
+              })();
             }}
             className="gap-1.5"
           >

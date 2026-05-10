@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { changeSettlementStatus, generateSettlement } from "@/lib/actions/settlements";
 import { getOrganizationBranding } from "@/lib/actions/org";
-import { generateSettlementPDF } from "@/lib/pdf/settlement-pdf";
 import type { OwnerSettlement, Owner, SettlementLine, Unit } from "@/lib/types/database";
 
 type SettlementDetail = OwnerSettlement & {
@@ -51,7 +50,10 @@ export function SettlementActions({ settlement }: { settlement: SettlementDetail
   function handlePdf() {
     startTransition(async () => {
       try {
-        const branding = await getOrganizationBranding();
+        const [branding, { generateSettlementPDF }] = await Promise.all([
+          getOrganizationBranding(),
+          import("@/lib/pdf/settlement-pdf"),
+        ]);
         await generateSettlementPDF(settlement, branding);
       } catch (e) {
         toast.error("Error generando PDF", { description: (e as Error).message });

@@ -63,27 +63,41 @@ export async function listUnitsEnriched(): Promise<UnitWithRelations[]> {
   if (!units || units.length === 0) return [];
   const unitIds = units.map((u) => u.id);
 
-  // Owners principales
-  const { data: unitOwners } = await admin
-    .from("unit_owners")
-    .select("unit_id, owner:owners(*)")
-    .in("unit_id", unitIds)
-    .eq("is_primary", true);
+  // Horizonte de bookings: solo necesitamos el próximo, no la temporada completa.
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const horizon = new Date(today);
+  horizon.setDate(today.getDate() + 90);
+  const horizonStr = horizon.toISOString().slice(0, 10);
+
+  // 3 lookups dependen solo de unitIds → paralelos.
+  const [{ data: unitOwners }, { data: bookings }, { data: tickets }] = await Promise.all([
+    admin
+      .from("unit_owners")
+      .select("unit_id, owner:owners(*)")
+      .in("unit_id", unitIds)
+      .eq("is_primary", true),
+    admin
+      .from("bookings")
+      .select(
+        "id, unit_id, guest_id, check_in_date, check_out_date, guests_count, guest:guests(id, full_name)",
+      )
+      .in("unit_id", unitIds)
+      .gte("check_in_date", todayStr)
+      .lte("check_in_date", horizonStr)
+      .in("status", ["confirmada", "check_in"])
+      .order("check_in_date"),
+    admin
+      .from("maintenance_tickets")
+      .select("id, unit_id, title, priority, status")
+      .in("unit_id", unitIds)
+      .not("status", "in", "(resuelto,cerrado)"),
+  ]);
 
   const ownerByUnit = new Map<string, Owner>();
   (unitOwners ?? []).forEach((uo) => {
     if (uo.owner) ownerByUnit.set(uo.unit_id, uo.owner as unknown as Owner);
   });
-
-  // Next bookings (próx 30 días, confirmada o check_in)
-  const today = new Date().toISOString().slice(0, 10);
-  const { data: bookings } = await admin
-    .from("bookings")
-    .select("id, unit_id, guest_id, check_in_date, check_out_date, guests_count, guest:guests(id, full_name)")
-    .in("unit_id", unitIds)
-    .gte("check_in_date", today)
-    .in("status", ["confirmada", "check_in"])
-    .order("check_in_date");
 
   const nextBookingByUnit = new Map<string, NonNullable<UnitWithRelations["next_booking"]>>();
   (bookings ?? []).forEach((b) => {
@@ -91,13 +105,6 @@ export async function listUnitsEnriched(): Promise<UnitWithRelations[]> {
       nextBookingByUnit.set(b.unit_id, b as unknown as NonNullable<UnitWithRelations["next_booking"]>);
     }
   });
-
-  // Open tickets — más urgente por unit
-  const { data: tickets } = await admin
-    .from("maintenance_tickets")
-    .select("id, unit_id, title, priority, status")
-    .in("unit_id", unitIds)
-    .not("status", "in", "(resuelto,cerrado)");
 
   const openTicketByUnit = new Map<string, NonNullable<UnitWithRelations["open_ticket"]>>();
   (tickets ?? []).forEach((t) => {

@@ -32,7 +32,6 @@ import { exportMovements, type ExportMovementsFilters } from "@/lib/actions/cash
 import { getOrganizationBranding } from "@/lib/actions/org";
 import { downloadCsv, toCsv } from "@/lib/csv";
 import { formatDateTime } from "@/lib/format";
-import { generateCashMovementsPDF } from "@/lib/pdf/cash-movements-pdf";
 import type { CashAccount, MovementCategory } from "@/lib/types/database";
 
 type RangePreset =
@@ -154,7 +153,10 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
           const filename = `movimientos_${filenameSuffix}_${range.fromLabel}_a_${range.toLabel}.csv`;
           downloadCsv(filename, csv);
         } else {
-          const branding = await getOrganizationBranding();
+          const [branding, { generateCashMovementsPDF }] = await Promise.all([
+            getOrganizationBranding(),
+            import("@/lib/pdf/cash-movements-pdf"),
+          ]);
           await generateCashMovementsPDF(
             rows,
             {

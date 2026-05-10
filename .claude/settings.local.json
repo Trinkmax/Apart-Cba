@@ -93,7 +93,10 @@
       "Bash(git pull *)",
       "Bash(sqlite3 :memory: \".schema\")",
       "mcp__supabase-apartcba__list_tables",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "mcp__supabase-apartcba__get_advisors",
+      "mcp__supabase-apartcba__get_logs",
+      "Bash(grep -v \":0$\")"
     ]
   },
   "enableAllProjectMcpServers": true,

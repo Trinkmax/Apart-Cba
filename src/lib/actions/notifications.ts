@@ -67,7 +67,6 @@ export async function markNotificationAsRead(id: string): Promise<void> {
     .is("read_at", null);
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/alertas");
-  revalidatePath("/", "layout");
 }
 
 export async function markAllNotificationsAsRead(): Promise<number> {
@@ -84,7 +83,6 @@ export async function markAllNotificationsAsRead(): Promise<number> {
     .select("id");
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/alertas");
-  revalidatePath("/", "layout");
   return data?.length ?? 0;
 }
 
@@ -99,7 +97,6 @@ export async function dismissNotification(id: string): Promise<void> {
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/alertas");
-  revalidatePath("/", "layout");
 }
 
 export async function dismissAllNotifications(): Promise<number> {
@@ -115,7 +112,6 @@ export async function dismissAllNotifications(): Promise<number> {
     .select("id");
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/alertas");
-  revalidatePath("/", "layout");
   return data?.length ?? 0;
 }
 
@@ -179,7 +175,6 @@ export async function createNotification(
     throw new Error(error.message);
   }
   revalidatePath("/dashboard/alertas");
-  revalidatePath("/", "layout");
   return data as Notification;
 }
 

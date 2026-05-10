@@ -1,5 +1,6 @@
 "use server";
 
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
@@ -12,11 +13,7 @@ export type SessionContext = {
   memberships: (OrganizationMember & { organization: Organization })[];
 };
 
-/**
- * Devuelve la sesión actual del usuario logueado, o null.
- * Hace una sola query JOIN para evitar N+1.
- */
-export async function getSession(): Promise<SessionContext | null> {
+const sessionLoader = cache(async (): Promise<SessionContext | null> => {
   const supabase = await createClient();
   const {
     data: { user },
@@ -43,13 +40,14 @@ export async function getSession(): Promise<SessionContext | null> {
     profile: profile as UserProfile,
     memberships: (memberships ?? []) as never,
   };
+});
+
+export async function getSession(): Promise<SessionContext | null> {
+  return sessionLoader();
 }
 
-/**
- * Helper: enforced. Redirige a /login si no hay sesión.
- */
 export async function requireSession(): Promise<SessionContext> {
-  const session = await getSession();
+  const session = await sessionLoader();
   if (!session) redirect("/login");
   return session;
 }

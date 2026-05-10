@@ -204,34 +204,6 @@ async function buildSnapshot(
   const orgId = org.id;
   const admin = createAdminClient();
 
-  // ─── Bookings que aplican al reportDate ──────────────────────────────────
-  // CH OUT: bookings cuyo check_out_date == reportDate y status no cancelado.
-  // CH IN:  bookings cuyo check_in_date == reportDate y status no cancelado.
-  const [outRes, inRes] = await Promise.all([
-    admin
-      .from("bookings")
-      .select(
-        `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
-         check_in_time, check_out_time,
-         unit:units(id, code, name),
-         guest:guests(id, full_name)`,
-      )
-      .eq("organization_id", orgId)
-      .eq("check_out_date", reportDate)
-      .in("status", ["confirmada", "check_in", "check_out"]),
-    admin
-      .from("bookings")
-      .select(
-        `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
-         check_in_time, check_out_time,
-         unit:units(id, code, name),
-         guest:guests(id, full_name)`,
-      )
-      .eq("organization_id", orgId)
-      .eq("check_in_date", reportDate)
-      .in("status", ["confirmada", "check_in"]),
-  ]);
-
   type BookingJoin = {
     id: string;
     unit_id: string;
@@ -245,49 +217,6 @@ async function buildSnapshot(
     unit: { id: string; code: string; name: string } | null;
     guest: { id: string; full_name: string } | null;
   };
-  const mapBooking = (b: BookingJoin): ParteDiarioBookingRow => ({
-    booking_id: b.id,
-    unit_id: b.unit_id,
-    unit_code: b.unit?.code ?? "—",
-    unit_name: b.unit?.name ?? "—",
-    guest_name: b.guest?.full_name ?? null,
-    mode: b.mode,
-    status: b.status,
-    is_owner_use: b.guest_id === null,
-    check_in_date: b.check_in_date,
-    check_out_date: b.check_out_date,
-    check_in_time: b.check_in_time,
-    check_out_time: b.check_out_time,
-  });
-
-  // CH IN ordenado por hora (los más tempranos primero), luego por unit_code.
-  // CH OUT idem por check-out time.
-  const sortByTime = (
-    timeKey: "check_in_time" | "check_out_time",
-  ) => (a: ParteDiarioBookingRow, b: ParteDiarioBookingRow) => {
-    const ta = a[timeKey] ?? "99:99:99";
-    const tb = b[timeKey] ?? "99:99:99";
-    return ta.localeCompare(tb) || a.unit_code.localeCompare(b.unit_code);
-  };
-  const checkOuts = ((outRes.data ?? []) as unknown as BookingJoin[])
-    .map(mapBooking)
-    .sort(sortByTime("check_out_time"));
-  const checkIns = ((inRes.data ?? []) as unknown as BookingJoin[])
-    .map(mapBooking)
-    .sort(sortByTime("check_in_time"));
-
-  // ─── SUCIOS = cleaning_tasks programadas para reportDate ─────────────────
-  // Más "ghost rows" para check-outs sin cleaning_task creada todavía.
-  const { data: cleaningRows } = await admin
-    .from("cleaning_tasks")
-    .select(
-      `id, unit_id, scheduled_for, status, assigned_to, booking_out_id,
-       unit:units(id, code, name)`,
-    )
-    .eq("organization_id", orgId)
-    .eq("scheduled_for", reportDate)
-    .in("status", ["pendiente", "en_progreso", "completada"]);
-
   type CleaningJoin = {
     id: string;
     unit_id: string;
@@ -297,117 +226,6 @@ async function buildSnapshot(
     booking_out_id: string | null;
     unit: { id: string; code: string; name: string } | null;
   };
-
-  // Resolver nombres de los assigned_to en una sola query
-  const cleaningJoinRows = (cleaningRows ?? []) as unknown as CleaningJoin[];
-  const assigneeIds = Array.from(
-    new Set(cleaningJoinRows.map((r) => r.assigned_to).filter((v): v is string => !!v)),
-  );
-  const assigneeNameById = new Map<string, string>();
-  if (assigneeIds.length > 0) {
-    const { data: profs } = await admin
-      .from("user_profiles")
-      .select("user_id, full_name")
-      .in("user_id", assigneeIds);
-    for (const p of profs ?? []) {
-      assigneeNameById.set(
-        (p as { user_id: string }).user_id,
-        ((p as { full_name: string | null }).full_name) ?? "Sin nombre",
-      );
-    }
-  }
-
-  // Mapeo de booking_out_id → guest name + check_out_time para mostrar contexto
-  const outBookingIds = Array.from(
-    new Set(cleaningJoinRows.map((r) => r.booking_out_id).filter((v): v is string => !!v)),
-  );
-  const bookingMetaById = new Map<string, { guest_name: string | null; check_out_time: string | null }>();
-  if (outBookingIds.length > 0) {
-    const { data: bks } = await admin
-      .from("bookings")
-      .select(`id, check_out_time, guest:guests(id, full_name)`)
-      .in("id", outBookingIds);
-    for (const b of bks ?? []) {
-      const row = b as unknown as {
-        id: string;
-        check_out_time: string | null;
-        guest: { full_name: string } | null;
-      };
-      bookingMetaById.set(row.id, {
-        guest_name: row.guest?.full_name ?? null,
-        check_out_time: row.check_out_time,
-      });
-    }
-  }
-
-  const realCleanings: ParteDiarioCleaningRow[] = cleaningJoinRows.map((c) => {
-    const meta = c.booking_out_id ? bookingMetaById.get(c.booking_out_id) : undefined;
-    return {
-      task_id: c.id,
-      unit_id: c.unit_id,
-      unit_code: c.unit?.code ?? "—",
-      unit_name: c.unit?.name ?? "—",
-      scheduled_for: c.scheduled_for,
-      status: c.status,
-      assigned_to: c.assigned_to,
-      assigned_to_name: c.assigned_to ? assigneeNameById.get(c.assigned_to) ?? null : null,
-      booking_out_id: c.booking_out_id,
-      guest_name: meta?.guest_name ?? null,
-      check_out_time: meta?.check_out_time ?? null,
-    };
-  });
-
-  // Ghost rows: check-outs del día sin cleaning_task creada. Usamos el booking
-  // como portador para que el admin pueda crear la tarea con un click desde la UI.
-  const realUnitIds = new Set(realCleanings.map((c) => c.unit_id));
-  const ghosts: ParteDiarioCleaningRow[] = checkOuts
-    .filter((b) => !realUnitIds.has(b.unit_id))
-    .map((b) => ({
-      task_id: null,
-      unit_id: b.unit_id,
-      unit_code: b.unit_code,
-      unit_name: b.unit_name,
-      scheduled_for: reportDate,
-      status: null,
-      assigned_to: null,
-      assigned_to_name: null,
-      booking_out_id: b.booking_id,
-      guest_name: b.guest_name,
-      check_out_time: null,
-    }));
-
-  const sucios = [...realCleanings, ...ghosts].sort((a, b) =>
-    a.unit_code.localeCompare(b.unit_code),
-  );
-
-  // ─── ARREGLOS = maintenance_tickets abiertos (sin filtro de priority) ────
-  // ─── TAREAS PENDIENTES = concierge_requests abiertas (módulo "Tareas") ──
-  // Esta separación matchea el sidebar (Mantenimiento vs Tareas) y mantiene
-  // semántica clara: "Arreglos" = repair work, "Tareas" = pedidos operativos.
-  const [{ data: tickets }, { data: requests }] = await Promise.all([
-    admin
-      .from("maintenance_tickets")
-      .select(
-        `id, unit_id, title, priority, status, opened_at, assigned_to,
-         unit:units(id, code, name)`,
-      )
-      .eq("organization_id", orgId)
-      .in("status", ["abierto", "en_progreso", "esperando_repuesto"])
-      .order("priority", { ascending: false })
-      .order("opened_at", { ascending: false }),
-    admin
-      .from("concierge_requests")
-      .select(
-        `id, unit_id, description, request_type, status, priority,
-         scheduled_for, assigned_to, created_at,
-         unit:units(id, code, name)`,
-      )
-      .eq("organization_id", orgId)
-      .in("status", ["pendiente", "en_progreso"])
-      .order("priority", { ascending: false })
-      .order("created_at", { ascending: false }),
-  ]);
-
   type TicketJoin = {
     id: string;
     unit_id: string;
@@ -430,29 +248,198 @@ async function buildSnapshot(
     created_at: string;
     unit: { id: string; code: string; name: string } | null;
   };
-  const ticketRows = (tickets ?? []) as unknown as TicketJoin[];
-  const conciergeRows = (requests ?? []) as unknown as ConciergeJoin[];
 
-  // Resolver nombres de assigned_to en una sola query para ambos sets.
-  const allAssigneeIds = Array.from(
-    new Set([
-      ...ticketRows.map((t) => t.assigned_to),
-      ...conciergeRows.map((c) => c.assigned_to),
-    ].filter((v): v is string => !!v)),
-  );
-  const nameById = new Map<string, string>();
-  if (allAssigneeIds.length > 0) {
-    const { data: profs } = await admin
-      .from("user_profiles")
-      .select("user_id, full_name")
-      .in("user_id", allAssigneeIds);
-    for (const p of profs ?? []) {
-      nameById.set(
-        (p as { user_id: string }).user_id,
-        ((p as { full_name: string | null }).full_name) ?? "Sin nombre",
-      );
+  // BATCH 1 — todas independientes
+  const [outRes, inRes, cleaningRowsRes, ticketsRes, requestsRes, membersRes] =
+    await Promise.all([
+      admin
+        .from("bookings")
+        .select(
+          `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
+           check_in_time, check_out_time,
+           unit:units(id, code, name),
+           guest:guests(id, full_name)`,
+        )
+        .eq("organization_id", orgId)
+        .eq("check_out_date", reportDate)
+        .in("status", ["confirmada", "check_in", "check_out"]),
+      admin
+        .from("bookings")
+        .select(
+          `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
+           check_in_time, check_out_time,
+           unit:units(id, code, name),
+           guest:guests(id, full_name)`,
+        )
+        .eq("organization_id", orgId)
+        .eq("check_in_date", reportDate)
+        .in("status", ["confirmada", "check_in"]),
+      admin
+        .from("cleaning_tasks")
+        .select(
+          `id, unit_id, scheduled_for, status, assigned_to, booking_out_id,
+           unit:units(id, code, name)`,
+        )
+        .eq("organization_id", orgId)
+        .eq("scheduled_for", reportDate)
+        .in("status", ["pendiente", "en_progreso", "completada"]),
+      admin
+        .from("maintenance_tickets")
+        .select(
+          `id, unit_id, title, priority, status, opened_at, assigned_to,
+           unit:units(id, code, name)`,
+        )
+        .eq("organization_id", orgId)
+        .in("status", ["abierto", "en_progreso", "esperando_repuesto"])
+        .order("priority", { ascending: false })
+        .order("opened_at", { ascending: false }),
+      admin
+        .from("concierge_requests")
+        .select(
+          `id, unit_id, description, request_type, status, priority,
+           scheduled_for, assigned_to, created_at,
+           unit:units(id, code, name)`,
+        )
+        .eq("organization_id", orgId)
+        .in("status", ["pendiente", "en_progreso"])
+        .order("priority", { ascending: false })
+        .order("created_at", { ascending: false }),
+      admin
+        .from("organization_members")
+        .select("user_id, role")
+        .eq("organization_id", orgId)
+        .eq("active", true)
+        .in("role", ASSIGNABLE_CLEANING_ROLES),
+    ]);
+
+  const cleaningJoinRows = (cleaningRowsRes.data ?? []) as unknown as CleaningJoin[];
+  const ticketRows = (ticketsRes.data ?? []) as unknown as TicketJoin[];
+  const conciergeRows = (requestsRes.data ?? []) as unknown as ConciergeJoin[];
+  const memberRows = (membersRes.data ?? []) as { user_id: string; role: UserRole }[];
+
+  const mapBooking = (b: BookingJoin): ParteDiarioBookingRow => ({
+    booking_id: b.id,
+    unit_id: b.unit_id,
+    unit_code: b.unit?.code ?? "—",
+    unit_name: b.unit?.name ?? "—",
+    guest_name: b.guest?.full_name ?? null,
+    mode: b.mode,
+    status: b.status,
+    is_owner_use: b.guest_id === null,
+    check_in_date: b.check_in_date,
+    check_out_date: b.check_out_date,
+    check_in_time: b.check_in_time,
+    check_out_time: b.check_out_time,
+  });
+  const sortByTime = (
+    timeKey: "check_in_time" | "check_out_time",
+  ) => (a: ParteDiarioBookingRow, b: ParteDiarioBookingRow) => {
+    const ta = a[timeKey] ?? "99:99:99";
+    const tb = b[timeKey] ?? "99:99:99";
+    return ta.localeCompare(tb) || a.unit_code.localeCompare(b.unit_code);
+  };
+  const checkOuts = ((outRes.data ?? []) as unknown as BookingJoin[])
+    .map(mapBooking)
+    .sort(sortByTime("check_out_time"));
+  const checkIns = ((inRes.data ?? []) as unknown as BookingJoin[])
+    .map(mapBooking)
+    .sort(sortByTime("check_in_time"));
+
+  // Pre-seed booking meta cache desde checkOuts (evita una query si el booking_out_id de la cleaning coincide con un CH-OUT del día — caso típico).
+  const bookingMetaById = new Map<string, { guest_name: string | null; check_out_time: string | null }>();
+  for (const co of checkOuts) {
+    bookingMetaById.set(co.booking_id, {
+      guest_name: co.guest_name,
+      check_out_time: co.check_out_time,
+    });
+  }
+
+  const allUserIds = new Set<string>();
+  for (const m of memberRows) allUserIds.add(m.user_id);
+  for (const c of cleaningJoinRows) if (c.assigned_to) allUserIds.add(c.assigned_to);
+  for (const t of ticketRows) if (t.assigned_to) allUserIds.add(t.assigned_to);
+  for (const r of conciergeRows) if (r.assigned_to) allUserIds.add(r.assigned_to);
+
+  const missingBookingIds = new Set<string>();
+  for (const c of cleaningJoinRows) {
+    if (c.booking_out_id && !bookingMetaById.has(c.booking_out_id)) {
+      missingBookingIds.add(c.booking_out_id);
     }
   }
+
+  const userIdsArr = [...allUserIds];
+  const missingBookingIdsArr = [...missingBookingIds];
+
+  // BATCH 2 — lookups dependientes
+  const [profilesRes, missingBookingsRes] = await Promise.all([
+    userIdsArr.length > 0
+      ? admin.from("user_profiles").select("user_id, full_name").in("user_id", userIdsArr)
+      : Promise.resolve({ data: [] as { user_id: string; full_name: string | null }[] }),
+    missingBookingIdsArr.length > 0
+      ? admin
+          .from("bookings")
+          .select(`id, check_out_time, guest:guests(id, full_name)`)
+          .in("id", missingBookingIdsArr)
+      : Promise.resolve({ data: [] as unknown[] }),
+  ]);
+
+  const nameById = new Map<string, string>();
+  for (const p of profilesRes.data ?? []) {
+    nameById.set(
+      (p as { user_id: string }).user_id,
+      ((p as { full_name: string | null }).full_name) ?? "Sin nombre",
+    );
+  }
+
+  for (const b of missingBookingsRes.data ?? []) {
+    const row = b as unknown as {
+      id: string;
+      check_out_time: string | null;
+      guest: { full_name: string } | null;
+    };
+    bookingMetaById.set(row.id, {
+      guest_name: row.guest?.full_name ?? null,
+      check_out_time: row.check_out_time,
+    });
+  }
+
+  const realCleanings: ParteDiarioCleaningRow[] = cleaningJoinRows.map((c) => {
+    const meta = c.booking_out_id ? bookingMetaById.get(c.booking_out_id) : undefined;
+    return {
+      task_id: c.id,
+      unit_id: c.unit_id,
+      unit_code: c.unit?.code ?? "—",
+      unit_name: c.unit?.name ?? "—",
+      scheduled_for: c.scheduled_for,
+      status: c.status,
+      assigned_to: c.assigned_to,
+      assigned_to_name: c.assigned_to ? nameById.get(c.assigned_to) ?? null : null,
+      booking_out_id: c.booking_out_id,
+      guest_name: meta?.guest_name ?? null,
+      check_out_time: meta?.check_out_time ?? null,
+    };
+  });
+
+  const realUnitIds = new Set(realCleanings.map((c) => c.unit_id));
+  const ghosts: ParteDiarioCleaningRow[] = checkOuts
+    .filter((b) => !realUnitIds.has(b.unit_id))
+    .map((b) => ({
+      task_id: null,
+      unit_id: b.unit_id,
+      unit_code: b.unit_code,
+      unit_name: b.unit_name,
+      scheduled_for: reportDate,
+      status: null,
+      assigned_to: null,
+      assigned_to_name: null,
+      booking_out_id: b.booking_id,
+      guest_name: b.guest_name,
+      check_out_time: null,
+    }));
+
+  const sucios = [...realCleanings, ...ghosts].sort((a, b) =>
+    a.unit_code.localeCompare(b.unit_code),
+  );
 
   const arreglos: ParteDiarioMaintenanceRow[] = ticketRows.map((t) => ({
     ticket_id: t.id,
@@ -482,7 +469,19 @@ async function buildSnapshot(
     created_at: c.created_at,
   }));
 
-  const cleanerLoads = await loadCleanerLoads(orgId, reportDate);
+  // Cleaner loads computados inline a partir de cleaningJoinRows + members. Evita la query extra de loadCleanerLoads.
+  const cleanerLoadCounts = new Map<string, number>();
+  for (const c of cleaningJoinRows) {
+    if (!c.assigned_to) continue;
+    if (c.status !== "pendiente" && c.status !== "en_progreso") continue;
+    cleanerLoadCounts.set(c.assigned_to, (cleanerLoadCounts.get(c.assigned_to) ?? 0) + 1);
+  }
+  const cleanerLoads: ParteDiarioCleanerLoad[] = memberRows.map((m) => ({
+    user_id: m.user_id,
+    full_name: nameById.get(m.user_id) ?? "Sin nombre",
+    role: m.role,
+    count: cleanerLoadCounts.get(m.user_id) ?? 0,
+  }));
 
   return {
     date: reportDate,
@@ -512,14 +511,15 @@ export async function getParteDiario(date?: string): Promise<ParteDiarioPayload>
   const reportDate = date ?? tomorrowInTz(settings.timezone);
 
   const admin = createAdminClient();
-  const { data: report } = await admin
-    .from("daily_reports")
-    .select("*")
-    .eq("organization_id", organization.id)
-    .eq("report_date", reportDate)
-    .maybeSingle();
-
-  const snapshot = await buildSnapshot(organization, organization.name, reportDate);
+  const [{ data: report }, snapshot] = await Promise.all([
+    admin
+      .from("daily_reports")
+      .select("*")
+      .eq("organization_id", organization.id)
+      .eq("report_date", reportDate)
+      .maybeSingle(),
+    buildSnapshot(organization, organization.name, reportDate),
+  ]);
 
   return {
     ...snapshot,
