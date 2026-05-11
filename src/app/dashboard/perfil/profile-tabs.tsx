@@ -10,9 +10,10 @@ import type { UserProfile } from "@/lib/types/database";
 interface ProfileTabsProps {
   profile: UserProfile;
   email: string;
+  mfaStatus: { enrolled: boolean; enabledAt: string | null };
 }
 
-export function ProfileTabs({ profile, email }: ProfileTabsProps) {
+export function ProfileTabs({ profile, email, mfaStatus }: ProfileTabsProps) {
   const [tab, setTab] = useState("datos");
 
   return (
@@ -37,7 +38,7 @@ export function ProfileTabs({ profile, email }: ProfileTabsProps) {
       </TabsContent>
 
       <TabsContent value="seguridad">
-        <SecuritySection profile={profile} email={email} />
+        <SecuritySection profile={profile} email={email} mfaStatus={mfaStatus} />
       </TabsContent>
     </Tabs>
   );

@@ -1,16 +1,22 @@
 "use client";
 
+import { PasswordCard } from "./security/password-card";
+import { EmailCard } from "./security/email-card";
+import { TwoFactorCard } from "./security/two-factor-card";
 import type { UserProfile } from "@/lib/types/database";
 
 interface Props {
   profile: UserProfile;
   email: string;
+  mfaStatus: { enrolled: boolean; enabledAt: string | null };
 }
 
-export function SecuritySection({ profile: _profile, email: _email }: Props) {
+export function SecuritySection({ profile: _profile, email, mfaStatus }: Props) {
   return (
-    <div className="rounded-lg border p-6 text-sm text-muted-foreground">
-      La sección de seguridad (cambio de contraseña, email, 2FA) se habilita en el próximo PR.
+    <div className="space-y-4">
+      <PasswordCard />
+      <EmailCard email={email} />
+      <TwoFactorCard enrolled={mfaStatus.enrolled} enabledAt={mfaStatus.enabledAt} />
     </div>
   );
 }
