@@ -38,7 +38,7 @@ export function ProfileTabs({ profile, email, mfaStatus }: ProfileTabsProps) {
       </TabsContent>
 
       <TabsContent value="seguridad">
-        <SecuritySection profile={profile} email={email} mfaStatus={mfaStatus} />
+        <SecuritySection email={email} mfaStatus={mfaStatus} />
       </TabsContent>
     </Tabs>
   );
