@@ -356,7 +356,7 @@ export async function verifyChannelSubscription(
     : apps[0];
   const expectedFields =
     channel.provider === "meta_instagram"
-      ? ["messages", "messaging_postbacks", "messaging_seen"]
+      ? ["messages", "messaging_postbacks"]
       : ["messages"];
   const fields = ourApp?.subscribed_fields ?? [];
   const missing = expectedFields.filter((f) => !fields.includes(f));
@@ -449,9 +449,12 @@ export async function subscribeChannelPage(
     };
   }
 
+  // Fields válidos a nivel Page (no confundir con los del producto Instagram en
+  // Meta App Dashboard, que son distintos). `messaging_seen` y otros read-
+  // receipt fields se manejan en el producto IG, no acá.
   const subscribedFields =
     channel.provider === "meta_instagram"
-      ? "messages,messaging_postbacks,messaging_seen"
+      ? "messages,messaging_postbacks"
       : "messages";
 
   const apiVersion = process.env.META_GRAPH_API_VERSION || "v22.0";

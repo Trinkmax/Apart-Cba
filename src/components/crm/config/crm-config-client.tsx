@@ -254,13 +254,13 @@ function ChannelsSection({ channels, appUrl }: { channels: CrmChannel[]; appUrl:
           <div className="border-t border-border pt-3 text-xs space-y-1">
             <p className="font-semibold bg-gradient-to-r from-amber-500 via-pink-500 to-purple-600 bg-clip-text text-transparent">Instagram DM</p>
             <p className="text-muted-foreground">
-              En Meta App Dashboard → <strong>Webhooks</strong> → <strong>Instagram</strong> → Callback URL = la URL de arriba. Verify Token = el que cargaste en el canal. Subscribed fields: <code>messages</code>, <code>messaging_postbacks</code>, <code>messaging_seen</code>.
+              <strong>Paso 1 — App-level:</strong> en Meta App Dashboard → <strong>Webhooks</strong> → <strong>Instagram</strong> → Callback URL = la URL de arriba. Verify Token = el que cargaste en el canal. Subscribed fields a nivel App: <code>messages</code>, <code>messaging_postbacks</code>, <code>messaging_seen</code>.
             </p>
             <p className="text-muted-foreground">
-              Después, en <strong>Instagram</strong> → <strong>Webhooks</strong> tenés que <strong>suscribir la Page</strong> donde vive la cuenta — sin esto los DMs no se entregan acá aunque la app esté en producción.
+              <strong>Paso 2 — Page-level:</strong> click el botón <strong>Suscribir Page</strong> arriba. Eso hace el POST a Graph API automáticamente con los fields válidos a este nivel (<code>messages</code>, <code>messaging_postbacks</code>). Sin este paso los DMs no se entregan acá.
             </p>
             <p className="text-muted-foreground">
-              Cuando termines, click <strong>Verificar webhook</strong> arriba para confirmar que la Page tiene la app suscripta con los fields correctos.
+              Cuando termines, click <strong>Verificar webhook</strong> para confirmar que la Page tiene la app suscripta.
             </p>
           </div>
         )}
