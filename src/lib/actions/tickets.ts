@@ -29,6 +29,8 @@ export async function listTickets(filters?: {
   status?: TicketStatus;
   unitId?: string;
   openOnly?: boolean;
+  /** Si es `true`, devuelve sólo los tickets ya archivados por el reset semanal. Default: sólo activos. */
+  showArchived?: boolean;
 }) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
@@ -36,10 +38,17 @@ export async function listTickets(filters?: {
     .from("maintenance_tickets")
     .select(`*, unit:units(id, code, name)`)
     .eq("organization_id", organization.id);
+  if (filters?.showArchived) {
+    q = q.not("archived_at", "is", null);
+  } else {
+    q = q.is("archived_at", null);
+  }
   if (filters?.status) q = q.eq("status", filters.status);
   if (filters?.unitId) q = q.eq("unit_id", filters.unitId);
   if (filters?.openOnly) q = q.not("status", "in", "(resuelto,cerrado)");
-  const { data, error } = await q.order("opened_at", { ascending: false });
+  const { data, error } = filters?.showArchived
+    ? await q.order("archived_at", { ascending: false })
+    : await q.order("opened_at", { ascending: false });
   if (error) throw new Error(error.message);
   return data ?? [];
 }

@@ -96,7 +96,8 @@
       "Bash(echo \"EXIT: $?\")",
       "mcp__supabase-apartcba__get_advisors",
       "mcp__supabase-apartcba__get_logs",
-      "Bash(grep -v \":0$\")"
+      "Bash(grep -v \":0$\")",
+      "mcp__supabase-apartcba__list_migrations"
     ]
   },
   "enableAllProjectMcpServers": true,

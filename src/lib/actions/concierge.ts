@@ -177,15 +177,26 @@ export async function listAssignableMembers(): Promise<{ user_id: string; full_n
     .sort((a, b) => (a.full_name ?? "").localeCompare(b.full_name ?? ""));
 }
 
-export async function listConciergeRequests(filters?: { status?: ConciergeStatus }) {
+export async function listConciergeRequests(filters?: {
+  status?: ConciergeStatus;
+  /** Si es `true`, devuelve sólo las tareas ya archivadas por el reset semanal. Default: sólo activas. */
+  showArchived?: boolean;
+}) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
   let q = admin
     .from("concierge_requests")
     .select(`*, unit:units(id, code, name), guest:guests(id, full_name)`)
     .eq("organization_id", organization.id);
+  if (filters?.showArchived) {
+    q = q.not("archived_at", "is", null);
+  } else {
+    q = q.is("archived_at", null);
+  }
   if (filters?.status) q = q.eq("status", filters.status);
-  const { data, error } = await q.order("scheduled_for", { ascending: true, nullsFirst: false });
+  const { data, error } = filters?.showArchived
+    ? await q.order("archived_at", { ascending: false })
+    : await q.order("scheduled_for", { ascending: true, nullsFirst: false });
   if (error) throw new Error(error.message);
   // Adjuntar asignados (user_profiles) sin N+1
   const assignedIds = Array.from(

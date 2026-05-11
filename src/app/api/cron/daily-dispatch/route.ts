@@ -304,6 +304,58 @@ export async function GET(req: Request) {
     results.parte_diario_reminders = { error: (err as Error).message };
   }
 
+  // 7. Reset semanal de Limpieza / Mantenimiento / Tareas (lunes 00:00 ART).
+  //    El cron corre 03:00 UTC = 00:00 ART; gateamos por día-de-semana en ART
+  //    para archivar sólo una vez por semana. Marca archived_at=now() sobre
+  //    tareas en estados terminales — quedan accesibles vía toggle "Ver
+  //    historial" pero salen del tablero activo.
+  try {
+    const artDay = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Argentina/Buenos_Aires",
+      weekday: "long",
+    }).format(new Date());
+
+    if (artDay === "Monday") {
+      const admin = createAdminClient();
+      const archivedAt = new Date().toISOString();
+
+      const { data: cleaning, error: cleaningErr } = await admin
+        .from("cleaning_tasks")
+        .update({ archived_at: archivedAt })
+        .is("archived_at", null)
+        .in("status", ["completada", "verificada", "cancelada"])
+        .select("id");
+      if (cleaningErr) throw new Error(`cleaning: ${cleaningErr.message}`);
+
+      const { data: tickets, error: ticketsErr } = await admin
+        .from("maintenance_tickets")
+        .update({ archived_at: archivedAt })
+        .is("archived_at", null)
+        .in("status", ["resuelto", "cerrado"])
+        .select("id");
+      if (ticketsErr) throw new Error(`tickets: ${ticketsErr.message}`);
+
+      const { data: concierge, error: conciergeErr } = await admin
+        .from("concierge_requests")
+        .update({ archived_at: archivedAt })
+        .is("archived_at", null)
+        .in("status", ["completada", "rechazada", "cancelada"])
+        .select("id");
+      if (conciergeErr) throw new Error(`concierge: ${conciergeErr.message}`);
+
+      results.weekly_archive = {
+        ran: true,
+        cleaning: cleaning?.length ?? 0,
+        tickets: tickets?.length ?? 0,
+        concierge: concierge?.length ?? 0,
+      };
+    } else {
+      results.weekly_archive = { ran: false, art_day: artDay };
+    }
+  } catch (err) {
+    results.weekly_archive = { error: (err as Error).message };
+  }
+
   const duration_ms = Date.now() - startedAt;
   console.log(`[cron/daily-dispatch] completed in ${duration_ms}ms`, results);
   return NextResponse.json({ ok: true, duration_ms, ...results });

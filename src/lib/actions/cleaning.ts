@@ -84,6 +84,8 @@ export async function listCleaningTasks(filters?: {
   status?: CleaningStatus;
   assignedTo?: string;
   upcoming?: boolean;
+  /** Si es `true`, devuelve sólo las tareas ya archivadas por el reset semanal. Default: sólo activas. */
+  showArchived?: boolean;
 }) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
@@ -91,6 +93,11 @@ export async function listCleaningTasks(filters?: {
     .from("cleaning_tasks")
     .select(`*, unit:units(id, code, name)`)
     .eq("organization_id", organization.id);
+  if (filters?.showArchived) {
+    q = q.not("archived_at", "is", null);
+  } else {
+    q = q.is("archived_at", null);
+  }
   if (filters?.status) q = q.eq("status", filters.status);
   if (filters?.assignedTo) q = q.eq("assigned_to", filters.assignedTo);
   if (filters?.upcoming) {
@@ -98,7 +105,9 @@ export async function listCleaningTasks(filters?: {
     todayStart.setHours(0, 0, 0, 0);
     q = q.gte("scheduled_for", todayStart.toISOString()).in("status", ["pendiente", "en_progreso"]);
   }
-  const { data, error } = await q.order("scheduled_for");
+  const { data, error } = filters?.showArchived
+    ? await q.order("archived_at", { ascending: false })
+    : await q.order("scheduled_for");
   if (error) throw new Error(error.message);
   return data ?? [];
 }

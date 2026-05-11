@@ -391,6 +391,7 @@ export interface MaintenanceTicket {
   charged_to_owner_at: string | null;
   charged_to_settlement_id: string | null;
   notes: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -483,6 +484,7 @@ export interface CleaningTask {
   verified_at: string | null;
   verified_by: string | null;
   notes: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -672,6 +674,7 @@ export interface ConciergeRequest {
   scheduled_for: string | null;
   completed_at: string | null;
   notes: string | null;
+  archived_at: string | null;
   created_at: string;
   created_by: string | null;
 }
