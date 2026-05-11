@@ -114,6 +114,7 @@ import type {
   BookingStatus,
   BookingWithRelations,
   CashAccount,
+  OrgDateMark,
   Unit,
   UnitWithRelations,
 } from "@/lib/types/database";
@@ -140,6 +141,7 @@ import {
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
+import { DateMarkPopover } from "./date-mark-popover";
 
 interface PmsBoardProps {
   initialUnits: UnitWithRelations[];
@@ -148,6 +150,10 @@ interface PmsBoardProps {
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   /** Cuotas mensuales — para badges 1/N flotantes sobre las barras */
   initialSchedule?: BookingPaymentSchedule[];
+  /** Marcas de color por fecha (feriados, puentes, eventos) en la ventana visible */
+  initialDateMarks?: OrgDateMark[];
+  /** Si true, el popover permite editar/quitar marcas. Si false, solo lectura. */
+  canEditDateMarks?: boolean;
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -224,6 +230,8 @@ export function PmsBoard({
   initialBookings,
   accounts = [],
   initialSchedule = [],
+  initialDateMarks = [],
+  canEditDateMarks = false,
   organizationId,
   startISO,
   days,
@@ -633,6 +641,13 @@ export function PmsBoard({
     const start = parseISO(windowStart);
     return Array.from({ length: windowDays }).map((_, i) => addDays(start, i));
   }, [windowStart, windowDays]);
+
+  // ── date marks indexadas por fecha YYYY-MM-DD (lookup O(1) en DayChip)
+  const dateMarksByISO = useMemo(() => {
+    const m = new Map<string, OrgDateMark>();
+    initialDateMarks.forEach((dm) => m.set(dm.date, dm));
+    return m;
+  }, [initialDateMarks]);
 
   // ── schedule indexado por booking_id (para badges flotantes)
   const scheduleByBooking = useMemo(() => {
@@ -2148,12 +2163,16 @@ export function PmsBoard({
                   {dateRange.map((d, i) => {
                     const prev = i > 0 ? dateRange[i - 1] : null;
                     const monthBoundary = prev && !isSameMonth(prev, d);
+                    const iso = format(d, "yyyy-MM-dd");
                     return (
                       <DayChip
                         key={d.toISOString()}
                         date={d}
+                        dateISO={iso}
                         cellWidth={CELL}
                         monthBoundary={!!monthBoundary}
+                        mark={dateMarksByISO.get(iso)}
+                        canEditMark={canEditDateMarks}
                       />
                     );
                   })}
@@ -2595,25 +2614,27 @@ function MonthBand({
 
 function DayChip({
   date,
+  dateISO,
   cellWidth,
   monthBoundary,
+  mark,
+  canEditMark,
 }: {
   date: Date;
+  dateISO: string;
   cellWidth: number;
   monthBoundary: boolean;
+  mark: OrgDateMark | undefined;
+  canEditMark: boolean;
 }) {
   const wk = isWeekend(date);
   const hoy = isToday(date);
-  return (
-    <div
-      className={cn(
-        "shrink-0 flex flex-col items-center justify-center border-r border-border/50 text-[10px]",
-        wk && "bg-amber-50/60 dark:bg-amber-500/[0.03]",
-        hoy && "bg-primary/10",
-        monthBoundary && "border-l-2 border-border"
-      )}
-      style={{ width: cellWidth }}
-    >
+  const isClickable = canEditMark || !!mark;
+  // Color del número: la marca si existe, sino el color por defecto/weekend.
+  const numberStyle = mark ? { color: mark.color } : undefined;
+
+  const inner = (
+    <>
       <span
         className={cn(
           "uppercase text-[8px] leading-tight font-medium tracking-widest",
@@ -2625,12 +2646,60 @@ function DayChip({
       <span
         className={cn(
           "font-semibold tabular-nums leading-tight",
-          hoy ? "text-primary text-sm" : wk ? "text-amber-700 dark:text-amber-400" : "text-foreground/90"
+          mark
+            ? "font-bold"
+            : hoy
+              ? "text-primary text-sm"
+              : wk
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-foreground/90"
         )}
+        style={numberStyle}
+        title={mark?.label ?? undefined}
       >
         {format(date, "d")}
       </span>
-    </div>
+      {mark && (
+        <span
+          aria-hidden
+          className="absolute bottom-0.5 left-1/2 -translate-x-1/2 size-1 rounded-full"
+          style={{ backgroundColor: mark.color }}
+        />
+      )}
+    </>
+  );
+
+  const className = cn(
+    "shrink-0 flex flex-col items-center justify-center border-r border-border/50 text-[10px] relative",
+    wk && "bg-amber-50/60 dark:bg-amber-500/[0.03]",
+    hoy && "bg-primary/10",
+    monthBoundary && "border-l-2 border-border",
+    isClickable && "hover:bg-accent/40 cursor-pointer transition-colors"
+  );
+
+  if (!isClickable) {
+    return (
+      <div className={className} style={{ width: cellWidth }}>
+        {inner}
+      </div>
+    );
+  }
+
+  return (
+    <DateMarkPopover date={dateISO} mark={mark} canEdit={canEditMark}>
+      <button
+        type="button"
+        className={className}
+        style={{ width: cellWidth }}
+        aria-label={
+          mark
+            ? `${format(date, "EEEE d", { locale: es })} — ${mark.label ?? "marcado"}`
+            : `Marcar ${format(date, "EEEE d", { locale: es })}`
+        }
+      >
+        {inner}
+      </button>
+    </DateMarkPopover>
   );
 }
 
