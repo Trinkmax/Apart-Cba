@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { verifyMfaLogin, useRecoveryCodeLogin as recoveryCodeLogin } from "@/lib/actions/security";
+import { verifyMfaLogin, loginWithRecoveryCode } from "@/lib/actions/security";
 
 interface Props {
   factorId: string;
@@ -36,12 +36,16 @@ export function TotpForm({ factorId }: Props) {
   function handleRecovery(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
-      const result = await recoveryCodeLogin({ code: recovery });
+      const result = await loginWithRecoveryCode({ code: recovery });
       if (!result.ok) {
         toast.error("Error", { description: result.error });
         return;
       }
-      toast.success("Entraste con un código de recuperación. Te recomendamos re-activar 2FA cuanto antes.");
+      toast.success("Entraste con un código de recuperación.", {
+        description:
+          "Tu factor 2FA y los códigos restantes fueron invalidados. Re-activá 2FA desde tu perfil cuanto antes.",
+        duration: 8000,
+      });
       router.push("/dashboard/perfil");
       router.refresh();
     });

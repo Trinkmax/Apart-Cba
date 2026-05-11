@@ -502,7 +502,7 @@ export async function verifyMfaLogin(args: {
  * queda aal1 pero el user puede entrar al dashboard. La UI le va a pedir
  * que re-enrolee 2FA.
  */
-export async function useRecoveryCodeLogin(args: {
+export async function loginWithRecoveryCode(args: {
   code: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession();
