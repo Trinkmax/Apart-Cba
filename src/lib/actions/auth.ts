@@ -54,16 +54,26 @@ export async function requireSession(): Promise<SessionContext> {
   return session;
 }
 
-export async function signIn(email: string, password: string): Promise<{ error?: string }> {
+export async function signIn(
+  email: string,
+  password: string
+): Promise<{ error?: string; requiresMfa?: { factorId: string } }> {
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { error: error.message };
 
-  // Verificar que el user tenga perfil en Apart Cba
   const session = await getSession();
   if (!session) {
     await supabase.auth.signOut();
     return { error: "Esta cuenta no está habilitada para Apart Cba." };
+  }
+
+  // Spec 2: si el user tiene factor TOTP verificado, desviar a /login/2fa
+  // antes de revalidar / redirigir al dashboard.
+  const { data: factorsData } = await supabase.auth.mfa.listFactors();
+  const totpFactor = factorsData?.totp?.[0];
+  if (totpFactor && totpFactor.status === "verified") {
+    return { requiresMfa: { factorId: totpFactor.id } };
   }
 
   revalidatePath("/", "layout");

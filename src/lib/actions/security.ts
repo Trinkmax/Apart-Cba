@@ -6,7 +6,7 @@ import { randomBytes } from "crypto";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { requireSession } from "./auth";
 import { logSecurityEvent } from "@/lib/security/audit";
-import { generateRecoveryCodes } from "@/lib/security/recovery-codes";
+import { generateRecoveryCodes, consumeRecoveryCode } from "@/lib/security/recovery-codes";
 import { sendSystemMail } from "@/lib/email/system";
 
 // ════════════════════════════════════════════════════════════════════════
@@ -473,4 +473,60 @@ export async function getMfaStatus(): Promise<{
     factorId: totpFactor.id,
     enabledAt: totpFactor.created_at ?? null,
   };
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 2FA login — verify TOTP / use recovery code
+// ════════════════════════════════════════════════════════════════════════
+
+export async function verifyMfaLogin(args: {
+  factorId: string;
+  code: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!/^\d{6}$/.test(args.code)) return { ok: false, error: "Código inválido" };
+  const sb = await createClient();
+  const { data: challenge, error: chErr } = await sb.auth.mfa.challenge({ factorId: args.factorId });
+  if (chErr) return { ok: false, error: chErr.message };
+  const { error: verifyErr } = await sb.auth.mfa.verify({
+    factorId: args.factorId,
+    challengeId: challenge.id,
+    code: args.code,
+  });
+  if (verifyErr) return { ok: false, error: "Código incorrecto" };
+  return { ok: true };
+}
+
+/**
+ * Login con recovery code: marca el code como usado y desactiva el factor
+ * MFA. Workaround porque Supabase no permite elevar AAL sin TOTP. La sesión
+ * queda aal1 pero el user puede entrar al dashboard. La UI le va a pedir
+ * que re-enrolee 2FA.
+ */
+export async function useRecoveryCodeLogin(args: {
+  code: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession();
+  const valid = await consumeRecoveryCode(session.userId, args.code);
+  if (!valid) return { ok: false, error: "Código de recuperación inválido o ya usado" };
+
+  const sb = await createClient();
+  const { data: factorsData } = await sb.auth.mfa.listFactors();
+  const totpFactor = factorsData?.totp?.[0];
+  if (totpFactor) {
+    await sb.auth.mfa.unenroll({ factorId: totpFactor.id });
+    const admin = createAdminClient();
+    await admin
+      .from("user_2fa_recovery_codes")
+      .update({ used_at: new Date().toISOString() })
+      .eq("user_id", session.userId)
+      .is("used_at", null);
+  }
+
+  await logSecurityEvent({
+    userId: session.userId,
+    eventType: "login_with_recovery_code",
+    metadata: { mfa_factor_disabled: true },
+  });
+
+  return { ok: true };
 }
