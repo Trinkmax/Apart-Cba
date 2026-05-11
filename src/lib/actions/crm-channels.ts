@@ -248,3 +248,160 @@ export async function testChannelHealth(id: string): Promise<{ ok: boolean; mess
     return { ok: false, message };
   }
 }
+
+/**
+ * Verifica si Meta efectivamente está enviando webhooks a este canal — distinto
+ * de testChannelHealth, que solo prueba que el access token funcione.
+ *
+ * Para WA: llama a Graph API /{waba_id}/subscribed_apps y reporta si nuestra app
+ * (identificada por app_id si está cargado) figura en la lista de subscribed.
+ *
+ * Para IG: llama a /{page_id}/subscribed_apps. La cuenta IG Business hereda los
+ * webhooks de su Page de Facebook — si la Page no está suscripta, ningún DM
+ * llega. Además devolvemos qué fields están subscribed para que el admin pueda
+ * confirmar que "messages" está activo.
+ *
+ * Causas típicas de "no me llegan mensajes":
+ *   1. La Page no está suscripta a nuestra app → fix: hacer POST /{page_id}/subscribed_apps
+ *   2. La app está suscripta pero sin el field "messages" → fix: agregar field
+ *   3. El access token no tiene permiso pages_messaging / instagram_manage_messages
+ *   4. La Callback URL en Meta App Dashboard apunta a otro dominio (placeholder)
+ */
+export async function verifyChannelSubscription(
+  id: string,
+): Promise<{
+  ok: boolean;
+  message: string;
+  details?: {
+    subscribed: boolean;
+    fields: string[];
+    expected_fields: string[];
+    target: string;
+    hint?: string;
+  };
+}> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  const { data: channel, error } = await admin
+    .from("crm_channels")
+    .select("*")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .single();
+  if (error || !channel) throw new Error("Canal no encontrado");
+
+  const { getSecret } = await import("@/lib/crm/encryption");
+  const accessToken = await getSecret(channel.access_token_secret_id);
+  if (!accessToken) {
+    return { ok: false, message: "Access token no configurado" };
+  }
+
+  const apiVersion = process.env.META_GRAPH_API_VERSION || "v22.0";
+  // Para IG el lookup es por page_id (la Page de FB que tiene linkeada la cuenta).
+  // Para WA es por waba_id.
+  const target = channel.provider === "meta_instagram" ? channel.page_id : channel.waba_id;
+  if (!target) {
+    return {
+      ok: false,
+      message:
+        channel.provider === "meta_instagram"
+          ? "Falta Page ID en el canal — no se puede chequear suscripción IG"
+          : "Falta WABA ID en el canal — no se puede chequear suscripción WA",
+    };
+  }
+
+  const url = `https://graph.facebook.com/${apiVersion}/${target}/subscribed_apps`;
+  let payload: { data?: { id?: string; name?: string; subscribed_fields?: string[] }[]; error?: { message?: string; code?: number; type?: string } };
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    payload = await res.json();
+    if (!res.ok) {
+      const errMsg = payload?.error?.message ?? `HTTP ${res.status}`;
+      return {
+        ok: false,
+        message: `Meta API: ${errMsg}`,
+        details: {
+          subscribed: false,
+          fields: [],
+          expected_fields:
+            channel.provider === "meta_instagram"
+              ? ["messages", "messaging_postbacks", "messaging_seen"]
+              : ["messages"],
+          target,
+          hint:
+            payload?.error?.code === 100 || payload?.error?.code === 190
+              ? "El token no tiene permisos suficientes — regenerá uno con instagram_manage_messages + pages_messaging."
+              : undefined,
+        },
+      };
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Fallo de red al consultar Meta: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const apps = payload.data ?? [];
+  // Si app_id del canal está cargado, lo usamos para identificar nuestra app.
+  // Si no, tomamos cualquier app que aparezca como "suscripta".
+  const ourApp = channel.app_id
+    ? apps.find((a) => a.id === channel.app_id)
+    : apps[0];
+  const expectedFields =
+    channel.provider === "meta_instagram"
+      ? ["messages", "messaging_postbacks", "messaging_seen"]
+      : ["messages"];
+  const fields = ourApp?.subscribed_fields ?? [];
+  const missing = expectedFields.filter((f) => !fields.includes(f));
+
+  if (!ourApp) {
+    return {
+      ok: false,
+      message: `La Page/WABA no tiene ninguna app suscripta — Meta no está enviando webhooks acá.`,
+      details: {
+        subscribed: false,
+        fields: [],
+        expected_fields: expectedFields,
+        target,
+        hint:
+          channel.provider === "meta_instagram"
+            ? `En Meta Dev → tu App → Instagram → Webhooks: agregá la Page (${target}) como suscripta a "messages".`
+            : `En Meta Dev → tu App → WhatsApp → Configuration: suscribí la WABA (${target}) al campo "messages".`,
+      },
+    };
+  }
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message: `App suscripta pero faltan campos: ${missing.join(", ")}`,
+      details: {
+        subscribed: true,
+        fields,
+        expected_fields: expectedFields,
+        target,
+        hint: `Activá los fields faltantes en Meta Dev → tu App → Webhooks → ${
+          channel.provider === "meta_instagram" ? "Instagram" : "WhatsApp Business"
+        }.`,
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    message: `Suscripción OK · ${fields.length} fields activos`,
+    details: {
+      subscribed: true,
+      fields,
+      expected_fields: expectedFields,
+      target,
+    },
+  };
+}

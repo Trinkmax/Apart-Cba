@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { TagChip } from "@/components/crm/shared/tag-chip";
-import { upsertChannel, setChannelStatus, testChannelHealth } from "@/lib/actions/crm-channels";
+import { upsertChannel, setChannelStatus, testChannelHealth, verifyChannelSubscription } from "@/lib/actions/crm-channels";
 import { updateAISettings } from "@/lib/actions/crm-ai-settings";
 import { AIUsageChart } from "./ai-usage-chart";
 import { createTemplate, submitTemplate, refreshTemplateStatus, deleteTemplate } from "@/lib/actions/crm-templates";
@@ -31,6 +31,8 @@ interface Props {
   aiSettings: CrmAiSettings | null;
   templates: CrmWhatsAppTemplate[];
   tags: CrmTag[];
+  /** URL pública del deployment — calculada server-side desde headers. */
+  appUrl: string;
 }
 
 function ProviderBadge({ provider }: { provider: string }) {
@@ -50,7 +52,7 @@ function ProviderBadge({ provider }: { provider: string }) {
   );
 }
 
-export function CrmConfigClient({ channels, aiSettings, templates, tags }: Props) {
+export function CrmConfigClient({ channels, aiSettings, templates, tags, appUrl }: Props) {
   return (
     <div className="p-6 max-w-5xl mx-auto">
       <header className="mb-6">
@@ -69,7 +71,7 @@ export function CrmConfigClient({ channels, aiSettings, templates, tags }: Props
         </TabsList>
 
         <TabsContent value="channels" className="mt-4">
-          <ChannelsSection channels={channels} />
+          <ChannelsSection channels={channels} appUrl={appUrl} />
         </TabsContent>
         <TabsContent value="ai" className="mt-4">
           <AISection aiSettings={aiSettings} />
@@ -87,16 +89,25 @@ export function CrmConfigClient({ channels, aiSettings, templates, tags }: Props
 
 // ─── Channels ───────────────────────────────────────────────────────────────
 
-function ChannelsSection({ channels }: { channels: CrmChannel[] }) {
+function ChannelsSection({ channels, appUrl }: { channels: CrmChannel[]; appUrl: string }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<CrmChannel | null>(null);
 
+  // Construye URL absoluta del webhook con fallback runtime cuando appUrl viene vacío
+  // (p.ej. dev sin NEXT_PUBLIC_APP_URL). El endpoint es compartido WA + IG.
+  const webhookUrl =
+    (appUrl || (typeof window !== "undefined" ? window.location.origin : "")) +
+    "/api/webhooks/whatsapp";
+
+  const hasInstagram = channels.some((c) => c.provider === "meta_instagram");
+  const hasWhatsApp = channels.some((c) => c.provider === "meta_cloud");
+
   return (
     <section>
       <div className="flex items-center justify-between mb-4">
-        <h2 className="font-semibold">Canales WhatsApp Business</h2>
+        <h2 className="font-semibold">Canales de mensajería</h2>
         <Dialog open={showForm} onOpenChange={(v) => { setShowForm(v); if (!v) setEditing(null); }}>
           <DialogTrigger asChild>
             <Button size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-white" onClick={() => setEditing(null)}>
@@ -167,22 +178,69 @@ function ChannelsSection({ channels }: { channels: CrmChannel[] }) {
               >
                 Probar
               </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => startTransition(async () => {
+                  const result = await verifyChannelSubscription(ch.id);
+                  if (result.ok) {
+                    toast.success(result.message, {
+                      description: result.details?.fields.length
+                        ? `Fields: ${result.details.fields.join(", ")}`
+                        : undefined,
+                      duration: 7000,
+                    });
+                  } else {
+                    toast.error(result.message, {
+                      description: result.details?.hint ?? undefined,
+                      duration: 12000,
+                    });
+                  }
+                  router.refresh();
+                })}
+              >
+                Verificar webhook
+              </Button>
               <Button size="sm" variant="outline" onClick={() => { setEditing(ch); setShowForm(true); }}>Editar</Button>
             </div>
           ))}
         </div>
       )}
 
-      <div className="mt-6 p-4 rounded-lg bg-muted/40 border border-border">
-        <h3 className="font-semibold text-sm mb-2 flex items-center gap-1.5">
-          <ShieldCheck className="size-4 text-emerald-500" /> URL del webhook
+      <div className="mt-6 p-4 rounded-lg bg-muted/40 border border-border space-y-3">
+        <h3 className="font-semibold text-sm flex items-center gap-1.5">
+          <ShieldCheck className="size-4 text-emerald-500" /> URL del webhook (compartida WhatsApp + Instagram)
         </h3>
-        <p className="text-xs text-muted-foreground mb-2">
-          Configurá esta URL en Meta Business → WhatsApp → Configuration:
-        </p>
         <code className="text-xs px-2 py-1 bg-background border border-border rounded block break-all">
-          {process.env.NEXT_PUBLIC_APP_URL ?? "https://tu-app.vercel.app"}/api/webhooks/whatsapp
+          {webhookUrl}
         </code>
+        <p className="text-[11px] text-muted-foreground">
+          El handler diferencia automáticamente por el campo <code>object</code> del payload, así que la misma URL sirve para ambos productos.
+        </p>
+
+        {hasWhatsApp && (
+          <div className="border-t border-border pt-3 text-xs space-y-1">
+            <p className="font-semibold text-emerald-600 dark:text-emerald-500">WhatsApp Business</p>
+            <p className="text-muted-foreground">
+              En Meta App Dashboard → <strong>WhatsApp</strong> → <strong>Configuration</strong> → Callback URL = la URL de arriba. Verify Token = el que cargaste en el canal. Subscribed fields: <code>messages</code>.
+            </p>
+          </div>
+        )}
+
+        {hasInstagram && (
+          <div className="border-t border-border pt-3 text-xs space-y-1">
+            <p className="font-semibold bg-gradient-to-r from-amber-500 via-pink-500 to-purple-600 bg-clip-text text-transparent">Instagram DM</p>
+            <p className="text-muted-foreground">
+              En Meta App Dashboard → <strong>Webhooks</strong> → <strong>Instagram</strong> → Callback URL = la URL de arriba. Verify Token = el que cargaste en el canal. Subscribed fields: <code>messages</code>, <code>messaging_postbacks</code>, <code>messaging_seen</code>.
+            </p>
+            <p className="text-muted-foreground">
+              Después, en <strong>Instagram</strong> → <strong>Webhooks</strong> tenés que <strong>suscribir la Page</strong> donde vive la cuenta — sin esto los DMs no se entregan acá aunque la app esté en producción.
+            </p>
+            <p className="text-muted-foreground">
+              Cuando termines, click <strong>Verificar webhook</strong> arriba para confirmar que la Page tiene la app suscripta con los fields correctos.
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );
