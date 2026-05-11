@@ -17,6 +17,9 @@ import type {
   BookingWithRelations,
   BookingStatus,
 } from "@/lib/types/database";
+import { sendGuestMail } from "@/lib/email/guest";
+import { plainTextToHtml } from "@/lib/email/render";
+import { buildBookingContext, getRenderedBookingTemplate } from "@/lib/email/booking-templates";
 
 // Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
 // en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
@@ -1480,4 +1483,185 @@ export async function moveBooking(input: {
   check_out_date: string;
 }): Promise<Booking> {
   return moveBookingTransaction(input);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Spec 2 — Confirmación de reserva multi-canal
+// ════════════════════════════════════════════════════════════════════════
+
+const confirmWithMessagesSchema = z.object({
+  bookingId: z.string().uuid(),
+  channels: z.array(z.enum(["email", "whatsapp"])).min(1),
+  emailOverride: z
+    .object({
+      subject: z.string().optional().nullable(),
+      body: z.string(),
+    })
+    .optional()
+    .nullable(),
+});
+
+export async function confirmBookingWithMessages(
+  input: z.infer<typeof confirmWithMessagesSchema>
+): Promise<
+  | {
+      ok: true;
+      channels_sent: string[];
+      channels_failed: { channel: string; error: string }[];
+    }
+  | { ok: false; error: string }
+> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const parsed = confirmWithMessagesSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Inputs inválidos" };
+  }
+
+  // WhatsApp es deshabilitado en Spec 2 (defensa server-side aunque la UI también lo bloquea).
+  const allowedChannels = parsed.data.channels.filter((c) => c === "email");
+  if (allowedChannels.length === 0) {
+    return { ok: false, error: "Solo email está disponible. WhatsApp llega en una versión futura." };
+  }
+
+  const admin = createAdminClient();
+
+  // Status enum es en español: confirmada (NO "confirmed").
+  const { error: updateErr } = await admin
+    .from("bookings")
+    .update({
+      status: "confirmada" as BookingStatus,
+      confirmation_sent_at: new Date().toISOString(),
+    })
+    .eq("id", parsed.data.bookingId)
+    .eq("organization_id", organization.id);
+  if (updateErr) return { ok: false, error: updateErr.message };
+
+  // Audit log de bookings está fuera de scope para Spec 2.
+
+  const ctx = await buildBookingContext(parsed.data.bookingId);
+  if (!ctx) return { ok: false, error: "No se pudo cargar el contexto del booking" };
+
+  const channelsSent: string[] = [];
+  const channelsFailed: { channel: string; error: string }[] = [];
+
+  if (allowedChannels.includes("email")) {
+    if (!ctx.guestEmail) {
+      channelsFailed.push({ channel: "email", error: "Huésped sin email registrado" });
+    } else {
+      let subject: string | null;
+      let body: string;
+      if (parsed.data.emailOverride) {
+        subject = parsed.data.emailOverride.subject ?? null;
+        body = parsed.data.emailOverride.body;
+      } else {
+        const tpl = await getRenderedBookingTemplate({
+          organizationId: ctx.organizationId,
+          eventType: "booking_confirmed",
+          channel: "email",
+          variables: ctx.variables,
+        });
+        if (!tpl) {
+          channelsFailed.push({ channel: "email", error: "Template no encontrado" });
+          subject = null;
+          body = "";
+        } else {
+          subject = tpl.subject;
+          body = tpl.body;
+        }
+      }
+      if (body) {
+        const html = plainTextToHtml(body);
+        const result = await sendGuestMail({
+          organizationId: ctx.organizationId,
+          to: ctx.guestEmail,
+          subject: subject ?? "Confirmación de reserva",
+          html,
+          text: body,
+          replyTo: ctx.orgContactEmail ?? undefined,
+        });
+        if (result.ok) channelsSent.push("email");
+        else channelsFailed.push({ channel: "email", error: result.error });
+      }
+    }
+  }
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${parsed.data.bookingId}`);
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades", "layout");
+
+  return { ok: true, channels_sent: channelsSent, channels_failed: channelsFailed };
+}
+
+const resendSchema = z.object({
+  bookingId: z.string().uuid(),
+  channels: z.array(z.enum(["email", "whatsapp"])).min(1),
+  emailOverride: z
+    .object({
+      subject: z.string().optional().nullable(),
+      body: z.string(),
+    })
+    .optional()
+    .nullable(),
+});
+
+export async function resendBookingConfirmation(
+  input: z.infer<typeof resendSchema>
+): Promise<
+  | { ok: true; channels_sent: string[]; channels_failed: { channel: string; error: string }[] }
+  | { ok: false; error: string }
+> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const parsed = resendSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Inputs inválidos" };
+  }
+
+  const allowedChannels = parsed.data.channels.filter((c) => c === "email");
+  if (allowedChannels.length === 0) return { ok: false, error: "Solo email disponible" };
+
+  const ctx = await buildBookingContext(parsed.data.bookingId);
+  if (!ctx) return { ok: false, error: "Booking no encontrado" };
+  if (!ctx.guestEmail) return { ok: false, error: "Huésped sin email" };
+
+  let subject: string | null;
+  let body: string;
+  if (parsed.data.emailOverride) {
+    subject = parsed.data.emailOverride.subject ?? null;
+    body = parsed.data.emailOverride.body;
+  } else {
+    const tpl = await getRenderedBookingTemplate({
+      organizationId: ctx.organizationId,
+      eventType: "booking_confirmed",
+      channel: "email",
+      variables: ctx.variables,
+    });
+    if (!tpl) return { ok: false, error: "Template no encontrado" };
+    subject = tpl.subject;
+    body = tpl.body;
+  }
+
+  const result = await sendGuestMail({
+    organizationId: ctx.organizationId,
+    to: ctx.guestEmail,
+    subject: subject ?? "Confirmación de reserva",
+    html: plainTextToHtml(body),
+    text: body,
+    replyTo: ctx.orgContactEmail ?? undefined,
+  });
+
+  const admin = createAdminClient();
+  await admin
+    .from("bookings")
+    .update({ confirmation_sent_at: new Date().toISOString() })
+    .eq("id", parsed.data.bookingId)
+    .eq("organization_id", organization.id);
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${parsed.data.bookingId}`);
+
+  if (!result.ok) return { ok: false, error: result.error };
+  return { ok: true, channels_sent: ["email"], channels_failed: [] };
 }

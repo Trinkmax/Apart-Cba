@@ -14,7 +14,15 @@ import { getCurrentOrg } from "@/lib/actions/org";
 import { signOut } from "@/lib/actions/auth";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { UserRole } from "@/lib/types/database";
+
+function getInitials(name: string | null | undefined): string {
+  if (!name) return "U";
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 interface MobileNavItem {
   href: string;
@@ -60,11 +68,26 @@ export default async function MobileLayout({ children }: { children: React.React
       <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl border-b safe-top safe-x">
         <div className="px-4 py-3 flex items-center justify-between">
           <Logo size="sm" />
-          <form action={signOut}>
-            <Button type="submit" size="icon" variant="ghost" className="size-9 tap">
-              <LogOut size={16} />
-            </Button>
-          </form>
+          <div className="flex items-center gap-2">
+            <Link href="/m/perfil" className="tap" aria-label="Mi perfil">
+              <Avatar className="size-9">
+                {session.profile.avatar_url && (
+                  <AvatarImage
+                    src={session.profile.avatar_url}
+                    alt={session.profile.full_name ?? "Mi perfil"}
+                  />
+                )}
+                <AvatarFallback className="text-xs">
+                  {getInitials(session.profile.full_name)}
+                </AvatarFallback>
+              </Avatar>
+            </Link>
+            <form action={signOut}>
+              <Button type="submit" size="icon" variant="ghost" className="size-9 tap">
+                <LogOut size={16} />
+              </Button>
+            </form>
+          </div>
         </div>
       </header>
 

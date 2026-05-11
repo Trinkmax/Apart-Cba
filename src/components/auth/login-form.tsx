@@ -24,6 +24,10 @@ export function LoginForm() {
         toast.error("No se pudo iniciar sesión", { description: result.error });
         return;
       }
+      if (result.requiresMfa) {
+        router.push(`/login/2fa?factorId=${result.requiresMfa.factorId}`);
+        return;
+      }
       toast.success("Sesión iniciada");
       router.push("/dashboard");
       router.refresh();

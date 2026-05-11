@@ -33,7 +33,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import { Logo } from "@/components/brand/logo";
+import { OrgBrand } from "@/components/brand/org-brand";
 import { cn } from "@/lib/utils";
 import { can, type Resource } from "@/lib/permissions";
 import type { Organization, OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
@@ -101,7 +101,7 @@ interface AppSidebarProps {
   profile: UserProfile;
 }
 
-export function AppSidebar({ currentRole }: AppSidebarProps) {
+export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
   const pathname = usePathname();
   const isAdmin = currentRole === "admin";
 
@@ -118,7 +118,7 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border h-14 md:h-16 flex items-center px-3 md:px-4">
         <Link href="/dashboard" className="flex items-center gap-2 group">
-          <Logo size="sm" showWordmark />
+          <OrgBrand organization={currentOrg} />
         </Link>
       </SidebarHeader>
 
@@ -171,10 +171,14 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
         })}
 
         {isAdmin && (() => {
+          const onOrganizacion =
+            pathname === "/dashboard/configuracion/organizacion" ||
+            pathname.startsWith("/dashboard/configuracion/organizacion/");
           const onEquipo =
             pathname === "/dashboard/configuracion/equipo" ||
             pathname.startsWith("/dashboard/configuracion/equipo/");
           const onConfig =
+            !onOrganizacion &&
             !onEquipo &&
             (pathname === "/dashboard/configuracion" ||
               pathname.startsWith("/dashboard/configuracion/"));
@@ -183,6 +187,14 @@ export function AppSidebar({ currentRole }: AppSidebarProps) {
               <SidebarGroupLabel>Configuración</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild tooltip="Organización" isActive={onOrganizacion}>
+                      <Link href="/dashboard/configuracion/organizacion">
+                        <Building2 size={18} className={cn("transition-colors", onOrganizacion && "text-sidebar-primary")} />
+                        <span>Organización</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild tooltip="Equipo y permisos" isActive={onEquipo}>
                       <Link href="/dashboard/configuracion/equipo">

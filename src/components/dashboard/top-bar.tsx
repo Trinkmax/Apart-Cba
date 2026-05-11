@@ -1,7 +1,8 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { Moon, Sun, LogOut, ChevronsUpDown, Check, Settings } from "lucide-react";
+import Link from "next/link";
+import { Moon, Sun, LogOut, ChevronsUpDown, Check, Settings, Building2 } from "lucide-react";
 import { useTransition } from "react";
 import {
   DropdownMenu,
@@ -172,9 +173,17 @@ export function TopBar({
               </a>
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem>
-            <Settings size={14} />
-            Mi perfil
+          <DropdownMenuItem asChild>
+            <Link href="/dashboard/perfil" className="cursor-pointer">
+              <Settings size={14} />
+              Mi perfil
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link href="/dashboard/configuracion/organizacion" className="cursor-pointer">
+              <Building2 size={14} />
+              Configuración de organización
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem

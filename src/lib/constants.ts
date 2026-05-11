@@ -282,22 +282,26 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     crm_inbox: ["view", "create", "update"],
     crm_rapidos: ["view"],
     parte_diario: ["view", "update", "create"],
+    date_marks: ["view", "create", "update", "delete"],
   },
   mantenimiento: {
     units: ["view"],
     tickets: ["view", "create", "update"],
     cleaning: ["view"],
     parte_diario: ["view"],
+    date_marks: ["view"],
   },
   limpieza: {
     units: ["view"],
     cleaning: ["view", "update"],
     parte_diario: ["view"],
+    date_marks: ["view"],
   },
   owner_view: {
     units: ["view"],
     bookings: ["view"],
     settlements: ["view"],
+    date_marks: ["view"],
   },
 };
 

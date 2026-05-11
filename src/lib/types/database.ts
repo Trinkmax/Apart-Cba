@@ -148,6 +148,15 @@ export interface Organization {
   primary_color: string | null;
   /** Override de colores por status de reserva (hex). Si null o falta una clave, se usa el default. */
   booking_status_colors: BookingStatusColors | null;
+  description: string | null;
+  address: string | null;
+  contact_phone: string | null;
+  contact_email: string | null;
+  email_domain: string | null;
+  email_sender_name: string | null;
+  email_sender_local_part: string | null;
+  email_domain_verified_at: string | null;
+  email_domain_dns_records: ResendDnsRecord[] | null;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -339,6 +348,7 @@ export interface Booking {
   checked_out_at: string | null;
   cancelled_at: string | null;
   cancelled_reason: string | null;
+  confirmation_sent_at: string | null;
   created_at: string;
   updated_at: string;
   created_by: string | null;
@@ -1383,4 +1393,84 @@ export interface MobileParteDiarioPayload {
   /** Cantidad de cleanings completadas hoy del set asignado. */
   completed_cleanings: number;
   total_cleanings: number;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Spec 2 — Tipos para tablas nuevas y dominio Resend
+// ════════════════════════════════════════════════════════════════════════
+
+export interface ResendDnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  ttl?: number;
+  priority?: number;
+}
+
+export interface User2FARecoveryCode {
+  id: string;
+  user_id: string;
+  code_hash: string;
+  used_at: string | null;
+  created_at: string;
+}
+
+export interface EmailChangeRequest {
+  id: string;
+  user_id: string;
+  old_email: string;
+  new_email: string;
+  confirm_token_hash: string;
+  cancel_token_hash: string;
+  expires_at: string;
+  confirmed_at: string | null;
+  cancelled_at: string | null;
+  notified_old_at: string | null;
+  created_at: string;
+}
+
+export type MessageChannel = "email" | "whatsapp";
+export type MessageEventType = "booking_confirmed";  // futuro: 'booking_reminder', 'review_request', etc.
+
+export interface OrgMessageTemplate {
+  id: string;
+  organization_id: string;
+  event_type: MessageEventType | string;
+  channel: MessageChannel;
+  subject: string | null;
+  body: string;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SecurityEventType =
+  | "password_changed"
+  | "email_change_requested"
+  | "email_change_confirmed"
+  | "email_change_cancelled"
+  | "2fa_enabled"
+  | "2fa_disabled"
+  | "2fa_recovery_codes_regenerated"
+  | "login_with_recovery_code";
+
+export interface SecurityAuditLog {
+  id: string;
+  user_id: string;
+  event_type: SecurityEventType;
+  metadata: Record<string, unknown> | null;
+  ip: string | null;  // inet en DB; treat as string en TS
+  user_agent: string | null;
+  occurred_at: string;
+}
+
+export interface OrgDateMark {
+  id: string;
+  organization_id: string;
+  date: string; // YYYY-MM-DD
+  color: string; // #RRGGBB
+  label: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
