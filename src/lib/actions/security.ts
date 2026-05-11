@@ -6,6 +6,7 @@ import { randomBytes } from "crypto";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { requireSession } from "./auth";
 import { logSecurityEvent } from "@/lib/security/audit";
+import { generateRecoveryCodes } from "@/lib/security/recovery-codes";
 import { sendSystemMail } from "@/lib/email/system";
 
 // ════════════════════════════════════════════════════════════════════════
@@ -288,4 +289,188 @@ export async function cancelEmailChange(
   });
 
   return { ok: true };
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 2FA — enroll / verify / regenerate codes / disable / status
+// ════════════════════════════════════════════════════════════════════════
+
+export async function enrollMfaFactor(): Promise<
+  | { ok: true; factorId: string; qrCode: string; secret: string; uri: string }
+  | { ok: false; error: string }
+> {
+  await requireSession();
+  const sb = await createClient();
+  const { data, error } = await sb.auth.mfa.enroll({
+    factorType: "totp",
+    friendlyName: "Apart Cba",
+  });
+  if (error) return { ok: false, error: error.message };
+  if (!data?.totp) return { ok: false, error: "Supabase no devolvió TOTP" };
+  return {
+    ok: true,
+    factorId: data.id,
+    qrCode: data.totp.qr_code,
+    secret: data.totp.secret,
+    uri: data.totp.uri,
+  };
+}
+
+const verifyEnrollSchema = z.object({
+  factorId: z.string().min(1),
+  code: z.string().regex(/^\d{6}$/, "El código son 6 dígitos"),
+});
+
+export async function verifyMfaEnrollment(
+  input: z.infer<typeof verifyEnrollSchema>
+): Promise<{ ok: true; recoveryCodes: string[] } | { ok: false; error: string }> {
+  const session = await requireSession();
+  const parsed = verifyEnrollSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Inputs inválidos" };
+  }
+
+  const sb = await createClient();
+  const { data: challenge, error: challengeError } = await sb.auth.mfa.challenge({
+    factorId: parsed.data.factorId,
+  });
+  if (challengeError) return { ok: false, error: challengeError.message };
+
+  const { error: verifyError } = await sb.auth.mfa.verify({
+    factorId: parsed.data.factorId,
+    challengeId: challenge.id,
+    code: parsed.data.code,
+  });
+  if (verifyError) return { ok: false, error: "Código incorrecto" };
+
+  const codes = await generateRecoveryCodes(session.userId);
+
+  await logSecurityEvent({
+    userId: session.userId,
+    eventType: "2fa_enabled",
+  });
+
+  const { data: userData } = await sb.auth.getUser();
+  const email = userData.user?.email;
+  if (email) {
+    await sendSystemMail({
+      to: email,
+      template: { name: "2fa-enabled", vars: { occurredAt: new Date().toLocaleString("es-AR") } },
+    });
+  }
+
+  return { ok: true, recoveryCodes: codes };
+}
+
+export async function regenerateRecoveryCodes(args: {
+  currentPassword: string;
+}): Promise<{ ok: true; codes: string[] } | { ok: false; error: string }> {
+  const session = await requireSession();
+  const sb = await createClient();
+  const { data: userData } = await sb.auth.getUser();
+  const email = userData.user?.email;
+  if (!email) return { ok: false, error: "No se pudo obtener email" };
+
+  const { error: signInError } = await sb.auth.signInWithPassword({
+    email,
+    password: args.currentPassword,
+  });
+  if (signInError) return { ok: false, error: "Contraseña incorrecta" };
+
+  const codes = await generateRecoveryCodes(session.userId);
+
+  await logSecurityEvent({
+    userId: session.userId,
+    eventType: "2fa_recovery_codes_regenerated",
+  });
+
+  return { ok: true, codes };
+}
+
+const disable2faSchema = z.object({
+  currentPassword: z.string().min(1),
+  totpCode: z.string().regex(/^\d{6}$/, "El código son 6 dígitos"),
+});
+
+export async function disable2fa(
+  input: z.infer<typeof disable2faSchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession();
+  const parsed = disable2faSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Inputs inválidos" };
+  }
+
+  const sb = await createClient();
+  const { data: userData } = await sb.auth.getUser();
+  const email = userData.user?.email;
+  if (!email) return { ok: false, error: "No se pudo obtener email" };
+
+  const { error: signInError } = await sb.auth.signInWithPassword({
+    email,
+    password: parsed.data.currentPassword,
+  });
+  if (signInError) return { ok: false, error: "Contraseña incorrecta" };
+
+  const { data: factorsData, error: listErr } = await sb.auth.mfa.listFactors();
+  if (listErr) return { ok: false, error: listErr.message };
+  const totpFactor = factorsData.totp?.[0];
+  if (!totpFactor) return { ok: false, error: "No hay factor 2FA activo" };
+
+  const { data: challenge, error: challengeErr } = await sb.auth.mfa.challenge({
+    factorId: totpFactor.id,
+  });
+  if (challengeErr) return { ok: false, error: challengeErr.message };
+
+  const { error: verifyErr } = await sb.auth.mfa.verify({
+    factorId: totpFactor.id,
+    challengeId: challenge.id,
+    code: parsed.data.totpCode,
+  });
+  if (verifyErr) return { ok: false, error: "Código TOTP incorrecto" };
+
+  const { error: unenrollErr } = await sb.auth.mfa.unenroll({ factorId: totpFactor.id });
+  if (unenrollErr) return { ok: false, error: unenrollErr.message };
+
+  const admin = createAdminClient();
+  await admin
+    .from("user_2fa_recovery_codes")
+    .update({ used_at: new Date().toISOString() })
+    .eq("user_id", session.userId)
+    .is("used_at", null);
+
+  await logSecurityEvent({
+    userId: session.userId,
+    eventType: "2fa_disabled",
+  });
+
+  await sendSystemMail({
+    to: email,
+    template: { name: "2fa-disabled", vars: { occurredAt: new Date().toLocaleString("es-AR") } },
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Lookup del estado MFA del user actual. Server-only helper para SSR de
+ * la card de seguridad.
+ */
+export async function getMfaStatus(): Promise<{
+  enrolled: boolean;
+  factorId: string | null;
+  enabledAt: string | null;
+}> {
+  await requireSession();
+  const sb = await createClient();
+  const { data: factorsData } = await sb.auth.mfa.listFactors();
+  const totpFactor = factorsData?.totp?.[0];
+  if (!totpFactor || totpFactor.status !== "verified") {
+    return { enrolled: false, factorId: null, enabledAt: null };
+  }
+  return {
+    enrolled: true,
+    factorId: totpFactor.id,
+    enabledAt: totpFactor.created_at ?? null,
+  };
 }
