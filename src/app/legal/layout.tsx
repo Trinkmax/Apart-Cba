@@ -13,6 +13,9 @@ export default function LegalLayout({ children }: { children: ReactNode }) {
             <Link href="/legal/privacidad" className="hover:text-foreground">
               Privacidad
             </Link>
+            <Link href="/legal/terminos" className="hover:text-foreground">
+              Términos
+            </Link>
             <Link href="/legal/eliminacion-de-datos" className="hover:text-foreground">
               Eliminación de datos
             </Link>
