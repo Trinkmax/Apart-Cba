@@ -438,79 +438,117 @@ export async function subscribeChannelPage(
     return { ok: false, message: "Access token no configurado" };
   }
 
-  const target = channel.provider === "meta_instagram" ? channel.page_id : channel.waba_id;
-  if (!target) {
-    return {
-      ok: false,
-      message:
-        channel.provider === "meta_instagram"
-          ? "Falta Page ID en el canal"
-          : "Falta WABA ID en el canal",
-    };
-  }
-
-  // Fields válidos a nivel Page (no confundir con los del producto Instagram en
-  // Meta App Dashboard, que son distintos). `messaging_seen` y otros read-
-  // receipt fields se manejan en el producto IG, no acá.
-  const subscribedFields =
-    channel.provider === "meta_instagram"
-      ? "messages,messaging_postbacks"
-      : "messages";
-
   const apiVersion = process.env.META_GRAPH_API_VERSION || "v22.0";
-  const url = `https://graph.facebook.com/${apiVersion}/${target}/subscribed_apps?subscribed_fields=${subscribedFields}`;
 
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    const data = (await res.json().catch(() => null)) as
-      | { success?: boolean; error?: { message?: string; code?: number; type?: string } }
-      | null;
+  // Para WhatsApp: una sola suscripción a nivel WABA.
+  // Para Instagram: DOS suscripciones (Page + IG account) — Meta requiere ambas
+  // para que los DMs lleguen al webhook. Sin la IG-level, Meta procesa el evento
+  // pero no lo entrega a nuestra URL aunque la app esté correctamente configurada.
+  type SubResult = { target: string; ok: boolean; fields: string[]; error?: string; code?: number };
+  const results: SubResult[] = [];
 
-    if (!res.ok || !data?.success) {
-      const errMsg = data?.error?.message ?? `HTTP ${res.status}`;
-      return {
-        ok: false,
-        message: `Meta API: ${errMsg}`,
-        details: {
-          fields: subscribedFields.split(","),
+  async function subscribe(target: string, fields: string): Promise<SubResult> {
+    const url = `https://graph.facebook.com/${apiVersion}/${target}/subscribed_apps?subscribed_fields=${fields}`;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { success?: boolean; error?: { message?: string; code?: number; type?: string } }
+        | null;
+      if (!res.ok || !data?.success) {
+        return {
           target,
-          hint:
-            data?.error?.code === 100
-              ? "El token no tiene permisos suficientes — necesita pages_manage_metadata + el permission correcto del producto."
-              : data?.error?.code === 190
-                ? "Token inválido o vencido — regeneralo desde Business Suite (System User → Generar identificador → Caducidad: Nunca)."
-                : "Confirmá en Meta Business Suite que la Page está en un Business Manager al que pertenece la app.",
-        },
+          ok: false,
+          fields: fields.split(","),
+          error: data?.error?.message ?? `HTTP ${res.status}`,
+          code: data?.error?.code,
+        };
+      }
+      return { target, ok: true, fields: fields.split(",") };
+    } catch (err) {
+      return {
+        target,
+        ok: false,
+        fields: fields.split(","),
+        error: err instanceof Error ? err.message : String(err),
       };
     }
+  }
 
-    // Actualizar campo informativo en DB para reflejar lo suscripto
-    await admin
-      .from("crm_channels")
-      .update({
-        webhook_subscribed_fields: subscribedFields.split(","),
-        last_health_check_at: new Date().toISOString(),
-        last_error: null,
-      })
-      .eq("id", id);
-    revalidatePath("/dashboard/configuracion/mensajeria");
+  if (channel.provider === "meta_instagram") {
+    if (!channel.page_id) {
+      return { ok: false, message: "Falta Page ID en el canal" };
+    }
+    // Page-level: para que la Page entregue eventos a nuestra app
+    results.push(await subscribe(channel.page_id, "messages,messaging_postbacks"));
+    // IG-level: para que la cuenta IG entregue eventos al app subscriber
+    if (channel.instagram_business_account_id) {
+      results.push(await subscribe(channel.instagram_business_account_id, "messages"));
+    }
+  } else {
+    if (!channel.waba_id) {
+      return { ok: false, message: "Falta WABA ID en el canal" };
+    }
+    results.push(await subscribe(channel.waba_id, "messages"));
+  }
 
-    return {
-      ok: true,
-      message: `Page suscripta · ${subscribedFields.split(",").length} fields`,
-      details: {
-        fields: subscribedFields.split(","),
-        target,
-      },
-    };
-  } catch (err) {
+  const failed = results.filter((r) => !r.ok);
+  const succeeded = results.filter((r) => r.ok);
+
+  if (failed.length > 0 && succeeded.length === 0) {
+    const first = failed[0];
     return {
       ok: false,
-      message: `Fallo de red al llamar a Meta: ${err instanceof Error ? err.message : String(err)}`,
+      message: `Meta API: ${first.error}`,
+      details: {
+        fields: first.fields,
+        target: first.target,
+        hint:
+          first.code === 100
+            ? "El token no tiene permisos suficientes — necesita pages_manage_metadata + instagram_manage_messages."
+            : first.code === 190
+              ? "Token inválido o vencido — regeneralo desde Business Suite (System User → Caducidad: Nunca)."
+              : "Confirmá en Meta Business Suite que la Page/IG están en un Business Manager al que pertenece la app.",
+      },
     };
   }
+
+  // Mezcla todos los fields suscritos (deduplicados) para registrar en DB.
+  const allFields = Array.from(new Set(succeeded.flatMap((r) => r.fields)));
+  await admin
+    .from("crm_channels")
+    .update({
+      webhook_subscribed_fields: allFields,
+      last_health_check_at: new Date().toISOString(),
+      last_error: failed.length > 0 ? `Parcial: falló ${failed.map((f) => f.target).join(", ")}` : null,
+    })
+    .eq("id", id);
+  revalidatePath("/dashboard/configuracion/mensajeria");
+
+  if (failed.length > 0) {
+    return {
+      ok: true,
+      message: `Suscripción parcial · ${succeeded.length}/${results.length} OK`,
+      details: {
+        fields: allFields,
+        target: succeeded.map((s) => s.target).join(" + "),
+        hint: `Falló: ${failed.map((f) => `${f.target} (${f.error})`).join("; ")}`,
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    message:
+      channel.provider === "meta_instagram"
+        ? `Page + IG suscriptos · ${allFields.join(", ")}`
+        : `WABA suscripta · ${allFields.join(", ")}`,
+    details: {
+      fields: allFields,
+      target: succeeded.map((s) => s.target).join(" + "),
+    },
+  };
 }
