@@ -13,7 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { TagChip } from "@/components/crm/shared/tag-chip";
-import { upsertChannel, setChannelStatus, testChannelHealth, verifyChannelSubscription } from "@/lib/actions/crm-channels";
+import { upsertChannel, setChannelStatus, testChannelHealth, verifyChannelSubscription, subscribeChannelPage } from "@/lib/actions/crm-channels";
 import { updateAISettings } from "@/lib/actions/crm-ai-settings";
 import { AIUsageChart } from "./ai-usage-chart";
 import { createTemplate, submitTemplate, refreshTemplateStatus, deleteTemplate } from "@/lib/actions/crm-templates";
@@ -200,6 +200,29 @@ function ChannelsSection({ channels, appUrl }: { channels: CrmChannel[]; appUrl:
                 })}
               >
                 Verificar webhook
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => startTransition(async () => {
+                  const result = await subscribeChannelPage(ch.id);
+                  if (result.ok) {
+                    toast.success(result.message, {
+                      description: result.details?.fields.length
+                        ? `Fields suscriptos: ${result.details.fields.join(", ")}`
+                        : undefined,
+                      duration: 7000,
+                    });
+                  } else {
+                    toast.error(result.message, {
+                      description: result.details?.hint ?? undefined,
+                      duration: 12000,
+                    });
+                  }
+                  router.refresh();
+                })}
+              >
+                Suscribir Page
               </Button>
               <Button size="sm" variant="outline" onClick={() => { setEditing(ch); setShowForm(true); }}>Editar</Button>
             </div>

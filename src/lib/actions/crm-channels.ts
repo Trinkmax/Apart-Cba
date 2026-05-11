@@ -405,3 +405,109 @@ export async function verifyChannelSubscription(
     },
   };
 }
+
+/**
+ * Suscribe la Page (IG) o la WABA (WhatsApp) a nuestra app vía Graph API.
+ * Es el equivalente a hacer `POST /{page_id}/subscribed_apps` desde Graph API
+ * Explorer pero automatizado — usa el token ya guardado en el canal.
+ *
+ * Sin este paso, aunque la app esté correctamente configurada en Meta App
+ * Dashboard, Meta no entrega webhooks a nuestro endpoint para esta Page/WABA
+ * específicamente — la suscripción a nivel app y la suscripción a nivel
+ * Page/WABA son dos cosas distintas.
+ */
+export async function subscribeChannelPage(
+  id: string,
+): Promise<{ ok: boolean; message: string; details?: { fields: string[]; target: string; hint?: string } }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") throw new Error("Sin permisos");
+
+  const admin = createAdminClient();
+  const { data: channel, error } = await admin
+    .from("crm_channels")
+    .select("*")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .single();
+  if (error || !channel) throw new Error("Canal no encontrado");
+
+  const { getSecret } = await import("@/lib/crm/encryption");
+  const accessToken = await getSecret(channel.access_token_secret_id);
+  if (!accessToken) {
+    return { ok: false, message: "Access token no configurado" };
+  }
+
+  const target = channel.provider === "meta_instagram" ? channel.page_id : channel.waba_id;
+  if (!target) {
+    return {
+      ok: false,
+      message:
+        channel.provider === "meta_instagram"
+          ? "Falta Page ID en el canal"
+          : "Falta WABA ID en el canal",
+    };
+  }
+
+  const subscribedFields =
+    channel.provider === "meta_instagram"
+      ? "messages,messaging_postbacks,messaging_seen"
+      : "messages";
+
+  const apiVersion = process.env.META_GRAPH_API_VERSION || "v22.0";
+  const url = `https://graph.facebook.com/${apiVersion}/${target}/subscribed_apps?subscribed_fields=${subscribedFields}`;
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = (await res.json().catch(() => null)) as
+      | { success?: boolean; error?: { message?: string; code?: number; type?: string } }
+      | null;
+
+    if (!res.ok || !data?.success) {
+      const errMsg = data?.error?.message ?? `HTTP ${res.status}`;
+      return {
+        ok: false,
+        message: `Meta API: ${errMsg}`,
+        details: {
+          fields: subscribedFields.split(","),
+          target,
+          hint:
+            data?.error?.code === 100
+              ? "El token no tiene permisos suficientes — necesita pages_manage_metadata + el permission correcto del producto."
+              : data?.error?.code === 190
+                ? "Token inválido o vencido — regeneralo desde Business Suite (System User → Generar identificador → Caducidad: Nunca)."
+                : "Confirmá en Meta Business Suite que la Page está en un Business Manager al que pertenece la app.",
+        },
+      };
+    }
+
+    // Actualizar campo informativo en DB para reflejar lo suscripto
+    await admin
+      .from("crm_channels")
+      .update({
+        webhook_subscribed_fields: subscribedFields.split(","),
+        last_health_check_at: new Date().toISOString(),
+        last_error: null,
+      })
+      .eq("id", id);
+    revalidatePath("/dashboard/configuracion/mensajeria");
+
+    return {
+      ok: true,
+      message: `Page suscripta · ${subscribedFields.split(",").length} fields`,
+      details: {
+        fields: subscribedFields.split(","),
+        target,
+      },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Fallo de red al llamar a Meta: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
