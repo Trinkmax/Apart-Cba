@@ -1455,3 +1455,14 @@ export interface SecurityAuditLog {
   user_agent: string | null;
   occurred_at: string;
 }
+
+export interface OrgDateMark {
+  id: string;
+  organization_id: string;
+  date: string; // YYYY-MM-DD
+  color: string; // #RRGGBB
+  label: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
