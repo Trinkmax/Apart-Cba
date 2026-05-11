@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
-import { LogIn, LogOut, X, Loader2, AlertTriangle, ShieldAlert, Wallet } from "lucide-react";
+import { LogIn, LogOut, X, Loader2, AlertTriangle, ShieldAlert, Wallet, CheckCircle2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import { formatMoney } from "@/lib/format";
 import type { Booking, CashAccount } from "@/lib/types/database";
 import { CheckInReadinessDialog } from "./check-in-readiness-dialog";
 import { QuickPayCard } from "./quick-pay-card";
+import { useConfirmBookingDialog } from "./use-confirm-booking-dialog";
 
 interface Props {
   booking: Booking;
@@ -48,6 +49,12 @@ export function BookingActions({ booking, role }: Props) {
   const paid = Number(booking.paid_amount ?? 0);
   const pending = Number((total - paid).toFixed(2));
   const isAdmin = role === "admin";
+
+  const isResend = booking.status !== "pendiente";
+  const { openConfirmDialog, dialogProps, ConfirmBookingDialog } = useConfirmBookingDialog({
+    mode: isResend ? "resend" : "confirm",
+    onSuccess: () => router.refresh(),
+  });
 
   useEffect(() => {
     if (!pendingDialogOpen || accounts !== null) return;
@@ -146,6 +153,11 @@ export function BookingActions({ booking, role }: Props) {
 
   return (
     <>
+      {booking.status === "pendiente" && (
+        <Button onClick={() => openConfirmDialog(booking.id)} disabled={isPending} className="gap-2">
+          <CheckCircle2 size={14} /> Confirmar reserva
+        </Button>
+      )}
       {booking.status === "confirmada" && (
         <Button onClick={() => handle("check_in")} disabled={isPending} className="gap-2">
           {isPending ? <Loader2 className="animate-spin" /> : <LogIn size={14} />}
@@ -156,6 +168,11 @@ export function BookingActions({ booking, role }: Props) {
         <Button onClick={() => handle("check_out")} disabled={isPending} className="gap-2" variant="default">
           {isPending ? <Loader2 className="animate-spin" /> : <LogOut size={14} />}
           Hacer check-out
+        </Button>
+      )}
+      {(booking.status === "confirmada" || booking.status === "check_in" || booking.status === "check_out") && (
+        <Button onClick={() => openConfirmDialog(booking.id)} disabled={isPending} variant="outline" className="gap-2">
+          <Send size={14} /> Reenviar confirmación
         </Button>
       )}
       {booking.status === "pendiente" && (
@@ -266,6 +283,8 @@ export function BookingActions({ booking, role }: Props) {
         isPending={isPending}
         onConfirm={performCheckIn}
       />
+
+      {dialogProps && <ConfirmBookingDialog {...dialogProps} />}
     </>
   );
 }
