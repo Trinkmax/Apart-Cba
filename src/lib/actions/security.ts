@@ -303,7 +303,7 @@ export async function enrollMfaFactor(): Promise<
   const sb = await createClient();
   const { data, error } = await sb.auth.mfa.enroll({
     factorType: "totp",
-    friendlyName: "Apart Cba",
+    friendlyName: "rentOS",
   });
   if (error) return { ok: false, error: error.message };
   if (!data?.totp) return { ok: false, error: "Supabase no devolvió TOTP" };

@@ -190,7 +190,7 @@ export function CreateOrgDialog({ children }: { children: React.ReactNode }) {
                     </Select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label>Comisión Apart Cba (%)</Label>
+                    <Label>Comisión rentOS (%)</Label>
                     <Input
                       type="number"
                       min="0" max="100" step="0.01"

@@ -711,7 +711,7 @@ function TemplateForm({ channels, onClose }: { channels: CrmChannel[]; onClose: 
       </div>
       <div>
         <Label>Footer (opcional)</Label>
-        <Input value={footer} onChange={(e) => setFooter(e.target.value)} placeholder="Apart Cba · Reservas 24/7" />
+        <Input value={footer} onChange={(e) => setFooter(e.target.value)} placeholder="rentOS · Reservas 24/7" />
       </div>
       <div className="flex justify-end gap-2 pt-2">
         <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>

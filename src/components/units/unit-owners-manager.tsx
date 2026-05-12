@@ -147,7 +147,7 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Comisión Apart Cba (override, opcional)</Label>
+                <Label>Comisión rentOS (override, opcional)</Label>
                 <Input
                   type="number"
                   min="0"

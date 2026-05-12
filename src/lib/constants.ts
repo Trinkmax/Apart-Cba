@@ -305,8 +305,8 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
   },
 };
 
-export const APP_NAME = "Apart Cba";
-export const APP_TAGLINE = "Gestión de departamentos temporales";
+export const APP_NAME = "rentOS";
+export const APP_TAGLINE = "Operá y reservá alojamientos en un solo lugar";
 
 // Coordenadas default para clima/contexto (Córdoba Capital).
 // TODO: a futuro mover esto a `organizations` para multi-ciudad.

@@ -467,7 +467,7 @@ export const aiResponseNode = defineNode({
   }),
   defaultConfig: {
     model: "claude-sonnet-4-6".split("").join(""),
-    systemPrompt: "Sos el asistente virtual de Apart Cba (PMS de alquileres temporarios). Respondé en español rioplatense, conciso y amable.",
+    systemPrompt: "Sos el asistente virtual de rentOS (PMS de alquileres temporarios). Respondé en español rioplatense, conciso y amable.",
     includeHistory: true,
     maxHistoryMessages: 10,
     sendAsMessage: true,

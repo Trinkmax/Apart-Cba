@@ -88,7 +88,7 @@ export function TwoFactorWizard({ open, onOpenChange, onSuccess }: Props) {
 
   function handleDownloadCodes() {
     const blob = new Blob(
-      [`Apart Cba — Códigos de recuperación 2FA\nGenerados: ${new Date().toLocaleString("es-AR")}\n\n${recoveryCodes.join("\n")}\n\nCada código es de un solo uso.`],
+      [`rentOS — Códigos de recuperación 2FA\nGenerados: ${new Date().toLocaleString("es-AR")}\n\n${recoveryCodes.join("\n")}\n\nCada código es de un solo uso.`],
       { type: "text/plain" }
     );
     const url = URL.createObjectURL(blob);

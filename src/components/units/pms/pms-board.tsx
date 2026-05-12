@@ -735,6 +735,7 @@ export function PmsBoard({
     const neighborhood = f.neighborhood.trim().toLowerCase();
     const checkAvailability =
       f.availableFrom && f.availableTo && f.availableTo > f.availableFrom;
+    const q = query.trim().toLowerCase();
 
     return units.filter((u) => {
       if (minGuests !== null && (u.max_guests ?? 0) < minGuests) return false;
@@ -769,9 +770,22 @@ export function PmsBoard({
         );
         if (overlap) return false;
       }
+      // Búsqueda libre: la unidad debe matchear directamente (código, nombre,
+      // barrio, dirección) o tener al menos una reserva visible que matchee
+      // (visibleBookings ya aplicó el filtro de query).
+      if (q) {
+        const matchesUnit =
+          (u.code ?? "").toLowerCase().includes(q) ||
+          (u.name ?? "").toLowerCase().includes(q) ||
+          (u.neighborhood ?? "").toLowerCase().includes(q) ||
+          (u.address ?? "").toLowerCase().includes(q);
+        if (!matchesUnit && (bookingsByUnit.get(u.id)?.length ?? 0) === 0) {
+          return false;
+        }
+      }
       return true;
     });
-  }, [units, unitFilters, bookings]);
+  }, [units, unitFilters, bookings, query, bookingsByUnit]);
 
   // ── stats por unidad dentro del rango visible (para el popover de unidad)
   const statsByUnit = useMemo(() => {

@@ -27,7 +27,7 @@ const DIRECTION_LABEL: Record<"in" | "out", string> = {
 };
 
 const BILLABLE_LABEL: Record<"apartcba" | "owner" | "guest", string> = {
-  apartcba: "Apart Cba",
+  apartcba: "rentOS",
   owner: "Propietario",
   guest: "Huésped",
 };

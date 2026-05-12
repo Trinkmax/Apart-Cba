@@ -78,7 +78,7 @@ const ALL_CATEGORIES = Object.keys(CATEGORY_LABELS) as MovementCategory[];
 const DIRECTION_LABEL: Record<"in" | "out", string> = { in: "Ingreso", out: "Egreso" };
 
 const BILLABLE_LABEL: Record<"apartcba" | "owner" | "guest", string> = {
-  apartcba: "Apart Cba",
+  apartcba: "rentOS",
   owner: "Propietario",
   guest: "Huésped",
 };
@@ -301,7 +301,7 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="apartcba">Apart Cba</SelectItem>
+                  <SelectItem value="apartcba">rentOS</SelectItem>
                   <SelectItem value="owner">Propietario</SelectItem>
                   <SelectItem value="guest">Huésped</SelectItem>
                 </SelectContent>

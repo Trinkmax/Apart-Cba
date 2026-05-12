@@ -41,7 +41,7 @@ export function LoginForm() {
         <Input
           id="email"
           type="email"
-          placeholder="tu@apartcba.com.ar"
+          placeholder="tu@rentos.app"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           autoComplete="email"

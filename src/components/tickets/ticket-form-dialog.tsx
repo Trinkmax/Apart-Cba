@@ -166,7 +166,7 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
               <Select value={form.billable_to} onValueChange={(v) => set("billable_to", v as TicketInput["billable_to"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="apartcba">Apart Cba (absorbe)</SelectItem>
+                  <SelectItem value="apartcba">rentOS (absorbe)</SelectItem>
                   <SelectItem value="owner">Propietario (se descuenta de la liquidación)</SelectItem>
                   <SelectItem value="guest">Huésped (se cobra)</SelectItem>
                 </SelectContent>

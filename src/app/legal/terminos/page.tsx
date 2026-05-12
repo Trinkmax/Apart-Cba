@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Términos y condiciones · Apart Cba",
+  title: "Términos y condiciones · rentOS",
   description:
-    "Términos y condiciones de uso del servicio de gestión de alojamientos temporales y canales de mensajería de Apart Cba.",
+    "Términos y condiciones de uso del servicio de gestión de alojamientos temporales y canales de mensajería de rentOS.",
 };
 
 const UPDATED = "11 de mayo de 2026";
@@ -21,8 +21,8 @@ export default function TermsPage() {
       <Section title="1. Aceptación de los términos">
         <p>
           Estos Términos y Condiciones (en adelante, los &quot;Términos&quot;) regulan el
-          uso del servicio prestado por <strong>Apart Cba</strong> (en adelante,
-          &quot;Apart Cba&quot;, &quot;nosotros&quot;), incluyendo la plataforma de gestión de
+          uso del servicio prestado por <strong>rentOS</strong> (en adelante,
+          &quot;rentOS&quot;, &quot;nosotros&quot;), incluyendo la plataforma de gestión de
           alojamientos temporales, el sitio web, los canales de mensajería
           (Instagram Direct, WhatsApp Business) y cualquier interacción con
           nuestro equipo.
@@ -37,7 +37,7 @@ export default function TermsPage() {
 
       <Section title="2. Descripción del servicio">
         <p>
-          Apart Cba opera y administra alojamientos temporales (departamentos
+          rentOS opera y administra alojamientos temporales (departamentos
           amueblados) en la Ciudad de Córdoba, Argentina, ya sea como
           propietario directo o en representación de propietarios terceros.
           Nuestros servicios incluyen:
@@ -51,9 +51,9 @@ export default function TermsPage() {
           <li>Liquidación a propietarios</li>
         </ul>
         <p>
-          Apart Cba no es una agencia de viajes registrada. La relación
+          rentOS no es una agencia de viajes registrada. La relación
           contractual de hospedaje se establece entre el huésped y el operador
-          (Apart Cba o el propietario representado, según el caso), conforme la
+          (rentOS o el propietario representado, según el caso), conforme la
           documentación que se emita para cada reserva.
         </p>
       </Section>
@@ -70,10 +70,10 @@ export default function TermsPage() {
 
         <h3 className="font-semibold mt-4">3.2 Confirmación</h3>
         <p>
-          La reserva queda confirmada cuando: (i) Apart Cba acuse recibo del
+          La reserva queda confirmada cuando: (i) rentOS acuse recibo del
           pago de la seña requerida, (ii) el huésped haya provisto los datos
           personales mínimos (nombre, DNI/pasaporte, teléfono, email) y (iii)
-          Apart Cba emita la confirmación por escrito (email o WhatsApp). Antes
+          rentOS emita la confirmación por escrito (email o WhatsApp). Antes
           de los tres pasos completos, no existe reserva.
         </p>
 
@@ -103,7 +103,7 @@ export default function TermsPage() {
             check-out, descontando eventuales daños o consumos pendientes.
           </li>
           <li>
-            <strong>Facturación:</strong> Apart Cba emite el comprobante fiscal
+            <strong>Facturación:</strong> rentOS emite el comprobante fiscal
             correspondiente (factura A, B o C según condición frente a IVA del
             huésped). Es obligación del huésped suministrar datos fiscales
             correctos.
@@ -129,7 +129,7 @@ export default function TermsPage() {
             reembolso.
           </li>
           <li>
-            <strong>Cancelación por Apart Cba:</strong> si por causas
+            <strong>Cancelación por rentOS:</strong> si por causas
             imputables a nosotros no podemos prestar el servicio, devolvemos el
             100% de lo abonado o reubicamos en una unidad equivalente.
           </li>
@@ -167,7 +167,7 @@ export default function TermsPage() {
 
       <Section title="7. Limitación de responsabilidad">
         <p>
-          Apart Cba se compromete a actuar con diligencia profesional en la
+          rentOS se compromete a actuar con diligencia profesional en la
           prestación de sus servicios. Sin embargo, no será responsable por:
         </p>
         <ul>
@@ -189,7 +189,7 @@ export default function TermsPage() {
           </li>
         </ul>
         <p>
-          En todos los casos, la responsabilidad máxima de Apart Cba frente al
+          En todos los casos, la responsabilidad máxima de rentOS frente al
           huésped queda limitada al monto efectivamente abonado por la reserva
           objeto de reclamo.
         </p>
@@ -197,7 +197,7 @@ export default function TermsPage() {
 
       <Section title="8. Uso de los canales de mensajería">
         <p>
-          Apart Cba ofrece atención por Instagram Direct y WhatsApp Business.
+          rentOS ofrece atención por Instagram Direct y WhatsApp Business.
           Al iniciar una conversación con nosotros por estos canales:
         </p>
         <ul>
@@ -231,7 +231,7 @@ export default function TermsPage() {
         <p>
           Todos los contenidos del sitio web y los canales digitales de Apart
           Cba (textos, fotografías, marcas, logos, código fuente, diseño) son
-          propiedad de Apart Cba o de los propietarios que representamos, y
+          propiedad de rentOS o de los propietarios que representamos, y
           están protegidos por la Ley 11.723 de Propiedad Intelectual. Queda
           prohibida su reproducción total o parcial sin autorización escrita.
         </p>
@@ -239,7 +239,7 @@ export default function TermsPage() {
 
       <Section title="10. Modificaciones a estos Términos">
         <p>
-          Apart Cba se reserva el derecho de modificar estos Términos en
+          rentOS se reserva el derecho de modificar estos Términos en
           cualquier momento. La versión vigente es siempre la publicada en
           esta página, con la fecha de &quot;Última actualización&quot; indicada arriba.
           Para reservas ya confirmadas regirán los Términos vigentes al momento
@@ -268,7 +268,7 @@ export default function TermsPage() {
           Para consultas sobre estos Términos:
         </p>
         <p>
-          <strong>Apart Cba</strong>
+          <strong>rentOS</strong>
           <br />
           Email:{" "}
           <a href="mailto:contacto@apart-cba.com.ar">contacto@apart-cba.com.ar</a>

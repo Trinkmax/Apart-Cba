@@ -137,7 +137,7 @@ export async function generateSettlement(
         ref_type: "booking",
         ref_id: b.id,
         unit_id: b.unit_id,
-        description: `Comisión Apart Cba ${commissionPct}% (mensual prorrateada)`,
+        description: `Comisión rentOS ${commissionPct}% (mensual prorrateada)`,
         amount: commission,
         sign: "-",
       });
@@ -178,7 +178,7 @@ export async function generateSettlement(
       ref_type: "booking",
       ref_id: b.id,
       unit_id: b.unit_id,
-      description: `Comisión Apart Cba ${commissionPct}%`,
+      description: `Comisión rentOS ${commissionPct}%`,
       amount: commission,
       sign: "-",
     });

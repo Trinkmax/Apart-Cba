@@ -50,7 +50,7 @@ export async function sendSystemMail(args: {
   template: SystemTemplate;
 }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const from = process.env.SYSTEM_EMAIL_FROM;
-  const fromName = process.env.SYSTEM_EMAIL_FROM_NAME ?? "Apart Cba Seguridad";
+  const fromName = process.env.SYSTEM_EMAIL_FROM_NAME ?? "rentOS Seguridad";
   if (!from) return { ok: false, error: "SYSTEM_EMAIL_FROM no configurada" };
 
   const tpl = TEMPLATE_MAP[args.template.name];

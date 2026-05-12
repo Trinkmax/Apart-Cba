@@ -466,7 +466,7 @@ export function TicketDetailDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="apartcba">Apart Cba (absorbe)</SelectItem>
+                    <SelectItem value="apartcba">rentOS (absorbe)</SelectItem>
                     <SelectItem value="owner">Propietario</SelectItem>
                     <SelectItem value="guest">Huésped</SelectItem>
                   </SelectContent>
@@ -474,7 +474,7 @@ export function TicketDetailDialog({
               ) : (
                 <Badge variant="outline" className="text-xs">
                   {ticket.billable_to === "apartcba"
-                    ? "Apart Cba"
+                    ? "rentOS"
                     : ticket.billable_to === "owner"
                     ? "Propietario"
                     : "Huésped"}

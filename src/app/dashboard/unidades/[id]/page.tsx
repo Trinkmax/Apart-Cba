@@ -70,7 +70,21 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
             )}
           </div>
         </div>
-        <EditUnitButton unit={u} />
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <Link
+            href={`/dashboard/unidades/${u.id}/marketplace`}
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium bg-gradient-to-r from-rose-500 to-rose-600 text-white hover:from-rose-600 hover:to-rose-700 transition-all shadow-sm"
+          >
+            ✨ Marketplace rentOS
+            {u.marketplace_published ? (
+              <span className="ml-1 inline-flex items-center gap-1 text-[10px] bg-white/25 px-1.5 py-0.5 rounded-full">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 animate-pulse" />
+                Live
+              </span>
+            ) : null}
+          </Link>
+          <EditUnitButton unit={u} />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">

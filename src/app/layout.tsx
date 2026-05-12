@@ -9,13 +9,14 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Apart Cba — PMS",
-  description: "Gestión integral de departamentos temporales en Córdoba",
-  applicationName: "Apart Cba",
+  title: "rentOS — Reservá tu próximo lugar",
+  description:
+    "Marketplace de alojamientos temporales en Argentina. Descubrí, compará y reservá departamentos, lofts y casas en segundos.",
+  applicationName: "rentOS",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    title: "Apart Cba",
+    title: "rentOS",
     statusBarStyle: "default",
   },
   icons: {

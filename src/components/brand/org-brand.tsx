@@ -10,7 +10,7 @@ interface OrgBrandProps {
 /**
  * Brand del sidebar:
  * - Si la org tiene logo_url → renderiza ese logo (white-label total).
- * - Si no → fallback al <Logo> de Apart Cba.
+ * - Si no → fallback al <Logo> de rentOS.
  *
  * Decisión Spec 2: las orgs sin logo siguen viendo "APART" como antes.
  */

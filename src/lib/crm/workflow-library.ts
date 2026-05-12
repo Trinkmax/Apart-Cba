@@ -43,7 +43,7 @@ export const WORKFLOW_LIBRARY: WorkflowLibraryItem[] = [
       nodes: [
         triggerNode("trg", "message_received", { filters: { fromKind: "lead" } }),
         baseNode("send-greet", "send_message", {
-          text: "¡Hola! 👋 Gracias por contactarte con Apart Cba. ¿En qué fecha querés alojarte? Te respondemos al toque.",
+          text: "¡Hola! 👋 Gracias por contactarte con rentOS. ¿En qué fecha querés alojarte? Te respondemos al toque.",
           previewUrl: false,
         }, 400, 240),
         baseNode("tag-lead", "add_tag", { tagSlug: "lead" }, 400, 380),

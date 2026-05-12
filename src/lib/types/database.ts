@@ -1,5 +1,5 @@
 /**
- * Apart Cba — Tipos TypeScript del schema apartcba.
+ * rentOS — Tipos TypeScript del schema apartcba.
  * Mantener en sync con supabase/migrations/.
  */
 
@@ -236,6 +236,8 @@ export interface Owner {
   updated_at: string;
 }
 
+export type CancellationPolicy = "flexible" | "moderada" | "estricta";
+
 export interface Unit {
   id: string;
   organization_id: string;
@@ -268,6 +270,24 @@ export interface Unit {
   ical_export_token: string;
   created_at: string;
   updated_at: string;
+  // ─── Marketplace (migration 016) ──────────────────────────────────────────
+  latitude: number | null;
+  longitude: number | null;
+  slug: string | null;
+  marketplace_published: boolean;
+  marketplace_title: string | null;
+  marketplace_description: string | null;
+  marketplace_property_type: string | null;
+  marketplace_currency: string | null;
+  instant_book: boolean;
+  min_nights: number;
+  max_nights: number | null;
+  cancellation_policy: CancellationPolicy | null;
+  house_rules: string | null;
+  check_in_window_start: string | null;
+  check_in_window_end: string | null;
+  marketplace_rating_avg: number;
+  marketplace_rating_count: number;
 }
 
 export interface UnitOwner {
@@ -1476,4 +1496,197 @@ export interface OrgDateMark {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Marketplace rentOS (migration 016)
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface UnitPhoto {
+  id: string;
+  unit_id: string;
+  organization_id: string;
+  storage_path: string;
+  public_url: string;
+  sort_order: number;
+  is_cover: boolean;
+  alt_text: string | null;
+  width: number | null;
+  height: number | null;
+  size_bytes: number | null;
+  uploaded_by: string | null;
+  uploaded_at: string;
+}
+
+export type MarketplaceAmenityCategory =
+  | "esencial"
+  | "comodidad"
+  | "exterior"
+  | "familia"
+  | "seguridad"
+  | "accesibilidad";
+
+export interface MarketplaceAmenity {
+  code: string;
+  name: string;
+  icon: string;
+  category: MarketplaceAmenityCategory;
+  display_order: number;
+  active: boolean;
+}
+
+export interface UnitMarketplaceAmenity {
+  unit_id: string;
+  amenity_code: string;
+}
+
+export type PricingRuleType = "date_range" | "weekday";
+
+export interface UnitPricingRule {
+  id: string;
+  unit_id: string;
+  organization_id: string;
+  name: string;
+  rule_type: PricingRuleType;
+  start_date: string | null;
+  end_date: string | null;
+  days_of_week: number[] | null;
+  price_multiplier: number | null;
+  price_override: number | null;
+  min_nights_override: number | null;
+  priority: number;
+  active: boolean;
+  created_at: string;
+}
+
+export interface GuestProfile {
+  user_id: string;
+  full_name: string;
+  phone: string | null;
+  avatar_url: string | null;
+  document_type: string | null;
+  document_number: string | null;
+  country: string | null;
+  city: string | null;
+  birth_date: string | null;
+  preferred_currency: string | null;
+  preferred_locale: string | null;
+  marketing_consent: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type BookingRequestStatus =
+  | "pendiente"
+  | "aprobada"
+  | "rechazada"
+  | "expirada"
+  | "cancelada";
+
+export interface BookingRequest {
+  id: string;
+  organization_id: string;
+  unit_id: string;
+  guest_user_id: string | null;
+  guest_full_name: string;
+  guest_email: string;
+  guest_phone: string | null;
+  guest_document: string | null;
+  check_in_date: string;
+  check_in_time: string;
+  check_out_date: string;
+  check_out_time: string;
+  guests_count: number;
+  currency: string;
+  total_amount: number;
+  cleaning_fee: number | null;
+  nights: number;
+  special_requests: string | null;
+  status: BookingRequestStatus;
+  expires_at: string;
+  approved_at: string | null;
+  approved_by: string | null;
+  rejected_at: string | null;
+  rejected_by: string | null;
+  rejection_reason: string | null;
+  resulting_booking_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookingRequestWithRelations extends BookingRequest {
+  unit?: Pick<Unit, "id" | "code" | "name" | "slug" | "marketplace_title"> | null;
+  organization?: Pick<Organization, "id" | "name"> | null;
+}
+
+export interface Review {
+  id: string;
+  organization_id: string;
+  unit_id: string;
+  booking_id: string;
+  guest_user_id: string | null;
+  guest_name_snapshot: string;
+  guest_avatar_snapshot: string | null;
+  rating: number;
+  cleanliness_rating: number | null;
+  communication_rating: number | null;
+  location_rating: number | null;
+  value_rating: number | null;
+  comment: string | null;
+  host_response: string | null;
+  host_responded_at: string | null;
+  host_responded_by: string | null;
+  published: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Wishlist {
+  user_id: string;
+  unit_id: string;
+  added_at: string;
+}
+
+// ─── Composiciones para vistas del marketplace ──────────────────────────────
+
+export interface MarketplaceListingSummary {
+  id: string;
+  organization_id: string;
+  slug: string;
+  marketplace_title: string;
+  marketplace_property_type: string;
+  neighborhood: string | null;
+  city: string | null;
+  address: string | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  max_guests: number | null;
+  size_m2: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  base_price: number;
+  marketplace_currency: string;
+  cleaning_fee: number | null;
+  instant_book: boolean;
+  rating_avg: number;
+  rating_count: number;
+  cover_url: string | null;
+  /** URLs adicionales para preview en cards (hasta 4). */
+  photo_urls: string[];
+  amenities: string[];
+}
+
+export interface MarketplaceListingDetail extends MarketplaceListingSummary {
+  marketplace_description: string | null;
+  house_rules: string | null;
+  cancellation_policy: CancellationPolicy;
+  min_nights: number;
+  max_nights: number | null;
+  check_in_window_start: string;
+  check_in_window_end: string;
+  photos: UnitPhoto[];
+  pricing_rules: UnitPricingRule[];
+  organization_name: string;
+  organization_logo_url: string | null;
 }

@@ -381,7 +381,7 @@ export function UnitFormDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="default_commission_pct">Comisión Apart Cba (%)</Label>
+                  <Label htmlFor="default_commission_pct">Comisión rentOS (%)</Label>
                   <Input
                     id="default_commission_pct"
                     type="text"

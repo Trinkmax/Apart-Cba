@@ -16,8 +16,8 @@ export function BrandingSection({ organization }: Props) {
       <header className="mb-4">
         <h2 className="text-lg font-semibold">Branding</h2>
         <p className="text-sm text-muted-foreground">
-          Subí el logo de tu organización. Se va a mostrar en el sidebar del producto en lugar del logo de Apart Cba.
-          Si lo eliminás, vuelve al brand Apart Cba por default.
+          Subí el logo de tu organización. Se va a mostrar en el sidebar del producto en lugar del logo de rentOS.
+          Si lo eliminás, vuelve al brand rentOS por default.
         </p>
       </header>
       <div className="max-w-md mx-auto">

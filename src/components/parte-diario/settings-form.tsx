@@ -324,7 +324,7 @@ Adjuntamos el PDF con los check-ins, check-outs, limpiezas asignadas y arreglos 
           </p>
           <ul className="text-xs space-y-1 font-mono">
             <li>{"{{1}}"} = Deysy</li>
-            <li>{"{{2}}"} = Apart Cba</li>
+            <li>{"{{2}}"} = rentOS</li>
             <li>{"{{3}}"} = miércoles 7 de mayo</li>
           </ul>
         </div>

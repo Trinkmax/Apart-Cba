@@ -73,10 +73,10 @@ function buildIcs(unit: UnitInfo, bookings: BookingRow[]): string {
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Apart Cba//Channel Manager//ES",
+    "PRODID:-//rentOS//Channel Manager//ES",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:${escapeText(`Apart Cba — ${unit.code} ${unit.name}`)}`,
+    `X-WR-CALNAME:${escapeText(`rentOS — ${unit.code} ${unit.name}`)}`,
     "X-WR-TIMEZONE:America/Argentina/Cordoba",
   ];
 

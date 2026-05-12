@@ -71,7 +71,7 @@ export async function signIn(
   const session = await getSession();
   if (!session) {
     await supabase.auth.signOut();
-    return { error: "Esta cuenta no está habilitada para Apart Cba." };
+    return { error: "Esta cuenta no está habilitada para rentOS." };
   }
 
   // Spec 2: si el user tiene factor TOTP verificado, desviar a /login/2fa

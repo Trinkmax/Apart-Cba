@@ -15,7 +15,7 @@ export default async function LoginPage() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,oklch(0_0_0/0.25),transparent_70%)]" />
 
         <div className="relative z-10 flex flex-col justify-between p-12 text-white w-full">
-          <Logo size="xl" variant="mono" />
+          <Logo size="xl" variant="light" />
 
           <div className="space-y-6 max-w-md animate-fade-up">
             <h1 className="text-4xl font-semibold leading-tight tracking-tight">
@@ -45,7 +45,7 @@ export default async function LoginPage() {
           </div>
 
           <div className="text-sm text-white/60">
-            © {new Date().getFullYear()} Apart Cba — Córdoba, Argentina
+            © {new Date().getFullYear()} rentOS — Córdoba, Argentina
           </div>
         </div>
       </div>

@@ -2,7 +2,7 @@ export const emailChangeNotifyOldTemplate = {
   subject: "Pedido de cambio de email en tu cuenta",
   text: (vars: { newEmail: string; cancelUrl: string }) => `Hola,
 
-Recibimos un pedido de cambio de email para tu cuenta de Apart Cba.
+Recibimos un pedido de cambio de email para tu cuenta de rentOS.
 
 El nuevo email solicitado es: ${vars.newEmail}
 
@@ -14,5 +14,5 @@ ${vars.cancelUrl}
 
 Si lo cancelás, tu email actual queda sin cambios.
 
-— Apart Cba Seguridad`,
+— rentOS Seguridad`,
 };

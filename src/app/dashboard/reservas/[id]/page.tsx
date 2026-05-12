@@ -206,7 +206,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
 
               <Separator />
               <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Comisión Apart Cba</span>
+                <span className="text-muted-foreground">Comisión rentOS</span>
                 <span>{formatMoney(b.commission_amount, b.currency)} ({b.commission_pct}%)</span>
               </div>
               <div className="flex justify-between text-xs">

@@ -59,7 +59,7 @@ function DomainEmptyState() {
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
         Configurá un dominio propio para que los emails a tus huéspedes salgan de tu marca.
-        Mientras tanto, salen desde un remitente genérico de Apart Cba.
+        Mientras tanto, salen desde un remitente genérico de rentOS.
       </p>
       <div className="space-y-3">
         <div className="space-y-2">
@@ -207,7 +207,7 @@ function DomainVerifiedState({ organization }: { organization: Organization }) {
   const [isResetting, startReset] = useTransition();
 
   function handleReset() {
-    if (!confirm("Esto borra el dominio en Resend. Los próximos mails al huésped van a salir desde el remitente genérico de Apart Cba. ¿Seguir?")) return;
+    if (!confirm("Esto borra el dominio en Resend. Los próximos mails al huésped van a salir desde el remitente genérico de rentOS. ¿Seguir?")) return;
     startReset(async () => {
       const result = await deleteOrgDomain();
       if (!result.ok) toast.error("Error", { description: result.error });

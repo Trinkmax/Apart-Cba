@@ -70,7 +70,7 @@ export default async function ChannelManagerPage() {
                 <p className="font-medium">Cómo exportar las reservas de Apart-Cba a Airbnb / Booking</p>
                 <ol className="list-decimal pl-5 text-muted-foreground text-xs space-y-1">
                   <li>Copiá la URL de la unidad (botón <b>Copiar</b>).</li>
-                  <li>En Airbnb: Listing → Calendar → Availability → Sync calendars → <b>Import calendar</b> → pegá la URL y poné un nombre (ej. &quot;Apart Cba&quot;).</li>
+                  <li>En Airbnb: Listing → Calendar → Availability → Sync calendars → <b>Import calendar</b> → pegá la URL y poné un nombre (ej. &quot;rentOS&quot;).</li>
                   <li>En Booking: Extranet → Rates &amp; Availability → Sync calendars → pestaña <b>Import calendar</b> → pegá la URL.</li>
                   <li>Cada plataforma actualiza el calendario cada ~2-12 hs (no es instantáneo). Cargá las reservas directas con anticipación para evitar doble-reserva.</li>
                   <li>El feed expone solo fechas ocupadas (sin nombres de huéspedes ni montos), respetando privacidad.</li>

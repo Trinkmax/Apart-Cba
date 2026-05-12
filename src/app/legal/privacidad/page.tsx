@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Política de privacidad · Apart Cba",
+  title: "Política de privacidad · rentOS",
   description:
-    "Cómo Apart Cba recolecta, usa, almacena y protege la información personal de huéspedes, propietarios y contactos.",
+    "Cómo rentOS recolecta, usa, almacena y protege la información personal de huéspedes, propietarios y contactos.",
 };
 
 const UPDATED = "11 de mayo de 2026";
@@ -18,7 +18,7 @@ export default function PrivacyPolicyPage() {
 
       <Section title="1. Identidad del responsable">
         <p>
-          <strong>Apart Cba</strong> (en adelante, &quot;Apart Cba&quot;, &quot;nosotros&quot;) es una
+          <strong>rentOS</strong> (en adelante, &quot;rentOS&quot;, &quot;nosotros&quot;) es una
           plataforma de gestión de alojamientos temporales con domicilio en la Ciudad
           de Córdoba, Provincia de Córdoba, República Argentina.
         </p>
@@ -51,7 +51,7 @@ export default function PrivacyPolicyPage() {
         <h3 className="font-semibold mt-4">2.3 Datos recibidos a través de Instagram y WhatsApp</h3>
         <p>
           Cuando un usuario nos envía un mensaje a través de Instagram Direct o
-          WhatsApp Business, Apart Cba recibe automáticamente:
+          WhatsApp Business, rentOS recibe automáticamente:
         </p>
         <ul>
           <li>Identificador de usuario provisto por Meta (IGSID en Instagram, número de teléfono en WhatsApp)</li>
@@ -133,7 +133,7 @@ export default function PrivacyPolicyPage() {
 
       <Section title="5. Con quién compartimos tus datos">
         <p>
-          Apart Cba <strong>no vende ni alquila</strong> tus datos personales a
+          rentOS <strong>no vende ni alquila</strong> tus datos personales a
           terceros. Compartimos datos únicamente con:
         </p>
         <ul>
@@ -227,7 +227,7 @@ export default function PrivacyPolicyPage() {
 
       <Section title="8. Seguridad">
         <p>
-          Apart Cba aplica medidas técnicas y organizativas razonables para
+          rentOS aplica medidas técnicas y organizativas razonables para
           proteger tus datos: cifrado TLS para las comunicaciones, cifrado en
           reposo de credenciales sensibles en Supabase Vault, control de acceso
           basado en roles, y registros de auditoría de operaciones críticas.
@@ -242,7 +242,7 @@ export default function PrivacyPolicyPage() {
 
       <Section title="9. Menores de edad">
         <p>
-          Apart Cba no presta servicios a menores de 18 años de forma directa. No
+          rentOS no presta servicios a menores de 18 años de forma directa. No
           recopilamos intencionalmente datos de menores. Si detectamos datos de
           menores cargados sin consentimiento parental, los eliminamos al ser
           notificados.

@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   MessageSquareText,
   ScrollText,
+  Inbox,
 } from "lucide-react";
 import {
   Sidebar,
@@ -65,6 +66,7 @@ const NAV: NavGroup[] = [
       { label: "Calendario", href: "/dashboard/unidades/kanban", icon: Hotel, resource: "units" },
       { label: "Unidades", href: "/dashboard/unidades", icon: Building2, resource: "units" },
       { label: "Reservas", href: "/dashboard/reservas", icon: CalendarDays, resource: "bookings" },
+      { label: "Solicitudes", href: "/dashboard/reservas-pendientes", icon: Inbox, resource: "bookings" },
       { label: "Huéspedes", href: "/dashboard/huespedes", icon: Users, resource: "guests" },
     ],
   },
@@ -220,7 +222,7 @@ export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
 
       <SidebarFooter className="border-t border-sidebar-border p-3">
         <div className="text-[10px] text-sidebar-foreground/50 text-center">
-          Apart Cba · v1.0
+          rentOS · v1.0
         </div>
       </SidebarFooter>
       <SidebarRail />

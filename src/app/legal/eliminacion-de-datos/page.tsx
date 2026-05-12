@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Eliminación de datos · Apart Cba",
+  title: "Eliminación de datos · rentOS",
   description:
-    "Cómo solicitar la eliminación de tus datos personales recolectados por Apart Cba a través de Instagram, WhatsApp o el formulario de reservas.",
+    "Cómo solicitar la eliminación de tus datos personales recolectados por rentOS a través de Instagram, WhatsApp o el formulario de reservas.",
 };
 
 const UPDATED = "11 de mayo de 2026";
@@ -21,7 +21,7 @@ export default function DataDeletionPage() {
       <section className="mb-8 rounded-lg border border-border bg-muted/30 p-4 sm:p-6">
         <h2 className="text-base font-semibold mb-2">Resumen</h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Si querés que eliminemos los datos personales que Apart Cba tiene sobre
+          Si querés que eliminemos los datos personales que rentOS tiene sobre
           vos (mensajes de Instagram/WhatsApp, datos de contacto, historial de
           reservas), podés solicitarlo enviando un email a{" "}
           <a
@@ -37,7 +37,7 @@ export default function DataDeletionPage() {
 
       <Section title="¿Qué datos elimino al pedir esto?">
         <p>
-          Al confirmar tu solicitud, Apart Cba eliminará o anonimizará en forma
+          Al confirmar tu solicitud, rentOS eliminará o anonimizará en forma
           permanente:
         </p>
         <ul>
@@ -105,14 +105,14 @@ export default function DataDeletionPage() {
 
       <Section title="Eliminación automática desde Instagram / Facebook">
         <p>
-          Si revocás los permisos de Apart Cba directamente desde tu configuración
+          Si revocás los permisos de rentOS directamente desde tu configuración
           de Facebook o Instagram (Configuración → Privacidad → Apps y sitios
           web), Meta nos enviará un aviso automático y eliminaremos los datos
           asociados a tu identificador de Meta dentro de los 30 días, sin
           intervención manual de tu parte.
         </p>
         <p className="text-sm text-muted-foreground">
-          Conforme la <em>Meta Platform Policy</em>, Apart Cba expone un
+          Conforme la <em>Meta Platform Policy</em>, rentOS expone un
           endpoint de callback que recibe estas notificaciones de revocación,
           inicia el proceso de eliminación y devuelve un código de seguimiento.
         </p>
@@ -178,7 +178,7 @@ export default function DataDeletionPage() {
 
       <p className="mt-12 text-xs text-muted-foreground">
         Esta página complementa la{" "}
-        <a href="/legal/privacidad">Política de privacidad</a> de Apart Cba.
+        <a href="/legal/privacidad">Política de privacidad</a> de rentOS.
       </p>
     </article>
   );

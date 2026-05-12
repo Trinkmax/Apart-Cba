@@ -14,7 +14,7 @@ export function SetupForm({ hasOrg, orgId }: { hasOrg: boolean; orgId: string | 
   const [done, setDone] = useState(false);
   const router = useRouter();
   const [form, setForm] = useState({
-    org_name: hasOrg ? "" : "Apart Cba",
+    org_name: hasOrg ? "" : "rentOS",
     full_name: "",
     email: "",
     password: "",
