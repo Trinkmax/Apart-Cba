@@ -186,7 +186,7 @@ export function CheckoutForm({
             disabled={pending}
             className={cn(
               "w-full h-14 rounded-2xl font-semibold text-base transition-all flex items-center justify-center gap-2",
-              "bg-gradient-to-r from-rose-500 to-rose-600 text-white hover:from-rose-600 hover:to-rose-700 shadow-md hover:shadow-lg",
+              "bg-gradient-to-r from-sage-500 to-sage-600 text-white hover:from-sage-600 hover:to-sage-700 shadow-md hover:shadow-lg",
               pending && "opacity-70 cursor-not-allowed"
             )}
           >

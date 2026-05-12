@@ -73,7 +73,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
           <Link
             href={`/dashboard/unidades/${u.id}/marketplace`}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium bg-gradient-to-r from-rose-500 to-rose-600 text-white hover:from-rose-600 hover:to-rose-700 transition-all shadow-sm"
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium bg-gradient-to-r from-sage-500 to-sage-600 text-white hover:from-sage-600 hover:to-sage-700 transition-all shadow-sm"
           >
             ✨ Marketplace rentOS
             {u.marketplace_published ? (

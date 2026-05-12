@@ -75,7 +75,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
 
   return (
     <div className="max-w-[1000px] mx-auto px-4 md:px-8 py-8 md:py-12">
-      <div className="rounded-3xl bg-gradient-to-br from-emerald-50 via-white to-rose-50 border border-neutral-200 overflow-hidden">
+      <div className="rounded-3xl bg-gradient-to-br from-emerald-50 via-white to-sage-50 border border-neutral-200 overflow-hidden">
         <div className="px-6 md:px-10 py-8 md:py-10 flex items-center gap-4">
           <div className="h-14 w-14 rounded-full bg-emerald-500 text-white grid place-items-center shadow-lg">
             <CheckCircle2 size={28} />
@@ -189,7 +189,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
           <div className="rounded-2xl border border-neutral-200 bg-white p-6">
             <h2 className="font-semibold text-neutral-900 mb-3">Tu anfitrión</h2>
             <div className="flex items-center gap-3 mb-4">
-              <div className="h-12 w-12 rounded-full bg-rose-100 grid place-items-center text-rose-700 font-semibold">
+              <div className="h-12 w-12 rounded-full bg-sage-100 grid place-items-center text-sage-700 font-semibold">
                 {org.name[0]?.toUpperCase()}
               </div>
               <div>
@@ -219,12 +219,12 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
             </div>
           </div>
 
-          <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-6">
-            <h3 className="text-sm font-semibold text-rose-900 mb-1">Código de reserva</h3>
-            <code className="text-lg font-mono font-semibold text-rose-900">
+          <div className="rounded-2xl border border-sage-200 bg-sage-50/50 p-6">
+            <h3 className="text-sm font-semibold text-sage-900 mb-1">Código de reserva</h3>
+            <code className="text-lg font-mono font-semibold text-sage-900">
               {booking.id.slice(0, 8).toUpperCase()}
             </code>
-            <p className="text-xs text-rose-700/70 mt-2">
+            <p className="text-xs text-sage-700/70 mt-2">
               Compartilo con tu anfitrión si necesitan referenciar tu reserva.
             </p>
           </div>

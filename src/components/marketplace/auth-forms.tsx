@@ -83,7 +83,7 @@ export function GuestSignInForm() {
       <button
         type="submit"
         disabled={isPending}
-        className="w-full h-12 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 text-white font-medium shadow-sm hover:shadow-md hover:from-rose-600 hover:to-rose-700 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+        className="w-full h-12 rounded-xl bg-gradient-to-r from-sage-500 to-sage-600 text-white font-medium shadow-sm hover:shadow-md hover:from-sage-600 hover:to-sage-700 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
       >
         {isPending ? <Loader2 size={16} className="animate-spin" /> : null}
         Continuar
@@ -242,7 +242,7 @@ export function GuestSignUpForm() {
       <button
         type="submit"
         disabled={isPending}
-        className="w-full h-12 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 text-white font-medium shadow-sm hover:shadow-md hover:from-rose-600 hover:to-rose-700 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+        className="w-full h-12 rounded-xl bg-gradient-to-r from-sage-500 to-sage-600 text-white font-medium shadow-sm hover:shadow-md hover:from-sage-600 hover:to-sage-700 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
       >
         {isPending ? <Loader2 size={16} className="animate-spin" /> : null}
         Crear mi cuenta

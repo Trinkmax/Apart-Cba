@@ -16,7 +16,7 @@ export default async function IngresarPage() {
       <div className="text-center mb-8">
         <Link href="/" className="inline-block">
           <h1 className="text-3xl font-bold">
-            <span className="text-rose-500">rent</span>
+            <span className="text-sage-500">rent</span>
             <span className="text-neutral-900">OS</span>
           </h1>
         </Link>

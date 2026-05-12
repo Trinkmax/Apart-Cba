@@ -66,7 +66,7 @@ export default function ResetPasswordPage() {
         <button
           type="submit"
           disabled={pending}
-          className="w-full h-12 rounded-xl bg-gradient-to-r from-rose-500 to-rose-600 text-white font-medium flex items-center justify-center gap-2 disabled:opacity-60"
+          className="w-full h-12 rounded-xl bg-gradient-to-r from-sage-500 to-sage-600 text-white font-medium flex items-center justify-center gap-2 disabled:opacity-60"
         >
           {pending ? <Loader2 size={16} className="animate-spin" /> : null}
           Cambiar contraseña

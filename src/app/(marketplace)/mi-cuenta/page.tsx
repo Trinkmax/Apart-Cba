@@ -217,7 +217,7 @@ function StatusPill({ status }: { status: BookingStatusValue }) {
     confirmada: { label: "Confirmada", cls: "bg-emerald-100 text-emerald-800" },
     check_in: { label: "Disfrutando", cls: "bg-sky-100 text-sky-800" },
     check_out: { label: "Finalizada", cls: "bg-neutral-100 text-neutral-700" },
-    cancelada: { label: "Cancelada", cls: "bg-rose-100 text-rose-800" },
+    cancelada: { label: "Cancelada", cls: "bg-sage-100 text-sage-800" },
     no_show: { label: "No-show", cls: "bg-neutral-200 text-neutral-700" },
   };
   const s = map[status] ?? { label: status, cls: "bg-neutral-100" };

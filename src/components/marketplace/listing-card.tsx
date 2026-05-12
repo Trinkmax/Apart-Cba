@@ -92,7 +92,7 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
             className={cn(
               "drop-shadow-md transition-all",
               favorited
-                ? "fill-rose-500 stroke-white stroke-[1.5px]"
+                ? "fill-sage-500 stroke-white stroke-[1.5px]"
                 : "fill-black/30 stroke-white group-hover/heart:scale-110"
             )}
           />

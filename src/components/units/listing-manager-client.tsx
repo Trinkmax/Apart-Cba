@@ -71,7 +71,7 @@ export function ListingManagerClient(props: Props) {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-rose-50 to-white p-5 md:p-6 flex flex-col md:flex-row md:items-center gap-4">
+      <div className="rounded-2xl border border-neutral-200 bg-gradient-to-br from-sage-50 to-white p-5 md:p-6 flex flex-col md:flex-row md:items-center gap-4">
         <div className="flex-1">
           <div className="text-xs uppercase tracking-wide text-neutral-500 font-medium">
             Estado del listing
@@ -99,7 +99,7 @@ export function ListingManagerClient(props: Props) {
               href={`/u/${props.unit.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-1 inline-flex items-center gap-1 text-xs text-rose-600 hover:underline"
+              className="mt-1 inline-flex items-center gap-1 text-xs text-sage-600 hover:underline"
             >
               <Eye size={11} /> Ver en el marketplace
               <ChevronRight size={11} />
@@ -576,7 +576,7 @@ function PhotosTab({
                     </button>
                     <button
                       onClick={() => handleDelete(p.id)}
-                      className="px-3 py-1.5 rounded-full bg-rose-500 hover:bg-rose-600 font-medium"
+                      className="px-3 py-1.5 rounded-full bg-sage-500 hover:bg-sage-600 font-medium"
                     >
                       Borrar
                     </button>
@@ -817,7 +817,7 @@ function PricingTab({
               />
               <button
                 onClick={() => remove(r.id)}
-                className="text-xs text-rose-600 hover:underline"
+                className="text-xs text-sage-600 hover:underline"
               >
                 Borrar
               </button>

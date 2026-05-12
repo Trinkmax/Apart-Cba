@@ -8,6 +8,19 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* rentOS marketplace — sage green brand palette */
+  --color-sage-50:  #f3f5f1;
+  --color-sage-100: #e4e9e0;
+  --color-sage-200: #c9d2c2;
+  --color-sage-300: #aab69f;
+  --color-sage-400: #8c9c83;
+  --color-sage-500: #7d8e74;
+  --color-sage-600: #647560;
+  --color-sage-700: #4f5d4c;
+  --color-sage-800: #3f4a3d;
+  --color-sage-900: #2c352b;
+  --color-sage-950: #1a201a;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

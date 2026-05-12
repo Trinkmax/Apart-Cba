@@ -43,7 +43,7 @@ export function CompactSearchBar() {
       </div>
       <button
         type="submit"
-        className="m-1.5 inline-flex items-center justify-center h-9 w-9 rounded-full bg-rose-500 text-white hover:bg-rose-600 transition-colors"
+        className="m-1.5 inline-flex items-center justify-center h-9 w-9 rounded-full bg-sage-500 text-white hover:bg-sage-600 transition-colors"
         aria-label="Buscar"
       >
         <Search size={16} />
@@ -78,7 +78,7 @@ export function HeroSearchBar() {
     >
       <label className="flex-1 px-6 py-4 hover:bg-neutral-50 transition-colors cursor-text">
         <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-700 flex items-center gap-1.5">
-          <MapPin size={11} className="text-rose-500" />
+          <MapPin size={11} className="text-sage-500" />
           Destino
         </div>
         <input
@@ -92,7 +92,7 @@ export function HeroSearchBar() {
 
       <label className="flex-1 px-6 py-4 hover:bg-neutral-50 transition-colors cursor-text">
         <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-700 flex items-center gap-1.5">
-          <CalendarIcon size={11} className="text-rose-500" />
+          <CalendarIcon size={11} className="text-sage-500" />
           Llegada
         </div>
         <input
@@ -106,7 +106,7 @@ export function HeroSearchBar() {
 
       <label className="flex-1 px-6 py-4 hover:bg-neutral-50 transition-colors cursor-text">
         <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-700 flex items-center gap-1.5">
-          <CalendarIcon size={11} className="text-rose-500" />
+          <CalendarIcon size={11} className="text-sage-500" />
           Salida
         </div>
         <input
@@ -121,7 +121,7 @@ export function HeroSearchBar() {
       <label className="flex-1 px-6 py-4 hover:bg-neutral-50 transition-colors cursor-text flex items-center gap-4">
         <div className="flex-1">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-neutral-700 flex items-center gap-1.5">
-            <Users size={11} className="text-rose-500" />
+            <Users size={11} className="text-sage-500" />
             Huéspedes
           </div>
           <div className="text-sm text-neutral-700 mt-1">
@@ -150,7 +150,7 @@ export function HeroSearchBar() {
 
       <button
         type="submit"
-        className="m-2 md:m-2 inline-flex items-center gap-2 px-6 md:px-5 py-3 md:py-0 rounded-2xl md:rounded-full bg-rose-500 hover:bg-rose-600 text-white font-medium transition-colors"
+        className="m-2 md:m-2 inline-flex items-center gap-2 px-6 md:px-5 py-3 md:py-0 rounded-2xl md:rounded-full bg-sage-500 hover:bg-sage-600 text-white font-medium transition-colors"
       >
         <Search size={18} />
         <span className="md:hidden">Buscar</span>

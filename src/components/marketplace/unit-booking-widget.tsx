@@ -177,7 +177,7 @@ export function UnitBookingWidget({
       </div>
 
       {hasOverlap ? (
-        <div className="flex items-start gap-2 rounded-xl bg-rose-50 border border-rose-200 p-3 text-sm text-rose-800">
+        <div className="flex items-start gap-2 rounded-xl bg-sage-50 border border-sage-200 p-3 text-sm text-sage-800">
           <CalendarX size={16} className="mt-0.5 shrink-0" />
           <div>Algunas de estas fechas ya están reservadas. Probá otras.</div>
         </div>
@@ -189,7 +189,7 @@ export function UnitBookingWidget({
         className={cn(
           "w-full h-12 rounded-xl font-medium transition-all",
           validation.ok
-            ? "bg-gradient-to-r from-rose-500 to-rose-600 text-white hover:from-rose-600 hover:to-rose-700 shadow-sm hover:shadow-md"
+            ? "bg-gradient-to-r from-sage-500 to-sage-600 text-white hover:from-sage-600 hover:to-sage-700 shadow-sm hover:shadow-md"
             : "bg-neutral-100 text-neutral-400 cursor-not-allowed"
         )}
       >

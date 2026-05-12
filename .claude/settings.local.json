@@ -116,7 +116,10 @@
       "Bash(echo \"exit: $?\")",
       "Bash(sips --getProperty pixelWidth public/brand/rentOS.png)",
       "Bash(node *)",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "Bash(echo \"tsc: $?\")",
+      "Bash(echo \"lint: $?\")",
+      "Read(//private/tmp/**)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -36,8 +36,8 @@ export function UnitLocationMap({
         scrollZoom={false}
       >
         <Marker latitude={latitude} longitude={longitude} anchor="center">
-          <div className="h-12 w-12 rounded-full bg-rose-500/30 grid place-items-center">
-            <div className="h-5 w-5 rounded-full bg-rose-500 border-2 border-white shadow-md" />
+          <div className="h-12 w-12 rounded-full bg-sage-500/30 grid place-items-center">
+            <div className="h-5 w-5 rounded-full bg-sage-500 border-2 border-white shadow-md" />
           </div>
         </Marker>
       </Map>

@@ -172,7 +172,7 @@ export function UnitDetailInfo({ listing, amenitiesCatalog, reviews }: Props) {
             {reviews.slice(0, 6).map((r) => (
               <article key={r.id}>
                 <div className="flex items-center gap-3 mb-2">
-                  <div className="h-10 w-10 rounded-full bg-rose-100 grid place-items-center text-rose-700 font-semibold text-sm">
+                  <div className="h-10 w-10 rounded-full bg-sage-100 grid place-items-center text-sage-700 font-semibold text-sm">
                     {r.guest_name_snapshot[0]?.toUpperCase()}
                   </div>
                   <div>

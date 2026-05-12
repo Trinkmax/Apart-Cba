@@ -1,8 +1,11 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Heart, Search, User, LogOut, ChevronDown } from "lucide-react";
-import { getGuestSession, signOutGuest } from "@/lib/actions/guest-auth";
+import { usePathname } from "next/navigation";
+import { Heart, LogOut, Search, User } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/brand/logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,9 +14,34 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CompactSearchBar } from "./search-bar";
+import { CurrencySwitcher } from "./currency-switcher";
+import { signOutGuest } from "@/lib/actions/guest-auth";
+import type { GuestSession } from "@/lib/actions/guest-auth";
+import { cn } from "@/lib/utils";
 
-export async function SiteHeader({ variant = "default" }: { variant?: "default" | "transparent" }) {
-  const session = await getGuestSession();
+type Props = {
+  session: GuestSession | null;
+};
+
+export function SiteHeader({ session }: Props) {
+  const pathname = usePathname();
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 80);
+    const tick = setTimeout(onScroll, 0);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      clearTimeout(tick);
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, []);
+
+  // Sólo el home tiene hero a pantalla completa con foto de fondo. Las demás
+  // páginas siempre muestran el header sólido.
+  const isHome = pathname === "/";
+  const hero = isHome && !scrolled;
+
   const initials = session
     ? session.profile.full_name
         .split(" ")
@@ -25,119 +53,170 @@ export async function SiteHeader({ variant = "default" }: { variant?: "default" 
 
   return (
     <header
-      className={
-        variant === "transparent"
-          ? "absolute top-0 inset-x-0 z-40"
-          : "sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-neutral-200"
-      }
+      className={cn(
+        "sticky top-0 z-40 transition-all duration-300",
+        hero
+          ? "bg-gradient-to-b from-black/35 via-black/15 to-transparent border-b border-transparent"
+          : "bg-white/95 backdrop-blur-md border-b border-neutral-200 shadow-sm"
+      )}
     >
-      <div className="max-w-[1400px] mx-auto px-4 md:px-8 h-20 flex items-center gap-4 md:gap-8">
-        <Link href="/" className="flex items-center gap-1 group">
-          <span className="text-2xl font-bold tracking-tight text-rose-500 group-hover:text-rose-600 transition-colors">
-            rent
-          </span>
-          <span className="text-2xl font-bold tracking-tight text-neutral-900">OS</span>
+      <div className="max-w-[1400px] mx-auto px-4 md:px-8 h-20 grid grid-cols-[auto_1fr_auto] md:grid-cols-[1fr_auto_1fr] items-center gap-4 md:gap-8">
+        <Link
+          href="/"
+          aria-label="rentOS — Inicio"
+          className="flex items-center transition-opacity hover:opacity-80 justify-self-start"
+        >
+          <Logo size="lg" variant={hero ? "light" : "dark"} />
         </Link>
 
-        <div className="hidden md:block flex-1 max-w-xl mx-auto">
-          <CompactSearchBar />
+        {/* Center — compact search bar SOLO cuando no estamos sobre el hero */}
+        <div className="hidden md:block w-full max-w-xl justify-self-center">
+          {hero ? null : <CompactSearchBar />}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
-          <Link
-            href="/buscar"
-            className="md:hidden inline-flex items-center justify-center h-10 w-10 rounded-full border border-neutral-200"
-            aria-label="Buscar"
-          >
-            <Search size={18} />
-          </Link>
-
-          {session ? (
+        {/* Right — currency + auth area */}
+        <div className="flex items-center gap-1.5 md:gap-2 justify-self-end">
+          {/* Mobile search button cuando no estamos en hero */}
+          {!hero ? (
             <Link
-              href="/favoritos"
-              className="hidden md:inline-flex items-center gap-1.5 text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
+              href="/buscar"
+              className="md:hidden inline-flex items-center justify-center h-10 w-10 rounded-full border border-neutral-200 text-neutral-700"
+              aria-label="Buscar"
             >
-              <Heart size={16} />
-              Favoritos
+              <Search size={18} />
             </Link>
           ) : null}
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-2 rounded-full border border-neutral-200 pl-3 pr-1.5 py-1.5 hover:shadow-md transition-shadow">
-                <ChevronDown size={14} className="text-neutral-600" />
-                {session && initials ? (
-                  <Avatar className="h-8 w-8">
-                    {session.profile.avatar_url ? (
-                      <AvatarImage src={session.profile.avatar_url} alt={session.profile.full_name} />
-                    ) : null}
-                    <AvatarFallback className="bg-neutral-900 text-white text-xs font-medium">
-                      {initials}
-                    </AvatarFallback>
-                  </Avatar>
-                ) : (
-                  <div className="h-8 w-8 rounded-full bg-neutral-100 grid place-items-center text-neutral-600">
-                    <User size={16} />
-                  </div>
-                )}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              {session ? (
-                <>
-                  <div className="px-3 py-2 text-xs text-neutral-500">
-                    Sesión iniciada como
-                    <div className="text-sm font-medium text-neutral-900 truncate">
-                      {session.profile.full_name}
-                    </div>
-                  </div>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link href="/mi-cuenta">Mi cuenta</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/mi-cuenta">Mis reservas</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/favoritos">Favoritos</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/mi-cuenta/perfil">Perfil</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <form action={signOutGuest}>
-                    <button
-                      type="submit"
-                      className="w-full text-left px-2 py-1.5 text-sm hover:bg-neutral-50 flex items-center gap-2"
-                    >
-                      <LogOut size={14} />
-                      Cerrar sesión
-                    </button>
-                  </form>
-                </>
-              ) : (
-                <>
-                  <DropdownMenuItem asChild>
-                    <Link href="/registrarse" className="font-medium">
-                      Registrarse
-                    </Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem asChild>
-                    <Link href="/ingresar">Ingresar</Link>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link href="/login" className="text-xs text-neutral-500">
-                      Soy anfitrión · Entrar al panel
-                    </Link>
-                  </DropdownMenuItem>
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <CurrencySwitcher variant={hero ? "hero" : "solid"} />
+
+          {session ? (
+            <>
+              {!hero ? (
+                <Link
+                  href="/favoritos"
+                  className="hidden md:inline-flex items-center gap-1.5 text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
+                >
+                  <Heart size={16} />
+                  Favoritos
+                </Link>
+              ) : null}
+              <UserAvatarMenu session={session} variant={hero ? "hero" : "solid"} initials={initials!} />
+            </>
+          ) : (
+            <AuthCtas variant={hero ? "hero" : "solid"} />
+          )}
         </div>
       </div>
     </header>
+  );
+}
+
+function AuthCtas({ variant }: { variant: "hero" | "solid" }) {
+  if (variant === "hero") {
+    return (
+      <>
+        <Link
+          href="/ingresar"
+          className="hidden sm:inline-flex items-center text-sm font-medium text-white hover:text-sage-100 px-3 py-2"
+        >
+          Ingresar
+        </Link>
+        <Link
+          href="/registrarse"
+          className="inline-flex items-center justify-center text-sm font-semibold rounded-full bg-white text-neutral-900 px-4 h-10 hover:bg-sage-50 transition-colors shadow-sm"
+        >
+          Crear cuenta
+        </Link>
+      </>
+    );
+  }
+  return (
+    <>
+      <Link
+        href="/ingresar"
+        className="hidden sm:inline-flex items-center text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
+      >
+        Ingresar
+      </Link>
+      <Link
+        href="/registrarse"
+        className="inline-flex items-center justify-center text-sm font-semibold rounded-full bg-sage-600 text-white px-4 h-10 hover:bg-sage-700 transition-colors shadow-sm"
+      >
+        Crear cuenta
+      </Link>
+    </>
+  );
+}
+
+function UserAvatarMenu({
+  session,
+  variant,
+  initials,
+}: {
+  session: GuestSession;
+  variant: "hero" | "solid";
+  initials: string;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          className={cn(
+            "flex items-center gap-2 rounded-full pl-1.5 pr-1.5 py-1 transition-all border",
+            variant === "hero"
+              ? "border-white/30 bg-white/10 hover:bg-white/20 backdrop-blur-md"
+              : "border-neutral-200 bg-white hover:border-neutral-300 hover:shadow-sm"
+          )}
+          aria-label="Tu cuenta"
+        >
+          <Avatar className="h-8 w-8">
+            {session.profile.avatar_url ? (
+              <AvatarImage src={session.profile.avatar_url} alt={session.profile.full_name} />
+            ) : null}
+            <AvatarFallback className="bg-neutral-900 text-white text-xs font-medium">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sideOffset={8} className="w-56">
+        <div className="px-3 py-2 text-xs text-neutral-500">
+          Sesión iniciada como
+          <div className="text-sm font-medium text-neutral-900 truncate">
+            {session.profile.full_name}
+          </div>
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/mi-cuenta">Mi cuenta</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/mi-cuenta">Mis reservas</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/favoritos">Favoritos</Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/mi-cuenta/perfil">Perfil</Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <form action={signOutGuest}>
+          <button
+            type="submit"
+            className="w-full text-left px-2 py-1.5 text-sm hover:bg-neutral-50 flex items-center gap-2 rounded-sm"
+          >
+            <LogOut size={14} />
+            Cerrar sesión
+          </button>
+        </form>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/login" className="text-xs text-neutral-500">
+            Soy anfitrión · Entrar al panel
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -149,4 +228,4 @@ export function SiteHeaderMobileSearch() {
   );
 }
 
-void Button; // keep import for tree-shaking parity with other pages
+void User; // keep import parity
