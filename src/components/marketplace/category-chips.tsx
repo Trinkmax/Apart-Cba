@@ -60,11 +60,11 @@ export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
         "sticky top-20 z-30 transition-all duration-300",
         hero
           ? "bg-transparent"
-          : "bg-white/95 backdrop-blur-md border-b border-neutral-200"
+          : "bg-white/85 backdrop-blur-xl border-b border-neutral-200/80",
       )}
     >
       <div className="max-w-[1400px] mx-auto px-4 md:px-8">
-        <div className="flex items-center gap-8 overflow-x-auto py-5 scrollbar-hide -mx-2 px-2 justify-center">
+        <div className="flex items-center gap-6 md:gap-9 overflow-x-auto no-scrollbar scroll-snap-x py-4 md:py-5 -mx-2 px-2 justify-start md:justify-center">
           {CATEGORIES.map((cat) => {
             const Icon = cat.icon;
             const isActive =
@@ -80,24 +80,51 @@ export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
             if (cat.vibe) next.set("vibe", cat.vibe);
             const href = `${basePath}${next.toString() ? `?${next}` : ""}`;
 
-            const inactiveClass = hero
-              ? "border-transparent text-white/65 hover:text-white"
-              : "border-transparent text-neutral-500 hover:text-neutral-900";
-            const activeClass = hero
-              ? "border-white text-white"
-              : "border-neutral-900 text-neutral-900";
-
             return (
               <Link
                 key={cat.id}
                 href={href}
+                aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex flex-col items-center gap-1.5 min-w-fit pb-2 -mb-px border-b-2 transition-all",
-                  isActive ? activeClass : inactiveClass
+                  "group/chip relative flex flex-col items-center gap-1.5 min-w-fit pb-2.5 transition-colors duration-200",
+                  hero
+                    ? isActive
+                      ? "text-white"
+                      : "text-white/55 hover:text-white"
+                    : isActive
+                      ? "text-neutral-900"
+                      : "text-neutral-500 hover:text-neutral-900",
                 )}
               >
-                <Icon size={22} strokeWidth={1.5} />
-                <span className="text-[11px] font-medium whitespace-nowrap">{cat.label}</span>
+                <Icon
+                  size={22}
+                  strokeWidth={1.5}
+                  className={cn(
+                    "transition-transform duration-300",
+                    "group-hover/chip:scale-110",
+                    isActive && "scale-110",
+                  )}
+                  aria-hidden
+                />
+                <span
+                  className={cn(
+                    "text-[11.5px] font-medium whitespace-nowrap tracking-[-0.005em] transition-opacity",
+                    isActive ? "opacity-100" : "opacity-90",
+                  )}
+                >
+                  {cat.label}
+                </span>
+                {/* Animated underline — slides in for the active chip, hovers for inactive */}
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute left-1/2 -translate-x-1/2 bottom-0 h-[2px] rounded-full transition-all duration-300",
+                    hero ? "bg-white" : "bg-neutral-900",
+                    isActive
+                      ? "w-full opacity-100"
+                      : "w-0 opacity-0 group-hover/chip:w-1/3 group-hover/chip:opacity-40",
+                  )}
+                />
               </Link>
             );
           })}

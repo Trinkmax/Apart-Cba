@@ -6,8 +6,8 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
 
   /* rentOS marketplace — sage green brand palette */
   --color-sage-50:  #f3f5f1;
@@ -164,7 +164,9 @@
   html,
   body {
     @apply bg-background text-foreground antialiased;
-    overflow-x: hidden;
+    /* `clip` evita scroll horizontal sin crear un scroll-container, lo cual
+       rompería `position: sticky` (el header del marketplace usa sticky). */
+    overflow-x: clip;
     font-feature-settings: "ss01", "cv11", "cv02";
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
@@ -250,11 +252,65 @@
   50%      { transform: translateY(-4px); }
 }
 
-.animate-fade-in   { animation: fadeIn 0.3s ease forwards; }
-.animate-fade-up   { animation: fadeUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
-.animate-scale-in  { animation: scaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
-.animate-pulse-dot { animation: pulseDot 2s ease-in-out infinite; }
-.animate-float     { animation: floatSubtle 3s ease-in-out infinite; }
+/* Reveal-on-scroll: travels --reveal-y px up while fading in. */
+@keyframes revealUp {
+  from { opacity: 0; transform: translate3d(0, var(--reveal-y, 18px), 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* Ken Burns: slow cinematic zoom+pan for hero background images. */
+@keyframes kenBurns {
+  0%   { transform: scale(1.06) translate3d(0%, 0%, 0); }
+  100% { transform: scale(1.18) translate3d(-1.5%, -1%, 0); }
+}
+
+/* Letter reveal — used by the hero headline. */
+@keyframes letterReveal {
+  0%   { opacity: 0; transform: translate3d(0, 0.55em, 0); }
+  100% { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+/* Scroll cue: caret that breathes downward. */
+@keyframes scrollCue {
+  0%, 100% { transform: translateY(0); opacity: 0.6; }
+  50%      { transform: translateY(6px); opacity: 1; }
+}
+
+/* Horizontal marquee for tickers (city counters, social proof). */
+@keyframes marquee {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+
+.animate-fade-in    { animation: fadeIn 0.3s ease forwards; }
+.animate-fade-up    { animation: fadeUp 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+.animate-scale-in   { animation: scaleIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+.animate-pulse-dot  { animation: pulseDot 2s ease-in-out infinite; }
+.animate-float      { animation: floatSubtle 3s ease-in-out infinite; }
+.animate-ken-burns  { animation: kenBurns 22s ease-out forwards; will-change: transform; }
+.animate-scroll-cue { animation: scrollCue 2.4s ease-in-out infinite; }
+.animate-marquee    { animation: marquee 38s linear infinite; }
+
+/* Reveal: paired with <Reveal> wrapper. Component sets data-reveal="in" when in view. */
+.reveal {
+  opacity: 0;
+  will-change: opacity, transform;
+}
+.reveal[data-reveal="in"] {
+  animation: revealUp 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+/* Letter reveal helper: parent sets [data-reveal-letters], children use --i custom property. */
+[data-reveal-letters] > span {
+  display: inline-block;
+  opacity: 0;
+  animation: letterReveal 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(60ms * var(--i, 0) + 200ms);
+}
+[data-reveal-letters] > span[data-space] {
+  width: 0.32em;
+}
 
 /* Glassmorphism cards */
 .glass {
