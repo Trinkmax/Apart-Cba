@@ -80,7 +80,7 @@ function Field({
       onClick={onActivate}
       onFocus={onActivate}
       className={cn(
-        "relative flex-1 px-6 py-3.5 cursor-text transition-all duration-200",
+        "relative flex-1 px-5 md:px-6 py-2.5 md:py-3.5 cursor-text transition-all duration-200",
         "before:absolute before:inset-1 before:rounded-full before:transition-all before:duration-200",
         isActive
           ? "before:bg-white before:shadow-[0_6px_24px_-8px_rgb(0_0_0/0.18),0_0_0_1px_rgb(0_0_0/0.04)]"

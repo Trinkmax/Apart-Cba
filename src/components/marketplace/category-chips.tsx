@@ -59,7 +59,10 @@ export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
       className={cn(
         "sticky top-20 z-30 transition-all duration-300",
         hero
-          ? "bg-transparent"
+          ? // Transparent on hero — chips ride directly on the hero's
+            // letterbox darkening (see HomeHero `top` overlay). The labels rely
+            // on text-shadow + drop-shadow for legibility against the photo.
+            "bg-transparent"
           : "bg-white/85 backdrop-blur-xl border-b border-neutral-200/80",
       )}
     >
@@ -90,10 +93,12 @@ export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
                   hero
                     ? isActive
                       ? "text-white"
-                      : "text-white/55 hover:text-white"
+                      : "text-white/80 hover:text-white"
                     : isActive
                       ? "text-neutral-900"
                       : "text-neutral-500 hover:text-neutral-900",
+                  // Crisp label legibility against bright hero imagery.
+                  hero && "[text-shadow:0_1px_4px_rgb(0_0_0/0.45)]",
                 )}
               >
                 <Icon
@@ -103,13 +108,14 @@ export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
                     "transition-transform duration-300",
                     "group-hover/chip:scale-110",
                     isActive && "scale-110",
+                    hero && "drop-shadow-[0_1px_3px_rgb(0_0_0/0.35)]",
                   )}
                   aria-hidden
                 />
                 <span
                   className={cn(
                     "text-[11.5px] font-medium whitespace-nowrap tracking-[-0.005em] transition-opacity",
-                    isActive ? "opacity-100" : "opacity-90",
+                    isActive ? "opacity-100" : "opacity-95",
                   )}
                 >
                   {cat.label}

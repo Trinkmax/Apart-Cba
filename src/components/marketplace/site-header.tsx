@@ -66,7 +66,12 @@ export function SiteHeader({ session }: Props) {
           aria-label="rentOS — Inicio"
           className="flex items-center transition-opacity hover:opacity-80 justify-self-start"
         >
-          <Logo size="lg" variant={hero ? "light" : "dark"} />
+          <span className="md:hidden">
+            <Logo size="sm" variant={hero ? "light" : "dark"} />
+          </span>
+          <span className="hidden md:flex">
+            <Logo size="lg" variant={hero ? "light" : "dark"} />
+          </span>
         </Link>
 
         {/* Center — compact search bar SOLO cuando no estamos sobre el hero */}

@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Suspense } from "react";
+import type { Viewport } from "next";
 import { ArrowRight, BadgeCheck, MessageCircle, Sparkles } from "lucide-react";
 import { CategoryChips } from "@/components/marketplace/category-chips";
 import { HomeHero } from "@/components/marketplace/home-hero";
@@ -11,6 +12,15 @@ import { ListingCard } from "@/components/marketplace/listing-card";
 import { Reveal } from "@/components/marketplace/reveal";
 import { getFeaturedListings } from "@/lib/actions/marketplace";
 import { listWishlistUnitIds } from "@/lib/actions/wishlists";
+
+// Theme-color override solo para el home: la franja Safari arriba/abajo
+// matchea el wash oscuro del hero en vez de mostrar bg-blanco del layout.
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#1a201a" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
+};
 
 export default async function MarketplaceHome() {
   return (
