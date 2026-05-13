@@ -112,6 +112,16 @@ export async function signUpGuest(input: z.infer<typeof signUpSchema>): Promise<
     return { ok: false, error: "No se pudo crear la cuenta. Probá de nuevo." };
   }
 
+  // Supabase devuelve un user "ofuscado" con identities vacío cuando el email
+  // ya existe (anti-enumeration). Si no detectamos esto, intentamos insertar
+  // un guest_profile con un user_id que no existe en auth.users y falla la FK.
+  if (!data.user.identities || data.user.identities.length === 0) {
+    return {
+      ok: false,
+      error: "Ya hay una cuenta con ese email. Probá ingresar.",
+    };
+  }
+
   // 2) Crear guest_profile (con service role para bypass de RLS)
   const admin = createAdminClient();
   const { error: profileErr } = await admin
