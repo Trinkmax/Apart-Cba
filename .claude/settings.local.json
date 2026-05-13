@@ -132,7 +132,11 @@
       "Bash(curl -sS -o /tmp/home7.html http://localhost:3001/)",
       "Bash(curl -sS -o /tmp/home8.html -w \"HTTP %{http_code} · %{size_download}B\\\\n\" http://localhost:3001/)",
       "Bash(curl -sS -o /tmp/home9.html -w \"HTTP %{http_code}\\\\n\" http://localhost:3001/)",
-      "Bash(curl -sS -o /tmp/home10.html -w \"HTTP %{http_code}\\\\n\" http://localhost:3001/)"
+      "Bash(curl -sS -o /tmp/home10.html -w \"HTTP %{http_code}\\\\n\" http://localhost:3001/)",
+      "Bash(grep -E \"^/.*\\\\.tsx?$|Error:|warning\")",
+      "Bash(echo \"Started dev server, PID: $!\")",
+      "Bash(curl *)",
+      "Bash(pkill -f \"next dev -p 3001\")"
     ]
   },
   "enableAllProjectMcpServers": true,
