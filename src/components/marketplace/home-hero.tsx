@@ -3,22 +3,23 @@ import { ChevronDown } from "lucide-react";
 import { HeroSearchBar } from "@/components/marketplace/search-bar";
 import { Reveal } from "@/components/marketplace/reveal";
 import { WordReveal } from "@/components/marketplace/word-reveal";
+import { getServerT } from "@/lib/i18n/server";
+import type { TKey } from "@/lib/i18n/dict";
 
 /**
- * Returns "otoño", "invierno", "primavera" o "verano" para Córdoba (hemisferio sur).
- * Server-rendered, dependiente del Date() del servidor — Vercel está en UTC,
- * pero la magnitud del mes mantiene la categoría correcta.
+ * Returns the i18n key for the current Córdoba (southern hemisphere) season.
  */
-function getSeason(month: number): string {
-  if (month >= 3 && month <= 5) return "Otoño";
-  if (month >= 6 && month <= 8) return "Invierno";
-  if (month >= 9 && month <= 11) return "Primavera";
-  return "Verano";
+function getSeasonKey(month: number): TKey {
+  if (month >= 3 && month <= 5) return "season.autumn";
+  if (month >= 6 && month <= 8) return "season.winter";
+  if (month >= 9 && month <= 11) return "season.spring";
+  return "season.summer";
 }
 
-export function HomeHero() {
+export async function HomeHero() {
+  const t = await getServerT();
   const now = new Date();
-  const season = getSeason(now.getMonth() + 1);
+  const season = t(getSeasonKey(now.getMonth() + 1));
   const year = now.getFullYear();
 
   return (
@@ -85,17 +86,19 @@ export function HomeHero() {
           <h1 className="mt-5 md:mt-7 font-bold tracking-[-0.025em] leading-[1.02]
                          text-[2.4rem] sm:text-5xl md:text-[5.25rem]
                          [text-shadow:0_2px_30px_rgb(0_0_0/0.4)]">
-            <WordReveal text="Quedate donde" />
+            <WordReveal text={t("hero.title.part1")} />
             <br />
             <span className="italic font-serif font-medium">
-              <WordReveal text="la ciudad late." startIndex={2} />
+              <WordReveal
+                text={t("hero.title.part2")}
+                startIndex={t("hero.title.part1").split(" ").length}
+              />
             </span>
           </h1>
 
           <Reveal delay={900} y={12}>
             <p className="mt-4 md:mt-6 text-[15px] md:text-lg text-white/85 max-w-xl mx-auto leading-relaxed px-2">
-              Departamentos curados en barrios reales. Reservás directo con el
-              anfitrión, sin comisiones escondidas.
+              {t("hero.subtitle")}
             </p>
           </Reveal>
         </div>
@@ -110,7 +113,7 @@ export function HomeHero() {
           className="mt-6 md:mt-14 flex flex-col items-center gap-1.5 md:gap-2 text-white/70"
         >
           <span className="text-[10px] tracking-[0.24em] uppercase font-semibold">
-            Scrolleá para descubrir
+            {t("hero.scroll_cue")}
           </span>
           <ChevronDown size={18} className="animate-scroll-cue" strokeWidth={1.75} />
         </Reveal>

@@ -17,22 +17,31 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/use-t";
+import type { TKey } from "@/lib/i18n/dict";
 
-const CATEGORIES = [
-  { id: "all", label: "Todo", icon: Sparkles, propertyType: null, vibe: null },
-  { id: "apartamento", label: "Departamentos", icon: Building, propertyType: "apartamento", vibe: null },
-  { id: "casa", label: "Casas", icon: Home, propertyType: "casa", vibe: null },
-  { id: "loft", label: "Lofts", icon: Sofa, propertyType: "loft", vibe: null },
-  { id: "playa", label: "Playa", icon: Waves, propertyType: null, vibe: "playa" },
-  { id: "montana", label: "Montaña", icon: Mountain, propertyType: null, vibe: "montana" },
-  { id: "campo", label: "Campo", icon: TreePine, propertyType: null, vibe: "campo" },
-  { id: "ph", label: "PH", icon: Castle, propertyType: "ph", vibe: null },
-  { id: "cabana", label: "Cabañas", icon: Palmtree, propertyType: "cabana", vibe: null },
-  { id: "diseno", label: "De diseño", icon: ChefHat, propertyType: null, vibe: "diseno" },
-  { id: "eventos", label: "Para eventos", icon: PartyPopper, propertyType: null, vibe: "eventos" },
+const CATEGORIES: Array<{
+  id: string;
+  labelKey: TKey;
+  icon: typeof Sparkles;
+  propertyType: string | null;
+  vibe: string | null;
+}> = [
+  { id: "all", labelKey: "cat.all", icon: Sparkles, propertyType: null, vibe: null },
+  { id: "apartamento", labelKey: "cat.apartamento", icon: Building, propertyType: "apartamento", vibe: null },
+  { id: "casa", labelKey: "cat.casa", icon: Home, propertyType: "casa", vibe: null },
+  { id: "loft", labelKey: "cat.loft", icon: Sofa, propertyType: "loft", vibe: null },
+  { id: "playa", labelKey: "cat.playa", icon: Waves, propertyType: null, vibe: "playa" },
+  { id: "montana", labelKey: "cat.montana", icon: Mountain, propertyType: null, vibe: "montana" },
+  { id: "campo", labelKey: "cat.campo", icon: TreePine, propertyType: null, vibe: "campo" },
+  { id: "ph", labelKey: "cat.ph", icon: Castle, propertyType: "ph", vibe: null },
+  { id: "cabana", labelKey: "cat.cabana", icon: Palmtree, propertyType: "cabana", vibe: null },
+  { id: "diseno", labelKey: "cat.diseno", icon: ChefHat, propertyType: null, vibe: "diseno" },
+  { id: "eventos", labelKey: "cat.eventos", icon: PartyPopper, propertyType: null, vibe: "eventos" },
 ];
 
 export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
+  const t = useT();
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const activeTipo = searchParams.get("tipo");
@@ -118,7 +127,7 @@ export function CategoryChips({ basePath = "/buscar" }: { basePath?: string }) {
                     isActive ? "opacity-100" : "opacity-95",
                   )}
                 >
-                  {cat.label}
+                  {t(cat.labelKey)}
                 </span>
                 {/* Animated underline — slides in for the active chip, hovers for inactive */}
                 <span

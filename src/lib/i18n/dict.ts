@@ -1,0 +1,407 @@
+/**
+ * Lightweight i18n for the marketplace surface.
+ *
+ * No external lib — just a typed dictionary + a `t()` function. The active
+ * locale comes from the `rentos_locale` cookie (read by the marketplace layout
+ * and passed via context to client components).
+ *
+ * Fallback chain: requested locale → es-AR → key name (last resort, never
+ * crashes a render).
+ */
+
+const ES_AR = {
+  // ── Header / nav ────────────────────────────────────────────────────────
+  "header.signin": "Ingresar",
+  "header.signup": "Crear cuenta",
+  "header.favorites": "Favoritos",
+  "header.account": "Mi cuenta",
+  "header.bookings": "Mis reservas",
+  "header.profile": "Perfil",
+  "header.signout": "Cerrar sesión",
+  "header.host_panel": "Soy anfitrión · Entrar al panel",
+  "header.signed_in_as": "Sesión iniciada como",
+  "header.search_placeholder": "¿A dónde vamos?",
+  "header.any_date": "Cualquier fecha",
+  "header.guests": "Huéspedes",
+
+  // ── Currency / language switcher ────────────────────────────────────────
+  "switcher.label_language": "Idioma",
+  "switcher.label_currency": "Moneda",
+
+  // ── Category chips ──────────────────────────────────────────────────────
+  "cat.all": "Todo",
+  "cat.apartamento": "Departamentos",
+  "cat.casa": "Casas",
+  "cat.loft": "Lofts",
+  "cat.playa": "Playa",
+  "cat.montana": "Montaña",
+  "cat.campo": "Campo",
+  "cat.ph": "PH",
+  "cat.cabana": "Cabañas",
+  "cat.diseno": "De diseño",
+  "cat.eventos": "Para eventos",
+
+  // ── Hero ────────────────────────────────────────────────────────────────
+  "hero.title.part1": "Quedate donde",
+  "hero.title.part2": "la ciudad late.",
+  "hero.subtitle": "Departamentos curados en barrios reales. Reservás directo con el anfitrión, sin comisiones escondidas.",
+  "hero.scroll_cue": "Scrolleá para descubrir",
+  "season.spring": "Primavera",
+  "season.summer": "Verano",
+  "season.autumn": "Otoño",
+  "season.winter": "Invierno",
+
+  // ── Hero search bar ─────────────────────────────────────────────────────
+  "search.destination": "Destino",
+  "search.checkin": "Llegada",
+  "search.checkout": "Salida",
+  "search.guests": "Huéspedes",
+  "search.destination_placeholder": "¿A dónde vas?",
+  "search.guest_one": "huésped",
+  "search.guest_many": "huéspedes",
+  "search.cta": "Buscar",
+  "search.decrease_guests": "Disminuir huéspedes",
+  "search.increase_guests": "Aumentar huéspedes",
+
+  // ── Featured ───────────────────────────────────────────────────────────
+  "featured.eyebrow": "Destacados de la semana",
+  "featured.title.part1": "Lugares que están",
+  "featured.title.part2": "enamorando",
+  "featured.subtitle": "Selección humana, no algoritmo. Lo que más reservaron esta semana.",
+  "featured.see_all": "Ver todo",
+  "featured.see_all_mobile": "Ver todos los lugares",
+  "featured.empty.title.part1": "Estamos preparando",
+  "featured.empty.title.part2": "algo lindo",
+  "featured.empty.body": "Los primeros anfitriones están subiendo sus unidades. Volvé en unos días.",
+  "featured.empty.cta": "Soy anfitrión, quiero publicar",
+  "featured.per_night": "/noche",
+
+  // ── Destinos (3 caras de Córdoba) ──────────────────────────────────────
+  "destinos.eyebrow": "Destinos",
+  "destinos.title.part1": "Tres caras de",
+  "destinos.title.part2": "Córdoba",
+  "destinos.subtitle": "Elegí tu vibe. Cada barrio cuenta una versión distinta de la ciudad.",
+  "destinos.explore_cordoba": "Explorar Córdoba",
+  "destinos.centro.eyebrow": "Centro histórico",
+  "destinos.centro.title": "Donde la historia respira",
+  "destinos.centro.body": "Iglesias jesuíticas, peatonales, cafés con alma. Caminás 200 años en una cuadra.",
+  "destinos.capital.eyebrow": "Capital cordobesa",
+  "destinos.capital.title": "La ciudad que no duerme",
+  "destinos.capital.body": "Atardeceres rojos sobre Güemes, Nueva Córdoba a las 3am, asados en Cofico.",
+  "destinos.sierras.eyebrow": "Sierras de Córdoba",
+  "destinos.sierras.title": "Aire que limpia la cabeza",
+  "destinos.sierras.body": "A 40 minutos: ríos transparentes, asados con sonido de chicharras, silencio.",
+  "destinos.explore": "Explorar",
+
+  // ── Inspiración ────────────────────────────────────────────────────────
+  "inspire.eyebrow": "Inspiración",
+  "inspire.title.part1": "Elegí cómo querés",
+  "inspire.title.part2": "irte",
+  "inspire.subtitle": "Curaduría por mood. Cada vibe linkea a una búsqueda ya filtrada.",
+  "inspire.capital.title": "Capital cordobesa",
+  "inspire.capital.body": "Para quedarte donde la noche empieza temprano y termina tarde.",
+  "inspire.sierras.title": "Sierras que abrazan",
+  "inspire.sierras.body": "Aire serrano, fogón al atardecer y un río a 10 minutos.",
+  "inspire.casas.title": "Casas para juntadas",
+  "inspire.casas.body": "Cuatro habitaciones, parrilla, pileta y silencio.",
+  "inspire.workation.title": "Workation con vista",
+  "inspire.workation.body": "Wi-Fi rápido, escritorio amplio y café al lado.",
+  "inspire.explore": "Explorar",
+
+  // ── Cómo funciona ──────────────────────────────────────────────────────
+  "how.eyebrow": "Cómo funciona",
+  "how.title.part1": "Tres pasos.",
+  "how.title.part2": "Cero vueltas.",
+  "how.subtitle": "Construimos rentOS para que reservar se sienta como mandar un mensaje, no como llenar un formulario.",
+  "how.step1.title": "Buscás como te gusta",
+  "how.step1.body": "Filtros por barrio, fecha y vibe. La búsqueda recuerda lo que importa, no lo que sobra.",
+  "how.step2.title": "Reservás sin intermediarios",
+  "how.step2.body": "El precio que ves es el que pagás. Sin comisiones escondidas, ni cargos sorpresa al final.",
+  "how.step3.title": "Chateás con tu anfitrión",
+  "how.step3.body": "WhatsApp directo. Coordinás llegada, pedís un consejo, contás cuántos huéspedes son.",
+
+  // ── Trust ──────────────────────────────────────────────────────────────
+  "trust.eyebrow": "Por qué rentOS",
+  "trust.title.part1": "Lo simple,",
+  "trust.title.part2": "bien hecho.",
+  "trust.pillar1.title": "Verificación humana",
+  "trust.pillar1.body": "Cada propiedad pasa un proceso real con el anfitrión antes de aparecer. No automatizamos lo importante.",
+  "trust.pillar2.title": "Precio que se siente justo",
+  "trust.pillar2.body": "Lo que ves es lo que pagás. Sin cargos ocultos, sin comisiones al final, sin sorpresas.",
+  "trust.pillar3.title": "Hablás con el anfitrión",
+  "trust.pillar3.body": "Chat directo por WhatsApp. Sin intermediarios. Sin tickets. Una persona, una conversación.",
+
+  // ── Host CTA ───────────────────────────────────────────────────────────
+  "host.eyebrow": "Para anfitriones",
+  "host.title.part1": "Hospedá en",
+  "host.title.part2": "tus términos",
+  "host.subtitle": "Sin algoritmos opacos ni pelea de tarifas. Publicá tu unidad, definí cómo querés trabajarla y conectá con huéspedes que valoran lo real.",
+  "host.cta_primary": "Publicar mi unidad",
+  "host.cta_secondary": "Ya soy anfitrión",
+} as const;
+
+export type TKey = keyof typeof ES_AR;
+type Dict = Record<TKey, string>;
+
+const EN_US: Dict = {
+  "header.signin": "Sign in",
+  "header.signup": "Sign up",
+  "header.favorites": "Favorites",
+  "header.account": "My account",
+  "header.bookings": "My bookings",
+  "header.profile": "Profile",
+  "header.signout": "Sign out",
+  "header.host_panel": "I'm a host · Open the panel",
+  "header.signed_in_as": "Signed in as",
+  "header.search_placeholder": "Where to?",
+  "header.any_date": "Any date",
+  "header.guests": "Guests",
+
+  "switcher.label_language": "Language",
+  "switcher.label_currency": "Currency",
+
+  "cat.all": "All",
+  "cat.apartamento": "Apartments",
+  "cat.casa": "Houses",
+  "cat.loft": "Lofts",
+  "cat.playa": "Beach",
+  "cat.montana": "Mountain",
+  "cat.campo": "Countryside",
+  "cat.ph": "PH",
+  "cat.cabana": "Cabins",
+  "cat.diseno": "Design",
+  "cat.eventos": "Events",
+
+  "hero.title.part1": "Stay where",
+  "hero.title.part2": "the city pulses.",
+  "hero.subtitle": "Curated apartments in real neighborhoods. Book directly with the host, no hidden fees.",
+  "hero.scroll_cue": "Scroll to explore",
+  "season.spring": "Spring",
+  "season.summer": "Summer",
+  "season.autumn": "Autumn",
+  "season.winter": "Winter",
+
+  "search.destination": "Destination",
+  "search.checkin": "Check-in",
+  "search.checkout": "Check-out",
+  "search.guests": "Guests",
+  "search.destination_placeholder": "Where are you going?",
+  "search.guest_one": "guest",
+  "search.guest_many": "guests",
+  "search.cta": "Search",
+  "search.decrease_guests": "Decrease guests",
+  "search.increase_guests": "Increase guests",
+
+  "featured.eyebrow": "This week's highlights",
+  "featured.title.part1": "Places people",
+  "featured.title.part2": "fall for",
+  "featured.subtitle": "Human curation, not algorithm. The most booked stays this week.",
+  "featured.see_all": "See all",
+  "featured.see_all_mobile": "See all places",
+  "featured.empty.title.part1": "We're preparing",
+  "featured.empty.title.part2": "something nice",
+  "featured.empty.body": "The first hosts are uploading their units. Come back in a few days.",
+  "featured.empty.cta": "I'm a host, I want to publish",
+  "featured.per_night": "/night",
+
+  "destinos.eyebrow": "Destinations",
+  "destinos.title.part1": "Three faces of",
+  "destinos.title.part2": "Córdoba",
+  "destinos.subtitle": "Pick your vibe. Each neighborhood tells a different version of the city.",
+  "destinos.explore_cordoba": "Explore Córdoba",
+  "destinos.centro.eyebrow": "Historic centre",
+  "destinos.centro.title": "Where history breathes",
+  "destinos.centro.body": "Jesuit churches, walking streets, cafés with soul. 200 years in a single block.",
+  "destinos.capital.eyebrow": "Córdoba capital",
+  "destinos.capital.title": "The city that never sleeps",
+  "destinos.capital.body": "Red sunsets over Güemes, Nueva Córdoba at 3am, BBQs in Cofico.",
+  "destinos.sierras.eyebrow": "Córdoba hills",
+  "destinos.sierras.title": "Air that clears the head",
+  "destinos.sierras.body": "40 minutes away: clear rivers, BBQs with crickets in the background, silence.",
+  "destinos.explore": "Explore",
+
+  "inspire.eyebrow": "Inspiration",
+  "inspire.title.part1": "Choose how you want to",
+  "inspire.title.part2": "get away",
+  "inspire.subtitle": "Mood-based curation. Each vibe links to a pre-filtered search.",
+  "inspire.capital.title": "Córdoba capital",
+  "inspire.capital.body": "Stay where the night starts early and ends late.",
+  "inspire.sierras.title": "Hills that embrace",
+  "inspire.sierras.body": "Mountain air, sunset fire, a river ten minutes away.",
+  "inspire.casas.title": "Houses for gatherings",
+  "inspire.casas.body": "Four bedrooms, grill, pool, silence.",
+  "inspire.workation.title": "Workation with a view",
+  "inspire.workation.body": "Fast Wi-Fi, generous desk, café next door.",
+  "inspire.explore": "Explore",
+
+  "how.eyebrow": "How it works",
+  "how.title.part1": "Three steps.",
+  "how.title.part2": "Zero hassle.",
+  "how.subtitle": "We built rentOS so booking feels like sending a message, not filling out a form.",
+  "how.step1.title": "Search your way",
+  "how.step1.body": "Filters by neighborhood, date and vibe. Search remembers what matters, drops what doesn't.",
+  "how.step2.title": "Book without middlemen",
+  "how.step2.body": "What you see is what you pay. No hidden fees, no surprise charges at the end.",
+  "how.step3.title": "Chat with your host",
+  "how.step3.body": "WhatsApp, direct. Coordinate arrival, ask for tips, share how many you'll be.",
+
+  "trust.eyebrow": "Why rentOS",
+  "trust.title.part1": "Simple things,",
+  "trust.title.part2": "done well.",
+  "trust.pillar1.title": "Human verification",
+  "trust.pillar1.body": "Every property goes through a real process with the host before it shows up. We don't automate what matters.",
+  "trust.pillar2.title": "A price that feels fair",
+  "trust.pillar2.body": "What you see is what you pay. No hidden charges, no fees at checkout, no surprises.",
+  "trust.pillar3.title": "Talk to the host",
+  "trust.pillar3.body": "Direct chat on WhatsApp. No middlemen. No tickets. One person, one conversation.",
+
+  "host.eyebrow": "For hosts",
+  "host.title.part1": "Host on",
+  "host.title.part2": "your terms",
+  "host.subtitle": "No opaque algorithms or rate fights. List your unit, decide how you want to run it, connect with guests who value the real thing.",
+  "host.cta_primary": "List my unit",
+  "host.cta_secondary": "I'm already a host",
+};
+
+const PT_BR: Dict = {
+  "header.signin": "Entrar",
+  "header.signup": "Criar conta",
+  "header.favorites": "Favoritos",
+  "header.account": "Minha conta",
+  "header.bookings": "Minhas reservas",
+  "header.profile": "Perfil",
+  "header.signout": "Sair",
+  "header.host_panel": "Sou anfitrião · Abrir painel",
+  "header.signed_in_as": "Logado como",
+  "header.search_placeholder": "Para onde?",
+  "header.any_date": "Qualquer data",
+  "header.guests": "Hóspedes",
+
+  "switcher.label_language": "Idioma",
+  "switcher.label_currency": "Moeda",
+
+  "cat.all": "Tudo",
+  "cat.apartamento": "Apartamentos",
+  "cat.casa": "Casas",
+  "cat.loft": "Lofts",
+  "cat.playa": "Praia",
+  "cat.montana": "Montanha",
+  "cat.campo": "Campo",
+  "cat.ph": "PH",
+  "cat.cabana": "Cabanas",
+  "cat.diseno": "Design",
+  "cat.eventos": "Para eventos",
+
+  "hero.title.part1": "Fique onde",
+  "hero.title.part2": "a cidade pulsa.",
+  "hero.subtitle": "Apartamentos curados em bairros reais. Reserva direta com o anfitrião, sem taxas escondidas.",
+  "hero.scroll_cue": "Role para descobrir",
+  "season.spring": "Primavera",
+  "season.summer": "Verão",
+  "season.autumn": "Outono",
+  "season.winter": "Inverno",
+
+  "search.destination": "Destino",
+  "search.checkin": "Chegada",
+  "search.checkout": "Saída",
+  "search.guests": "Hóspedes",
+  "search.destination_placeholder": "Para onde você vai?",
+  "search.guest_one": "hóspede",
+  "search.guest_many": "hóspedes",
+  "search.cta": "Buscar",
+  "search.decrease_guests": "Diminuir hóspedes",
+  "search.increase_guests": "Aumentar hóspedes",
+
+  "featured.eyebrow": "Destaques da semana",
+  "featured.title.part1": "Lugares que estão",
+  "featured.title.part2": "apaixonando",
+  "featured.subtitle": "Curadoria humana, não algoritmo. O mais reservado da semana.",
+  "featured.see_all": "Ver tudo",
+  "featured.see_all_mobile": "Ver todos os lugares",
+  "featured.empty.title.part1": "Estamos preparando",
+  "featured.empty.title.part2": "algo bonito",
+  "featured.empty.body": "Os primeiros anfitriões estão subindo suas unidades. Volte em alguns dias.",
+  "featured.empty.cta": "Sou anfitrião, quero publicar",
+  "featured.per_night": "/noite",
+
+  "destinos.eyebrow": "Destinos",
+  "destinos.title.part1": "Três faces de",
+  "destinos.title.part2": "Córdoba",
+  "destinos.subtitle": "Escolha sua vibe. Cada bairro conta uma versão diferente da cidade.",
+  "destinos.explore_cordoba": "Explorar Córdoba",
+  "destinos.centro.eyebrow": "Centro histórico",
+  "destinos.centro.title": "Onde a história respira",
+  "destinos.centro.body": "Igrejas jesuíticas, calçadões, cafés com alma. 200 anos em uma quadra.",
+  "destinos.capital.eyebrow": "Capital de Córdoba",
+  "destinos.capital.title": "A cidade que não dorme",
+  "destinos.capital.body": "Pôr do sol vermelho sobre Güemes, Nueva Córdoba às 3 da manhã, churrascos em Cofico.",
+  "destinos.sierras.eyebrow": "Serras de Córdoba",
+  "destinos.sierras.title": "Ar que limpa a cabeça",
+  "destinos.sierras.body": "A 40 minutos: rios cristalinos, churrasco com som de cigarras, silêncio.",
+  "destinos.explore": "Explorar",
+
+  "inspire.eyebrow": "Inspiração",
+  "inspire.title.part1": "Escolha como você quer",
+  "inspire.title.part2": "ir embora",
+  "inspire.subtitle": "Curadoria por mood. Cada vibe leva a uma busca já filtrada.",
+  "inspire.capital.title": "Capital de Córdoba",
+  "inspire.capital.body": "Para ficar onde a noite começa cedo e termina tarde.",
+  "inspire.sierras.title": "Serras que abraçam",
+  "inspire.sierras.body": "Ar de serra, fogueira ao pôr do sol, e um rio a 10 minutos.",
+  "inspire.casas.title": "Casas para encontros",
+  "inspire.casas.body": "Quatro quartos, churrasqueira, piscina e silêncio.",
+  "inspire.workation.title": "Workation com vista",
+  "inspire.workation.body": "Wi-Fi rápido, mesa ampla e café ao lado.",
+  "inspire.explore": "Explorar",
+
+  "how.eyebrow": "Como funciona",
+  "how.title.part1": "Três passos.",
+  "how.title.part2": "Zero burocracia.",
+  "how.subtitle": "Construímos a rentOS para que reservar pareça mandar uma mensagem, não preencher um formulário.",
+  "how.step1.title": "Você busca do seu jeito",
+  "how.step1.body": "Filtros por bairro, data e vibe. A busca lembra o que importa, ignora o resto.",
+  "how.step2.title": "Reserva sem intermediários",
+  "how.step2.body": "O preço que você vê é o que você paga. Sem taxas escondidas, sem surpresas no final.",
+  "how.step3.title": "Conversa com o anfitrião",
+  "how.step3.body": "WhatsApp direto. Combina a chegada, pede uma dica, conta quantos vão.",
+
+  "trust.eyebrow": "Por que rentOS",
+  "trust.title.part1": "O simples,",
+  "trust.title.part2": "bem feito.",
+  "trust.pillar1.title": "Verificação humana",
+  "trust.pillar1.body": "Cada propriedade passa por um processo real com o anfitrião antes de aparecer. Não automatizamos o que importa.",
+  "trust.pillar2.title": "Preço que parece justo",
+  "trust.pillar2.body": "O que você vê é o que paga. Sem cobranças escondidas, sem taxas no final, sem surpresas.",
+  "trust.pillar3.title": "Você fala com o anfitrião",
+  "trust.pillar3.body": "Chat direto pelo WhatsApp. Sem intermediários. Sem tickets. Uma pessoa, uma conversa.",
+
+  "host.eyebrow": "Para anfitriões",
+  "host.title.part1": "Hospede nos",
+  "host.title.part2": "seus termos",
+  "host.subtitle": "Sem algoritmos opacos ou briga de tarifas. Publique sua unidade, defina como quer operar e conecte-se com hóspedes que valorizam o real.",
+  "host.cta_primary": "Publicar minha unidade",
+  "host.cta_secondary": "Já sou anfitrião",
+};
+
+const DICT = {
+  "es-AR": ES_AR,
+  "en-US": EN_US,
+  "pt-BR": PT_BR,
+} as const;
+
+export type Locale = keyof typeof DICT;
+
+export function t(
+  locale: string,
+  key: TKey,
+  vars?: Record<string, string | number>,
+): string {
+  const safeLocale = (locale in DICT ? locale : "es-AR") as Locale;
+  let str: string = DICT[safeLocale][key] ?? DICT["es-AR"][key] ?? key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      str = str.replace(`{${k}}`, String(v));
+    }
+  }
+  return str;
+}

@@ -12,6 +12,8 @@ import { ListingCard } from "@/components/marketplace/listing-card";
 import { Reveal } from "@/components/marketplace/reveal";
 import { getFeaturedListings } from "@/lib/actions/marketplace";
 import { listWishlistUnitIds } from "@/lib/actions/wishlists";
+import { getServerT } from "@/lib/i18n/server";
+import type { TKey } from "@/lib/i18n/dict";
 
 // Theme-color override solo para el home: la franja Safari arriba/abajo
 // matchea el wash oscuro del hero en vez de mostrar bg-blanco del layout.
@@ -72,9 +74,10 @@ function FeaturedSkeleton() {
 /* ───────────────────────── Featured ─────────────────────────── */
 
 async function FeaturedListings() {
-  const [listings, favSet] = await Promise.all([
+  const [listings, favSet, t] = await Promise.all([
     getFeaturedListings(8),
     listWishlistUnitIds(),
+    getServerT(),
   ]);
 
   if (listings.length === 0) {
@@ -86,16 +89,16 @@ async function FeaturedListings() {
               <Sparkles size={20} strokeWidth={1.75} />
             </div>
             <h2 className="mt-6 text-2xl md:text-3xl font-bold text-neutral-900 tracking-[-0.015em]">
-              Estamos preparando <span className="italic font-serif">algo lindo</span>
+              {t("featured.empty.title.part1")} <span className="italic font-serif">{t("featured.empty.title.part2")}</span>
             </h2>
             <p className="mt-3 text-neutral-600 leading-relaxed">
-              Los primeros anfitriones están subiendo sus unidades. Volvé en unos días.
+              {t("featured.empty.body")}
             </p>
             <Link
               href="/login"
               className="mt-6 inline-flex items-center gap-2 rounded-full bg-neutral-900 text-white px-5 py-2.5 text-sm font-semibold hover:bg-neutral-800 transition-colors"
             >
-              Soy anfitrión, quiero publicar
+              {t("featured.empty.cta")}
               <ArrowRight size={14} strokeWidth={2.5} />
             </Link>
           </div>
@@ -110,20 +113,20 @@ async function FeaturedListings() {
         <div className="flex items-end justify-between gap-6">
           <div>
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-              Destacados de la semana
+              {t("featured.eyebrow")}
             </span>
             <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-              Lugares que están <span className="italic font-serif font-medium">enamorando</span>
+              {t("featured.title.part1")} <span className="italic font-serif font-medium">{t("featured.title.part2")}</span>
             </h2>
             <p className="hidden md:block text-sm text-neutral-500 mt-2 max-w-md">
-              Selección humana, no algoritmo. Lo que más reservaron esta semana.
+              {t("featured.subtitle")}
             </p>
           </div>
           <Link
             href="/buscar"
             className="group hidden md:inline-flex items-center gap-1 text-sm font-medium text-neutral-900 hover:gap-2 transition-all whitespace-nowrap"
           >
-            Ver todo
+            {t("featured.see_all")}
             <ArrowRight
               size={14}
               strokeWidth={2.25}
@@ -148,7 +151,7 @@ async function FeaturedListings() {
           href="/buscar"
           className="group inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-5 py-2.5 text-sm font-semibold text-neutral-900 hover:border-neutral-900 transition-colors"
         >
-          Ver todos los lugares
+          {t("featured.see_all_mobile")}
           <ArrowRight
             size={14}
             strokeWidth={2.5}
@@ -162,51 +165,58 @@ async function FeaturedListings() {
 
 /* ───────────────────── Tres caras de Córdoba ───────────────────── */
 
-const CORDOBA_DESTINATIONS = [
+const CORDOBA_DESTINATIONS: Array<{
+  eyebrowKey: TKey;
+  titleKey: TKey;
+  subtitleKey: TKey;
+  image: string;
+  href: string;
+}> = [
   {
-    eyebrow: "Centro histórico",
-    title: "Donde la historia respira",
-    subtitle: "Iglesias jesuíticas, peatonales, cafés con alma. Caminás 200 años en una cuadra.",
+    eyebrowKey: "destinos.centro.eyebrow",
+    titleKey: "destinos.centro.title",
+    subtitleKey: "destinos.centro.body",
     image: "/cordoba/buenpastor.avif",
     href: "/buscar?ciudad=C%C3%B3rdoba&barrio=Centro",
   },
   {
-    eyebrow: "Capital cordobesa",
-    title: "La ciudad que no duerme",
-    subtitle: "Atardeceres rojos sobre Güemes, Nueva Córdoba a las 3am, asados en Cofico.",
+    eyebrowKey: "destinos.capital.eyebrow",
+    titleKey: "destinos.capital.title",
+    subtitleKey: "destinos.capital.body",
     image: "/cordoba/ciudad.webp",
     href: "/buscar?ciudad=C%C3%B3rdoba",
   },
   {
-    eyebrow: "Sierras de Córdoba",
-    title: "Aire que limpia la cabeza",
-    subtitle: "A 40 minutos: ríos transparentes, asados con sonido de chicharras, silencio.",
+    eyebrowKey: "destinos.sierras.eyebrow",
+    titleKey: "destinos.sierras.title",
+    subtitleKey: "destinos.sierras.body",
     image: "/cordoba/sierras.jpg",
     href: "/buscar?ciudad=Sierras",
   },
 ];
 
-function CordobaDestinations() {
+async function CordobaDestinations() {
+  const t = await getServerT();
   return (
     <section className="max-w-[1400px] mx-auto px-4 md:px-8 py-12 md:py-20">
       <Reveal className="block mb-10 md:mb-12">
         <div className="flex items-end justify-between gap-6">
           <div>
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-              Destinos
+              {t("destinos.eyebrow")}
             </span>
             <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-              Tres caras de <span className="italic font-serif font-medium">Córdoba</span>
+              {t("destinos.title.part1")} <span className="italic font-serif font-medium">{t("destinos.title.part2")}</span>
             </h2>
             <p className="hidden md:block text-sm text-neutral-500 mt-2 max-w-md">
-              Elegí tu vibe. Cada barrio cuenta una versión distinta de la ciudad.
+              {t("destinos.subtitle")}
             </p>
           </div>
           <Link
             href="/buscar?ciudad=C%C3%B3rdoba"
             className="group hidden md:inline-flex items-center gap-1 text-sm font-medium text-neutral-900 hover:gap-2 transition-all whitespace-nowrap"
           >
-            Explorar Córdoba
+            {t("destinos.explore_cordoba")}
             <ArrowRight
               size={14}
               strokeWidth={2.25}
@@ -218,7 +228,7 @@ function CordobaDestinations() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5 md:gap-6">
         {CORDOBA_DESTINATIONS.map((dest, i) => (
-          <Reveal key={dest.title} delay={i * 120} y={28}>
+          <Reveal key={dest.titleKey} delay={i * 120} y={28}>
             <Link
               href={dest.href}
               className="group relative block overflow-hidden rounded-3xl bg-neutral-100 aspect-[4/5]
@@ -245,17 +255,17 @@ function CordobaDestinations() {
 
               <div className="absolute inset-x-0 bottom-0 p-6 md:p-7 text-white">
                 <div className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-white/75 mb-1.5">
-                  {dest.eyebrow}
+                  {t(dest.eyebrowKey)}
                 </div>
                 <h3 className="text-xl md:text-2xl font-semibold tracking-[-0.01em] leading-snug">
-                  {dest.title}
+                  {t(dest.titleKey)}
                 </h3>
                 <p className="text-sm text-white/80 mt-2 leading-relaxed line-clamp-2 max-w-xs">
-                  {dest.subtitle}
+                  {t(dest.subtitleKey)}
                 </p>
                 <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-white/95
                                 transition-all duration-300 group-hover:gap-2.5">
-                  Explorar
+                  {t("destinos.explore")}
                   <ArrowRight size={15} strokeWidth={2.25} />
                 </div>
               </div>
@@ -269,34 +279,27 @@ function CordobaDestinations() {
 
 /* ───────────────────────── Trust pillars ───────────────────────── */
 
-const TRUST_PILLARS = [
-  {
-    title: "Verificación humana",
-    body: "Cada propiedad pasa un proceso real con el anfitrión antes de aparecer. No automatizamos lo importante.",
-    icon: BadgeCheck,
-  },
-  {
-    title: "Precio que se siente justo",
-    body: "Lo que ves es lo que pagás. Sin cargos ocultos, sin comisiones al final, sin sorpresas.",
-    icon: Sparkles,
-  },
-  {
-    title: "Hablás con el anfitrión",
-    body: "Chat directo por WhatsApp. Sin intermediarios. Sin tickets. Una persona, una conversación.",
-    icon: MessageCircle,
-  },
+const TRUST_PILLARS: Array<{
+  titleKey: TKey;
+  bodyKey: TKey;
+  icon: typeof BadgeCheck;
+}> = [
+  { titleKey: "trust.pillar1.title", bodyKey: "trust.pillar1.body", icon: BadgeCheck },
+  { titleKey: "trust.pillar2.title", bodyKey: "trust.pillar2.body", icon: Sparkles },
+  { titleKey: "trust.pillar3.title", bodyKey: "trust.pillar3.body", icon: MessageCircle },
 ];
 
-function TrustSection() {
+async function TrustSection() {
+  const t = await getServerT();
   return (
     <section className="bg-white border-t border-neutral-200/80">
       <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-16 md:py-24">
         <Reveal className="block mb-12 md:mb-14 max-w-2xl">
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-            Por qué rentOS
+            {t("trust.eyebrow")}
           </span>
           <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-            Lo simple, <span className="italic font-serif font-medium">bien hecho</span>.
+            {t("trust.title.part1")} <span className="italic font-serif font-medium">{t("trust.title.part2")}</span>
           </h2>
         </Reveal>
 
@@ -304,7 +307,7 @@ function TrustSection() {
           {TRUST_PILLARS.map((item, i) => {
             const Icon = item.icon;
             return (
-              <Reveal key={item.title} delay={i * 140} y={20}>
+              <Reveal key={item.titleKey} delay={i * 140} y={20}>
                 <div className="group">
                   <div
                     className="inline-flex h-12 w-12 items-center justify-center rounded-2xl
@@ -316,10 +319,10 @@ function TrustSection() {
                     <Icon size={20} strokeWidth={1.75} />
                   </div>
                   <h3 className="mt-5 text-lg font-semibold text-neutral-900 tracking-[-0.01em]">
-                    {item.title}
+                    {t(item.titleKey)}
                   </h3>
                   <p className="mt-2 text-sm text-neutral-600 leading-relaxed max-w-sm">
-                    {item.body}
+                    {t(item.bodyKey)}
                   </p>
                 </div>
               </Reveal>

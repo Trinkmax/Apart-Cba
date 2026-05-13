@@ -4,6 +4,7 @@ import { useState, useId } from "react";
 import { useRouter } from "next/navigation";
 import { Search, MapPin, Calendar as CalendarIcon, Users, Minus, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/use-t";
 
 function formatDateInput(value: string | null): string {
   return value ?? "";
@@ -11,6 +12,7 @@ function formatDateInput(value: string | null): string {
 
 export function CompactSearchBar() {
   const router = useRouter();
+  const t = useT();
   const [city, setCity] = useState("");
 
   function handleSearch(e: React.FormEvent) {
@@ -28,7 +30,7 @@ export function CompactSearchBar() {
       <div className="flex-1 px-4 py-2.5">
         <input
           type="text"
-          placeholder="¿A dónde vamos?"
+          placeholder={t("header.search_placeholder")}
           className="w-full text-sm font-medium placeholder:text-neutral-400 focus:outline-none bg-transparent"
           value={city}
           onChange={(e) => setCity(e.target.value)}
@@ -36,16 +38,16 @@ export function CompactSearchBar() {
       </div>
       <div className="hidden md:block px-3 text-xs text-neutral-400">·</div>
       <div className="hidden md:block px-4 py-2.5 text-sm text-neutral-500 whitespace-nowrap">
-        Cualquier fecha
+        {t("header.any_date")}
       </div>
       <div className="hidden md:block px-3 text-xs text-neutral-400">·</div>
       <div className="hidden md:block px-4 py-2.5 text-sm text-neutral-500 whitespace-nowrap">
-        Huéspedes
+        {t("header.guests")}
       </div>
       <button
         type="submit"
         className="m-1.5 inline-flex items-center justify-center h-9 w-9 rounded-full bg-sage-500 text-white hover:bg-sage-600 transition-colors"
-        aria-label="Buscar"
+        aria-label={t("search.cta")}
       >
         <Search size={16} />
       </button>
@@ -101,6 +103,7 @@ function Field({
 
 export function HeroSearchBar() {
   const router = useRouter();
+  const t = useT();
   const baseId = useId();
   const [city, setCity] = useState("");
   const [checkIn, setCheckIn] = useState<string | null>(null);
@@ -138,7 +141,7 @@ export function HeroSearchBar() {
     >
       <Field
         id={`${baseId}-destino`}
-        label="Destino"
+        label={t("search.destination")}
         icon={<MapPin size={11} strokeWidth={2.25} />}
         isActive={activeField === "destino"}
         onActivate={() => setActiveField("destino")}
@@ -147,7 +150,7 @@ export function HeroSearchBar() {
           id={`${baseId}-destino`}
           type="text"
           className="w-full text-[15px] placeholder:text-neutral-400 focus:outline-none bg-transparent"
-          placeholder="¿A dónde vas?"
+          placeholder={t("search.destination_placeholder")}
           value={city}
           onChange={(e) => setCity(e.target.value)}
           onFocus={() => setActiveField("destino")}
@@ -157,7 +160,7 @@ export function HeroSearchBar() {
 
       <Field
         id={`${baseId}-llegada`}
-        label="Llegada"
+        label={t("search.checkin")}
         icon={<CalendarIcon size={11} strokeWidth={2.25} />}
         isActive={activeField === "llegada"}
         onActivate={() => setActiveField("llegada")}
@@ -175,7 +178,7 @@ export function HeroSearchBar() {
 
       <Field
         id={`${baseId}-salida`}
-        label="Salida"
+        label={t("search.checkout")}
         icon={<CalendarIcon size={11} strokeWidth={2.25} />}
         isActive={activeField === "salida"}
         onActivate={() => setActiveField("salida")}
@@ -193,7 +196,7 @@ export function HeroSearchBar() {
 
       <Field
         id={`${baseId}-huespedes`}
-        label="Huéspedes"
+        label={t("search.guests")}
         icon={<Users size={11} strokeWidth={2.25} />}
         isActive={activeField === "huespedes"}
         onActivate={() => setActiveField("huespedes")}
@@ -201,7 +204,7 @@ export function HeroSearchBar() {
       >
         <div className="flex items-center justify-between">
           <span className="text-[15px] text-neutral-700">
-            {guests} {guests === 1 ? "huésped" : "huéspedes"}
+            {guests} {guests === 1 ? t("search.guest_one") : t("search.guest_many")}
           </span>
           <div className="flex items-center gap-1 -mr-1">
             <button
@@ -212,7 +215,7 @@ export function HeroSearchBar() {
                 setGuests((g) => Math.max(1, g - 1));
               }}
               className="h-7 w-7 rounded-full border border-neutral-300 hover:border-neutral-900 hover:bg-neutral-900 hover:text-white grid place-items-center transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-current disabled:hover:border-neutral-300"
-              aria-label="Disminuir huéspedes"
+              aria-label={t("search.decrease_guests")}
               disabled={guests <= 1}
             >
               <Minus size={12} strokeWidth={2.5} />
@@ -225,7 +228,7 @@ export function HeroSearchBar() {
                 setGuests((g) => Math.min(20, g + 1));
               }}
               className="h-7 w-7 rounded-full border border-neutral-300 hover:border-neutral-900 hover:bg-neutral-900 hover:text-white grid place-items-center transition-all"
-              aria-label="Aumentar huéspedes"
+              aria-label={t("search.increase_guests")}
             >
               <Plus size={12} strokeWidth={2.5} />
             </button>
@@ -245,7 +248,7 @@ export function HeroSearchBar() {
                    hover:scale-[1.02] active:scale-[0.98]"
       >
         <Search size={18} strokeWidth={2.5} />
-        <span className="md:hidden">Buscar</span>
+        <span className="md:hidden">{t("search.cta")}</span>
       </button>
     </form>
   );

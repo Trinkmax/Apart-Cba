@@ -2,8 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { Reveal } from "@/components/marketplace/reveal";
+import { getServerT } from "@/lib/i18n/server";
 
-export function HomeHostCta() {
+export async function HomeHostCta() {
+  const t = await getServerT();
   return (
     <section className="max-w-[1400px] mx-auto px-4 md:px-8 py-16 md:py-24">
       <Reveal y={28}>
@@ -31,15 +33,13 @@ export function HomeHostCta() {
 
           <div className="relative p-7 md:p-14 lg:p-16 max-w-2xl text-white">
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-100/85">
-              Para anfitriones
+              {t("host.eyebrow")}
             </span>
             <h2 className="mt-3 text-3xl md:text-5xl font-bold leading-[1.05] tracking-[-0.02em]">
-              Hospedá en <span className="italic font-serif font-medium">tus términos</span>.
+              {t("host.title.part1")} <span className="italic font-serif font-medium">{t("host.title.part2")}</span>.
             </h2>
             <p className="mt-4 text-sm md:text-base text-white/85 leading-relaxed max-w-md">
-              Sin algoritmos opacos ni pelea de tarifas. Publicá tu unidad,
-              definí cómo querés trabajarla y conectá con huéspedes que valoran
-              lo real.
+              {t("host.subtitle")}
             </p>
 
             <div className="mt-7 flex flex-col sm:flex-row gap-3">
@@ -51,7 +51,7 @@ export function HomeHostCta() {
                            hover:bg-sage-50 transition-colors
                            shadow-[0_10px_30px_-12px_rgb(0_0_0/0.4)]"
               >
-                Publicar mi unidad
+                {t("host.cta_primary")}
                 <ArrowRight
                   size={16}
                   strokeWidth={2.5}
@@ -65,7 +65,7 @@ export function HomeHostCta() {
                            px-5 py-3 text-sm font-medium
                            hover:bg-white/10 transition-colors"
               >
-                Ya soy anfitrión
+                {t("host.cta_secondary")}
               </Link>
             </div>
           </div>

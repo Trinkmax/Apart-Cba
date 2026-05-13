@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatInCurrency } from "@/lib/marketplace/currency-config";
 import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
+import { useT } from "@/lib/i18n/use-t";
 import { toggleWishlist } from "@/lib/actions/wishlists";
 import type { MarketplaceListingSummary } from "@/lib/types/database";
 
@@ -23,6 +24,7 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
   const [favorited, setFavorited] = useState(isFavorited);
   const [, startTransition] = useTransition();
   const { currency, locale } = useMarketplacePrefs();
+  const t = useT();
 
   const photos = listing.photo_urls.length > 0 ? listing.photo_urls : [listing.cover_url].filter(Boolean) as string[];
   const target = href ?? `/u/${listing.slug}`;
@@ -132,7 +134,7 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
           <span className="font-semibold text-neutral-900">
             {formatInCurrency(listing.base_price, listing.marketplace_currency, currency, locale)}
           </span>
-          <span className="text-sm text-neutral-500"> /noche</span>
+          <span className="text-sm text-neutral-500"> {t("featured.per_night")}</span>
         </div>
       </div>
     </Link>

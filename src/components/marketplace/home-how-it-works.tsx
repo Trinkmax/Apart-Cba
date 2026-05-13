@@ -1,47 +1,35 @@
 import { Compass, KeyRound, MessageCircle } from "lucide-react";
 import { Reveal } from "@/components/marketplace/reveal";
+import { getServerT } from "@/lib/i18n/server";
+import type { TKey } from "@/lib/i18n/dict";
 
 type Step = {
   n: string;
-  title: string;
-  body: string;
+  titleKey: TKey;
+  bodyKey: TKey;
   icon: React.ComponentType<{ size?: number; className?: string; strokeWidth?: number }>;
 };
 
 const STEPS: Step[] = [
-  {
-    n: "01",
-    title: "Buscás como te gusta",
-    body: "Filtros por barrio, fecha y vibe. La búsqueda recuerda lo que importa, no lo que sobra.",
-    icon: Compass,
-  },
-  {
-    n: "02",
-    title: "Reservás sin intermediarios",
-    body: "El precio que ves es el que pagás. Sin comisiones escondidas, ni cargos sorpresa al final.",
-    icon: KeyRound,
-  },
-  {
-    n: "03",
-    title: "Chateás con tu anfitrión",
-    body: "WhatsApp directo. Coordinás llegada, pedís un consejo, contás cuántos huéspedes son.",
-    icon: MessageCircle,
-  },
+  { n: "01", titleKey: "how.step1.title", bodyKey: "how.step1.body", icon: Compass },
+  { n: "02", titleKey: "how.step2.title", bodyKey: "how.step2.body", icon: KeyRound },
+  { n: "03", titleKey: "how.step3.title", bodyKey: "how.step3.body", icon: MessageCircle },
 ];
 
-export function HomeHowItWorks() {
+export async function HomeHowItWorks() {
+  const t = await getServerT();
   return (
     <section className="bg-neutral-50 border-y border-neutral-200/80">
       <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-16 md:py-24">
         <Reveal className="block max-w-2xl mb-12 md:mb-16">
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-            Cómo funciona
+            {t("how.eyebrow")}
           </span>
           <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-            Tres pasos. <span className="italic font-serif font-medium">Cero vueltas.</span>
+            {t("how.title.part1")} <span className="italic font-serif font-medium">{t("how.title.part2")}</span>
           </h2>
           <p className="text-sm md:text-base text-neutral-500 mt-2.5 leading-relaxed">
-            Construimos rentOS para que reservar se sienta como mandar un mensaje, no como llenar un formulario.
+            {t("how.subtitle")}
           </p>
         </Reveal>
 
@@ -70,10 +58,10 @@ export function HomeHowItWorks() {
                     </span>
                   </div>
                   <h3 className="mt-5 text-lg md:text-xl font-semibold text-neutral-900 tracking-[-0.01em]">
-                    {step.title}
+                    {t(step.titleKey)}
                   </h3>
                   <p className="mt-2 text-sm md:text-[15px] text-neutral-600 leading-relaxed max-w-sm">
-                    {step.body}
+                    {t(step.bodyKey)}
                   </p>
                 </div>
               </Reveal>

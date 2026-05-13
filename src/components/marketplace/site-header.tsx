@@ -18,6 +18,7 @@ import { CurrencySwitcher } from "./currency-switcher";
 import { signOutGuest } from "@/lib/actions/guest-auth";
 import type { GuestSession } from "@/lib/actions/guest-auth";
 import { cn } from "@/lib/utils";
+import { useT } from "@/lib/i18n/use-t";
 
 type Props = {
   session: GuestSession | null;
@@ -25,6 +26,7 @@ type Props = {
 
 export function SiteHeader({ session }: Props) {
   const pathname = usePathname();
+  const t = useT();
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
@@ -102,7 +104,7 @@ export function SiteHeader({ session }: Props) {
                   className="hidden md:inline-flex items-center gap-1.5 text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
                 >
                   <Heart size={16} />
-                  Favoritos
+                  {t("header.favorites")}
                 </Link>
               ) : null}
               <UserAvatarMenu session={session} variant={hero ? "hero" : "solid"} initials={initials!} />
@@ -117,6 +119,7 @@ export function SiteHeader({ session }: Props) {
 }
 
 function AuthCtas({ variant }: { variant: "hero" | "solid" }) {
+  const t = useT();
   if (variant === "hero") {
     return (
       <>
@@ -124,13 +127,13 @@ function AuthCtas({ variant }: { variant: "hero" | "solid" }) {
           href="/ingresar"
           className="hidden sm:inline-flex items-center text-sm font-medium text-white hover:text-sage-100 px-3 py-2"
         >
-          Ingresar
+          {t("header.signin")}
         </Link>
         <Link
           href="/registrarse"
           className="inline-flex items-center justify-center text-sm font-semibold rounded-full bg-white text-neutral-900 px-4 h-10 hover:bg-sage-50 transition-colors shadow-sm"
         >
-          Crear cuenta
+          {t("header.signup")}
         </Link>
       </>
     );
@@ -141,13 +144,13 @@ function AuthCtas({ variant }: { variant: "hero" | "solid" }) {
         href="/ingresar"
         className="hidden sm:inline-flex items-center text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
       >
-        Ingresar
+        {t("header.signin")}
       </Link>
       <Link
         href="/registrarse"
         className="inline-flex items-center justify-center text-sm font-semibold rounded-full bg-sage-600 text-white px-4 h-10 hover:bg-sage-700 transition-colors shadow-sm"
       >
-        Crear cuenta
+        {t("header.signup")}
       </Link>
     </>
   );
@@ -162,6 +165,7 @@ function UserAvatarMenu({
   variant: "hero" | "solid";
   initials: string;
 }) {
+  const t = useT();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -172,7 +176,7 @@ function UserAvatarMenu({
               ? "border-white/30 bg-white/10 hover:bg-white/20 backdrop-blur-md"
               : "border-neutral-200 bg-white hover:border-neutral-300 hover:shadow-sm"
           )}
-          aria-label="Tu cuenta"
+          aria-label={t("header.account")}
         >
           <Avatar className="h-8 w-8">
             {session.profile.avatar_url ? (
@@ -186,23 +190,23 @@ function UserAvatarMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sideOffset={8} className="w-56">
         <div className="px-3 py-2 text-xs text-neutral-500">
-          Sesión iniciada como
+          {t("header.signed_in_as")}
           <div className="text-sm font-medium text-neutral-900 truncate">
             {session.profile.full_name}
           </div>
         </div>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link href="/mi-cuenta">Mi cuenta</Link>
+          <Link href="/mi-cuenta">{t("header.account")}</Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/mi-cuenta">Mis reservas</Link>
+          <Link href="/mi-cuenta">{t("header.bookings")}</Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/favoritos">Favoritos</Link>
+          <Link href="/favoritos">{t("header.favorites")}</Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/mi-cuenta/perfil">Perfil</Link>
+          <Link href="/mi-cuenta/perfil">{t("header.profile")}</Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <form action={signOutGuest}>
@@ -211,13 +215,13 @@ function UserAvatarMenu({
             className="w-full text-left px-2 py-1.5 text-sm hover:bg-neutral-50 flex items-center gap-2 rounded-sm"
           >
             <LogOut size={14} />
-            Cerrar sesión
+            {t("header.signout")}
           </button>
         </form>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link href="/login" className="text-xs text-neutral-500">
-            Soy anfitrión · Entrar al panel
+            {t("header.host_panel")}
           </Link>
         </DropdownMenuItem>
       </DropdownMenuContent>

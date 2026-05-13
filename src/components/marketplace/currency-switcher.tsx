@@ -17,6 +17,7 @@ import {
   setMarketplaceCurrency,
   setMarketplaceLocale,
 } from "@/lib/actions/marketplace-preferences";
+import { useT } from "@/lib/i18n/use-t";
 
 const CURRENCIES = [
   { code: "ARS", name: "Peso argentino", symbol: "$" },
@@ -36,6 +37,7 @@ export function CurrencySwitcher({
   variant?: "hero" | "solid";
 }) {
   const router = useRouter();
+  const t = useT();
   const { currency, locale } = useMarketplacePrefs();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -91,7 +93,7 @@ export function CurrencySwitcher({
                    rounded-2xl"
       >
         <DropdownMenuLabel className="px-2 pt-1 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.18em] text-white/55">
-          Idioma
+          {t("switcher.label_language")}
         </DropdownMenuLabel>
         {LOCALES.map((l) => (
           <DropdownMenuItem
@@ -109,7 +111,7 @@ export function CurrencySwitcher({
         ))}
         <DropdownMenuSeparator className="my-1.5 bg-white/10" />
         <DropdownMenuLabel className="px-2 pt-1 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.18em] text-white/55">
-          Moneda
+          {t("switcher.label_currency")}
         </DropdownMenuLabel>
         {CURRENCIES.map((c) => (
           <DropdownMenuItem
