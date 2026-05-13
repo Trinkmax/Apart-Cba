@@ -2,7 +2,19 @@
 
 import { useState, useId } from "react";
 import { useRouter } from "next/navigation";
-import { Search, MapPin, Calendar as CalendarIcon, Users, Minus, Plus } from "lucide-react";
+import {
+  Search,
+  MapPin,
+  Calendar as CalendarIcon,
+  Users,
+  Minus,
+  Plus,
+} from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/use-t";
 
@@ -10,24 +22,60 @@ function formatDateInput(value: string | null): string {
   return value ?? "";
 }
 
+function formatDateLabel(value: string | null, locale = "es-AR"): string | null {
+  if (!value) return null;
+  const d = new Date(`${value}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
+}
+
+function formatDateRange(checkIn: string | null, checkOut: string | null): string | null {
+  const a = formatDateLabel(checkIn);
+  const b = formatDateLabel(checkOut);
+  if (a && b) return `${a} → ${b}`;
+  if (a) return `Desde ${a}`;
+  if (b) return `Hasta ${b}`;
+  return null;
+}
+
+/* ───────────────────────── Compact search bar (header sticky) ───────────────────────── */
+
 export function CompactSearchBar() {
   const router = useRouter();
   const t = useT();
   const [city, setCity] = useState("");
+  const [checkIn, setCheckIn] = useState<string | null>(null);
+  const [checkOut, setCheckOut] = useState<string | null>(null);
+  const [guests, setGuests] = useState(2);
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  function buildHref() {
+    const params = new URLSearchParams();
+    if (city.trim()) params.set("ciudad", city.trim());
+    if (checkIn) params.set("checkin", checkIn);
+    if (checkOut) params.set("checkout", checkOut);
+    if (guests > 1) params.set("huespedes", String(guests));
+    return `/buscar?${params.toString()}`;
+  }
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
-    const params = new URLSearchParams();
-    if (city.trim()) params.set("ciudad", city.trim());
-    router.push(`/buscar?${params.toString()}`);
+    router.push(buildHref());
   }
+
+  const datesLabel = formatDateRange(checkIn, checkOut);
+  const guestsLabel = guests > 1
+    ? `${guests} ${t("search.guest_many")}`
+    : t("header.guests");
 
   return (
     <form
       onSubmit={handleSearch}
       className="flex items-center rounded-full border border-neutral-200 shadow-sm hover:shadow-md transition-shadow bg-white overflow-hidden"
     >
-      <div className="flex-1 px-4 py-2.5">
+      {/* Destino */}
+      <div className="flex-1 min-w-0 px-4 py-2.5">
         <input
           type="text"
           placeholder={t("header.search_placeholder")}
@@ -36,22 +84,199 @@ export function CompactSearchBar() {
           onChange={(e) => setCity(e.target.value)}
         />
       </div>
-      <div className="hidden md:block px-3 text-xs text-neutral-400">·</div>
-      <div className="hidden md:block px-4 py-2.5 text-sm text-neutral-500 whitespace-nowrap">
-        {t("header.any_date")}
-      </div>
-      <div className="hidden md:block px-3 text-xs text-neutral-400">·</div>
-      <div className="hidden md:block px-4 py-2.5 text-sm text-neutral-500 whitespace-nowrap">
-        {t("header.guests")}
-      </div>
+
+      <Divider />
+
+      {/* Fechas */}
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "hidden md:flex items-center px-4 py-2.5 text-sm whitespace-nowrap hover:bg-neutral-50 transition-colors",
+              datesLabel ? "text-neutral-900 font-medium" : "text-neutral-500",
+            )}
+          >
+            {datesLabel ?? t("header.any_date")}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="center" sideOffset={12} className="w-80 p-4">
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <DateField
+                label={t("search.checkin")}
+                value={checkIn}
+                min={today}
+                onChange={setCheckIn}
+              />
+              <DateField
+                label={t("search.checkout")}
+                value={checkOut}
+                min={checkIn ?? today}
+                onChange={setCheckOut}
+              />
+            </div>
+            {(checkIn || checkOut) ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setCheckIn(null);
+                  setCheckOut(null);
+                }}
+                className="text-xs text-neutral-500 hover:text-neutral-900 underline"
+              >
+                Limpiar fechas
+              </button>
+            ) : null}
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <Divider />
+
+      {/* Huéspedes */}
+      <Popover>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "hidden md:flex items-center px-4 py-2.5 text-sm whitespace-nowrap hover:bg-neutral-50 transition-colors",
+              guests > 1 ? "text-neutral-900 font-medium" : "text-neutral-500",
+            )}
+          >
+            {guestsLabel}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" sideOffset={12} className="w-72 p-4">
+          <GuestStepper
+            label={t("search.guests")}
+            value={guests}
+            onChange={setGuests}
+            min={1}
+            max={20}
+            unitOne={t("search.guest_one")}
+            unitMany={t("search.guest_many")}
+          />
+        </PopoverContent>
+      </Popover>
+
       <button
         type="submit"
-        className="m-1.5 inline-flex items-center justify-center h-9 w-9 rounded-full bg-sage-500 text-white hover:bg-sage-600 transition-colors"
+        className="m-1.5 inline-flex items-center justify-center h-9 w-9 rounded-full bg-sage-500 text-white hover:bg-sage-600 transition-colors shrink-0"
         aria-label={t("search.cta")}
       >
         <Search size={16} />
       </button>
     </form>
+  );
+}
+
+function Divider() {
+  return <div className="hidden md:block self-stretch w-px bg-neutral-200" />;
+}
+
+function DateField({
+  label,
+  value,
+  min,
+  onChange,
+}: {
+  label: string;
+  value: string | null;
+  min?: string;
+  onChange: (v: string | null) => void;
+}) {
+  return (
+    <label className="block">
+      <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-neutral-500 mb-1">
+        {label}
+      </div>
+      <input
+        type="date"
+        min={min}
+        value={formatDateInput(value)}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="w-full h-10 px-3 rounded-lg border border-neutral-200 bg-white text-sm text-neutral-900 focus:border-sage-500 focus:ring-2 focus:ring-sage-500/20 outline-none transition"
+      />
+    </label>
+  );
+}
+
+function GuestStepper({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  unitOne,
+  unitMany,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+  unitOne: string;
+  unitMany: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div>
+        <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-neutral-500">
+          {label}
+        </div>
+        <div className="text-sm text-neutral-700 mt-0.5">
+          {value} {value === 1 ? unitOne : unitMany}
+        </div>
+      </div>
+      <SymStepper value={value} onChange={onChange} min={min} max={max} />
+    </div>
+  );
+}
+
+/**
+ * Stepper visualmente simétrico: dos botones idénticos en tamaño y centrado.
+ */
+function SymStepper({
+  value,
+  onChange,
+  min,
+  max,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+}) {
+  return (
+    <div className="inline-flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onChange(Math.max(min, value - 1));
+        }}
+        disabled={value <= min}
+        aria-label="Disminuir"
+        className="h-8 w-8 rounded-full border border-neutral-300 inline-flex items-center justify-center transition-all hover:border-neutral-900 hover:bg-neutral-900 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-current disabled:hover:border-neutral-300"
+      >
+        <Minus size={13} strokeWidth={2.5} className="shrink-0" />
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onChange(Math.min(max, value + 1));
+        }}
+        disabled={value >= max}
+        aria-label="Aumentar"
+        className="h-8 w-8 rounded-full border border-neutral-300 inline-flex items-center justify-center transition-all hover:border-neutral-900 hover:bg-neutral-900 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-current disabled:hover:border-neutral-300"
+      >
+        <Plus size={13} strokeWidth={2.5} className="shrink-0" />
+      </button>
+    </div>
   );
 }
 
@@ -200,39 +425,17 @@ export function HeroSearchBar() {
         icon={<Users size={11} strokeWidth={2.25} />}
         isActive={activeField === "huespedes"}
         onActivate={() => setActiveField("huespedes")}
-        className="flex items-center gap-4"
       >
-        <div className="flex items-center justify-between">
-          <span className="text-[15px] text-neutral-700">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[15px] text-neutral-700 tabular-nums whitespace-nowrap">
             {guests} {guests === 1 ? t("search.guest_one") : t("search.guest_many")}
           </span>
-          <div className="flex items-center gap-1 -mr-1">
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setGuests((g) => Math.max(1, g - 1));
-              }}
-              className="h-7 w-7 rounded-full border border-neutral-300 hover:border-neutral-900 hover:bg-neutral-900 hover:text-white grid place-items-center transition-all disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-current disabled:hover:border-neutral-300"
-              aria-label={t("search.decrease_guests")}
-              disabled={guests <= 1}
-            >
-              <Minus size={12} strokeWidth={2.5} />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setGuests((g) => Math.min(20, g + 1));
-              }}
-              className="h-7 w-7 rounded-full border border-neutral-300 hover:border-neutral-900 hover:bg-neutral-900 hover:text-white grid place-items-center transition-all"
-              aria-label={t("search.increase_guests")}
-            >
-              <Plus size={12} strokeWidth={2.5} />
-            </button>
-          </div>
+          <SymStepper
+            value={guests}
+            onChange={setGuests}
+            min={1}
+            max={20}
+          />
         </div>
       </Field>
 
@@ -253,3 +456,4 @@ export function HeroSearchBar() {
     </form>
   );
 }
+
