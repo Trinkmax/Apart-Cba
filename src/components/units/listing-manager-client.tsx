@@ -290,10 +290,10 @@ function ListingStatus({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl border bg-gradient-to-br p-5 md:p-6",
+        "relative overflow-hidden rounded-2xl border p-5 md:p-6 shadow-sm dark:shadow-none",
         published
-          ? "border-emerald-200/60 from-emerald-50/80 to-card dark:border-emerald-900/40 dark:from-emerald-950/40 dark:to-card"
-          : "border-border from-sage-50/60 to-card dark:from-card dark:to-card",
+          ? "border-emerald-200/70 bg-gradient-to-br from-emerald-50/80 to-card dark:border-emerald-900/40 dark:from-emerald-950/40 dark:to-white/[0.03]"
+          : "border-border dark:border-white/[0.07] bg-gradient-to-br from-sage-50/60 to-card dark:from-white/[0.04] dark:to-white/[0.015]",
       )}
     >
       <div className="flex flex-col md:flex-row md:items-center gap-5">
@@ -591,7 +591,7 @@ function BasicsTab({
                   "h-10 px-3 rounded-xl border text-sm font-medium transition-all",
                   form.marketplace_property_type === t.value
                     ? "border-primary bg-primary/10 text-foreground ring-2 ring-primary/20"
-                    : "border-border bg-card hover:border-foreground/40 text-muted-foreground hover:text-foreground",
+                    : "border-border bg-background dark:bg-white/[0.02] dark:border-white/[0.06] hover:border-foreground/40 text-muted-foreground hover:text-foreground",
                 )}
               >
                 {t.label}
@@ -761,10 +761,10 @@ function BasicsTab({
                   setForm({ ...form, cancellation_policy: p.value })
                 }
                 className={cn(
-                  "text-left p-3 rounded-xl border transition-all",
+                  "text-left p-3.5 rounded-xl border transition-all",
                   form.cancellation_policy === p.value
-                    ? "border-primary bg-primary/5 ring-2 ring-primary/20"
-                    : "border-border bg-card hover:border-foreground/40",
+                    ? "border-primary bg-primary/10 ring-2 ring-primary/20"
+                    : "border-border bg-background dark:bg-white/[0.02] dark:border-white/[0.06] hover:border-foreground/40",
                 )}
               >
                 <div className="flex items-center gap-2">
@@ -803,7 +803,7 @@ function BasicsTab({
           />
         </FieldShell>
 
-        <label className="flex items-start gap-4 rounded-2xl border border-border bg-card p-4 cursor-pointer hover:border-foreground/30 transition-colors">
+        <label className="flex items-start gap-4 rounded-2xl border border-border bg-background dark:bg-white/[0.02] dark:border-white/[0.06] p-4 cursor-pointer hover:border-foreground/30 transition-colors">
           <div className="mt-0.5 size-10 rounded-xl bg-primary/10 text-primary grid place-items-center shrink-0">
             <Zap size={18} />
           </div>
@@ -1332,8 +1332,8 @@ function AmenitiesTab({
                     className={cn(
                       "group flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all",
                       isSelected
-                        ? "border-primary bg-primary/5 ring-2 ring-primary/20"
-                        : "border-border bg-card hover:border-foreground/30 hover:bg-card/80",
+                        ? "border-primary bg-primary/10 ring-2 ring-primary/20"
+                        : "border-border bg-card dark:bg-white/[0.03] dark:border-white/[0.07] hover:border-foreground/40",
                     )}
                   >
                     <div
@@ -1450,7 +1450,7 @@ function PricingTab({
   return (
     <div className="space-y-6">
       {/* Base price summary */}
-      <div className="rounded-2xl border border-border bg-gradient-to-br from-sage-50/50 to-card dark:from-card dark:to-card p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="rounded-2xl border border-border dark:border-white/[0.07] bg-gradient-to-br from-sage-50/60 to-card dark:from-white/[0.05] dark:to-white/[0.015] shadow-sm dark:shadow-none p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Precio base
@@ -1544,7 +1544,7 @@ function PricingRuleCard({
   return (
     <div
       className={cn(
-        "flex items-center gap-4 p-4 rounded-2xl border bg-card transition-opacity",
+        "flex items-center gap-4 p-4 rounded-2xl border bg-card dark:bg-white/[0.025] dark:border-white/[0.07] shadow-sm dark:shadow-none transition-opacity",
         rule.active ? "border-border" : "border-border opacity-60",
       )}
     >
@@ -1894,14 +1894,16 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-4">
-      <div className="flex items-center gap-3">
+    <section>
+      <div className="flex items-baseline gap-3 mb-3 px-1">
         <h3 className="text-base font-semibold text-foreground">{title}</h3>
         {hint ? (
           <span className="text-xs text-muted-foreground">{hint}</span>
         ) : null}
       </div>
-      <div className="space-y-4">{children}</div>
+      <div className="rounded-2xl border border-border bg-card dark:bg-white/[0.025] dark:border-white/[0.07] shadow-sm dark:shadow-none p-5 sm:p-6 space-y-5">
+        {children}
+      </div>
     </section>
   );
 }
@@ -1940,7 +1942,7 @@ function Stepper({
   max?: number;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-3.5">
+    <div className="rounded-xl border border-border bg-background dark:bg-white/[0.02] dark:border-white/[0.06] p-3.5">
       <div className="flex items-center gap-2 text-xs font-medium text-foreground/80">
         {icon}
         {label}
@@ -1950,7 +1952,7 @@ function Stepper({
           type="button"
           onClick={() => onChange(Math.max(min, value - 1))}
           disabled={value <= min}
-          className="size-9 grid place-items-center rounded-full border border-border bg-background hover:bg-accent disabled:opacity-40 disabled:hover:bg-background transition"
+          className="size-9 grid place-items-center rounded-full border border-border bg-card hover:bg-accent disabled:opacity-40 disabled:hover:bg-card transition"
           aria-label={`Disminuir ${label}`}
         >
           <Minus size={14} />
@@ -1962,7 +1964,7 @@ function Stepper({
           type="button"
           onClick={() => onChange(Math.min(max, value + 1))}
           disabled={value >= max}
-          className="size-9 grid place-items-center rounded-full border border-border bg-background hover:bg-accent disabled:opacity-40 disabled:hover:bg-background transition"
+          className="size-9 grid place-items-center rounded-full border border-border bg-card hover:bg-accent disabled:opacity-40 disabled:hover:bg-card transition"
           aria-label={`Aumentar ${label}`}
         >
           <Plus size={14} />

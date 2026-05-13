@@ -25,16 +25,16 @@ export default async function UnitMarketplacePage({ params }: { params: Params }
     <div className="max-w-[1200px] mx-auto px-4 md:px-8 py-6 md:py-10 space-y-6">
       <Link
         href={`/dashboard/unidades/${id}`}
-        className="inline-flex items-center gap-1 text-sm text-neutral-600 hover:text-neutral-900"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
       >
         <ChevronLeft size={14} />
         Volver a {data.unit.code}
       </Link>
       <div>
-        <h1 className="text-2xl md:text-3xl font-semibold text-neutral-900">
+        <h1 className="text-2xl md:text-3xl font-semibold text-foreground tracking-tight">
           Listing en rentOS
         </h1>
-        <p className="text-sm text-neutral-500 mt-1">
+        <p className="text-sm text-muted-foreground mt-1.5 max-w-2xl">
           Publicá esta unidad en el marketplace público. Cuando esté lista, prendé el switch para
           que los huéspedes la vean.
         </p>

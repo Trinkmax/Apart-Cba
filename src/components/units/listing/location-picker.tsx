@@ -293,7 +293,7 @@ export function LocationPicker({ initial, mapboxToken, onSave }: Props) {
             aria-expanded={open}
             aria-controls={listboxId}
             aria-autocomplete="list"
-            className="w-full h-14 pl-12 pr-12 rounded-2xl border border-border bg-background text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring transition shadow-sm"
+            className="w-full h-14 pl-12 pr-12 rounded-2xl border border-border dark:border-white/[0.08] bg-card dark:bg-white/[0.03] text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/40 focus:border-ring transition shadow-sm dark:shadow-none"
           />
           <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
             {searching || reversing ? (
@@ -420,7 +420,7 @@ export function LocationPicker({ initial, mapboxToken, onSave }: Props) {
 
       {/* Resolved info */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div className="rounded-xl border border-border bg-card px-4 py-3">
+        <div className="rounded-xl border border-border dark:border-white/[0.07] bg-card dark:bg-white/[0.03] px-4 py-3">
           <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Dirección
           </div>
@@ -432,7 +432,7 @@ export function LocationPicker({ initial, mapboxToken, onSave }: Props) {
             )}
           </div>
         </div>
-        <div className="rounded-xl border border-border bg-card px-4 py-3">
+        <div className="rounded-xl border border-border dark:border-white/[0.07] bg-card dark:bg-white/[0.03] px-4 py-3">
           <label className="block">
             <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Barrio
