@@ -8,8 +8,9 @@ import { cn } from "@/lib/utils";
 import {
   computePricing,
   countNights,
-  formatCurrency,
 } from "@/lib/marketplace/pricing";
+import { formatInCurrency } from "@/lib/marketplace/currency-config";
+import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
 import type { MarketplaceListingDetail } from "@/lib/types/database";
 
 type Props = {
@@ -30,6 +31,9 @@ export function UnitBookingWidget({
   prefillGuests,
 }: Props) {
   const router = useRouter();
+  const { currency: targetCurrency, locale } = useMarketplacePrefs();
+  const fmt = (amount: number) =>
+    formatInCurrency(amount, listing.marketplace_currency, targetCurrency, locale);
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [checkIn, setCheckIn] = useState<string>(prefillCheckIn ?? "");
   const [checkOut, setCheckOut] = useState<string>(prefillCheckOut ?? "");
@@ -113,7 +117,7 @@ export function UnitBookingWidget({
       <div className="flex items-baseline justify-between">
         <div>
           <span className="text-2xl font-semibold">
-            {formatCurrency(listing.base_price, listing.marketplace_currency)}
+            {fmt(listing.base_price)}
           </span>
           <span className="text-neutral-500"> /noche</span>
         </div>
@@ -212,22 +216,22 @@ export function UnitBookingWidget({
         <div className="space-y-2 pt-3 border-t border-neutral-200">
           <div className="flex justify-between text-sm">
             <span className="underline underline-offset-2 text-neutral-700">
-              {formatCurrency(breakdown.avg_price_per_night, listing.marketplace_currency)} ×{" "}
+              {fmt(breakdown.avg_price_per_night)} ×{" "}
               {nights} {nights === 1 ? "noche" : "noches"}
             </span>
-            <span>{formatCurrency(breakdown.subtotal, listing.marketplace_currency)}</span>
+            <span>{fmt(breakdown.subtotal)}</span>
           </div>
           {showCleaning ? (
             <div className="flex justify-between text-sm">
               <span className="underline underline-offset-2 text-neutral-700">
                 Tarifa de limpieza
               </span>
-              <span>{formatCurrency(breakdown.cleaning_fee, listing.marketplace_currency)}</span>
+              <span>{fmt(breakdown.cleaning_fee)}</span>
             </div>
           ) : null}
           <div className="pt-2 border-t border-neutral-200 flex justify-between font-semibold">
             <span>Total</span>
-            <span>{formatCurrency(breakdown.total, listing.marketplace_currency)}</span>
+            <span>{fmt(breakdown.total)}</span>
           </div>
         </div>
       ) : null}

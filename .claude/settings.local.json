@@ -128,7 +128,10 @@
       "Bash(grep -oE \"-mt-\\\\[164px\\\\]|md:-mt-\\\\[180px\\\\]|min-h-\\\\[680px\\\\]|theme-color|#1a201a|Logo size=\\\\\"sm\\\\\"|quality=92|q=92\" /tmp/home4.html)",
       "Bash(curl -sS -o /tmp/home5.html http://localhost:3001/)",
       "Bash(curl -sS -o /tmp/home6.html http://localhost:3001/)",
-      "Bash(grep -oE '-mt-\\\\[180px\\\\]|md:-mt-\\\\[200px\\\\]|h-14 md:h-20|from-white to-transparent|w-10 sm:w-auto' /tmp/home6.html)"
+      "Bash(grep -oE '-mt-\\\\[180px\\\\]|md:-mt-\\\\[200px\\\\]|h-14 md:h-20|from-white to-transparent|w-10 sm:w-auto' /tmp/home6.html)",
+      "Bash(curl -sS -o /tmp/home7.html http://localhost:3001/)",
+      "Bash(curl -sS -o /tmp/home8.html -w \"HTTP %{http_code} · %{size_download}B\\\\n\" http://localhost:3001/)",
+      "Bash(curl -sS -o /tmp/home9.html -w \"HTTP %{http_code}\\\\n\" http://localhost:3001/)"
     ]
   },
   "enableAllProjectMcpServers": true,

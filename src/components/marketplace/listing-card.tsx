@@ -6,7 +6,8 @@ import Link from "next/link";
 import { Heart, Star, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { formatCurrency } from "@/lib/marketplace/pricing";
+import { formatInCurrency } from "@/lib/marketplace/currency-config";
+import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
 import { toggleWishlist } from "@/lib/actions/wishlists";
 import type { MarketplaceListingSummary } from "@/lib/types/database";
 
@@ -21,6 +22,7 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
   const [photoIndex, setPhotoIndex] = useState(0);
   const [favorited, setFavorited] = useState(isFavorited);
   const [, startTransition] = useTransition();
+  const { currency, locale } = useMarketplacePrefs();
 
   const photos = listing.photo_urls.length > 0 ? listing.photo_urls : [listing.cover_url].filter(Boolean) as string[];
   const target = href ?? `/u/${listing.slug}`;
@@ -128,7 +130,7 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
         </div>
         <div className="pt-1">
           <span className="font-semibold text-neutral-900">
-            {formatCurrency(listing.base_price, listing.marketplace_currency)}
+            {formatInCurrency(listing.base_price, listing.marketplace_currency, currency, locale)}
           </span>
           <span className="text-sm text-neutral-500"> /noche</span>
         </div>

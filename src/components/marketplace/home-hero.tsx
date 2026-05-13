@@ -62,14 +62,6 @@ export function HomeHero() {
         className="absolute inset-x-0 bottom-0 h-80 pointer-events-none
                    bg-gradient-to-t from-black/65 via-black/15 to-transparent"
       />
-      {/* Smooth fade-out into the next section's white background — eliminates
-          the hard edge between the hero photo and the featured listings band.
-          Kept short so the scroll cue sitting above it stays readable. */}
-      <div
-        aria-hidden
-        className="absolute inset-x-0 bottom-0 h-14 md:h-20 pointer-events-none
-                   bg-gradient-to-t from-white to-transparent"
-      />
 
       <div className="relative z-10 w-full max-w-[1400px] mx-auto px-4 md:px-8">
         <div className="max-w-3xl mx-auto text-center text-white">

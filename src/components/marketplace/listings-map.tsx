@@ -3,7 +3,8 @@
 import { useCallback, useMemo, useState } from "react";
 import Map, { Marker, Popup, NavigationControl } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
-import { formatCurrency } from "@/lib/marketplace/pricing";
+import { formatInCurrency } from "@/lib/marketplace/currency-config";
+import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
 import type { MarketplaceListingSummary } from "@/lib/types/database";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
 export function ListingsMap({ listings, hoveredId, onMarkerHover }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
+  const { currency: targetCurrency, locale } = useMarketplacePrefs();
 
   const withCoords = useMemo(
     () =>
@@ -96,7 +98,7 @@ export function ListingsMap({ listings, hoveredId, onMarkerHover }: Props) {
                   : "bg-white text-neutral-900 hover:scale-105"
               )}
             >
-              {formatCurrency(l.base_price, l.marketplace_currency)}
+              {formatInCurrency(l.base_price, l.marketplace_currency, targetCurrency, locale)}
             </button>
           </Marker>
         );
@@ -135,9 +137,11 @@ export function ListingsMap({ listings, hoveredId, onMarkerHover }: Props) {
               </div>
               <div className="text-sm">
                 <span className="font-semibold">
-                  {formatCurrency(
+                  {formatInCurrency(
                     selectedListing.base_price,
-                    selectedListing.marketplace_currency
+                    selectedListing.marketplace_currency,
+                    targetCurrency,
+                    locale,
                   )}
                 </span>
                 <span className="text-neutral-500"> /noche</span>
