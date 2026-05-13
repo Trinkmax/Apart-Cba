@@ -89,7 +89,6 @@ function revalidateListingPaths(unitId: string, slug?: string | null) {
   revalidatePath(`/dashboard/unidades/${unitId}`);
   revalidatePath(`/dashboard/unidades/${unitId}/marketplace`);
   revalidatePath("/buscar");
-  revalidatePath("/", "layout");
   if (slug) revalidatePath(`/u/${slug}`);
 }
 
