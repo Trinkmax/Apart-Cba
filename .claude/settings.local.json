@@ -136,7 +136,8 @@
       "Bash(grep -E \"^/.*\\\\.tsx?$|Error:|warning\")",
       "Bash(echo \"Started dev server, PID: $!\")",
       "Bash(curl *)",
-      "Bash(pkill -f \"next dev -p 3001\")"
+      "Bash(pkill -f \"next dev -p 3001\")",
+      "Bash(xargs grep -l \"total_amount\\\\|paid_amount\\\\|price\\\\|currency\\\\|ARS\\\\|\\\\\\\\\\\\$\")"
     ]
   },
   "enableAllProjectMcpServers": true,

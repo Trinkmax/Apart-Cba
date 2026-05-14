@@ -5,6 +5,7 @@ import { getBooking, listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,21 +27,25 @@ type BookingDetail = Booking & {
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [booking, units, accounts, movements, { role }] = await Promise.all([
+  const { role } = await getCurrentOrg();
+  const canViewMoney = can(role, "payments", "view");
+  const canEditBooking = can(role, "bookings", "update");
+  const [booking, units, accounts, movements] = await Promise.all([
     getBooking(id),
     listUnitsEnriched(),
-    listAccounts(),
-    listMovementsForBooking(id),
-    getCurrentOrg(),
+    canViewMoney ? listAccounts() : Promise.resolve([]),
+    canViewMoney ? listMovementsForBooking(id) : Promise.resolve([]),
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
   const unitBookings = await listBookings({ unitId: b.unit_id });
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
-  const latestAuditByMovement = await listLatestAuditByAccount(
-    "",
-    movements.map((m) => m.id)
-  );
+  const latestAuditByMovement = canViewMoney
+    ? await listLatestAuditByAccount(
+        "",
+        movements.map((m) => m.id)
+      )
+    : {};
   const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
@@ -71,15 +76,17 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           </p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          <BookingActions booking={b} role={role} />
-          <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
-            <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
-          </BookingFormDialog>
+          <BookingActions booking={b} role={role} canEditBooking={canEditBooking} canViewMoney={canViewMoney} />
+          {canEditBooking && (
+            <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
+              <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
+            </BookingFormDialog>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 md:gap-6">
-        <Card className="p-4 sm:p-5 lg:col-span-2 space-y-4 sm:space-y-5">
+      <div className={canViewMoney ? "grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 md:gap-6" : "grid grid-cols-1 gap-4 sm:gap-5 md:gap-6"}>
+        <Card className={canViewMoney ? "p-4 sm:p-5 lg:col-span-2 space-y-4 sm:space-y-5" : "p-4 sm:p-5 space-y-4 sm:space-y-5"}>
           <div>
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Estadía</h2>
             <div className="mt-2 grid grid-cols-2 gap-4">
@@ -163,6 +170,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           <ExtensionHistory bookingId={b.id} />
         </Card>
 
+        {canViewMoney && (
         <Card className="p-4 sm:p-5 space-y-4 h-fit">
           <div>
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Pago</h2>
@@ -226,6 +234,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
             </div>
           </div>
         </Card>
+        )}
       </div>
     </div>
   );

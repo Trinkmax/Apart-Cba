@@ -68,6 +68,10 @@ interface PmsBookingPopoverProps {
   onEdit: () => void;
   onStatusChanged?: (nextStatus: BookingStatus) => void;
   onPaymentAdded?: (newPaid: number) => void;
+  /** Si es false, esconde montos, comisiones, "Registrar pago" y demás info de plata. */
+  canViewMoney?: boolean;
+  /** Si es false, esconde "Editar", "Cancelar" y deshabilita los date pickers. */
+  canEditBooking?: boolean;
   /**
    * Callback al pedir cambio de fecha desde las cards check-in/check-out.
    * El parent (PmsBoard) abre el flujo MoveConfirmDialog con el preview
@@ -87,6 +91,8 @@ export function PmsBookingPopoverContent({
   onEdit,
   onStatusChanged,
   onPaymentAdded,
+  canViewMoney = true,
+  canEditBooking = true,
   onRequestDateChange,
 }: PmsBookingPopoverProps) {
   const [pending, startTransition] = useTransition();
@@ -280,6 +286,7 @@ export function PmsBookingPopoverContent({
             // Para check-in: el límite superior es check_out - 1 día
             maxISO={subDaysISO(booking.check_out_date, 1)}
             disabled={
+              !canEditBooking ||
               booking.status === "cancelada" ||
               booking.status === "no_show" ||
               !onRequestDateChange
@@ -295,6 +302,7 @@ export function PmsBookingPopoverContent({
             // Para check-out: el límite inferior es check_in + 1 día
             minISO={addDaysISO(booking.check_in_date, 1)}
             disabled={
+              !canEditBooking ||
               booking.status === "cancelada" ||
               booking.status === "no_show" ||
               !onRequestDateChange
@@ -309,9 +317,10 @@ export function PmsBookingPopoverContent({
         </div>
       </div>
 
-      <Separator />
+      {canViewMoney && <Separator />}
 
       {/* Money */}
+      {canViewMoney && (
       <div className="px-4 py-3 space-y-1.5">
         <MoneyRow label="Total" value={formatMoney(Number(booking.total_amount), booking.currency)} highlight />
         <MoneyRow label="Cobrado" value={formatMoney(Number(booking.paid_amount), booking.currency)} />
@@ -423,6 +432,7 @@ export function PmsBookingPopoverContent({
           </div>
         )}
       </div>
+      )}
 
       {booking.notes && (
         <>
@@ -484,15 +494,17 @@ export function PmsBookingPopoverContent({
             <CalendarX2 size={12} /> Check-out
           </Button>
         )}
-        <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={onEdit}>
-          <Pencil size={12} /> Editar
-        </Button>
+        {canEditBooking && (
+          <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={onEdit}>
+            <Pencil size={12} /> Editar
+          </Button>
+        )}
         <Link href={`/dashboard/reservas/${booking.id}`}>
           <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs">
             <ExternalLink size={12} /> Ver completo
           </Button>
         </Link>
-        {booking.status !== "cancelada" && booking.status !== "check_out" && (
+        {canEditBooking && booking.status !== "cancelada" && booking.status !== "check_out" && (
           <Button
             size="sm"
             variant="ghost"

@@ -801,7 +801,10 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
 // Reutilizado por la pestaña Pagos en /dashboard/reservas/[id].
 export async function listMovementsForBooking(bookingId: string): Promise<EnrichedMovement[]> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "view") && !can(role, "payments", "view")) {
+    return [];
+  }
   const admin = createAdminClient();
 
   const { data: schedules } = await admin

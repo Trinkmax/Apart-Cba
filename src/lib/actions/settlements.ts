@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { can } from "@/lib/permissions";
 import type { OwnerSettlement, SettlementLine } from "@/lib/types/database";
 
 interface PreviewLine {
@@ -27,7 +28,10 @@ export async function generateSettlement(
   currency: string = "ARS"
 ): Promise<{ settlement: OwnerSettlement; lines: SettlementLine[] }> {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "create")) {
+    throw new Error("No tenés permisos para generar liquidaciones");
+  }
   const admin = createAdminClient();
 
   // Verificar si ya existe
@@ -296,7 +300,10 @@ export async function generateSettlement(
 }
 
 export async function listSettlements(filters?: { ownerId?: string; year?: number; month?: number }) {
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) {
+    throw new Error("No tenés permisos para ver liquidaciones");
+  }
   const admin = createAdminClient();
   let q = admin
     .from("owner_settlements")
@@ -311,7 +318,10 @@ export async function listSettlements(filters?: { ownerId?: string; year?: numbe
 }
 
 export async function getSettlement(id: string) {
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) {
+    throw new Error("No tenés permisos para ver liquidaciones");
+  }
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("owner_settlements")
@@ -329,7 +339,10 @@ export async function changeSettlementStatus(
   paidMovementId?: string
 ) {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para cambiar liquidaciones");
+  }
   const admin = createAdminClient();
   const update: Record<string, unknown> = { status };
   if (status === "revisada") {

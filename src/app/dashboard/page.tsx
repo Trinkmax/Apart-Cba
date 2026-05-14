@@ -4,6 +4,8 @@ import {
   LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet,
 } from "lucide-react";
 import { getDashboardKPIs } from "@/lib/actions/kpis";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RevenueChart } from "@/components/dashboard/revenue-chart";
@@ -13,7 +15,8 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default async function DashboardHome() {
-  const kpis = await getDashboardKPIs();
+  const [kpis, { role }] = await Promise.all([getDashboardKPIs(), getCurrentOrg()]);
+  const canViewMoney = can(role, "payments", "view");
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
@@ -59,27 +62,29 @@ export default async function DashboardHome() {
         })}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
-        {/* Revenue chart */}
-        <Card className="lg:col-span-2 p-4 sm:p-5">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <div className="min-w-0 w-full">
-              <h2 className="text-xs sm:text-sm font-semibold uppercase tracking-wider text-muted-foreground">Revenue 30 días</h2>
-              <div className="flex gap-3 sm:gap-4 mt-2 flex-wrap">
-                {Object.entries(kpis.finance.revenue_30d_by_currency).map(([cur, val]) => (
-                  <div key={cur}>
-                    <div className="text-[10px] text-muted-foreground">{cur}</div>
-                    <div className="text-base sm:text-lg font-semibold tabular-nums">{formatMoney(val, cur)}</div>
-                  </div>
-                ))}
-                {Object.keys(kpis.finance.revenue_30d_by_currency).length === 0 && (
-                  <span className="text-sm text-muted-foreground">Sin movimiento aún</span>
-                )}
+      <div className={canViewMoney ? "grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4" : "grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4"}>
+        {/* Revenue chart — solo visible para roles con acceso a plata */}
+        {canViewMoney && (
+          <Card className="lg:col-span-2 p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <div className="min-w-0 w-full">
+                <h2 className="text-xs sm:text-sm font-semibold uppercase tracking-wider text-muted-foreground">Revenue 30 días</h2>
+                <div className="flex gap-3 sm:gap-4 mt-2 flex-wrap">
+                  {Object.entries(kpis.finance.revenue_30d_by_currency).map(([cur, val]) => (
+                    <div key={cur}>
+                      <div className="text-[10px] text-muted-foreground">{cur}</div>
+                      <div className="text-base sm:text-lg font-semibold tabular-nums">{formatMoney(val, cur)}</div>
+                    </div>
+                  ))}
+                  {Object.keys(kpis.finance.revenue_30d_by_currency).length === 0 && (
+                    <span className="text-sm text-muted-foreground">Sin movimiento aún</span>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-          <RevenueChart data={kpis.daily_revenue_30d} />
-        </Card>
+            <RevenueChart data={kpis.daily_revenue_30d} />
+          </Card>
+        )}
 
         {/* Atención requerida */}
         <Card className="p-4 sm:p-5 space-y-3">
@@ -115,7 +120,7 @@ export default async function DashboardHome() {
               </div>
               <Badge variant="secondary">{kpis.service.concierge_pending}</Badge>
             </Link>
-            {Object.entries(kpis.finance.pending_payment_by_currency).map(([cur, amt]) => (
+            {canViewMoney && Object.entries(kpis.finance.pending_payment_by_currency).map(([cur, amt]) => (
               <div key={cur} className="flex items-center justify-between p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
                 <div className="flex items-center gap-2">
                   <Wallet size={16} className="text-amber-600 dark:text-amber-400" />

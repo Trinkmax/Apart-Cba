@@ -15,6 +15,8 @@ export default async function UnidadesPage() {
     getCurrentOrg(),
   ]);
   const canDelete = can(role, "units", "delete");
+  const canCreateUnit = can(role, "units", "create");
+  const canViewMoney = can(role, "payments", "view");
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
@@ -31,23 +33,28 @@ export default async function UnidadesPage() {
               <Hotel size={16} /> Calendario
             </Button>
           </Link>
-          <UnitFormDialog owners={owners}>
-            <Button className="gap-2 shrink-0">
-              <Plus size={16} /> <span className="hidden sm:inline">Nueva unidad</span><span className="sm:hidden">Nueva</span>
-            </Button>
-          </UnitFormDialog>
+          {canCreateUnit && (
+            <UnitFormDialog owners={owners}>
+              <Button className="gap-2 shrink-0">
+                <Plus size={16} /> <span className="hidden sm:inline">Nueva unidad</span><span className="sm:hidden">Nueva</span>
+              </Button>
+            </UnitFormDialog>
+          )}
         </div>
       </div>
 
       <UnitsGrid
         units={units}
         canDelete={canDelete}
+        canViewMoney={canViewMoney}
         emptyCta={
-          <UnitFormDialog owners={owners}>
-            <Button className="gap-2">
-              <Plus size={16} /> Crear primera unidad
-            </Button>
-          </UnitFormDialog>
+          canCreateUnit ? (
+            <UnitFormDialog owners={owners}>
+              <Button className="gap-2">
+                <Plus size={16} /> Crear primera unidad
+              </Button>
+            </UnitFormDialog>
+          ) : null
         }
       />
     </div>

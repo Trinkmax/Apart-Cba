@@ -1,7 +1,10 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Plus, FileText, ChevronRight } from "lucide-react";
 import { listSettlements } from "@/lib/actions/settlements";
 import { listOwners } from "@/lib/actions/owners";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +31,8 @@ const MONTH_NAMES = [
 type SettlementWithOwner = OwnerSettlement & { owner: Pick<Owner, "id" | "full_name" | "email" | "preferred_currency"> };
 
 export default async function LiquidacionesPage() {
+  const { role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) redirect("/dashboard");
   const [settlements, owners] = await Promise.all([listSettlements(), listOwners()]);
   const ss = settlements as SettlementWithOwner[];
 

@@ -60,11 +60,14 @@ export function UnitsGrid({
   units,
   emptyCta,
   canDelete = false,
+  canViewMoney = true,
 }: {
   units: UnitWithRelations[];
   emptyCta?: React.ReactNode;
   /** Mostrar acción "Eliminar" en cada card (sólo admin). */
   canDelete?: boolean;
+  /** Si false, esconde la tarifa por noche en cada card. */
+  canViewMoney?: boolean;
 }) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -202,6 +205,7 @@ export function UnitsGrid({
                   unit={unit}
                   draggable={dragEnabled}
                   canDelete={canDelete}
+                  canViewMoney={canViewMoney}
                 />
               ))}
             </div>
@@ -238,10 +242,12 @@ function SortableUnitCard({
   unit,
   draggable,
   canDelete,
+  canViewMoney,
 }: {
   unit: UnitWithRelations;
   draggable: boolean;
   canDelete: boolean;
+  canViewMoney: boolean;
 }) {
   const {
     attributes,
@@ -342,7 +348,7 @@ function SortableUnitCard({
               </div>
             )}
 
-            {unit.base_price && (
+            {canViewMoney && unit.base_price && (
               <div className="text-sm font-semibold mt-3">
                 {formatMoney(Number(unit.base_price), unit.base_price_currency ?? "ARS")}
                 <span className="text-xs text-muted-foreground font-normal ml-1">/ noche</span>

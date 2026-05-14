@@ -1,7 +1,9 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { getSettlement } from "@/lib/actions/settlements";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -37,6 +39,8 @@ type SettlementDetail = OwnerSettlement & {
 
 export default async function SettlementDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  const { role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) redirect("/dashboard");
   const settlement = (await getSettlement(id)) as unknown as SettlementDetail | null;
   if (!settlement) notFound();
   const meta = STATUS_META[settlement.status];

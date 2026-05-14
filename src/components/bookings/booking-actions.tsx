@@ -32,9 +32,11 @@ interface Props {
   booking: Booking;
   /** El rol viene del layout que ya invoca getCurrentOrg(). Si no se pasa, asumimos no-admin (más restrictivo). */
   role?: "admin" | "recepcion" | "mantenimiento" | "limpieza" | "owner_view";
+  canEditBooking?: boolean;
+  canViewMoney?: boolean;
 }
 
-export function BookingActions({ booking, role }: Props) {
+export function BookingActions({ booking, role, canEditBooking = true, canViewMoney = true }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [pendingDialogOpen, setPendingDialogOpen] = useState(false);
@@ -88,7 +90,9 @@ export function BookingActions({ booking, role }: Props) {
     if (newStatus === "cancelada" && !confirm("¿Cancelar la reserva?")) return;
     // Atajo en cliente: si vamos a check_out con saldo, abrimos el dialog
     // sin ir al server (el server igual valida; esto es UX preventivo).
-    if (newStatus === "check_out" && pending > 0.01) {
+    // Si el rol no puede ver plata, no mostramos el dialog: dejamos que el
+    // servidor responda con el error y mostramos un toast genérico.
+    if (newStatus === "check_out" && pending > 0.01 && canViewMoney) {
       setPendingDialogOpen(true);
       return;
     }
@@ -175,7 +179,7 @@ export function BookingActions({ booking, role }: Props) {
           <Send size={14} /> Reenviar confirmación
         </Button>
       )}
-      {booking.status === "pendiente" && (
+      {booking.status === "pendiente" && canEditBooking && (
         <Button
           onClick={() => handle("cancelada")}
           variant="outline"

@@ -27,6 +27,8 @@ interface PmsUnitPopoverProps {
   nightsTotal: number;
   revenue: number;
   currency: string;
+  /** Si es false, esconde "Ingresos" y la tarifa por noche. */
+  canViewMoney?: boolean;
 }
 
 export function PmsUnitPopoverContent({
@@ -36,6 +38,7 @@ export function PmsUnitPopoverContent({
   nightsTotal,
   revenue,
   currency,
+  canViewMoney = true,
 }: PmsUnitPopoverProps) {
   const meta = UNIT_STATUS_META[unit.status];
 
@@ -66,10 +69,12 @@ export function PmsUnitPopoverContent({
       </div>
 
       {/* Occupancy stats */}
-      <div className="px-4 py-3 grid grid-cols-3 gap-2">
+      <div className={canViewMoney ? "px-4 py-3 grid grid-cols-3 gap-2" : "px-4 py-3 grid grid-cols-2 gap-2"}>
         <Stat label="Ocupación" value={`${occupancyPct.toFixed(0)}%`} tone={occupancyPct >= 70 ? "ok" : occupancyPct >= 40 ? "warn" : "bad"} />
         <Stat label="Noches" value={`${nightsOccupied}/${nightsTotal}`} />
-        <Stat label="Ingresos" value={formatMoney(revenue, currency)} compact />
+        {canViewMoney && (
+          <Stat label="Ingresos" value={formatMoney(revenue, currency)} compact />
+        )}
       </div>
 
       <Separator />
@@ -85,7 +90,7 @@ export function PmsUnitPopoverContent({
         {unit.max_guests && (
           <SpecRow icon={<Users size={11} />} label={`hasta ${unit.max_guests}`} />
         )}
-        {unit.base_price !== null && unit.base_price !== undefined && (
+        {canViewMoney && unit.base_price !== null && unit.base_price !== undefined && (
           <SpecRow
             icon={<DollarSign size={11} />}
             label={`${formatMoney(Number(unit.base_price), unit.base_price_currency ?? "ARS")} /noche`}
