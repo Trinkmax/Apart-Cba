@@ -13,9 +13,16 @@ const guestSchema = z.object({
   document_number: z.string().optional().nullable(),
   email: z.string().email("Email inválido").optional().or(z.literal("")).nullable(),
   phone: z.string().optional().nullable(),
+  // Legacy text fields — se mantienen sincronizados con los _code/_name de abajo
+  // para no romper consumers que aún leen guest.country / guest.city / etc.
   country: z.string().default("AR"),
   state_or_province: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
+  // Nuevos campos estructurados (spec "Nuevo huésped" en reservas).
+  country_code: z.string().length(2).optional().nullable(),
+  state_code: z.string().optional().nullable(),
+  city_name: z.string().optional().nullable(),
+  phone_e164: z.string().optional().nullable(),
   birth_date: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
 });

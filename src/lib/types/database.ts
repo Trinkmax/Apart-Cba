@@ -323,6 +323,10 @@ export interface Guest {
   country: string | null;
   state_or_province: string | null;
   city: string | null;
+  country_code: string | null;
+  state_code: string | null;
+  city_name: string | null;
+  phone_e164: string | null;
   birth_date: string | null;
   notes: string | null;
   blacklisted: boolean;

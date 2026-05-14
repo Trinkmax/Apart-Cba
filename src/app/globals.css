@@ -435,3 +435,95 @@
 .pms-cell-overlay:active {
   background-color: rgba(var(--primary-rgb, 59, 130, 246), 0.06);
 }
+
+/* ─────────────── react-phone-number-input ───────────────────────────────────
+   Override de los estilos por defecto del paquete para matchear el <Input />
+   de shadcn (mismo border, height, radius, focus-ring) usando exclusivamente
+   las CSS vars del design system. La wrapper component `<PhoneInput />` aplica
+   la clase `.shadcn-phone-input`. */
+.shadcn-phone-input {
+  --PhoneInputCountryFlag-height: 1em;
+  --PhoneInputCountrySelectArrow-opacity: 0.5;
+  --PhoneInputCountrySelectArrow-color: var(--foreground);
+  --PhoneInput-color--focus: var(--ring);
+
+  display: flex;
+  align-items: stretch;
+  height: 2.25rem; /* h-9 */
+  width: 100%;
+  border-radius: 0.375rem; /* rounded-md */
+  border: 1px solid var(--input);
+  background-color: transparent;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); /* shadow-xs */
+  transition: color 150ms ease, box-shadow 150ms ease, border-color 150ms ease;
+  overflow: hidden;
+}
+.dark .shadcn-phone-input {
+  background-color: color-mix(in oklab, var(--input) 30%, transparent);
+}
+.shadcn-phone-input:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
+.shadcn-phone-input.is-invalid {
+  border-color: var(--destructive);
+}
+.shadcn-phone-input.is-invalid:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive) 20%, transparent);
+}
+
+/* Country selector (flag + caret) */
+.shadcn-phone-input .PhoneInputCountry {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding-inline: 0.625rem;
+  border-right: 1px solid var(--input);
+  background-color: color-mix(in oklab, var(--accent) 30%, transparent);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+.shadcn-phone-input .PhoneInputCountry:hover {
+  background-color: color-mix(in oklab, var(--accent) 60%, transparent);
+}
+.shadcn-phone-input .PhoneInputCountryIcon {
+  width: 1.25em;
+  box-shadow: none; /* el default tiene un inset shadow */
+  border-radius: 2px;
+}
+.shadcn-phone-input .PhoneInputCountrySelectArrow {
+  width: 0.4em;
+  height: 0.4em;
+  margin-left: 2px;
+  color: var(--PhoneInputCountrySelectArrow-color);
+  opacity: var(--PhoneInputCountrySelectArrow-opacity);
+}
+
+/* Input numérico */
+.shadcn-phone-input .shadcn-phone-input__input,
+.shadcn-phone-input .PhoneInputInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding-inline: 0.75rem;
+  background-color: transparent;
+  color: var(--foreground);
+  font-size: 1rem;
+  line-height: 1.25rem;
+  border: 0;
+  outline: none;
+}
+@media (min-width: 768px) {
+  .shadcn-phone-input .shadcn-phone-input__input,
+  .shadcn-phone-input .PhoneInputInput {
+    font-size: 0.875rem;
+  }
+}
+.shadcn-phone-input .PhoneInputInput::placeholder {
+  color: var(--muted-foreground);
+}
+.shadcn-phone-input:has(input:disabled),
+.shadcn-phone-input[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
