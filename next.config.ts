@@ -24,7 +24,7 @@ const nextConfig: NextConfig = {
     ],
   },
   // Libs Node-only que NO deben bundlearse en el server bundle (jspdf usa APIs del browser/node sin tree-shake claro; ical.js es CJS pesado).
-  serverExternalPackages: ["jspdf", "jspdf-autotable", "ical.js"],
+  serverExternalPackages: ["jspdf", "jspdf-autotable", "ical.js", "exceljs"],
   images: {
     // Next.js 16+ requiere whitelistar valores de `quality` no estándar.
     // 75 = default; 92 = hero a calidad casi-original sin reventar bandwidth.

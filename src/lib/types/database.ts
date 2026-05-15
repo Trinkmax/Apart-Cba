@@ -579,8 +579,32 @@ export interface OwnerSettlement {
   paid_movement_id: string | null;
   notes: string | null;
   pdf_url: string | null;
+  /** Token aleatorio para el link público de solo lectura /liquidacion/[token]. */
+  public_token: string;
+  /** Email al que se envió la liquidación (audit trail). */
+  sent_to: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Snapshot que viaja en settlement_lines.meta (jsonb). Se llena sobre la línea
+ * de ingreso (booking_revenue / monthly_rent_fraction) en el momento de generar
+ * la liquidación, para reconstruir la planilla por unidad sin re-derivar de
+ * bookings que pueden haber cambiado.
+ */
+export interface SettlementLineMeta {
+  guest_name?: string | null;
+  nights?: number | null;
+  check_in?: string | null;
+  check_out?: string | null;
+  source?: string | null;
+  mode?: "temporario" | "mensual" | null;
+  commission_pct?: number | null;
+  /** Días ocupados del mes (prorrateo mensual). */
+  prorate_days?: number | null;
+  /** Días totales del mes (prorrateo mensual). */
+  prorate_of?: number | null;
 }
 
 export interface SettlementLine {
@@ -600,6 +624,10 @@ export interface SettlementLine {
   description: string;
   amount: number;
   sign: "+" | "-";
+  /** true = ajuste manual; se preserva al regenerar. */
+  is_manual: boolean;
+  /** Snapshot para la planilla (ver SettlementLineMeta). */
+  meta: SettlementLineMeta | null;
   display_order: number;
   created_at: string;
 }

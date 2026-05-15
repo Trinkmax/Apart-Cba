@@ -70,6 +70,78 @@ export async function loadOrgLogo(
   });
 }
 
+/** Lee el alto/ancho de un PNG o JPEG desde sus bytes (sin libs). */
+function readImageSize(buf: Uint8Array): { w: number; h: number } | null {
+  // PNG: firma de 8 bytes + IHDR (width@16, height@20, big-endian)
+  if (
+    buf.length > 24 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47
+  ) {
+    const w = (buf[16] << 24) | (buf[17] << 16) | (buf[18] << 8) | buf[19];
+    const h = (buf[20] << 24) | (buf[21] << 16) | (buf[22] << 8) | buf[23];
+    if (w > 0 && h > 0) return { w, h };
+  }
+  // JPEG: escanear marcadores SOF
+  if (buf.length > 4 && buf[0] === 0xff && buf[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < buf.length) {
+      if (buf[i] !== 0xff) {
+        i++;
+        continue;
+      }
+      const marker = buf[i + 1];
+      const len = (buf[i + 2] << 8) | buf[i + 3];
+      // SOF0..SOF15 (excepto 0xC4 DHT, 0xC8 JPG, 0xCC DAC)
+      if (
+        marker >= 0xc0 &&
+        marker <= 0xcf &&
+        marker !== 0xc4 &&
+        marker !== 0xc8 &&
+        marker !== 0xcc
+      ) {
+        const h = (buf[i + 5] << 8) | buf[i + 6];
+        const w = (buf[i + 7] << 8) | buf[i + 8];
+        if (w > 0 && h > 0) return { w, h };
+        return null;
+      }
+      i += 2 + len;
+    }
+  }
+  return null;
+}
+
+/**
+ * Carga el logo en el server (sin canvas/DOM): fetch → base64 + dimensiones.
+ * Necesario para el PDF que se manda por email (no hay browser).
+ */
+export async function loadOrgLogoServer(
+  url: string | null | undefined
+): Promise<LoadedLogo | null> {
+  if (!url) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const ab = await res.arrayBuffer();
+    const bytes = new Uint8Array(ab);
+    const ct = res.headers.get("content-type") ?? "";
+    const isJpeg = /jpe?g/i.test(ct) || /\.jpe?g(\?|$)/i.test(url);
+    const size = readImageSize(bytes) ?? { w: 256, h: 256 };
+    const b64 = Buffer.from(ab).toString("base64");
+    const mime = isJpeg ? "image/jpeg" : "image/png";
+    return {
+      dataUrl: `data:${mime};base64,${b64}`,
+      format: isJpeg ? "JPEG" : "PNG",
+      w: size.w,
+      h: size.h,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function setFill(doc: jsPDF, c: RGB) {
   doc.setFillColor(c[0], c[1], c[2]);
 }
