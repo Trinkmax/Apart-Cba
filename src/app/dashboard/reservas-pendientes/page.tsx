@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Clock, MapPin, Users } from "lucide-react";
 import { listBookingRequestsForOrg } from "@/lib/actions/booking-requests";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -21,10 +22,9 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 };
 
 export default async function ReservasPendientesPage() {
-  const [requests, { role }] = await Promise.all([
-    listBookingRequestsForOrg(),
-    getCurrentOrg(),
-  ]);
+  const { role } = await getCurrentOrg();
+  if (!can(role, "bookings", "view")) redirect("/dashboard");
+  const requests = await listBookingRequestsForOrg();
   const canViewMoney = can(role, "payments", "view");
   const pendingCount = requests.filter((r) => r.status === "pendiente").length;
 

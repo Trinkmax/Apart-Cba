@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { Plus } from "lucide-react";
 import { listBookings } from "@/lib/actions/bookings";
 import { listUnitsEnriched } from "@/lib/actions/units";
@@ -10,6 +11,7 @@ import { BookingsListClient } from "@/components/bookings/bookings-list-client";
 
 export default async function ReservasPage() {
   const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "view")) redirect("/dashboard");
   const canCreateBooking = can(role, "bookings", "create");
   const canViewMoney = can(role, "payments", "view");
   const [bookings, units, accounts] = await Promise.all([

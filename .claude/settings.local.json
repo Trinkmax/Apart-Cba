@@ -137,7 +137,10 @@
       "Bash(echo \"Started dev server, PID: $!\")",
       "Bash(curl *)",
       "Bash(pkill -f \"next dev -p 3001\")",
-      "Bash(xargs grep -l \"total_amount\\\\|paid_amount\\\\|price\\\\|currency\\\\|ARS\\\\|\\\\\\\\\\\\$\")"
+      "Bash(xargs grep -l \"total_amount\\\\|paid_amount\\\\|price\\\\|currency\\\\|ARS\\\\|\\\\\\\\\\\\$\")",
+      "Bash(PORT=3001 npm run start)",
+      "Bash(PORT=3001 npm run dev)",
+      "Bash(ps -p 11776 -o pid,ppid,command)"
     ]
   },
   "enableAllProjectMcpServers": true,

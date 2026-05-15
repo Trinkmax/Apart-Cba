@@ -46,6 +46,7 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
   const { role } = await getCurrentOrg();
   if (!can(role, "parte_diario", "view")) redirect("/dashboard");
   const canEdit = can(role, "parte_diario", "update");
+  const canViewBookings = can(role, "bookings", "view");
 
   const sp = await searchParams;
   const requestedDate = sp.date ?? undefined;
@@ -102,8 +103,12 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
 
         <SummaryChips
           chips={[
-            { key: "check_outs", count: payload.check_outs.length },
-            { key: "check_ins", count: payload.check_ins.length },
+            ...(canViewBookings
+              ? [
+                  { key: "check_outs" as const, count: payload.check_outs.length },
+                  { key: "check_ins" as const, count: payload.check_ins.length },
+                ]
+              : []),
             { key: "sucios", count: payload.sucios.length },
             { key: "tareas_pendientes", count: payload.tareas_pendientes.length },
             { key: "arreglos", count: payload.arreglos.length },
@@ -111,19 +116,22 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
         />
 
         {/* Fila 1: CH IN (izquierda) | CH OUT (derecha) — paralelos para
-            comparar movimientos del día de un vistazo */}
-        <div className="grid gap-4 lg:grid-cols-2">
-          <BookingsSection
-            sectionKey="check_ins"
-            rows={payload.check_ins}
-            emptyMessage="Sin check-ins."
-          />
-          <BookingsSection
-            sectionKey="check_outs"
-            rows={payload.check_outs}
-            emptyMessage="Sin check-outs."
-          />
-        </div>
+            comparar movimientos del día de un vistazo. Roles sin acceso a
+            reservas (mantenimiento / limpieza) no ven huéspedes. */}
+        {canViewBookings ? (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <BookingsSection
+              sectionKey="check_ins"
+              rows={payload.check_ins}
+              emptyMessage="Sin check-ins."
+            />
+            <BookingsSection
+              sectionKey="check_outs"
+              rows={payload.check_outs}
+              emptyMessage="Sin check-outs."
+            />
+          </div>
+        ) : null}
 
         {/* Banner: Carga del equipo — full-width, da contexto antes de asignar */}
         <CleanerLoadsBanner loads={payload.cleaner_loads} />
