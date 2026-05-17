@@ -1,28 +1,39 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import { Loader2, Sparkles, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from "@/components/ui/select";
 import { generateSettlement } from "@/lib/actions/settlements";
 import type { Owner } from "@/lib/types/database";
 
-const MONTHS = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const MONTHS = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+];
 
-interface Props {
-  children: React.ReactNode;
-  owners: Owner[];
-}
-
-export function GenerateSettlementDialog({ children, owners }: Props) {
+/**
+ * Autocontenido: renderiza su PROPIO botón disparador (no recibe children
+ * desde un Server Component). Mismo patrón que UnitOwnersManager.
+ */
+export function GenerateSettlementDialog({ owners }: { owners: Owner[] }) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -53,8 +64,17 @@ export function GenerateSettlementDialog({ children, owners }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogTrigger asChild>
+        <Button className="gap-2">
+          <Plus size={16} />
+          <span className="hidden sm:inline">Generar liquidación</span>
+          <span className="sm:hidden">Generar</span>
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        className="max-w-md"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>Generar liquidación</DialogTitle>
         </DialogHeader>
@@ -62,10 +82,14 @@ export function GenerateSettlementDialog({ children, owners }: Props) {
           <div className="space-y-1.5">
             <Label>Propietario</Label>
             <Select value={ownerId} onValueChange={setOwnerId}>
-              <SelectTrigger><SelectValue placeholder="Elegir..." /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Elegir..." />
+              </SelectTrigger>
               <SelectContent>
                 {owners.map((o) => (
-                  <SelectItem key={o.id} value={o.id}>{o.full_name}</SelectItem>
+                  <SelectItem key={o.id} value={o.id}>
+                    {o.full_name}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -73,22 +97,38 @@ export function GenerateSettlementDialog({ children, owners }: Props) {
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5 col-span-1">
               <Label>Año</Label>
-              <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={String(year)}
+                onValueChange={(v) => setYear(Number(v))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
-                  {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map((y) => (
-                    <SelectItem key={y} value={String(y)}>{y}</SelectItem>
-                  ))}
+                  {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(
+                    (y) => (
+                      <SelectItem key={y} value={String(y)}>
+                        {y}
+                      </SelectItem>
+                    ),
+                  )}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1.5 col-span-2">
               <Label>Mes</Label>
-              <Select value={String(month)} onValueChange={(v) => setMonth(Number(v))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={String(month)}
+                onValueChange={(v) => setMonth(Number(v))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   {MONTHS.map((m, i) => (
-                    <SelectItem key={i} value={String(i + 1)}>{m}</SelectItem>
+                    <SelectItem key={i} value={String(i + 1)}>
+                      {m}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -97,7 +137,9 @@ export function GenerateSettlementDialog({ children, owners }: Props) {
           <div className="space-y-1.5">
             <Label>Moneda de la liquidación</Label>
             <Select value={currency} onValueChange={setCurrency}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="ARS">ARS</SelectItem>
                 <SelectItem value="USD">USD</SelectItem>
@@ -106,14 +148,21 @@ export function GenerateSettlementDialog({ children, owners }: Props) {
               </SelectContent>
             </Select>
             <p className="text-[10px] text-muted-foreground">
-              Solo se incluyen reservas en esta moneda. Si el propietario tiene reservas mixtas, generá una liquidación por moneda.
+              Solo se incluyen reservas en esta moneda. Si el propietario tiene
+              reservas mixtas, generá una liquidación por moneda.
             </p>
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
+          <Button variant="outline" onClick={() => setOpen(false)}>
+            Cancelar
+          </Button>
           <Button onClick={handleGenerate} disabled={isPending} className="gap-2">
-            {isPending ? <Loader2 className="animate-spin" /> : <Sparkles size={14} />}
+            {isPending ? (
+              <Loader2 className="animate-spin" />
+            ) : (
+              <Sparkles size={14} />
+            )}
             Generar
           </Button>
         </DialogFooter>

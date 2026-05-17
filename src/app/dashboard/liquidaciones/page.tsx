@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Plus, FileText, ChevronRight } from "lucide-react";
+import { FileText, ChevronRight } from "lucide-react";
 import { listSettlements } from "@/lib/actions/settlements";
 import { listOwners } from "@/lib/actions/owners";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -43,16 +42,10 @@ export default async function LiquidacionesPage() {
             {ss.length} generadas · {pendientes} pendientes de pago
           </p>
         </div>
-        <GenerateSettlementDialog owners={owners}>
-          <Button className="gap-2">
-            <Plus size={16} />{" "}
-            <span className="hidden sm:inline">Generar liquidación</span>
-            <span className="sm:hidden">Generar</span>
-          </Button>
-        </GenerateSettlementDialog>
+        <GenerateSettlementDialog owners={owners} />
       </div>
 
-      <SettlementsViewTabs active="propietario" />
+      <SettlementsViewTabs />
 
       {ss.length === 0 ? (
         <Card className="p-8 sm:p-12 text-center border-dashed">

@@ -115,3 +115,57 @@ export async function archiveOwner(id: string): Promise<void> {
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/propietarios");
 }
+
+/**
+ * Asigna una unidad a un propietario (lado propietario). Espejo de
+ * linkOwnerToUnit pero revalidando la ficha del propietario.
+ */
+export async function linkUnitToOwner(
+  ownerId: string,
+  unitId: string,
+  ownership_pct: number,
+  is_primary: boolean = false,
+  commission_pct_override: number | null = null,
+): Promise<void> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const { data: unit } = await admin
+    .from("units")
+    .select("id")
+    .eq("id", unitId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!unit) throw new Error("Unidad no encontrada");
+
+  const { data: existing } = await admin
+    .from("unit_owners")
+    .select("id")
+    .eq("unit_id", unitId)
+    .eq("owner_id", ownerId)
+    .maybeSingle();
+  if (existing) {
+    throw new Error("Esa unidad ya está asignada a este propietario");
+  }
+
+  if (is_primary) {
+    await admin
+      .from("unit_owners")
+      .update({ is_primary: false })
+      .eq("unit_id", unitId);
+  }
+
+  const { error } = await admin.from("unit_owners").insert({
+    unit_id: unitId,
+    owner_id: ownerId,
+    ownership_pct,
+    is_primary,
+    commission_pct_override,
+  });
+  if (error) throw new Error(error.message);
+
+  revalidatePath(`/dashboard/propietarios/${ownerId}`);
+  revalidatePath(`/dashboard/unidades/${unitId}`);
+  revalidatePath("/dashboard/propietarios");
+}

@@ -38,7 +38,9 @@ interface ComputedLine {
   meta: SettlementLineMeta | null;
 }
 
-export interface PeriodGenerationResult {
+// NO exportar tipos desde un archivo "use server" (rompe el proxy de acciones
+// del cliente y los componentes que importan acciones de este módulo no montan).
+interface PeriodGenerationResult {
   owner_id: string;
   owner_name: string;
   ok: boolean;

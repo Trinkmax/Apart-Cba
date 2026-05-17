@@ -49,8 +49,9 @@ export default async function LiquidacionesPeriodoPage({
             Generación por período · {formatPeriod(year, month)}
           </p>
         </div>
-        <SettlementsViewTabs active="periodo" />
       </div>
+
+      <SettlementsViewTabs />
 
       <PeriodBatchPanel
         year={year}

@@ -149,7 +149,8 @@
       "Bash(echo \"--- total tsc lines: $\\(npx tsc --noEmit 2>&1)",
       "Bash(echo \"tsc total: $\\(npx tsc --noEmit 2>&1)",
       "Bash(npx eslint *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(echo \"tsc: $\\(npx tsc --noEmit 2>&1)"
     ]
   },
   "enableAllProjectMcpServers": true,
