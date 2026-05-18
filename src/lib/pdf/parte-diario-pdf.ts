@@ -29,7 +29,7 @@ const ROW_STRIPE: [number, number, number] = [248, 250, 252];
 const PAGE_W = 210;
 const MARGIN_X = 14;
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
-const HEADER_H = 38;
+const HEADER_H = 42;
 
 function brandingFromSnapshot(snapshot: ParteDiarioSnapshot): OrgBranding {
   return {

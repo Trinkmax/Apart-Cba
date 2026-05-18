@@ -131,7 +131,7 @@ export async function generatePaymentReceiptPDF(data: PaymentReceiptData): Promi
   }
 
   // ─── Header band ───────────────────────────────────────────────────────────
-  const HEADER_H = 50;
+  const HEADER_H = 46;
   setFill(doc, brand);
   doc.rect(0, 0, PAGE_W, HEADER_H, "F");
 
@@ -141,41 +141,38 @@ export async function generatePaymentReceiptPDF(data: PaymentReceiptData): Promi
   doc.rect(0, HEADER_H, PAGE_W, 4, "F");
   doc.setGState(new (doc as unknown as { GState: new (o: { opacity: number }) => unknown }).GState({ opacity: 1 }));
 
-  // Logo (cuadrado de 22x22, alineado a la izquierda)
-  let titleX = MARGIN_X;
+  // Logo grande, sin texto al lado (el logo ya es la identidad de marca).
+  // Logo directo sobre la banda (sin recuadro): un PNG transparente claro
+  // se ve nítido sobre el fondo oscuro. Si la org no tiene logo, se cae
+  // al nombre/datos fiscales como respaldo.
   if (logo) {
-    const maxSide = 22;
+    const maxSide = HEADER_H - 2;
     const ratio = logo.w / logo.h;
     let w = maxSide;
     let h = maxSide;
     if (ratio > 1) h = maxSide / ratio;
     else w = maxSide * ratio;
-    // Fondo blanco redondeado para el logo (mejora visibilidad sobre brand color)
-    setFill(doc, [255, 255, 255]);
-    drawRoundedRect(doc, MARGIN_X, 12, 26, 26, 4, "F");
     doc.addImage(
       logo.dataUrl,
       logo.format,
-      MARGIN_X + (26 - w) / 2,
-      12 + (26 - h) / 2,
+      MARGIN_X,
+      (HEADER_H - h) / 2,
       w,
       h
     );
-    titleX = MARGIN_X + 32;
-  }
-
-  setText(doc, [255, 255, 255]);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(18);
-  doc.text(data.organization.name.toUpperCase(), titleX, 22);
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  if (data.organization.legal_name) {
-    doc.text(data.organization.legal_name, titleX, 28);
-  }
-  if (data.organization.tax_id) {
-    doc.text(`CUIT/Tax ID: ${data.organization.tax_id}`, titleX, 33);
+  } else {
+    setText(doc, [255, 255, 255]);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(18);
+    doc.text(data.organization.name.toUpperCase(), MARGIN_X, 22);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    if (data.organization.legal_name) {
+      doc.text(data.organization.legal_name, MARGIN_X, 28);
+    }
+    if (data.organization.tax_id) {
+      doc.text(`CUIT/Tax ID: ${data.organization.tax_id}`, MARGIN_X, 33);
+    }
   }
 
   // Right block: receipt number + issue date

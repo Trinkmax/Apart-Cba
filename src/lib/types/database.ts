@@ -146,6 +146,8 @@ export interface Organization {
   default_commission_pct: number | null;
   logo_url: string | null;
   primary_color: string | null;
+  /** false = en el sidebar se muestra solo el logo (sin el nombre). */
+  brand_show_name: boolean;
   /** Override de colores por status de reserva (hex). Si null o falta una clave, se usa el default. */
   booking_status_colors: BookingStatusColors | null;
   description: string | null;

@@ -150,6 +150,7 @@ const organizationProfileSchema = z.object({
     .refine((v) => v === null || HEX_COLOR_RE.test(v), {
       message: "Color inválido (#RRGGBB)",
     }),
+  brand_show_name: z.boolean().optional(),
 });
 
 export type OrganizationProfileInput = z.input<typeof organizationProfileSchema>;
@@ -171,7 +172,26 @@ export async function updateOrganizationProfile(
       legal_name: validated.legal_name,
       tax_id: validated.tax_id,
       primary_color: validated.primary_color,
+      ...(validated.brand_show_name !== undefined
+        ? { brand_show_name: validated.brand_show_name }
+        : {}),
     })
+    .eq("id", organization.id);
+  if (error) throw new Error(error.message);
+  revalidatePath("/", "layout");
+}
+
+/** Toggle independiente: mostrar/ocultar el nombre junto al logo (sidebar). */
+export async function setOrgBrandShowName(value: boolean): Promise<void> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (role !== "admin") {
+    throw new Error("Solo un administrador puede cambiar la configuración");
+  }
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("organizations")
+    .update({ brand_show_name: value })
     .eq("id", organization.id);
   if (error) throw new Error(error.message);
   revalidatePath("/", "layout");

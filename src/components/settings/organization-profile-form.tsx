@@ -8,8 +8,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   removeOrganizationLogo,
+  setOrgBrandShowName,
   updateOrganizationProfile,
   uploadOrganizationLogo,
 } from "@/lib/actions/org";
@@ -23,7 +25,7 @@ export function OrganizationProfileForm({
 }: {
   organization: Pick<
     Organization,
-    "name" | "legal_name" | "tax_id" | "primary_color" | "logo_url" | "slug" | "timezone"
+    | "name" | "legal_name" | "tax_id" | "primary_color" | "logo_url" | "slug" | "timezone" | "brand_show_name"
   >;
 }) {
   const router = useRouter();
@@ -36,6 +38,7 @@ export function OrganizationProfileForm({
   const [taxId, setTaxId] = useState(organization.tax_id ?? "");
   const [color, setColor] = useState(organization.primary_color ?? DEFAULT_COLOR);
   const [logoUrl, setLogoUrl] = useState(organization.logo_url);
+  const [showName, setShowName] = useState(organization.brand_show_name ?? true);
 
   function handleSubmit() {
     if (!name.trim()) {
@@ -106,6 +109,24 @@ export function OrganizationProfileForm({
     });
   }
 
+  function toggleShowName(v: boolean) {
+    setShowName(v); // optimista
+    startTransition(async () => {
+      try {
+        await setOrgBrandShowName(v);
+        toast.success(
+          v ? "Se mostrará el nombre junto al logo" : "Se mostrará solo el logo",
+        );
+        router.refresh();
+      } catch (e) {
+        setShowName(!v); // revertir
+        toast.error("No se pudo guardar", {
+          description: (e as Error).message,
+        });
+      }
+    });
+  }
+
   return (
     <div className="space-y-6">
       {/* Logo */}
@@ -113,14 +134,16 @@ export function OrganizationProfileForm({
         <div>
           <h3 className="text-sm font-semibold">Logo</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Aparece en el sidebar y en los comprobantes en PDF. PNG, JPG, WebP o SVG, hasta 4 MB.
+            Aparece en el sidebar y en los comprobantes/PDF. Usá un{" "}
+            <strong>PNG con fondo transparente</strong> (preferentemente
+            claro/blanco, para que se vea sobre fondo oscuro). Hasta 4 MB.
           </p>
         </div>
 
         <div className="flex items-center gap-4 flex-wrap">
           <div
-            className="size-20 rounded-lg border bg-muted/40 flex items-center justify-center overflow-hidden shrink-0"
-            aria-label="Vista previa del logo"
+            className="size-20 rounded-lg border bg-neutral-900 flex items-center justify-center overflow-hidden shrink-0"
+            aria-label="Vista previa del logo (fondo oscuro, igual que en sidebar y PDF)"
           >
             {logoUrl ? (
               <Image
@@ -174,6 +197,22 @@ export function OrganizationProfileForm({
               </Button>
             )}
           </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t pt-4">
+          <div className="min-w-0">
+            <Label className="text-sm">Mostrar el nombre junto al logo</Label>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              En el sidebar. Si lo desactivás, se muestra solo el logo (más
+              grande). No afecta los documentos PDF.
+            </p>
+          </div>
+          <Switch
+            checked={showName}
+            onCheckedChange={toggleShowName}
+            disabled={isPending}
+            aria-label="Mostrar el nombre junto al logo"
+          />
         </div>
       </div>
 

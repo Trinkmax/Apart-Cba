@@ -151,7 +151,8 @@
       "Bash(npx eslint *)",
       "Bash(python3 *)",
       "Bash(echo \"tsc: $\\(npx tsc --noEmit 2>&1)",
-      "Bash(xargs -I {} basename {})"
+      "Bash(xargs -I {} basename {})",
+      "Bash(grep -n \"from\\(\\\\\"organizations\\\\\"\\)\\\\|organization:organizations\\\\|organizations\\(\\\\*\\\\|select\\(\\\\`\\\\\\\\*\\\\|select\\(\\\\\"\\\\\\\\*\" src/lib/actions/auth.ts src/lib/actions/org.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,

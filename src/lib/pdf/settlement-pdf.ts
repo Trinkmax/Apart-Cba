@@ -20,7 +20,7 @@ import {
 const PAGE_W = 210;
 const PAGE_H = 297;
 const MARGIN_X = 14;
-const HEADER_H = 38;
+const HEADER_H = 42;
 const INK: RGB = [15, 23, 42];
 const MUTED: RGB = [100, 116, 139];
 

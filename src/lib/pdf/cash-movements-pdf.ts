@@ -35,7 +35,7 @@ const BILLABLE_LABEL: Record<"apartcba" | "owner" | "guest", string> = {
 const PAGE_W = 297; // landscape A4
 const PAGE_H = 210;
 const MARGIN_X = 14;
-const HEADER_H = 32;
+const HEADER_H = 36;
 
 export interface CashMovementsPdfMeta {
   fromLabel: string;

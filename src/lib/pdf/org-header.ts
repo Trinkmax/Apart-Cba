@@ -182,7 +182,6 @@ export async function drawOrgBrandHeader(
 ): Promise<{ brand: RGB; titleX: number; logo: LoadedLogo | null }> {
   const marginX = opts.marginX ?? 14;
   const showFiscalInfo = opts.showFiscalInfo ?? true;
-  const logoSize = opts.logoSize ?? 22;
   const nameFontSize = opts.nameFontSize ?? 18;
   const brand = resolveBrandColor(org);
 
@@ -198,55 +197,52 @@ export async function drawOrgBrandHeader(
   doc.rect(0, opts.headerHeight, opts.pageWidth, 3, "F");
   doc.setGState(new GState({ opacity: 1 }));
 
-  // Logo (white rounded box, contain-fit)
+  // Logo directo sobre la banda de marca (sin recuadro blanco): así los
+  // logos PNG con fondo transparente (típicamente claros) se ven nítidos.
   let logo: LoadedLogo | null = opts.logo ?? null;
   if (!logo && org.logo_url) {
     logo = await loadOrgLogo(org.logo_url);
   }
-  let textX = marginX;
-  const logoBoxSize = logoSize + 4;
-  const logoBoxY = Math.max(8, (opts.headerHeight - logoBoxSize) / 2);
+  const textX = marginX;
+  // Logo grande escalado a la banda, SIN texto al lado (mismo criterio en
+  // todos los documentos). Si la org no tiene logo → nombre + datos
+  // fiscales como respaldo.
   if (logo) {
-    setFill(doc, [255, 255, 255]);
-    doc.roundedRect(marginX, logoBoxY, logoBoxSize, logoBoxSize, 3, 3, "F");
+    const targetSide = Math.min(opts.headerHeight - 2, 64);
     const ratio = logo.w / logo.h;
-    let w = logoSize;
-    let h = logoSize;
-    if (ratio > 1) h = logoSize / ratio;
-    else w = logoSize * ratio;
+    let w = targetSide;
+    let h = targetSide;
+    if (ratio > 1) h = targetSide / ratio;
+    else w = targetSide * ratio;
     doc.addImage(
       logo.dataUrl,
       logo.format,
-      marginX + (logoBoxSize - w) / 2,
-      logoBoxY + (logoBoxSize - h) / 2,
+      marginX,
+      (opts.headerHeight - h) / 2,
       w,
       h
     );
-    textX = marginX + logoBoxSize + 6;
-  }
-
-  // Org name + (optional) fiscal info
-  setText(doc, [255, 255, 255]);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(nameFontSize);
-
-  const baseY = logo ? logoBoxY + logoBoxSize / 2 + 1 : opts.headerHeight / 2 + 1;
-  if (showFiscalInfo && (org.legal_name || org.tax_id)) {
-    // Push name up so legal_name/tax_id fit underneath
-    const nameY = baseY - 4;
-    doc.text(org.name.toUpperCase(), textX, nameY);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    let infoY = nameY + 5;
-    if (org.legal_name) {
-      doc.text(org.legal_name, textX, infoY);
-      infoY += 4.5;
-    }
-    if (org.tax_id) {
-      doc.text(`CUIT/Tax ID: ${org.tax_id}`, textX, infoY);
-    }
   } else {
-    doc.text(org.name.toUpperCase(), textX, baseY);
+    setText(doc, [255, 255, 255]);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(nameFontSize);
+    const baseY = opts.headerHeight / 2 + 1;
+    if (showFiscalInfo && (org.legal_name || org.tax_id)) {
+      const nameY = baseY - 4;
+      doc.text(org.name.toUpperCase(), textX, nameY);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      let infoY = nameY + 5;
+      if (org.legal_name) {
+        doc.text(org.legal_name, textX, infoY);
+        infoY += 4.5;
+      }
+      if (org.tax_id) {
+        doc.text(`CUIT/Tax ID: ${org.tax_id}`, textX, infoY);
+      }
+    } else {
+      doc.text(org.name.toUpperCase(), textX, baseY);
+    }
   }
 
   // Reset to ink for caller
