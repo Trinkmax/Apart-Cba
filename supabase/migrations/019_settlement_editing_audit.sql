@@ -53,13 +53,15 @@ CREATE TABLE IF NOT EXISTS apartcba.settlement_audit (
 CREATE INDEX IF NOT EXISTS idx_settlement_audit_settlement
   ON apartcba.settlement_audit(settlement_id, occurred_at DESC);
 
+-- Log inmutable: lo escribe/lee SOLO service_role en server actions (nunca el
+-- browser client). RLS habilitada SIN policy → deny por defecto a
+-- anon/authenticated; service_role tiene BYPASSRLS. Más estricto que el patrón
+-- USING(true) del resto del esquema, a propósito (es auditoría).
 ALTER TABLE apartcba.settlement_audit ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS settlement_audit_all ON apartcba.settlement_audit;
-CREATE POLICY settlement_audit_all ON apartcba.settlement_audit
-  FOR ALL USING (true) WITH CHECK (true);
 
 COMMENT ON TABLE apartcba.settlement_audit IS
-  'Historial inmutable de cambios de liquidaciones. Acceso vía service_role en server actions; el scoping por org se hace en la capa de acciones.';
+  'Historial inmutable de cambios de liquidaciones. RLS sin policy: acceso solo vía service_role en server actions; el scoping por org se hace en la capa de acciones.';
 
 -- ─── Lock extendido: ajustes de liquidación cerrada también protegidos ──────
 CREATE OR REPLACE FUNCTION apartcba.cash_movement_settlement_lock(p_movement_id uuid)

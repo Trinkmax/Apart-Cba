@@ -157,7 +157,9 @@
       "Bash(awk '/CREATE TABLE apartcba.settlement_lines/,/\\\\\\);/' /Users/ignaciobaldovino/Apart-Cba/supabase/migrations/001_apartcba_full_schema.sql)",
       "Bash(grep -E \"\\\\.ts$\")",
       "Bash(kill -9 67899 67938 67939 91485)",
-      "Bash(grep -n \"export async function changeSettlementStatus\\\\|export async function registerSettlementPayment\\\\|export async function sendSettlementToOwner\\\\|return { ok: true as const, movement_id\\\\|revalidateSettlement\\(id\\);\\\\|^}\" src/lib/actions/settlements.ts)"
+      "Bash(grep -n \"export async function changeSettlementStatus\\\\|export async function registerSettlementPayment\\\\|export async function sendSettlementToOwner\\\\|return { ok: true as const, movement_id\\\\|revalidateSettlement\\(id\\);\\\\|^}\" src/lib/actions/settlements.ts)",
+      "Bash(echo \"EXITGREP:$?\")",
+      "Bash(echo \"BUILD_EXIT:$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,

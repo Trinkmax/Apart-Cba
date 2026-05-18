@@ -1,16 +1,13 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
-import { getSettlement } from "@/lib/actions/settlements";
+import { getSettlement, listSettlementAudit } from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
 import { can } from "@/lib/permissions";
 import { SettlementStatement } from "@/components/settlements/settlement-statement";
+import { EditableSettlementStatement } from "@/components/settlements/editable-settlement-statement";
 import { SettlementActions } from "@/components/settlements/settlement-actions";
-import {
-  SettlementLineEditor,
-  type EditorLine,
-} from "@/components/settlements/settlement-line-editor";
 import {
   buildStatementModel,
   type StatementInput,
@@ -43,13 +40,16 @@ export default async function SettlementDetailPage({
   )) as unknown as SettlementDetail | null;
   if (!settlement) notFound();
 
-  const [branding, accounts] = await Promise.all([
+  const [branding, accounts, audit] = await Promise.all([
     getOrganizationBranding(),
     listAccounts(),
+    listSettlementAudit(id),
   ]);
 
   const canCreate = can(role, "settlements", "create");
   const canUpdate = can(role, "settlements", "update");
+  const paid =
+    settlement.status === "pagada" || !!settlement.paid_movement_id;
 
   const statementInput: StatementInput = {
     id: settlement.id,
@@ -96,20 +96,6 @@ export default async function SettlementDetailPage({
     a.code.localeCompare(b.code),
   );
 
-  const editorLines: EditorLine[] = (settlement.lines ?? [])
-    .slice()
-    .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
-    .map((l) => ({
-      id: l.id,
-      line_type: l.line_type,
-      description: l.description,
-      unit_id: l.unit_id,
-      unitCode: l.unit?.code ?? null,
-      amount: Number(l.amount),
-      sign: l.sign,
-      is_manual: l.is_manual,
-    }));
-
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -141,15 +127,18 @@ export default async function SettlementDetailPage({
         canUpdate={canUpdate}
       />
 
-      <SettlementStatement model={model} />
-
-      {settlement.status === "borrador" && canUpdate && (
-        <SettlementLineEditor
+      {canUpdate ? (
+        <EditableSettlementStatement
+          model={model}
           settlementId={settlement.id}
           currency={settlement.currency}
-          lines={editorLines}
+          status={settlement.status}
+          paid={paid}
           units={units}
+          audit={audit}
         />
+      ) : (
+        <SettlementStatement model={model} />
       )}
     </div>
   );

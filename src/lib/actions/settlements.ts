@@ -915,6 +915,58 @@ export async function deleteSettlementLine(lineId: string) {
   });
 }
 
+/** Quita una reserva completa de la liquidación (todas las líneas del grupo)
+ * en una sola operación → un único asiento de ajuste si está pagada. */
+export async function removeSettlementBookingRow(input: {
+  settlement_id: string;
+  ref_id: string;
+}) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const settlementId = z.string().uuid().parse(input.settlement_id);
+  const refId = z.string().uuid().parse(input.ref_id);
+  const admin = createAdminClient();
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    settlementId,
+  );
+
+  const { data: group } = await admin
+    .from("settlement_lines")
+    .select("id, description, meta")
+    .eq("settlement_id", settlementId)
+    .eq("ref_type", "booking")
+    .eq("ref_id", refId);
+  if (!group || group.length === 0) {
+    throw new Error("Reserva no encontrada en la liquidación");
+  }
+  const label =
+    (group.find((g) => g.meta)?.meta as SettlementLineMeta | null)
+      ?.guest_name ?? "Reserva";
+
+  const { error } = await admin
+    .from("settlement_lines")
+    .delete()
+    .eq("settlement_id", settlementId)
+    .eq("ref_type", "booking")
+    .eq("ref_id", refId);
+  if (error) throw new Error(error.message);
+
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "line_delete",
+    changes: { reserva: label, lineas_eliminadas: group.length },
+    reason: `quitó la reserva de ${label}`,
+  });
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Editar una fila de reserva de la planilla — "liquidar más/menos noches".
 // Toca de forma atómica las 3 líneas del grupo (ingreso + comisión + gastos),

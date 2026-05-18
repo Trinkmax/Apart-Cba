@@ -72,6 +72,8 @@ export interface StatementUnitGroup {
 }
 
 export interface StatementOtherRow {
+  /** id de la settlement_line — necesario para editar/eliminar desde la UI. */
+  id: string;
   description: string;
   line_type: SettlementLine["line_type"];
   unitCode: string | null;
@@ -113,6 +115,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       bookingGroups.set(l.ref_id, arr);
     } else {
       otros.push({
+        id: l.id,
         description: l.description,
         line_type: l.line_type,
         unitCode: l.unit?.code ?? null,
