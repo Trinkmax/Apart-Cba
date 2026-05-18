@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useId, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -110,21 +110,26 @@ function Money({ n, c, neg }: { n: number; c: string; neg?: boolean }) {
 }
 
 /**
- * Selector "¿este cambio impacta en Caja?". Solo tiene sentido cuando la
- * liquidación ya está pagada (si no, no hay movimiento de Caja igual). ON =
- * postea el asiento de ajuste; OFF = solo visual (el documento cambia, Caja no).
+ * Selector "¿este cambio impacta en Caja?". Siempre visible al editar.
+ *   • Pagada  + ON  → postea un asiento de ajuste por la diferencia.
+ *   • Pagada  + OFF → solo visual: el documento cambia, el egreso queda intacto.
+ *   • Sin pagar + ON  → se refleja en Caja al registrar el pago.
+ *   • Sin pagar + OFF → solo visual: no genera ningún movimiento de Caja.
  */
 function CajaImpactToggle({
   value,
   onChange,
   currency,
   delta,
+  paid,
 }: {
   value: boolean;
   onChange: (v: boolean) => void;
   currency: string;
   delta: number;
+  paid: boolean;
 }) {
+  const id = useId();
   return (
     <div
       className={cn(
@@ -135,35 +140,44 @@ function CajaImpactToggle({
       )}
     >
       <Switch
-        id="caja-impact"
+        id={id}
         checked={value}
         onCheckedChange={onChange}
         className="mt-0.5"
       />
       <div className="space-y-0.5 min-w-0">
-        <Label htmlFor="caja-impact" className="text-sm cursor-pointer">
+        <Label htmlFor={id} className="text-sm cursor-pointer">
           {value ? "Impacta en Caja" : "Solo visual"}
         </Label>
         <p className="text-xs text-muted-foreground">
           {value ? (
-            <>
-              Genera un asiento de ajuste en Caja
-              {delta !== 0 && (
-                <>
-                  {" "}
-                  de{" "}
-                  <span className="font-medium text-foreground">
-                    {delta > 0 ? "+" : "−"}
-                    {formatMoney(Math.abs(delta), currency)}
-                  </span>
-                </>
-              )}
-              .
-            </>
-          ) : (
+            paid ? (
+              <>
+                Genera un asiento de ajuste en Caja
+                {delta !== 0 && (
+                  <>
+                    {" "}
+                    de{" "}
+                    <span className="font-medium text-foreground">
+                      {delta > 0 ? "+" : "−"}
+                      {formatMoney(Math.abs(delta), currency)}
+                    </span>
+                  </>
+                )}
+                .
+              </>
+            ) : (
+              <>Se refleja en Caja al registrar el pago.</>
+            )
+          ) : paid ? (
             <>
               Actualiza solo el documento (PDF / planilla). No mueve Caja: el
               egreso ya pagado queda intacto.
+            </>
+          ) : (
+            <>
+              Actualiza solo el documento (PDF / planilla). No genera ningún
+              movimiento de Caja.
             </>
           )}
         </p>
@@ -405,27 +419,15 @@ function RowEditor({
                 </span>
               </span>
             </div>
-            {!paid && delta !== 0 && (
-              <div className="flex items-start gap-2 pt-1.5 border-t text-xs">
-                <Wallet
-                  size={13}
-                  className="mt-0.5 shrink-0 text-primary"
-                />
-                <span className="text-muted-foreground">
-                  Impacta en Caja al registrar el pago.
-                </span>
-              </div>
-            )}
           </div>
 
-          {paid && (
-            <CajaImpactToggle
-              value={impactCaja}
-              onChange={setImpactCaja}
-              currency={currency}
-              delta={delta}
-            />
-          )}
+          <CajaImpactToggle
+            value={impactCaja}
+            onChange={setImpactCaja}
+            currency={currency}
+            delta={delta}
+            paid={paid}
+          />
         </div>
 
         <DialogFooter className="gap-2 sm:justify-between">
@@ -651,19 +653,18 @@ function ChargeDialog({
               </div>
             )}
           </div>
-          {paid && (
-            <CajaImpactToggle
-              value={impactCaja}
-              onChange={setImpactCaja}
-              currency={currency}
-              delta={round2(
-                (sign === "+" ? 1 : -1) * num(amount) -
-                  (initial
-                    ? (initial.sign === "+" ? 1 : -1) * initial.amount
-                    : 0),
-              )}
-            />
-          )}
+          <CajaImpactToggle
+            value={impactCaja}
+            onChange={setImpactCaja}
+            currency={currency}
+            paid={paid}
+            delta={round2(
+              (sign === "+" ? 1 : -1) * num(amount) -
+                (initial
+                  ? (initial.sign === "+" ? 1 : -1) * initial.amount
+                  : 0),
+            )}
+          />
         </div>
         <DialogFooter>
           <Button
@@ -985,15 +986,17 @@ export function EditableSettlementStatement({
           <span>
             {paid ? (
               <>
-                Liquidación <strong>pagada</strong>: cada cambio postea un{" "}
-                <strong>asiento de ajuste en Caja</strong> por la diferencia,
-                registrado a tu nombre. El egreso original no se reescribe.
+                Liquidación <strong>pagada</strong>. En cada cambio elegís si{" "}
+                <strong>impacta en Caja</strong> (postea un asiento de ajuste
+                por la diferencia, sin reescribir el egreso original) o es{" "}
+                <strong>solo visual</strong>. Todo queda en el historial a tu
+                nombre.
               </>
             ) : (
               <>
-                Tocá una fila o un cargo para editar. Los cambios impactan en{" "}
-                <strong>Caja</strong> al registrar el pago y quedan en el
-                historial.
+                Tocá una fila o un cargo para editar. En cada cambio elegís si{" "}
+                <strong>impacta en Caja</strong> o es <strong>solo visual</strong>;
+                todo queda en el historial.
               </>
             )}
           </span>
@@ -1306,16 +1309,13 @@ export function EditableSettlementStatement({
               historial.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {paid && (
-            <CajaImpactToggle
-              value={delImpact}
-              onChange={setDelImpact}
-              currency={c}
-              delta={
-                deletingCharge ? round2(-deletingCharge.signed) : 0
-              }
-            />
-          )}
+          <CajaImpactToggle
+            value={delImpact}
+            onChange={setDelImpact}
+            currency={c}
+            paid={paid}
+            delta={deletingCharge ? round2(-deletingCharge.signed) : 0}
+          />
           <AlertDialogFooter>
             <AlertDialogCancel disabled={pending}>
               Cancelar
