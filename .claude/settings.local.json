@@ -161,7 +161,12 @@
       "Bash(echo \"EXITGREP:$?\")",
       "Bash(echo \"BUILD_EXIT:$?\")",
       "mcp__supabase-apartcba__get_project_url",
-      "Skill(react-best-practices)"
+      "Skill(react-best-practices)",
+      "Bash(grep -n \"reason:\\\\s*$\\\\|reason:.*noches\\\\|oldNights != null\\\\|impactCaja\\\\|reconcileAfterEdit\\({\" src/lib/actions/settlements.ts)",
+      "Bash(grep -n \"const \\\\[expenses, setExpenses\\\\]\\\\|function save\\(\\)\\\\|updateSettlementBookingRow\\({\\\\|removeSettlementBookingRow\\({\\\\|Neto de esta fila\\\\|delta !== 0 &&\\\\|paid ? \\(\\\\|Genera un{\\\\|Impacta en Caja al registrar\\\\|</div>\\\\s*$\" src/components/settlements/editable-settlement-statement.tsx)",
+      "Bash(grep -n \"function ChargeDialog\\\\|const \\\\[unitId, setUnitId\\\\]\\\\|function submit\\(\\)\\\\|updateSettlementLine\\({ id: initial.id\\\\|addSettlementLine\\({\\\\|res?.adjustmentId != null\\\\|La liquidación está pagada: este cargo\\\\|<DialogFooter>\" src/components/settlements/editable-settlement-statement.tsx)",
+      "Bash(grep -n \"<AuditSheet\\\\|<ChargeDialog\\\\|{editingRow &&\\\\|</Card>\\\\s*$\\\\|initial={editCharge}\" src/components/settlements/editable-settlement-statement.tsx)",
+      "Bash(echo \"TSC_EXIT:$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,

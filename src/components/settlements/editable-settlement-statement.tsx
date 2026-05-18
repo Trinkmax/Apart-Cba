@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -108,6 +109,69 @@ function Money({ n, c, neg }: { n: number; c: string; neg?: boolean }) {
   );
 }
 
+/**
+ * Selector "¿este cambio impacta en Caja?". Solo tiene sentido cuando la
+ * liquidación ya está pagada (si no, no hay movimiento de Caja igual). ON =
+ * postea el asiento de ajuste; OFF = solo visual (el documento cambia, Caja no).
+ */
+function CajaImpactToggle({
+  value,
+  onChange,
+  currency,
+  delta,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+  currency: string;
+  delta: number;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-3 flex items-start gap-3 transition-colors",
+        value
+          ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900"
+          : "bg-muted/40",
+      )}
+    >
+      <Switch
+        id="caja-impact"
+        checked={value}
+        onCheckedChange={onChange}
+        className="mt-0.5"
+      />
+      <div className="space-y-0.5 min-w-0">
+        <Label htmlFor="caja-impact" className="text-sm cursor-pointer">
+          {value ? "Impacta en Caja" : "Solo visual"}
+        </Label>
+        <p className="text-xs text-muted-foreground">
+          {value ? (
+            <>
+              Genera un asiento de ajuste en Caja
+              {delta !== 0 && (
+                <>
+                  {" "}
+                  de{" "}
+                  <span className="font-medium text-foreground">
+                    {delta > 0 ? "+" : "−"}
+                    {formatMoney(Math.abs(delta), currency)}
+                  </span>
+                </>
+              )}
+              .
+            </>
+          ) : (
+            <>
+              Actualiza solo el documento (PDF / planilla). No mueve Caja: el
+              egreso ya pagado queda intacto.
+            </>
+          )}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────────── Editor de fila ─────────────────────────── */
 
 function RowEditor({
@@ -143,6 +207,7 @@ function RowEditor({
   );
   const [commission, setCommission] = useState(String(row.commission));
   const [expenses, setExpenses] = useState(String(row.expenses));
+  const [impactCaja, setImpactCaja] = useState(true);
 
   const oldNet = round2(row.gross - row.commission - row.expenses);
   const newNet = round2(num(gross) - num(commission) - num(expenses));
@@ -181,12 +246,15 @@ function RowEditor({
           guest_name: guest.trim() || null,
           check_in: checkIn || null,
           check_out: checkOut || null,
+          impact_caja: impactCaja,
         });
         toast.success("Reserva actualizada", {
           description:
             res.adjustmentId != null
               ? `Asiento de ajuste en Caja de ${formatMoney(Math.abs(res.delta), currency)}`
-              : undefined,
+              : res.visualOnly && paid
+                ? "Solo visual — Caja sin cambios"
+                : undefined,
         });
         onOpenChange(false);
         router.refresh();
@@ -204,12 +272,15 @@ function RowEditor({
         const res = await removeSettlementBookingRow({
           settlement_id: settlementId,
           ref_id: row.ref_id!,
+          impact_caja: impactCaja,
         });
         toast.success("Reserva quitada de la liquidación", {
           description:
             res.adjustmentId != null
               ? `Asiento de ajuste en Caja de ${formatMoney(Math.abs(res.delta), currency)}`
-              : undefined,
+              : res.visualOnly && paid
+                ? "Solo visual — Caja sin cambios"
+                : undefined,
         });
         onOpenChange(false);
         router.refresh();
@@ -334,30 +405,27 @@ function RowEditor({
                 </span>
               </span>
             </div>
-            {delta !== 0 && (
+            {!paid && delta !== 0 && (
               <div className="flex items-start gap-2 pt-1.5 border-t text-xs">
                 <Wallet
                   size={13}
                   className="mt-0.5 shrink-0 text-primary"
                 />
                 <span className="text-muted-foreground">
-                  {paid ? (
-                    <>
-                      Genera un{" "}
-                      <strong className="text-foreground">
-                        asiento de ajuste en Caja
-                      </strong>{" "}
-                      de{" "}
-                      {delta > 0 ? "+" : "−"}
-                      {formatMoney(Math.abs(delta), currency)}.
-                    </>
-                  ) : (
-                    <>Impacta en Caja al registrar el pago.</>
-                  )}
+                  Impacta en Caja al registrar el pago.
                 </span>
               </div>
             )}
           </div>
+
+          {paid && (
+            <CajaImpactToggle
+              value={impactCaja}
+              onChange={setImpactCaja}
+              currency={currency}
+              delta={delta}
+            />
+          )}
         </div>
 
         <DialogFooter className="gap-2 sm:justify-between">
@@ -376,8 +444,11 @@ function RowEditor({
                 <AlertDialogTitle>¿Quitar la reserva?</AlertDialogTitle>
                 <AlertDialogDescription>
                   Se eliminan todas sus líneas de la liquidación
-                  {paid && " y se genera el ajuste correspondiente en Caja"}.
-                  Queda registrado en el historial.
+                  {paid &&
+                    (impactCaja
+                      ? " y se genera el ajuste correspondiente en Caja"
+                      : " (solo visual: Caja queda intacta)")}
+                  . Queda registrado en el historial.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -455,6 +526,7 @@ function ChargeDialog({
     initial ? String(initial.amount) : "",
   );
   const [unitId, setUnitId] = useState("none");
+  const [impactCaja, setImpactCaja] = useState(true);
 
   function submit() {
     if (description.trim().length < 2 || !(num(amount) > 0)) {
@@ -468,6 +540,7 @@ function ChargeDialog({
           description: description.trim(),
           amount: round2(num(amount)),
           sign,
+          impact_caja: impactCaja,
         };
         const res = initial
           ? await updateSettlementLine({ id: initial.id, ...payload })
@@ -480,7 +553,9 @@ function ChargeDialog({
           description:
             res?.adjustmentId != null
               ? `Asiento de ajuste en Caja de ${formatMoney(Math.abs(res.delta), currency)}`
-              : undefined,
+              : res?.visualOnly && paid
+                ? "Solo visual — Caja sin cambios"
+                : undefined,
         });
         onOpenChange(false);
         router.refresh();
@@ -577,11 +652,17 @@ function ChargeDialog({
             )}
           </div>
           {paid && (
-            <p className="text-xs text-muted-foreground flex items-start gap-2">
-              <Wallet size={13} className="mt-0.5 shrink-0 text-primary" />
-              La liquidación está pagada: este cargo genera un asiento de
-              ajuste en Caja por la diferencia.
-            </p>
+            <CajaImpactToggle
+              value={impactCaja}
+              onChange={setImpactCaja}
+              currency={currency}
+              delta={round2(
+                (sign === "+" ? 1 : -1) * num(amount) -
+                  (initial
+                    ? (initial.sign === "+" ? 1 : -1) * initial.amount
+                    : 0),
+              )}
+            />
           )}
         </div>
         <DialogFooter>
@@ -740,30 +821,39 @@ export function EditableSettlementStatement({
     | null
   >(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [deletingCharge, setDeletingCharge] = useState<{
+    id: string;
+    description: string;
+    signed: number;
+  } | null>(null);
+  const [delImpact, setDelImpact] = useState(true);
   const router = useRouter();
   const [pending, start] = useTransition();
 
   const lastEdit = audit[0] ?? null;
   const editable = status !== "anulada";
 
-  // Map de "otros" → necesitamos el id real de la línea para editar/borrar.
-  // El modelo no trae el id; lo resolvemos por descripción+importe (único en
-  // la práctica). Para edición exacta usamos el índice del modelo.
+  // El modelo de "otros" ya trae el id real de la settlement_line.
   const otros = useMemo(
-    () => model.otros.map((o, i) => ({ ...o, key: `${o.description}-${i}` })),
+    () => model.otros.map((o, i) => ({ ...o, key: `${o.id}-${i}` })),
     [model.otros],
   );
 
-  function removeCharge(o: (typeof otros)[number]) {
+  function confirmRemoveCharge() {
+    if (!deletingCharge) return;
+    const { id } = deletingCharge;
     start(async () => {
       try {
-        const res = await deleteSettlementLine(o.id);
+        const res = await deleteSettlementLine(id, delImpact);
         toast.success("Cargo eliminado", {
           description:
             res?.adjustmentId != null
               ? `Asiento de ajuste en Caja de ${formatMoney(Math.abs(res.delta), c)}`
-              : undefined,
+              : res?.visualOnly && paid
+                ? "Solo visual — Caja sin cambios"
+                : undefined,
         });
+        setDeletingCharge(null);
         router.refresh();
       } catch (e) {
         toast.error("No se pudo eliminar", {
@@ -1108,41 +1198,24 @@ export function EditableSettlementStatement({
                         >
                           <Pencil size={13} />
                         </Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-7 text-muted-foreground hover:text-rose-600"
-                              aria-label="Eliminar cargo"
-                              disabled={pending}
-                            >
-                              <Trash2 size={13} />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>
-                                ¿Eliminar el cargo?
-                              </AlertDialogTitle>
-                              <AlertDialogDescription>
-                                “{o.description}”
-                                {paid &&
-                                  " — se genera el ajuste correspondiente en Caja"}
-                                . Queda en el historial.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                              <AlertDialogAction
-                                onClick={() => removeCharge(o)}
-                                className="bg-rose-600 hover:bg-rose-700"
-                              >
-                                Eliminar
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 text-muted-foreground hover:text-rose-600"
+                          aria-label="Eliminar cargo"
+                          disabled={pending}
+                          onClick={() => {
+                            setDelImpact(true);
+                            setDeletingCharge({
+                              id,
+                              description: o.description,
+                              signed:
+                                (o.sign === "+" ? 1 : -1) * o.amount,
+                            });
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -1220,6 +1293,43 @@ export function EditableSettlementStatement({
         audit={audit}
         currency={c}
       />
+
+      <AlertDialog
+        open={!!deletingCharge}
+        onOpenChange={(o) => !o && setDeletingCharge(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Eliminar el cargo?</AlertDialogTitle>
+            <AlertDialogDescription>
+              “{deletingCharge?.description}”. Queda registrado en el
+              historial.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {paid && (
+            <CajaImpactToggle
+              value={delImpact}
+              onChange={setDelImpact}
+              currency={c}
+              delta={
+                deletingCharge ? round2(-deletingCharge.signed) : 0
+              }
+            />
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmRemoveCharge}
+              disabled={pending}
+              className="bg-rose-600 hover:bg-rose-700"
+            >
+              Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

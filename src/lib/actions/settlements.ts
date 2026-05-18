@@ -639,13 +639,21 @@ async function reconcileAfterEdit(opts: {
   changes: Record<string, unknown>;
   /** Línea humana de qué cambió (va en la descripción del asiento de Caja). */
   reason: string;
+  /**
+   * false = "solo visual": aplica el cambio al documento y recalcula el neto,
+   * pero NO postea el asiento de ajuste en Caja aunque la liquidación esté
+   * pagada (el egreso original queda intacto). Default true.
+   */
+  impactCaja?: boolean;
 }): Promise<{
   netBefore: number;
   netAfter: number;
   delta: number;
   adjustmentId: string | null;
+  visualOnly: boolean;
 }> {
   const { admin, before, userId, actorName, action, changes, reason } = opts;
+  const impactCaja = opts.impactCaja !== false;
   const netBefore = round2(Number(before.net_payable));
 
   const totals = await recomputeSettlementTotals(admin, before.id);
@@ -659,10 +667,11 @@ async function reconcileAfterEdit(opts: {
     );
   }
 
-  // ── Impacto en Caja: solo si ya hay pago registrado ──────────────────────
+  // ── Impacto en Caja: solo si ya hay pago registrado Y el usuario lo pidió ──
+  const visualOnly = !impactCaja;
   let adjustmentId: string | null = null;
   let adjustmentAccountId: string | null = null;
-  if (before.paid_movement_id && Math.abs(delta) >= 0.01) {
+  if (before.paid_movement_id && Math.abs(delta) >= 0.01 && impactCaja) {
     const { data: payMov } = await admin
       .from("cash_movements")
       .select("account_id")
@@ -705,8 +714,18 @@ async function reconcileAfterEdit(opts: {
         `${direction === "out" ? "Egreso" : "Ingreso"} de ajuste en Caja ${formatMoney(amount, before.currency)}`,
       );
     }
+  } else if (
+    before.paid_movement_id &&
+    Math.abs(delta) >= 0.01 &&
+    !impactCaja
+  ) {
+    sideEffects.push("Solo visual — sin impacto en Caja (egreso intacto)");
   } else if (!before.paid_movement_id && Math.abs(delta) >= 0.01) {
-    sideEffects.push("Impacta en Caja al registrar el pago");
+    sideEffects.push(
+      impactCaja
+        ? "Impacta en Caja al registrar el pago"
+        : "Solo visual — sin impacto en Caja",
+    );
   }
 
   const now = new Date().toISOString();
@@ -721,7 +740,7 @@ async function reconcileAfterEdit(opts: {
     action,
     actor_user_id: userId,
     actor_name: actorName,
-    changes,
+    changes: { ...changes, caja: impactCaja ? "impacto" : "solo_visual" },
     side_effects: sideEffects,
   });
 
@@ -735,7 +754,7 @@ async function reconcileAfterEdit(opts: {
     revalidatePath("/dashboard");
   }
 
-  return { netBefore, netAfter, delta, adjustmentId };
+  return { netBefore, netAfter, delta, adjustmentId, visualOnly };
 }
 
 const lineInputSchema = z.object({
@@ -745,6 +764,8 @@ const lineInputSchema = z.object({
   unit_id: z.string().uuid().optional().nullable(),
   amount: z.coerce.number().positive("El importe debe ser mayor a 0"),
   sign: z.enum(["+", "-"]),
+  /** false = solo visual (no postea ajuste en Caja). Default true. */
+  impact_caja: z.boolean().optional(),
 });
 
 export async function addSettlementLine(input: z.input<typeof lineInputSchema>) {
@@ -800,6 +821,7 @@ export async function addSettlementLine(input: z.input<typeof lineInputSchema>) 
       sign: v.sign,
     },
     reason: `agregó "${v.description}" (${v.sign}${formatMoney(v.amount, before.currency)})`,
+    impactCaja: v.impact_caja,
   });
 }
 
@@ -810,6 +832,8 @@ const lineUpdateSchema = z.object({
   sign: z.enum(["+", "-"]).optional(),
   line_type: z.enum(LINE_TYPES).optional(),
   unit_id: z.string().uuid().nullable().optional(),
+  /** false = solo visual (no postea ajuste en Caja). Default true. */
+  impact_caja: z.boolean().optional(),
 });
 
 /** Editar una línea suelta (típicamente un "otro cargo"/ajuste). Queda
@@ -873,10 +897,14 @@ export async function updateSettlementLine(
     action: "line_update",
     changes: { line: line.description, ...changes },
     reason: `editó "${line.description}"`,
+    impactCaja: v.impact_caja,
   });
 }
 
-export async function deleteSettlementLine(lineId: string) {
+export async function deleteSettlementLine(
+  lineId: string,
+  impactCaja: boolean = true,
+) {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
@@ -912,6 +940,7 @@ export async function deleteSettlementLine(lineId: string) {
       sign: line.sign,
     },
     reason: `eliminó "${line.description}"`,
+    impactCaja,
   });
 }
 
@@ -920,6 +949,7 @@ export async function deleteSettlementLine(lineId: string) {
 export async function removeSettlementBookingRow(input: {
   settlement_id: string;
   ref_id: string;
+  impact_caja?: boolean;
 }) {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
@@ -964,6 +994,7 @@ export async function removeSettlementBookingRow(input: {
     action: "line_delete",
     changes: { reserva: label, lineas_eliminadas: group.length },
     reason: `quitó la reserva de ${label}`,
+    impactCaja: input.impact_caja,
   });
 }
 
@@ -982,6 +1013,8 @@ const bookingRowSchema = z.object({
   guest_name: z.string().max(160).optional().nullable(),
   check_in: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   check_out: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  /** false = solo visual (no postea ajuste en Caja). Default true. */
+  impact_caja: z.boolean().optional(),
 });
 
 export async function updateSettlementBookingRow(
@@ -1163,6 +1196,7 @@ export async function updateSettlementBookingRow(
       oldNights != null && oldNights !== v.nights
         ? `${guestName ?? unitCode}: ${oldNights}→${v.nights} noches`
         : `${guestName ?? unitCode}: bruto ${formatMoney(oldGross, before.currency)} → ${formatMoney(v.gross, before.currency)}`,
+    impactCaja: v.impact_caja,
   });
 }
 

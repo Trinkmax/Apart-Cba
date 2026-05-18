@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import {
   Camera,
   Download,
@@ -410,6 +411,70 @@ function AttachmentTile({
   );
 }
 
+/**
+ * Descarga real del archivo. El atributo `download` de un <a> se IGNORA en
+ * URLs cross-origin (Supabase Storage es otro dominio), así que el navegador
+ * abría la foto en vez de bajarla. Lo traemos como blob y forzamos la descarga.
+ */
+async function downloadAttachment(url: string, name: string) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(String(res.status));
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = name || "foto";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  } catch {
+    // Último recurso: abrir en pestaña nueva.
+    window.open(url, "_blank", "noopener,noreferrer");
+    toast.message("Abrimos la foto en otra pestaña", {
+      description: "Mantené apretado / clic derecho para guardarla.",
+    });
+  }
+}
+
+function DownloadButton({
+  url,
+  name,
+  label,
+  className,
+}: {
+  url: string;
+  name: string;
+  label: string;
+  className?: string;
+}) {
+  const [pending, setPending] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={async (e) => {
+        e.stopPropagation();
+        setPending(true);
+        try {
+          await downloadAttachment(url, name);
+        } finally {
+          setPending(false);
+        }
+      }}
+      className={cn("transition-colors disabled:opacity-60", className)}
+    >
+      {pending ? (
+        <Loader2 size={15} className="animate-spin" />
+      ) : (
+        <Download size={15} />
+      )}
+      {label}
+    </button>
+  );
+}
+
 /** Imagen del lightbox con su propio estado de fallback. Se monta con `key`
  *  por adjunto, así al cambiar de slide arranca limpia sin useEffect de reset. */
 function LightboxImage({ attachment: a }: { attachment: TicketAttachment }) {
@@ -420,21 +485,20 @@ function LightboxImage({ attachment: a }: { attachment: TicketAttachment }) {
 
   if (broken) {
     return (
-      <div className="flex flex-col items-center gap-3 text-white/80 p-8">
-        <FileWarning size={40} />
-        <p className="text-sm text-center max-w-xs">
+      <div className="flex flex-col items-center gap-4 text-white/85 px-6 text-center max-w-sm">
+        <span className="size-16 rounded-full bg-white/10 grid place-items-center">
+          <FileWarning size={28} />
+        </span>
+        <p className="text-sm leading-relaxed">
           Esta foto está en un formato que el navegador no puede mostrar (HEIC
           de iPhone). Descargala para verla.
         </p>
-        <a
-          href={a.file_url}
-          download={a.file_name ?? "foto"}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-md bg-white/15 hover:bg-white/25 px-4 py-2 text-sm font-medium"
-        >
-          <Download size={15} /> Descargar foto
-        </a>
+        <DownloadButton
+          url={a.file_url}
+          name={a.file_name ?? "foto"}
+          label="Descargar foto"
+          className="inline-flex items-center gap-2 rounded-lg bg-white/15 hover:bg-white/25 px-4 py-2.5 text-sm font-medium"
+        />
       </div>
     );
   }
@@ -443,7 +507,7 @@ function LightboxImage({ attachment: a }: { attachment: TicketAttachment }) {
     <img
       src={src}
       alt={a.file_name ?? "Foto del trabajo"}
-      className="max-h-[80vh] max-w-full w-auto h-auto object-contain rounded-md"
+      className="max-h-full max-w-full w-auto h-auto object-contain rounded-lg shadow-2xl select-none"
       onError={() => {
         if (src !== a.file_url) setSrc(a.file_url);
         else setBroken(true);
@@ -484,71 +548,101 @@ function Lightbox({
     return () => window.removeEventListener("keydown", onKey);
   }, [go, onClose]);
 
-  return (
+  // Bloquear scroll del fondo mientras el visor está abierto.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  if (typeof document === "undefined") return null;
+
+  // Portal a <body>: el DialogContent de Radix usa transform, lo que crea un
+  // containing block para position:fixed y "atrapaba" el visor adentro del
+  // modal. Sacándolo del árbol del dialog ocupa toda la pantalla, limpio.
+  return createPortal(
     <div
-      className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4"
+      className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-sm flex flex-col animate-in fade-in duration-150"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Visor de fotos"
       onClick={onClose}
     >
-      <button
-        type="button"
-        onClick={onClose}
-        className="absolute top-4 right-4 size-10 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white z-10"
-        aria-label="Cerrar"
-      >
-        <X size={18} />
-      </button>
-
-      {total > 1 ? (
-        <>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              go(-1);
-            }}
-            className="absolute left-3 top-1/2 -translate-y-1/2 size-11 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white z-10"
-            aria-label="Anterior"
-          >
-            <ChevronLeft size={22} />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              go(1);
-            }}
-            className="absolute right-3 top-1/2 -translate-y-1/2 size-11 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white z-10"
-            aria-label="Siguiente"
-          >
-            <ChevronRight size={22} />
-          </button>
-        </>
-      ) : null}
-
+      {/* Barra superior: contador (izq) + cerrar (der) — simétrica */}
       <div
-        className="max-h-full max-w-full flex flex-col items-center gap-3"
+        className="shrink-0 h-14 flex items-center justify-between px-4 sm:px-6 text-white/80"
         onClick={(e) => e.stopPropagation()}
       >
-        <LightboxImage key={a.id} attachment={a} />
-        <div className="flex items-center gap-3 text-xs text-white/70">
-          <span className="tabular-nums">
-            {index + 1} / {total}
-          </span>
-          <span>·</span>
-          <span>{formatTimeAgo(a.uploaded_at)}</span>
-          <span>·</span>
-          <a
-            href={a.file_url}
-            download={a.file_name ?? "foto"}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center gap-1 hover:text-white"
-          >
-            <Download size={12} /> Descargar
-          </a>
+        <span className="text-xs font-medium tabular-nums">
+          {index + 1} / {total}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="size-9 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white transition-colors"
+          aria-label="Cerrar"
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      {/* Escenario: imagen centrada con flechas a insets simétricos */}
+      <div
+        className="relative flex-1 min-h-0 flex items-center justify-center px-4 sm:px-20"
+        onClick={onClose}
+      >
+        {total > 1 ? (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                go(-1);
+              }}
+              className="absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 size-11 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white transition-colors"
+              aria-label="Anterior"
+            >
+              <ChevronLeft size={22} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                go(1);
+              }}
+              className="absolute right-3 sm:right-5 top-1/2 -translate-y-1/2 size-11 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white transition-colors"
+              aria-label="Siguiente"
+            >
+              <ChevronRight size={22} />
+            </button>
+          </>
+        ) : null}
+
+        <div
+          className="max-h-full max-w-full flex items-center justify-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <LightboxImage key={a.id} attachment={a} />
         </div>
       </div>
-    </div>
+
+      {/* Pie: metadatos + descarga, centrado */}
+      <div
+        className="shrink-0 h-16 flex items-center justify-center gap-3 px-4 text-xs text-white/70"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span>{formatTimeAgo(a.uploaded_at)}</span>
+        <span className="text-white/30">·</span>
+        <DownloadButton
+          url={a.file_url}
+          name={a.file_name ?? "foto"}
+          label="Descargar"
+          className="inline-flex items-center gap-1.5 hover:text-white"
+        />
+      </div>
+    </div>,
+    document.body
   );
 }
