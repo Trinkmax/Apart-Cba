@@ -213,7 +213,7 @@ export async function generatePaymentReceiptPDF(data: PaymentReceiptData): Promi
   setText(doc, accentInk);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(28);
-  const amountText = `${isIn ? "" : "− "}${formatMoney(data.movement.amount, data.movement.currency)}`;
+  const amountText = `${isIn ? "" : "- "}${formatMoney(data.movement.amount, data.movement.currency)}`;
   doc.text(amountText, MARGIN_X + 6, y + 22);
 
   // Fecha grande a la derecha

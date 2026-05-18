@@ -101,7 +101,7 @@ export async function generateCashMovementsPDF(
       r.currency,
       DIRECTION_LABEL[r.direction],
       CATEGORY_LABELS[r.category],
-      `${r.direction === "out" ? "−" : ""}${formatMoney(r.amount, r.currency)}`,
+      `${r.direction === "out" ? "-" : ""}${formatMoney(r.amount, r.currency)}`,
       formatMoney(r.running_balance, r.currency),
       r.unit_code ?? "—",
       r.owner_name ?? "—",

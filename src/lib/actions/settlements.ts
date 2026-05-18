@@ -12,6 +12,8 @@ import type {
   OwnerSettlement,
   SettlementLine,
   SettlementLineMeta,
+  SettlementStatus,
+  SettlementAuditEntry,
 } from "@/lib/types/database";
 import type { StatementInput } from "@/lib/settlements/statement-model";
 
@@ -556,8 +558,26 @@ export async function generateSettlementsForPeriod(
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Edición de líneas (solo en borrador) + ajustes manuales
+// Edición de líneas + impacto en Caja + auditoría
+//
+// Regla de negocio (confirmada con el usuario): editar una liquidación YA
+// PAGADA NO reescribe el egreso original. Postea un asiento de AJUSTE en Caja
+// por la diferencia de neto (ref_type='settlement_adjustment', vinculado a la
+// liquidación) y deja registro en settlement_audit de quién lo hizo y qué
+// cambió. Editar antes del pago solo recalcula el neto (impacta Caja al pagar).
 // ════════════════════════════════════════════════════════════════════════════
+
+type EditableSettlement = {
+  id: string;
+  status: string;
+  organization_id: string;
+  owner_id: string;
+  period_year: number;
+  period_month: number;
+  currency: string;
+  net_payable: number;
+  paid_movement_id: string | null;
+};
 
 async function recomputeSettlementTotals(admin: Admin, settlementId: string) {
   const { data: lines } = await admin
@@ -575,25 +595,147 @@ async function recomputeSettlementTotals(admin: Admin, settlementId: string) {
   return totals;
 }
 
-/** Verifica que la liquidación exista, sea de la org y esté editable (borrador). */
+/** Liquidación de la org y editable (cualquier estado salvo "anulada"). */
 async function loadEditableSettlement(
   admin: Admin,
   organizationId: string,
   settlementId: string,
-): Promise<{ id: string; status: string }> {
+): Promise<EditableSettlement> {
   const { data: s } = await admin
     .from("owner_settlements")
-    .select("id, status")
+    .select(
+      "id, status, organization_id, owner_id, period_year, period_month, currency, net_payable, paid_movement_id",
+    )
     .eq("id", settlementId)
     .eq("organization_id", organizationId)
     .maybeSingle();
   if (!s) throw new Error("Liquidación no encontrada");
-  if (!EDITABLE_STATUSES.includes(s.status)) {
+  if (!EDITABLE_STATUSES.includes(s.status as SettlementStatus)) {
     throw new Error(
-      `La liquidación está ${s.status}: solo se pueden editar líneas en borrador`,
+      `La liquidación está ${s.status}: anulá o regenerá antes de editar`,
     );
   }
-  return s as { id: string; status: string };
+  return { ...s, net_payable: Number(s.net_payable) } as EditableSettlement;
+}
+
+function actorNameOf(
+  session: Awaited<ReturnType<typeof requireSession>>,
+): string {
+  return session.profile.full_name?.trim() || session.email || "Usuario";
+}
+
+/**
+ * Cierra cualquier mutación de líneas: recalcula totales; si la liquidación ya
+ * tiene pago registrado postea el asiento de ajuste por el delta de neto;
+ * escribe la auditoría; sella last_edited_*; revalida (incluida Caja si hubo
+ * asiento). Idempotente respecto a la lectura del neto previo (`before`).
+ */
+async function reconcileAfterEdit(opts: {
+  admin: Admin;
+  before: EditableSettlement;
+  userId: string;
+  actorName: string;
+  action: SettlementAuditEntry["action"];
+  changes: Record<string, unknown>;
+  /** Línea humana de qué cambió (va en la descripción del asiento de Caja). */
+  reason: string;
+}): Promise<{
+  netBefore: number;
+  netAfter: number;
+  delta: number;
+  adjustmentId: string | null;
+}> {
+  const { admin, before, userId, actorName, action, changes, reason } = opts;
+  const netBefore = round2(Number(before.net_payable));
+
+  const totals = await recomputeSettlementTotals(admin, before.id);
+  const netAfter = round2(Number(totals.net_payable));
+  const delta = round2(netAfter - netBefore);
+
+  const sideEffects: string[] = [];
+  if (Math.abs(delta) >= 0.005) {
+    sideEffects.push(
+      `Neto ${formatMoney(netBefore, before.currency)} → ${formatMoney(netAfter, before.currency)}`,
+    );
+  }
+
+  // ── Impacto en Caja: solo si ya hay pago registrado ──────────────────────
+  let adjustmentId: string | null = null;
+  let adjustmentAccountId: string | null = null;
+  if (before.paid_movement_id && Math.abs(delta) >= 0.01) {
+    const { data: payMov } = await admin
+      .from("cash_movements")
+      .select("account_id")
+      .eq("id", before.paid_movement_id)
+      .maybeSingle();
+    if (payMov) {
+      const periodLabel = formatPeriod(
+        before.period_year,
+        before.period_month,
+      );
+      const direction = delta > 0 ? "out" : "in";
+      const amount = round2(Math.abs(delta));
+      const { data: adj, error: adjErr } = await admin
+        .from("cash_movements")
+        .insert({
+          organization_id: before.organization_id,
+          account_id: payMov.account_id,
+          direction,
+          amount,
+          currency: before.currency,
+          category: "owner_settlement",
+          ref_type: "settlement_adjustment",
+          ref_id: before.id,
+          owner_id: before.owner_id,
+          billable_to: "owner",
+          description: `Ajuste liquidación ${periodLabel} · ${reason} · por ${actorName}`,
+          occurred_at: new Date().toISOString(),
+          created_by: userId,
+        })
+        .select("id")
+        .single();
+      if (adjErr) {
+        throw new Error(
+          `No se pudo registrar el ajuste en Caja: ${adjErr.message}`,
+        );
+      }
+      adjustmentId = adj.id as string;
+      adjustmentAccountId = payMov.account_id as string;
+      sideEffects.push(
+        `${direction === "out" ? "Egreso" : "Ingreso"} de ajuste en Caja ${formatMoney(amount, before.currency)}`,
+      );
+    }
+  } else if (!before.paid_movement_id && Math.abs(delta) >= 0.01) {
+    sideEffects.push("Impacta en Caja al registrar el pago");
+  }
+
+  const now = new Date().toISOString();
+  await admin
+    .from("owner_settlements")
+    .update({ last_edited_by: userId, last_edited_at: now, updated_at: now })
+    .eq("id", before.id);
+
+  await admin.from("settlement_audit").insert({
+    organization_id: before.organization_id,
+    settlement_id: before.id,
+    action,
+    actor_user_id: userId,
+    actor_name: actorName,
+    changes,
+    side_effects: sideEffects,
+  });
+
+  revalidateSettlement(before.id);
+  if (adjustmentId) {
+    revalidatePath("/dashboard/caja");
+    if (adjustmentAccountId) {
+      revalidatePath(`/dashboard/caja/${adjustmentAccountId}`);
+    }
+    revalidatePath("/dashboard/alertas");
+    revalidatePath("/dashboard");
+  }
+
+  return { netBefore, netAfter, delta, adjustmentId };
 }
 
 const lineInputSchema = z.object({
@@ -606,14 +748,18 @@ const lineInputSchema = z.object({
 });
 
 export async function addSettlementLine(input: z.input<typeof lineInputSchema>) {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
     throw new Error("No tenés permisos para editar liquidaciones");
   }
   const v = lineInputSchema.parse(input);
   const admin = createAdminClient();
-  await loadEditableSettlement(admin, organization.id, v.settlement_id);
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
 
   const { data: last } = await admin
     .from("settlement_lines")
@@ -636,11 +782,25 @@ export async function addSettlementLine(input: z.input<typeof lineInputSchema>) 
     is_manual: true,
     meta: null,
     display_order: nextOrder,
+    created_by: session.userId,
+    updated_by: session.userId,
+    updated_at: new Date().toISOString(),
   });
   if (error) throw new Error(error.message);
 
-  await recomputeSettlementTotals(admin, v.settlement_id);
-  revalidateSettlement(v.settlement_id);
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "line_add",
+    changes: {
+      description: v.description,
+      amount: { from: 0, to: v.amount },
+      sign: v.sign,
+    },
+    reason: `agregó "${v.description}" (${v.sign}${formatMoney(v.amount, before.currency)})`,
+  });
 }
 
 const lineUpdateSchema = z.object({
@@ -652,12 +812,12 @@ const lineUpdateSchema = z.object({
   unit_id: z.string().uuid().nullable().optional(),
 });
 
-/** Editar una línea (auto o manual). Al editarla queda is_manual=true para
- * que sobreviva una regeneración (override intencional del usuario). */
+/** Editar una línea suelta (típicamente un "otro cargo"/ajuste). Queda
+ * is_manual=true para sobrevivir una regeneración. */
 export async function updateSettlementLine(
   input: z.input<typeof lineUpdateSchema>,
 ) {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
     throw new Error("No tenés permisos para editar liquidaciones");
@@ -667,13 +827,21 @@ export async function updateSettlementLine(
 
   const { data: line } = await admin
     .from("settlement_lines")
-    .select("id, settlement_id")
+    .select("id, settlement_id, description, amount, sign, line_type")
     .eq("id", v.id)
     .maybeSingle();
   if (!line) throw new Error("Línea no encontrada");
-  await loadEditableSettlement(admin, organization.id, line.settlement_id);
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    line.settlement_id,
+  );
 
-  const patch: Record<string, unknown> = { is_manual: true };
+  const patch: Record<string, unknown> = {
+    is_manual: true,
+    updated_by: session.userId,
+    updated_at: new Date().toISOString(),
+  };
   if (v.description !== undefined) patch.description = v.description;
   if (v.amount !== undefined) patch.amount = v.amount;
   if (v.sign !== undefined) patch.sign = v.sign;
@@ -686,12 +854,30 @@ export async function updateSettlementLine(
     .eq("id", v.id);
   if (error) throw new Error(error.message);
 
-  await recomputeSettlementTotals(admin, line.settlement_id);
-  revalidateSettlement(line.settlement_id);
+  const changes: Record<string, unknown> = {};
+  if (v.amount !== undefined && Number(line.amount) !== v.amount) {
+    changes.amount = { from: Number(line.amount), to: v.amount };
+  }
+  if (v.sign !== undefined && line.sign !== v.sign) {
+    changes.sign = { from: line.sign, to: v.sign };
+  }
+  if (v.description !== undefined && line.description !== v.description) {
+    changes.description = { from: line.description, to: v.description };
+  }
+
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "line_update",
+    changes: { line: line.description, ...changes },
+    reason: `editó "${line.description}"`,
+  });
 }
 
 export async function deleteSettlementLine(lineId: string) {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
     throw new Error("No tenés permisos para editar liquidaciones");
@@ -701,17 +887,262 @@ export async function deleteSettlementLine(lineId: string) {
 
   const { data: line } = await admin
     .from("settlement_lines")
-    .select("id, settlement_id")
+    .select("id, settlement_id, description, amount, sign")
     .eq("id", id)
     .maybeSingle();
   if (!line) throw new Error("Línea no encontrada");
-  await loadEditableSettlement(admin, organization.id, line.settlement_id);
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    line.settlement_id,
+  );
 
   const { error } = await admin.from("settlement_lines").delete().eq("id", id);
   if (error) throw new Error(error.message);
 
-  await recomputeSettlementTotals(admin, line.settlement_id);
-  revalidateSettlement(line.settlement_id);
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "line_delete",
+    changes: {
+      description: line.description,
+      amount: { from: Number(line.amount), to: 0 },
+      sign: line.sign,
+    },
+    reason: `eliminó "${line.description}"`,
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Editar una fila de reserva de la planilla — "liquidar más/menos noches".
+// Toca de forma atómica las 3 líneas del grupo (ingreso + comisión + gastos),
+// actualiza el snapshot meta (noches/fechas/huésped) y reconcilia Caja+audit.
+// ════════════════════════════════════════════════════════════════════════════
+const bookingRowSchema = z.object({
+  settlement_id: z.string().uuid(),
+  ref_id: z.string().uuid(),
+  nights: z.coerce.number().int().min(0).max(366),
+  gross: z.coerce.number().min(0, "El bruto no puede ser negativo"),
+  commission: z.coerce.number().min(0),
+  expenses: z.coerce.number().min(0),
+  guest_name: z.string().max(160).optional().nullable(),
+  check_in: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  check_out: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+});
+
+export async function updateSettlementBookingRow(
+  input: z.input<typeof bookingRowSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = bookingRowSchema.parse(input);
+  const admin = createAdminClient();
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  const { data: groupRaw } = await admin
+    .from("settlement_lines")
+    .select("*, unit:units(id, code, name)")
+    .eq("settlement_id", v.settlement_id)
+    .eq("ref_type", "booking")
+    .eq("ref_id", v.ref_id)
+    .order("display_order");
+  const group = (groupRaw ?? []) as Array<
+    SettlementLine & { unit: { id: string; code: string; name: string } | null }
+  >;
+  if (group.length === 0) throw new Error("Reserva no encontrada en la liquidación");
+
+  const revenue =
+    group.find(
+      (g) =>
+        g.sign === "+" &&
+        (g.line_type === "booking_revenue" ||
+          g.line_type === "monthly_rent_fraction"),
+    ) ?? group.find((g) => g.sign === "+");
+  if (!revenue) throw new Error("La reserva no tiene línea de ingreso");
+  const commissionLine = group.find((g) => g.line_type === "commission");
+  const deductionLines = group.filter(
+    (g) => g.sign === "-" && g.line_type !== "commission",
+  );
+
+  const oldMeta: SettlementLineMeta = revenue.meta ?? {};
+  const oldNights = oldMeta.nights ?? null;
+  const oldGross = Number(revenue.amount);
+  const oldCommission = commissionLine ? Number(commissionLine.amount) : 0;
+  const oldExpenses = round2(
+    deductionLines.reduce((a, g) => a + Number(g.amount), 0),
+  );
+
+  const unitCode = revenue.unit?.code ?? "—";
+  const checkIn = v.check_in ?? oldMeta.check_in ?? null;
+  const checkOut = v.check_out ?? oldMeta.check_out ?? null;
+  const guestName = v.guest_name?.trim() || oldMeta.guest_name || null;
+  const commissionPct =
+    v.gross > 0 ? round2((v.commission / v.gross) * 100) : oldMeta.commission_pct ?? null;
+  const isMensual = oldMeta.mode === "mensual";
+  const rangeLabel =
+    checkIn && checkOut ? `${checkIn} → ${checkOut}` : `${v.nights} noches`;
+  const newDescription = isMensual
+    ? `Renta mensual ${rangeLabel} (${v.nights}${oldMeta.prorate_of ? `/${oldMeta.prorate_of}` : ""} días) — ${unitCode}`
+    : `Reserva ${rangeLabel} (${unitCode})`;
+  const newMeta: SettlementLineMeta = {
+    ...oldMeta,
+    nights: v.nights,
+    check_in: checkIn,
+    check_out: checkOut,
+    guest_name: guestName,
+    commission_pct: commissionPct,
+  };
+
+  const now = new Date().toISOString();
+  const stamp = { is_manual: true, updated_by: session.userId, updated_at: now };
+
+  // 1) Línea de ingreso
+  {
+    const { error } = await admin
+      .from("settlement_lines")
+      .update({
+        ...stamp,
+        amount: round2(v.gross),
+        description: newDescription,
+        meta: newMeta,
+      })
+      .eq("id", revenue.id);
+    if (error) throw new Error(error.message);
+  }
+
+  // 2) Comisión
+  if (commissionLine) {
+    const { error } = await admin
+      .from("settlement_lines")
+      .update({
+        ...stamp,
+        amount: round2(v.commission),
+        description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}${isMensual ? " (mensual prorrateada)" : ""}`,
+      })
+      .eq("id", commissionLine.id);
+    if (error) throw new Error(error.message);
+  } else if (v.commission > 0) {
+    const { error } = await admin.from("settlement_lines").insert({
+      settlement_id: v.settlement_id,
+      line_type: "commission",
+      ref_type: "booking",
+      ref_id: v.ref_id,
+      unit_id: revenue.unit_id,
+      description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}`,
+      amount: round2(v.commission),
+      sign: "-",
+      meta: null,
+      display_order: (revenue.display_order ?? 0) + 1,
+      created_by: session.userId,
+      ...stamp,
+    });
+    if (error) throw new Error(error.message);
+  }
+
+  // 3) Gastos — colapsamos a una sola línea "Gastos" (lo que muestra la
+  //    planilla por fila). Reescribimos la primera, borramos sobrantes.
+  if (v.expenses > 0) {
+    if (deductionLines.length > 0) {
+      const keep = deductionLines[0];
+      const { error } = await admin
+        .from("settlement_lines")
+        .update({
+          ...stamp,
+          line_type: "expenses_fraction",
+          amount: round2(v.expenses),
+          description: "Gastos",
+        })
+        .eq("id", keep.id);
+      if (error) throw new Error(error.message);
+      const extra = deductionLines.slice(1).map((g) => g.id);
+      if (extra.length > 0) {
+        await admin.from("settlement_lines").delete().in("id", extra);
+      }
+    } else {
+      const { error } = await admin.from("settlement_lines").insert({
+        settlement_id: v.settlement_id,
+        line_type: "expenses_fraction",
+        ref_type: "booking",
+        ref_id: v.ref_id,
+        unit_id: revenue.unit_id,
+        description: "Gastos",
+        amount: round2(v.expenses),
+        sign: "-",
+        meta: null,
+        display_order: (revenue.display_order ?? 0) + 2,
+        created_by: session.userId,
+        ...stamp,
+      });
+      if (error) throw new Error(error.message);
+    }
+  } else if (deductionLines.length > 0) {
+    await admin
+      .from("settlement_lines")
+      .delete()
+      .in(
+        "id",
+        deductionLines.map((g) => g.id),
+      );
+  }
+
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "row_update",
+    changes: {
+      reserva: guestName ?? unitCode,
+      noches: { from: oldNights, to: v.nights },
+      bruto: { from: oldGross, to: round2(v.gross) },
+      comision: { from: oldCommission, to: round2(v.commission) },
+      gastos: { from: oldExpenses, to: round2(v.expenses) },
+    },
+    reason:
+      oldNights != null && oldNights !== v.nights
+        ? `${guestName ?? unitCode}: ${oldNights}→${v.nights} noches`
+        : `${guestName ?? unitCode}: bruto ${formatMoney(oldGross, before.currency)} → ${formatMoney(v.gross, before.currency)}`,
+  });
+}
+
+/** Historial de cambios de la liquidación (más recientes primero). */
+export async function listSettlementAudit(
+  settlementId: string,
+): Promise<SettlementAuditEntry[]> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) {
+    throw new Error("No tenés permisos para ver liquidaciones");
+  }
+  const id = z.string().uuid().parse(settlementId);
+  const admin = createAdminClient();
+  const { data: s } = await admin
+    .from("owner_settlements")
+    .select("id")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!s) return [];
+  const { data, error } = await admin
+    .from("settlement_audit")
+    .select(
+      "id, settlement_id, action, actor_user_id, actor_name, changes, side_effects, occurred_at",
+    )
+    .eq("organization_id", organization.id)
+    .eq("settlement_id", id)
+    .order("occurred_at", { ascending: false })
+    .limit(50);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as SettlementAuditEntry[];
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -860,14 +1291,29 @@ export async function changeSettlementStatus(
     throw new Error("No tenés permisos para cambiar liquidaciones");
   }
   const admin = createAdminClient();
-  const update: Record<string, unknown> = { status };
+
+  const { data: prev } = await admin
+    .from("owner_settlements")
+    .select("status")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!prev) throw new Error("Liquidación no encontrada");
+
+  const now = new Date().toISOString();
+  const update: Record<string, unknown> = {
+    status,
+    last_edited_by: session.userId,
+    last_edited_at: now,
+    updated_at: now,
+  };
   if (status === "revisada") {
-    update.reviewed_at = new Date().toISOString();
+    update.reviewed_at = now;
     update.reviewed_by = session.userId;
   }
-  if (status === "enviada") update.sent_at = new Date().toISOString();
+  if (status === "enviada") update.sent_at = now;
   if (status === "pagada") {
-    update.paid_at = new Date().toISOString();
+    update.paid_at = now;
     if (paidMovementId) update.paid_movement_id = paidMovementId;
   }
   const { error } = await admin
@@ -876,6 +1322,18 @@ export async function changeSettlementStatus(
     .eq("id", id)
     .eq("organization_id", organization.id);
   if (error) throw new Error(error.message);
+
+  if (prev.status !== status) {
+    await admin.from("settlement_audit").insert({
+      organization_id: organization.id,
+      settlement_id: id,
+      action: "status_change",
+      actor_user_id: session.userId,
+      actor_name: actorNameOf(session),
+      changes: { status: { from: prev.status, to: status } },
+      side_effects: [],
+    });
+  }
   revalidateSettlement(id);
 }
 
@@ -982,6 +1440,9 @@ export async function registerSettlementPayment(
       status: "pagada",
       paid_at: occurredAt,
       paid_movement_id: movement.id,
+      last_edited_by: session.userId,
+      last_edited_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     })
     .eq("id", v.settlement_id)
     .eq("organization_id", organization.id);
@@ -990,6 +1451,21 @@ export async function registerSettlementPayment(
     await admin.from("cash_movements").delete().eq("id", movement.id);
     throw new Error(`No se pudo cerrar la liquidación: ${updErr.message}`);
   }
+
+  await admin.from("settlement_audit").insert({
+    organization_id: organization.id,
+    settlement_id: v.settlement_id,
+    action: "payment",
+    actor_user_id: session.userId,
+    actor_name: actorNameOf(session),
+    changes: {
+      status: { from: settlement.status, to: "pagada" },
+      amount,
+    },
+    side_effects: [
+      `Egreso en Caja ${formatMoney(amount, settlement.currency)} (${account.name})`,
+    ],
+  });
 
   for (const p of [
     "/dashboard/liquidaciones",

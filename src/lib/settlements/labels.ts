@@ -50,8 +50,25 @@ export const SETTLEMENT_LINE_META: Record<
   adjustment:            { label: "Ajuste",        color: "#64748b" },
 };
 
-/** Estados en los que la liquidación todavía es editable (líneas, regenerar). */
-export const EDITABLE_STATUSES: SettlementStatus[] = ["borrador"];
+/**
+ * Estados en los que se pueden editar las líneas / importes de la liquidación.
+ * Editable en cualquier estado salvo "anulada" (sin efecto). Si la liquidación
+ * ya tiene pago registrado, la edición NO reescribe el egreso original: postea
+ * un asiento de ajuste por la diferencia (ver settlements.ts).
+ */
+export const EDITABLE_STATUSES: SettlementStatus[] = [
+  "borrador",
+  "revisada",
+  "enviada",
+  "pagada",
+  "disputada",
+];
 
-/** Estados "cerrados" — bloquean edición de líneas y del movimiento de Caja. */
+/** Solo "borrador" se puede regenerar desde cero (recalcula líneas auto). */
+export const REGENERABLE_STATUSES: SettlementStatus[] = ["borrador"];
+
+/**
+ * Estados "cerrados contablemente": editar acá impacta Caja mediante un
+ * asiento de ajuste y el movimiento queda protegido (cash_movement_settlement_lock).
+ */
 export const LOCKED_STATUSES: SettlementStatus[] = ["revisada", "enviada", "pagada"];

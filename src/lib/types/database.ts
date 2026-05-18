@@ -585,8 +585,30 @@ export interface OwnerSettlement {
   public_token: string;
   /** Email al que se envió la liquidación (audit trail). */
   sent_to: string | null;
+  /** Último usuario que modificó la liquidación. */
+  last_edited_by: string | null;
+  last_edited_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Entrada del historial inmutable de cambios de una liquidación. */
+export interface SettlementAuditEntry {
+  id: string;
+  settlement_id: string | null;
+  action:
+    | "line_add"
+    | "line_update"
+    | "line_delete"
+    | "row_update"
+    | "status_change"
+    | "payment"
+    | "regenerate";
+  actor_user_id: string | null;
+  actor_name: string;
+  changes: Record<string, { from: unknown; to: unknown } | unknown>;
+  side_effects: string[];
+  occurred_at: string;
 }
 
 /**
@@ -631,6 +653,11 @@ export interface SettlementLine {
   /** Snapshot para la planilla (ver SettlementLineMeta). */
   meta: SettlementLineMeta | null;
   display_order: number;
+  /** Usuario que creó la línea (NULL = autogenerada por el sistema). */
+  created_by: string | null;
+  /** Último usuario que editó la línea manualmente. */
+  updated_by: string | null;
+  updated_at: string;
   created_at: string;
 }
 

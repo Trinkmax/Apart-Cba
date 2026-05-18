@@ -152,7 +152,12 @@
       "Bash(python3 *)",
       "Bash(echo \"tsc: $\\(npx tsc --noEmit 2>&1)",
       "Bash(xargs -I {} basename {})",
-      "Bash(grep -n \"from\\(\\\\\"organizations\\\\\"\\)\\\\|organization:organizations\\\\|organizations\\(\\\\*\\\\|select\\(\\\\`\\\\\\\\*\\\\|select\\(\\\\\"\\\\\\\\*\" src/lib/actions/auth.ts src/lib/actions/org.ts)"
+      "Bash(grep -n \"from\\(\\\\\"organizations\\\\\"\\)\\\\|organization:organizations\\\\|organizations\\(\\\\*\\\\|select\\(\\\\`\\\\\\\\*\\\\|select\\(\\\\\"\\\\\\\\*\" src/lib/actions/auth.ts src/lib/actions/org.ts)",
+      "Bash(awk '/CREATE TABLE apartcba.owner_settlements/,/\\\\\\);/' /Users/ignaciobaldovino/Apart-Cba/supabase/migrations/001_apartcba_full_schema.sql)",
+      "Bash(awk '/CREATE TABLE apartcba.settlement_lines/,/\\\\\\);/' /Users/ignaciobaldovino/Apart-Cba/supabase/migrations/001_apartcba_full_schema.sql)",
+      "Bash(grep -E \"\\\\.ts$\")",
+      "Bash(kill -9 67899 67938 67939 91485)",
+      "Bash(grep -n \"export async function changeSettlementStatus\\\\|export async function registerSettlementPayment\\\\|export async function sendSettlementToOwner\\\\|return { ok: true as const, movement_id\\\\|revalidateSettlement\\(id\\);\\\\|^}\" src/lib/actions/settlements.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,

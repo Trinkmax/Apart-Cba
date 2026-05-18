@@ -16,6 +16,10 @@ import {
   type StatementInput,
   type StatementModel,
 } from "@/lib/settlements/statement-model";
+import { pdfSafe, pdfNeg } from "@/lib/pdf/text";
+
+/** Marcador de celda vacía (en-dash, válido en WinAnsi). */
+const EMPTY = "–";
 
 const PAGE_W = 210;
 const PAGE_H = 297;
@@ -33,7 +37,7 @@ function slug(s: string): string {
 }
 
 function money(n: number, currency: string): string {
-  return formatMoney(n, currency);
+  return pdfSafe(formatMoney(n, currency));
 }
 
 /** Asegura espacio vertical; si no entra, agrega página y vuelve arriba. */
@@ -84,8 +88,10 @@ export async function buildSettlementDoc(
   doc.text("ESTADO DE LIQUIDACIÓN", PAGE_W - MARGIN_X, 13, { align: "right" });
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
-  doc.text(model.number, PAGE_W - MARGIN_X, 19, { align: "right" });
-  doc.text(model.periodLabel, PAGE_W - MARGIN_X, 24, { align: "right" });
+  doc.text(pdfSafe(model.number), PAGE_W - MARGIN_X, 19, { align: "right" });
+  doc.text(pdfSafe(model.periodLabel), PAGE_W - MARGIN_X, 24, {
+    align: "right",
+  });
 
   // Bloque de datos
   doc.setTextColor(INK[0], INK[1], INK[2]);
@@ -95,11 +101,11 @@ export async function buildSettlementDoc(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7.5);
     doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
-    doc.text(label.toUpperCase(), x, yy);
+    doc.text(pdfSafe(label.toUpperCase()), x, yy);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(10);
     doc.setTextColor(INK[0], INK[1], INK[2]);
-    doc.text(value, x, yy + 5);
+    doc.text(pdfSafe(value), x, yy + 5);
   };
 
   field("Propietario", model.owner.full_name, MARGIN_X, y);
@@ -133,36 +139,48 @@ export async function buildSettlementDoc(
       startY: y,
       head: [tableCols.map((c) => c.header)],
       body: u.rows.map((b) => [
-        b.check_in ? formatDate(b.check_in) : "—",
-        b.check_out ? formatDate(b.check_out) : "—",
-        b.guest + (b.mode === "mensual" ? " (mensual)" : ""),
-        b.nights ?? "—",
+        b.check_in ? formatDate(b.check_in) : EMPTY,
+        b.check_out ? formatDate(b.check_out) : EMPTY,
+        pdfSafe(b.guest + (b.mode === "mensual" ? " (mensual)" : "")),
+        b.nights ?? EMPTY,
         money(b.gross, model.currency),
-        b.commission ? `−${money(b.commission, model.currency)}` : "—",
-        b.expenses ? `−${money(b.expenses, model.currency)}` : "—",
+        b.commission ? pdfNeg(money(b.commission, model.currency)) : EMPTY,
+        b.expenses ? pdfNeg(money(b.expenses, model.currency)) : EMPTY,
         money(b.net, model.currency),
       ]),
       foot: [
         [
-          { content: `Subtotal ${u.code}`, colSpan: 4, styles: { halign: "right", fontStyle: "bold" } },
+          { content: pdfSafe(`Subtotal ${u.code}`), colSpan: 4, styles: { halign: "right", fontStyle: "bold" } },
           { content: money(u.subtotal.gross, model.currency), styles: { halign: "right", fontStyle: "bold" } },
-          { content: `−${money(u.subtotal.commission, model.currency)}`, styles: { halign: "right", fontStyle: "bold" } },
-          { content: `−${money(u.subtotal.expenses, model.currency)}`, styles: { halign: "right", fontStyle: "bold" } },
+          { content: pdfNeg(money(u.subtotal.commission, model.currency)), styles: { halign: "right", fontStyle: "bold" } },
+          { content: pdfNeg(money(u.subtotal.expenses, model.currency)), styles: { halign: "right", fontStyle: "bold" } },
           { content: money(u.subtotal.net, model.currency), styles: { halign: "right", fontStyle: "bold" } },
         ],
       ],
       theme: "striped",
-      headStyles: { fillColor: brand, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8 },
-      footStyles: { fillColor: [241, 245, 249], textColor: INK },
-      bodyStyles: { fontSize: 8 },
+      headStyles: { fillColor: brand, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5 },
+      footStyles: { fillColor: [241, 245, 249], textColor: INK, fontSize: 7.5 },
+      bodyStyles: { fontSize: 7.5 },
+      // Anchos fijos: la suma de columnas fijas (150) + huésped 'auto' (32) =
+      // 182mm = ancho imprimible exacto. Los importes nunca se salen del margen.
       columnStyles: {
-        3: { halign: "center", cellWidth: 14 },
-        4: { halign: "right" },
-        5: { halign: "right" },
-        6: { halign: "right" },
-        7: { halign: "right" },
+        0: { cellWidth: 18 },
+        1: { cellWidth: 18 },
+        2: { cellWidth: "auto", overflow: "ellipsize" },
+        3: { halign: "center", cellWidth: 13 },
+        4: { halign: "right", cellWidth: 26 },
+        5: { halign: "right", cellWidth: 26 },
+        6: { halign: "right", cellWidth: 23 },
+        7: { halign: "right", cellWidth: 26 },
       },
-      styles: { cellPadding: 2, lineColor: [226, 232, 240], lineWidth: 0.1 },
+      styles: {
+        cellPadding: 1.6,
+        fontSize: 7.5,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1,
+        overflow: "linebreak",
+      },
+      tableWidth: PAGE_W - MARGIN_X * 2,
       margin: { left: MARGIN_X, right: MARGIN_X },
     });
     // @ts-expect-error - jspdf-autotable agrega lastAutoTable
@@ -176,14 +194,25 @@ export async function buildSettlementDoc(
       startY: y,
       head: [["Concepto", "Importe"]],
       body: model.otros.map((o) => [
-        o.unitCode ? `${o.description}  (${o.unitCode})` : o.description,
-        `${o.sign === "+" ? "" : "−"}${money(o.amount, model.currency)}`,
+        pdfSafe(
+          o.unitCode ? `${o.description}  (${o.unitCode})` : o.description,
+        ),
+        `${o.sign === "+" ? "+" : "-"}${money(o.amount, model.currency)}`,
       ]),
       theme: "striped",
-      headStyles: { fillColor: brand, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8 },
-      bodyStyles: { fontSize: 8 },
-      columnStyles: { 1: { halign: "right", cellWidth: 40 } },
-      styles: { cellPadding: 2, lineColor: [226, 232, 240], lineWidth: 0.1 },
+      headStyles: { fillColor: brand, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5 },
+      bodyStyles: { fontSize: 7.5 },
+      columnStyles: {
+        0: { cellWidth: "auto", overflow: "linebreak" },
+        1: { halign: "right", cellWidth: 42 },
+      },
+      styles: {
+        cellPadding: 1.6,
+        fontSize: 7.5,
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1,
+      },
+      tableWidth: PAGE_W - MARGIN_X * 2,
       margin: { left: MARGIN_X, right: MARGIN_X },
     });
     // @ts-expect-error - jspdf-autotable agrega lastAutoTable
@@ -199,13 +228,13 @@ export async function buildSettlementDoc(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
-    doc.text(label, boxX + 4, yy);
+    doc.text(pdfSafe(label), boxX + 4, yy);
     doc.setTextColor(INK[0], INK[1], INK[2]);
-    doc.text(value, boxX + 82, yy, { align: "right" });
+    doc.text(pdfSafe(value), boxX + 82, yy, { align: "right" });
   };
   line("Bruto", money(model.totals.gross, model.currency), y + 7);
-  line("− Comisión", `−${money(model.totals.commission, model.currency)}`, y + 13);
-  line("− Gastos", `−${money(model.totals.deductions, model.currency)}`, y + 19);
+  line("- Comisión", pdfNeg(money(model.totals.commission, model.currency)), y + 13);
+  line("- Gastos", pdfNeg(money(model.totals.deductions, model.currency)), y + 19);
   doc.setDrawColor(brand[0], brand[1], brand[2]);
   doc.setLineWidth(0.4);
   doc.line(boxX + 4, y + 24, boxX + 82, y + 24);
@@ -213,7 +242,9 @@ export async function buildSettlementDoc(
   doc.setFontSize(11);
   doc.setTextColor(brand[0], brand[1], brand[2]);
   doc.text("NETO A TRANSFERIR", boxX + 4, y + 33);
-  doc.text(money(model.totals.net, model.currency), boxX + 82, y + 33, { align: "right" });
+  doc.text(money(model.totals.net, model.currency), boxX + 82, y + 33, {
+    align: "right",
+  });
   doc.setTextColor(INK[0], INK[1], INK[2]);
 
   // ── Datos bancarios (izquierda, alineado con el box de totales) ──
@@ -230,7 +261,9 @@ export async function buildSettlementDoc(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(INK[0], INK[1], INK[2]);
-    bankParts.forEach((p, i) => doc.text(p, MARGIN_X, y + 13 + i * 5.5));
+    bankParts.forEach((p, i) =>
+      doc.text(pdfSafe(p), MARGIN_X, y + 13 + i * 5.5),
+    );
   }
 
   // ── Watermark de estado ──
