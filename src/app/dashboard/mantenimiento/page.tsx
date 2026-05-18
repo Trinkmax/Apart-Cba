@@ -2,18 +2,15 @@ import { Plus } from "lucide-react";
 import { listTickets } from "@/lib/actions/tickets";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
+import { listOrgMemberNames } from "@/lib/actions/team";
 import { listCurrentOccupancyByUnit } from "@/lib/actions/bookings";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { Button } from "@/components/ui/button";
 import { TicketFormDialog } from "@/components/tickets/ticket-form-dialog";
 import { TicketsBoard } from "@/components/tickets/tickets-board";
+import { ArchivedTicketsHistory } from "@/components/tickets/archived-tickets-history";
 import { HistoryToggle } from "@/components/shared/history-toggle";
-import {
-  WeeklyHistoryTable,
-  type HistoryRow,
-} from "@/components/shared/weekly-history-table";
-import { TICKET_STATUS_META } from "@/lib/constants";
-import type { MaintenanceTicket, TicketStatus, Unit } from "@/lib/types/database";
+import type { MaintenanceTicket, Unit } from "@/lib/types/database";
 
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
 
@@ -25,32 +22,19 @@ export default async function MantenimientoPage({
   const { historial } = await searchParams;
   const showArchived = historial === "1";
 
-  const [{ organization }, tickets, units, owners, occupancyByUnit] = await Promise.all([
-    getCurrentOrg(),
-    listTickets({ showArchived }),
-    listUnitsEnriched(),
-    listOwners(),
-    listCurrentOccupancyByUnit(),
-  ]);
+  const [{ organization }, tickets, units, owners, members, occupancyByUnit] =
+    await Promise.all([
+      getCurrentOrg(),
+      listTickets({ showArchived }),
+      listUnitsEnriched(),
+      listOwners(),
+      listOrgMemberNames(),
+      listCurrentOccupancyByUnit(),
+    ]);
 
   const open = tickets.filter(
     (t) => !["resuelto", "cerrado"].includes((t as TicketWithUnit).status)
   ).length;
-
-  const historyRows: HistoryRow[] = showArchived
-    ? (tickets as TicketWithUnit[]).map((t) => {
-        const meta = TICKET_STATUS_META[t.status as TicketStatus];
-        return {
-          id: t.id,
-          title: t.title,
-          subtitle: t.unit ? `${t.unit.code} · ${t.unit.name}` : null,
-          statusLabel: meta?.label ?? t.status,
-          statusColor: meta?.color ?? "#64748b",
-          archivedAt: t.archived_at!,
-          primaryDate: t.opened_at,
-        };
-      })
-    : [];
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
@@ -89,9 +73,11 @@ export default async function MantenimientoPage({
       </div>
 
       {showArchived ? (
-        <WeeklyHistoryTable
-          rows={historyRows}
-          emptyHint="Todavía no hay tickets de mantenimiento archivados."
+        <ArchivedTicketsHistory
+          tickets={tickets as TicketWithUnit[]}
+          units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}
+          owners={owners}
+          members={members}
         />
       ) : (
         <TicketsBoard
@@ -99,6 +85,7 @@ export default async function MantenimientoPage({
           initialTickets={tickets as TicketWithUnit[]}
           units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}
           owners={owners}
+          members={members}
           occupancyByUnit={occupancyByUnit}
         />
       )}

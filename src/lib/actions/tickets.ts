@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { can } from "@/lib/permissions";
 import type { MaintenanceTicket, TicketEvent, TicketStatus } from "@/lib/types/database";
 
 const ticketSchema = z.object({
@@ -162,23 +163,47 @@ export async function updateTicket(id: string, input: TicketInput) {
 }
 
 /**
- * Permite al colaborador asignado (o al admin) actualizar solo el costo real
- * sin tocar otros campos del ticket. Útil desde la vista mobile.
+ * Permite al colaborador asignado (o a quien pueda editar tickets) cargar el
+ * presupuesto/costo de una reparación sin tocar el resto del ticket. Es la
+ * acción que usa mantenimiento desde el celular — incluso para trabajos ya
+ * resueltos o archivados (carga "el viernes a la noche").
+ *
+ * `estimatedCost === undefined` → no se toca el presupuesto estimado (back-compat
+ * con llamadas viejas de 3 argumentos). `null` → se limpia.
  */
 export async function updateTicketCost(
   id: string,
   actualCost: number | null,
-  costCurrency: string
+  costCurrency: string,
+  estimatedCost?: number | null
 ) {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
+
+  // Guard: sólo el técnico asignado o quien tenga permiso de editar tickets.
+  const { data: prev, error: prevErr } = await admin
+    .from("maintenance_tickets")
+    .select("assigned_to")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (prevErr) throw new Error(prevErr.message);
+  if (!prev) throw new Error("Ticket no encontrado");
+  const isAssignee = prev.assigned_to === session.userId;
+  if (!isAssignee && !can(role, "tickets", "update")) {
+    throw new Error("No tenés permiso para cargar el presupuesto de este ticket");
+  }
+
+  const patch: Record<string, unknown> = {
+    actual_cost: actualCost,
+    cost_currency: costCurrency,
+  };
+  if (estimatedCost !== undefined) patch.estimated_cost = estimatedCost;
+
   const { data, error } = await admin
     .from("maintenance_tickets")
-    .update({
-      actual_cost: actualCost,
-      cost_currency: costCurrency,
-    })
+    .update(patch)
     .eq("id", id)
     .eq("organization_id", organization.id)
     .select()
@@ -190,7 +215,11 @@ export async function updateTicketCost(
     organization_id: organization.id,
     actor_id: session.userId,
     event_type: "cost_updated",
-    metadata: { actual_cost: actualCost, cost_currency: costCurrency },
+    metadata: {
+      actual_cost: actualCost,
+      cost_currency: costCurrency,
+      ...(estimatedCost !== undefined ? { estimated_cost: estimatedCost } : {}),
+    },
   });
 
   revalidatePath("/dashboard/mantenimiento");
@@ -198,6 +227,30 @@ export async function updateTicketCost(
   revalidatePath(`/m/mantenimiento/${id}`);
   revalidatePath("/m/mantenimiento");
   return data as MaintenanceTicket;
+}
+
+/**
+ * Trabajos del usuario actual (técnico asignado) que ya están resueltos/cerrados
+ * pero todavía NO tienen costo cargado — incluye los archivados por el reset
+ * semanal. Es la lista "para presupuestar" del celular: el problema era que al
+ * resolver un ticket desaparecía de /m/mantenimiento (filtra openOnly) y nunca
+ * se le podía cargar el monto después.
+ */
+export async function listMyTicketsToBudget() {
+  const session = await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("maintenance_tickets")
+    .select(`*, unit:units(id, code, name)`)
+    .eq("organization_id", organization.id)
+    .eq("assigned_to", session.userId)
+    .in("status", ["resuelto", "cerrado"])
+    .is("actual_cost", null)
+    .order("resolved_at", { ascending: false, nullsFirst: false })
+    .order("opened_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data ?? [];
 }
 
 export async function changeTicketStatus(id: string, status: TicketStatus) {

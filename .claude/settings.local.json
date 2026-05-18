@@ -159,7 +159,9 @@
       "Bash(kill -9 67899 67938 67939 91485)",
       "Bash(grep -n \"export async function changeSettlementStatus\\\\|export async function registerSettlementPayment\\\\|export async function sendSettlementToOwner\\\\|return { ok: true as const, movement_id\\\\|revalidateSettlement\\(id\\);\\\\|^}\" src/lib/actions/settlements.ts)",
       "Bash(echo \"EXITGREP:$?\")",
-      "Bash(echo \"BUILD_EXIT:$?\")"
+      "Bash(echo \"BUILD_EXIT:$?\")",
+      "mcp__supabase-apartcba__get_project_url",
+      "Skill(react-best-practices)"
     ]
   },
   "enableAllProjectMcpServers": true,

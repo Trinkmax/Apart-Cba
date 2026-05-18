@@ -1,4 +1,4 @@
-import { Archive } from "lucide-react";
+import { Archive, ChevronRight } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
 import { formatDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export interface HistoryRow {
   id: string;
@@ -24,6 +25,11 @@ export interface HistoryRow {
 interface Props {
   rows: HistoryRow[];
   emptyHint: string;
+  /**
+   * Si se pasa, cada fila es clickeable (abre el detalle). Limpieza/Tareas no
+   * lo pasan → la tabla sigue siendo read-only exactamente como antes.
+   */
+  onRowClick?: (id: string) => void;
 }
 
 /**
@@ -31,7 +37,8 @@ interface Props {
  * Tareas. Lo que el cron de lunes 00:00 ART movió a archived_at aparece acá,
  * ordenado por fecha de archivo descendente.
  */
-export function WeeklyHistoryTable({ rows, emptyHint }: Props) {
+export function WeeklyHistoryTable({ rows, emptyHint, onRowClick }: Props) {
+  const clickable = typeof onRowClick === "function";
   if (rows.length === 0) {
     return (
       <Card className="border-dashed p-10 text-center text-sm text-muted-foreground">
@@ -57,7 +64,26 @@ export function WeeklyHistoryTable({ rows, emptyHint }: Props) {
         </TableHeader>
         <TableBody>
           {rows.map((r) => (
-            <TableRow key={r.id}>
+            <TableRow
+              key={r.id}
+              {...(clickable
+                ? {
+                    role: "button",
+                    tabIndex: 0,
+                    onClick: () => onRowClick!(r.id),
+                    onKeyDown: (e: React.KeyboardEvent) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onRowClick!(r.id);
+                      }
+                    },
+                  }
+                : {})}
+              className={cn(
+                clickable &&
+                  "cursor-pointer transition-colors hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none"
+              )}
+            >
               <TableCell className="font-medium">
                 <div className="leading-tight">{r.title}</div>
                 {r.subtitle ? (
@@ -83,7 +109,16 @@ export function WeeklyHistoryTable({ rows, emptyHint }: Props) {
                 {r.primaryDate ? formatDateTime(r.primaryDate) : "—"}
               </TableCell>
               <TableCell className="text-right text-xs text-muted-foreground tabular-nums">
-                {formatDateTime(r.archivedAt)}
+                <span className="inline-flex items-center gap-1.5">
+                  {formatDateTime(r.archivedAt)}
+                  {clickable ? (
+                    <ChevronRight
+                      size={14}
+                      className="text-muted-foreground/50"
+                      aria-hidden
+                    />
+                  ) : null}
+                </span>
               </TableCell>
             </TableRow>
           ))}

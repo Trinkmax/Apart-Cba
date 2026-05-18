@@ -28,6 +28,7 @@ interface Props {
   ticketId: string;
   initialStatus: TicketStatus;
   initialActualCost: number | null;
+  initialEstimatedCost: number | null;
   initialCostCurrency: string;
   initialAttachments: TicketAttachment[];
 }
@@ -36,6 +37,7 @@ export function MobileTicketEditor({
   ticketId,
   initialStatus,
   initialActualCost,
+  initialEstimatedCost,
   initialCostCurrency,
   initialAttachments,
 }: Props) {
@@ -44,6 +46,11 @@ export function MobileTicketEditor({
   const [actualCost, setActualCost] = useState<string>(
     initialActualCost !== null && initialActualCost !== undefined
       ? String(initialActualCost)
+      : ""
+  );
+  const [estimatedCost, setEstimatedCost] = useState<string>(
+    initialEstimatedCost !== null && initialEstimatedCost !== undefined
+      ? String(initialEstimatedCost)
       : ""
   );
   const [currency, setCurrency] = useState<string>(initialCostCurrency);
@@ -80,9 +87,10 @@ export function MobileTicketEditor({
         await updateTicketCost(
           ticketId,
           actualCost === "" ? null : Number(actualCost),
-          currency
+          currency,
+          estimatedCost === "" ? null : Number(estimatedCost)
         );
-        toast.success("Costo actualizado");
+        toast.success("Presupuesto guardado");
         router.refresh();
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
@@ -131,12 +139,16 @@ export function MobileTicketEditor({
       <CostCard
         actualCost={actualCost}
         setActualCost={setActualCost}
+        estimatedCost={estimatedCost}
+        setEstimatedCost={setEstimatedCost}
         currency={currency}
         setCurrency={setCurrency}
         onSave={handleCostSave}
         pending={costPending}
         dirty={
           (actualCost === "" ? null : Number(actualCost)) !== initialActualCost ||
+          (estimatedCost === "" ? null : Number(estimatedCost)) !==
+            initialEstimatedCost ||
           currency !== initialCostCurrency
         }
       />
@@ -155,6 +167,8 @@ export function MobileTicketEditor({
 function CostCard({
   actualCost,
   setActualCost,
+  estimatedCost,
+  setEstimatedCost,
   currency,
   setCurrency,
   onSave,
@@ -163,6 +177,8 @@ function CostCard({
 }: {
   actualCost: string;
   setActualCost: (v: string) => void;
+  estimatedCost: string;
+  setEstimatedCost: (v: string) => void;
   currency: string;
   setCurrency: (v: string) => void;
   onSave: () => void;
@@ -173,30 +189,54 @@ function CostCard({
     <Card className="p-4 space-y-3">
       <Label className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
         <DollarSign size={13} />
-        Costo del trabajo
+        Presupuesto / costo del trabajo
       </Label>
-      <div className="flex gap-2">
+
+      <div className="space-y-1.5">
+        <span className="text-xs text-muted-foreground">
+          Presupuesto estimado{" "}
+          <span className="text-muted-foreground/60">(opcional)</span>
+        </span>
         <Input
           type="number"
           inputMode="decimal"
           min="0"
           step="0.01"
-          value={actualCost}
-          onChange={(e) => setActualCost(e.target.value)}
-          placeholder="0.00"
-          className="flex-1 text-base"
+          value={estimatedCost}
+          onChange={(e) => setEstimatedCost(e.target.value)}
+          placeholder="Lo que presupuestaste"
+          className="text-base"
+          aria-label="Presupuesto estimado"
         />
-        <Select value={currency} onValueChange={setCurrency}>
-          <SelectTrigger className="w-24">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ARS">ARS</SelectItem>
-            <SelectItem value="USD">USD</SelectItem>
-            <SelectItem value="USDT">USDT</SelectItem>
-          </SelectContent>
-        </Select>
       </div>
+
+      <div className="space-y-1.5">
+        <span className="text-xs font-medium">Costo final del arreglo</span>
+        <div className="flex gap-2">
+          <Input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.01"
+            value={actualCost}
+            onChange={(e) => setActualCost(e.target.value)}
+            placeholder="Lo que salió"
+            className="flex-1 text-base"
+            aria-label="Costo final"
+          />
+          <Select value={currency} onValueChange={setCurrency}>
+            <SelectTrigger className="w-24">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ARS">ARS</SelectItem>
+              <SelectItem value="USD">USD</SelectItem>
+              <SelectItem value="USDT">USDT</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       <Button
         type="button"
         className="w-full gap-2"
@@ -204,7 +244,7 @@ function CostCard({
         onClick={onSave}
       >
         {pending ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-        Guardar costo
+        Guardar presupuesto
       </Button>
     </Card>
   );
