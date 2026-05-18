@@ -10,7 +10,7 @@ import { AccountFormDialog } from "@/components/cash/account-form-dialog";
 import { AccountsGrid } from "@/components/cash/accounts-grid";
 import { MovementFormDialog } from "@/components/cash/movement-form-dialog";
 import { TransferFormDialog } from "@/components/cash/transfer-form-dialog";
-import { MovementsList } from "@/components/cash/movements-list";
+import { RecentMovementsPanel } from "@/components/cash/recent-movements-panel";
 import { ExportMovementsDialog } from "@/components/cash/export-movements-dialog";
 import { formatMoney } from "@/lib/format";
 
@@ -109,7 +109,11 @@ export default async function CajaPage() {
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
           Movimientos recientes
         </h2>
-        <MovementsList movements={movements as never} />
+        <RecentMovementsPanel
+          movements={movements as never}
+          accounts={accounts}
+          units={unitsForMovement}
+        />
       </div>
     </div>
   );

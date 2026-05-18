@@ -14,8 +14,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { deleteMovement, type MovementDetail } from "@/lib/actions/cash";
 
 interface Props {
@@ -26,13 +24,11 @@ interface Props {
 
 export function MovementDeleteAlert({ movement, onDeleted, trigger }: Props) {
   const [open, setOpen] = useState(false);
-  const [actorName, setActorName] = useState("");
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
 
   const isTransfer = movement.category === "transfer";
   const isLockedSettlement = movement.linked_settlement?.is_locked ?? false;
-  const actorOk = actorName.trim().length >= 2;
 
   function copy() {
     if (isLockedSettlement) {
@@ -74,23 +70,17 @@ export function MovementDeleteAlert({ movement, onDeleted, trigger }: Props) {
   const c = copy();
 
   function handleDelete() {
-    if (!actorOk) {
-      toast.error("Indicá tu nombre antes de eliminar");
-      return;
-    }
     startTransition(async () => {
       try {
         const res = await deleteMovement({
           id: movement.id,
           force_transfer: isTransfer,
-          actor_name: actorName.trim(),
         });
         const effects = (res.side_effects ?? []).filter((e) => e !== "Movimiento eliminado");
         toast.success("Movimiento eliminado", {
           description: effects.length ? effects.join(" · ") : undefined,
         });
         setOpen(false);
-        setActorName("");
         onDeleted?.();
         router.refresh();
       } catch (e) {
@@ -112,31 +102,18 @@ export function MovementDeleteAlert({ movement, onDeleted, trigger }: Props) {
         </AlertDialogHeader>
 
         {!isLockedSettlement && (
-          <div className="space-y-1.5 rounded-xl border border-amber-300/50 bg-amber-50/60 dark:bg-amber-950/20 dark:border-amber-800/40 p-3">
-            <Label className="text-amber-900 dark:text-amber-200 text-[11px] uppercase tracking-wider font-semibold">
-              ¿Quién está eliminando este movimiento? *
-            </Label>
-            <Input
-              autoFocus
-              required
-              value={actorName}
-              onChange={(e) => setActorName(e.target.value)}
-              placeholder="Nombre del administrador"
-              className="h-9 bg-background"
-            />
-            <p className="text-[10px] text-amber-800/80 dark:text-amber-200/80">
-              Queda registrado en el historial junto con la fecha y hora.
-            </p>
-          </div>
+          <p className="text-xs text-muted-foreground">
+            Queda registrado en el historial a tu nombre, con la fecha y hora.
+          </p>
         )}
 
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => setActorName("")}>Cancelar</AlertDialogCancel>
+          <AlertDialogCancel>Cancelar</AlertDialogCancel>
           {c.action && !isLockedSettlement && (
             <Button
               type="button"
               onClick={handleDelete}
-              disabled={isPending || !actorOk}
+              disabled={isPending}
               className="bg-rose-600 hover:bg-rose-600/90 text-white focus-visible:ring-rose-600/50 gap-1.5"
             >
               {isPending ? <Loader2 className="animate-spin" size={14} /> : <Trash2 size={14} />}
