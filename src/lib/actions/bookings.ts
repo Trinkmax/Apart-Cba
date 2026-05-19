@@ -489,7 +489,10 @@ export async function createBooking(
   input: BookingInputWithAccount
 ): Promise<Booking> {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "create")) {
+    throw new Error("No tenés permisos para crear reservas");
+  }
   const { account_id: accountId, ...rest } = input;
   const validated = bookingSchema.parse(rest);
 
@@ -712,7 +715,10 @@ export async function updateBooking(
   input: BookingInputWithAccount
 ): Promise<Booking> {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update")) {
+    throw new Error("No tenés permisos para editar reservas");
+  }
   const { account_id: accountId, ...rest } = input;
   const validated = bookingSchema.parse(rest);
   const commission_amount =
@@ -827,7 +833,10 @@ export async function addBookingPayment(
   accountId: string
 ): Promise<Booking> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "payments", "create")) {
+    throw new Error("No tenés permisos para registrar pagos");
+  }
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new Error("El importe del pago debe ser mayor a 0");
   }
@@ -881,6 +890,12 @@ export async function changeBookingStatus(
 ) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
+  // Cancelar una reserva equivale a editarla — requiere bookings.update.
+  // Los cambios operativos (check-in / check-out) los puede ejecutar cualquier
+  // rol con `bookings.view` para no bloquear la operación diaria.
+  if (newStatus === "cancelada" && !can(role, "bookings", "update")) {
+    throw new Error("No tenés permisos para cancelar reservas");
+  }
   const admin = createAdminClient();
 
   // ── Bloqueo de check-out con saldo pendiente ──────────────────────────────

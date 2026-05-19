@@ -92,6 +92,7 @@ export default async function MobileTicketDetailPage({ params }: PageProps) {
         ticketId={ticket.id}
         initialStatus={ticket.status}
         initialActualCost={ticket.actual_cost}
+        initialEstimatedCost={ticket.estimated_cost}
         initialCostCurrency={ticket.cost_currency ?? "ARS"}
         initialAttachments={ticket.attachments ?? []}
       />

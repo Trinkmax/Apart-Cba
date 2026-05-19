@@ -4,6 +4,13 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   // Tree-shake icon/util barrels para no arrastrar paquetes enteros al bundle inicial.
   experimental: {
+    // Las fotos de mantenimiento (cámara de celular) pesan varios MB. El default
+    // de 1MB de Server Actions cortaba el upload ANTES de llegar al action (el
+    // chequeo de 10MB nunca corría). El cliente igual comprime antes de subir,
+    // pero dejamos margen para fotos sin comprimir / lotes.
+    serverActions: {
+      bodySizeLimit: "15mb",
+    },
     optimizePackageImports: [
       "lucide-react",
       "date-fns",
@@ -24,7 +31,7 @@ const nextConfig: NextConfig = {
     ],
   },
   // Libs Node-only que NO deben bundlearse en el server bundle (jspdf usa APIs del browser/node sin tree-shake claro; ical.js es CJS pesado).
-  serverExternalPackages: ["jspdf", "jspdf-autotable", "ical.js"],
+  serverExternalPackages: ["jspdf", "jspdf-autotable", "ical.js", "exceljs"],
   images: {
     // Next.js 16+ requiere whitelistar valores de `quality` no estándar.
     // 75 = default; 92 = hero a calidad casi-original sin reventar bandwidth.

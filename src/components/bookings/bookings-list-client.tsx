@@ -25,9 +25,10 @@ interface Props {
   bookings: BookingWithRelations[];
   units: Pick<Unit, "id" | "code" | "name">[];
   organizationId: string;
+  canViewMoney?: boolean;
 }
 
-export function BookingsListClient({ bookings: initialBookings, organizationId }: Props) {
+export function BookingsListClient({ bookings: initialBookings, organizationId, canViewMoney = true }: Props) {
   // Sync con server data cuando llega nuevo prop (router.refresh tras crear/editar).
   // Patrón "ajuste de state durante render" — reemplaza al useEffect+setState.
   const [prevInitial, setPrevInitial] = useState(initialBookings);
@@ -195,7 +196,9 @@ export function BookingsListClient({ bookings: initialBookings, organizationId }
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="text-sm font-semibold tabular-nums">{formatMoney(b.total_amount, b.currency)}</div>
+                          {canViewMoney && (
+                            <div className="text-sm font-semibold tabular-nums">{formatMoney(b.total_amount, b.currency)}</div>
+                          )}
                           <Badge className="font-normal text-[9px] gap-1 mt-0.5" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
                             {sm.label}
                           </Badge>
@@ -210,7 +213,7 @@ export function BookingsListClient({ bookings: initialBookings, organizationId }
                         </div>
                         <span className="shrink-0">{nights}n · {b.guests_count}p</span>
                       </div>
-                      {b.paid_amount < b.total_amount && (
+                      {canViewMoney && b.paid_amount < b.total_amount && (
                         <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
                           Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
                         </div>
@@ -238,11 +241,17 @@ export function BookingsListClient({ bookings: initialBookings, organizationId }
                       <div className="text-xs text-muted-foreground">{nights} {nights === 1 ? "noche" : "noches"}</div>
                     </div>
                     <div className="col-span-2 text-right">
-                      <div className="text-sm font-semibold">{formatMoney(b.total_amount, b.currency)}</div>
-                      {b.paid_amount < b.total_amount && (
-                        <div className="text-[10px] text-amber-600 dark:text-amber-400">
-                          Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
-                        </div>
+                      {canViewMoney ? (
+                        <>
+                          <div className="text-sm font-semibold">{formatMoney(b.total_amount, b.currency)}</div>
+                          {b.paid_amount < b.total_amount && (
+                            <div className="text-[10px] text-amber-600 dark:text-amber-400">
+                              Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </div>
                     <div className="col-span-1 flex flex-col items-end gap-1">

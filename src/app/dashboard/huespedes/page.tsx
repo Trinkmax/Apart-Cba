@@ -1,10 +1,15 @@
+import { redirect } from "next/navigation";
 import { Plus } from "lucide-react";
 import { listGuests } from "@/lib/actions/guests";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { GuestFormDialog } from "@/components/guests/guest-form-dialog";
 import { GuestsListClient } from "@/components/guests/guests-list-client";
 
 export default async function HuespedesPage() {
+  const { role } = await getCurrentOrg();
+  if (!can(role, "guests", "view")) redirect("/dashboard");
   const guests = await listGuests();
 
   return (

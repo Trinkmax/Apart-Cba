@@ -11,6 +11,8 @@ import {
   FileText,
 } from "lucide-react";
 import { getOwnerWithUnits } from "@/lib/actions/owners";
+import { listUnitsEnriched } from "@/lib/actions/units";
+import { AssignUnitDialog } from "@/components/owners/assign-unit-dialog";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -31,6 +33,12 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
   const { id } = await params;
   const owner = (await getOwnerWithUnits(id)) as OwnerWithUnits | null;
   if (!owner) notFound();
+
+  const allUnits = await listUnitsEnriched();
+  const linkedUnitIds = new Set(owner.unit_owners.map((uo) => uo.unit.id));
+  const availableUnits = allUnits
+    .filter((u) => !linkedUnitIds.has(u.id))
+    .map((u) => ({ id: u.id, code: u.code, name: u.name }));
 
   const totalOwnership = owner.unit_owners.reduce((acc, uo) => acc + Number(uo.ownership_pct), 0);
 
@@ -89,10 +97,13 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
             <Building2 className="size-4 text-muted-foreground" />
             <h2 className="font-medium">Unidades ({owner.unit_owners.length})</h2>
             {totalOwnership > 0 && (
-              <Badge variant="secondary" className="ml-auto">
+              <Badge variant="secondary">
                 {totalOwnership.toFixed(0)}% total
               </Badge>
             )}
+            <div className="ml-auto">
+              <AssignUnitDialog ownerId={owner.id} units={availableUnits} />
+            </div>
           </div>
           {owner.unit_owners.length === 0 ? (
             <div className="py-8 text-center text-sm text-muted-foreground">

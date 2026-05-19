@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { getUnit } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -25,10 +27,15 @@ type UnitDetail = Unit & {
 
 export default async function UnitDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [unit, owners] = await Promise.all([getUnit(id), listOwners()]);
+  const [unit, owners, { role }] = await Promise.all([
+    getUnit(id),
+    listOwners(),
+    getCurrentOrg(),
+  ]);
   if (!unit) notFound();
   const u = unit as unknown as UnitDetail;
   const meta = UNIT_STATUS_META[u.status];
+  const canViewMoney = can(role, "payments", "view");
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
@@ -114,23 +121,25 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
         </TabsList>
 
         <TabsContent value="general" className="space-y-4 mt-4">
-          <Card className="p-4 sm:p-5">
-            <h2 className="text-sm font-semibold mb-3">Tarifas</h2>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-sm">
-              <div>
-                <div className="text-xs text-muted-foreground">Precio / noche</div>
-                <div className="font-medium">{formatMoney(u.base_price, u.base_price_currency ?? "ARS")}</div>
+          {canViewMoney && (
+            <Card className="p-4 sm:p-5">
+              <h2 className="text-sm font-semibold mb-3">Tarifas</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-sm">
+                <div>
+                  <div className="text-xs text-muted-foreground">Precio / noche</div>
+                  <div className="font-medium">{formatMoney(u.base_price, u.base_price_currency ?? "ARS")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Fee limpieza</div>
+                  <div className="font-medium">{formatMoney(u.cleaning_fee, u.base_price_currency ?? "ARS")}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground">Comisión</div>
+                  <div className="font-medium">{u.default_commission_pct ?? 0}%</div>
+                </div>
               </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Fee limpieza</div>
-                <div className="font-medium">{formatMoney(u.cleaning_fee, u.base_price_currency ?? "ARS")}</div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground">Comisión</div>
-                <div className="font-medium">{u.default_commission_pct ?? 0}%</div>
-              </div>
-            </div>
-          </Card>
+            </Card>
+          )}
 
           {u.description && (
             <Card className="p-4 sm:p-5">

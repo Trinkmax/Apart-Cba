@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { Plus, Wallet, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { listAccounts, listMovements, getAccountBalances } from "@/lib/actions/cash";
 import { listUnitsEnriched } from "@/lib/actions/units";
@@ -9,16 +10,17 @@ import { AccountFormDialog } from "@/components/cash/account-form-dialog";
 import { AccountsGrid } from "@/components/cash/accounts-grid";
 import { MovementFormDialog } from "@/components/cash/movement-form-dialog";
 import { TransferFormDialog } from "@/components/cash/transfer-form-dialog";
-import { MovementsList } from "@/components/cash/movements-list";
+import { RecentMovementsPanel } from "@/components/cash/recent-movements-panel";
 import { ExportMovementsDialog } from "@/components/cash/export-movements-dialog";
 import { formatMoney } from "@/lib/format";
 
 export default async function CajaPage() {
-  const [accounts, movements, units, { role }, balancesMap] = await Promise.all([
+  const { role } = await getCurrentOrg();
+  if (!can(role, "cash", "view")) redirect("/dashboard");
+  const [accounts, movements, units, balancesMap] = await Promise.all([
     listAccounts(),
     listMovements({ limit: 100 }),
     listUnitsEnriched(),
-    getCurrentOrg(),
     getAccountBalances(),
   ]);
   const balances = accounts.map((a) => balancesMap[a.id] ?? 0);
@@ -107,7 +109,11 @@ export default async function CajaPage() {
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
           Movimientos recientes
         </h2>
-        <MovementsList movements={movements as never} />
+        <RecentMovementsPanel
+          movements={movements as never}
+          accounts={accounts}
+          units={unitsForMovement}
+        />
       </div>
     </div>
   );

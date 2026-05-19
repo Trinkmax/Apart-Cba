@@ -154,6 +154,10 @@ interface PmsBoardProps {
   initialDateMarks?: OrgDateMark[];
   /** Si true, el popover permite editar/quitar marcas. Si false, solo lectura. */
   canEditDateMarks?: boolean;
+  /** Si false, el board es solo-lectura para reservas: sin drag, resize, edit ni cancel. */
+  canEditBookings?: boolean;
+  /** Si false, esconde montos (total/cobrado/saldo/comisión) y "Registrar pago" en el popover. */
+  canViewMoney?: boolean;
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -232,6 +236,8 @@ export function PmsBoard({
   initialSchedule = [],
   initialDateMarks = [],
   canEditDateMarks = false,
+  canEditBookings = true,
+  canViewMoney = true,
   organizationId,
   startISO,
   days,
@@ -1429,12 +1435,13 @@ export function PmsBoard({
   // ── click en celda vacía → abrir quick-add
   const onCellClick = useCallback(
     (unit: UnitWithRelations, date: Date) => {
+      if (!canEditBookings) return;
       if (dragRef.current?.moved) return;
       const ci = format(date, "yyyy-MM-dd");
       const co = isoAddDays(ci, 1);
       setQuickAdd({ unitId: unit.id, checkIn: ci, checkOut: co });
     },
-    []
+    [canEditBookings]
   );
 
   // ── render helpers
@@ -2008,15 +2015,17 @@ export function PmsBoard({
               </Tooltip>
 
               {/* Nueva reserva */}
-              <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
-                <Button
-                  size="sm"
-                  className="h-8 gap-1.5 text-xs"
-                  disabled={editMode}
-                >
-                  <Plus size={13} /> Nueva
-                </Button>
-              </BookingFormDialog>
+              {canEditBookings && (
+                <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
+                  <Button
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs"
+                    disabled={editMode}
+                  >
+                    <Plus size={13} /> Nueva
+                  </Button>
+                </BookingFormDialog>
+              )}
             </div>
           </div>
 
@@ -2241,6 +2250,7 @@ export function PmsBoard({
                     onOpenChange={(o) => setOpenUnitId(o ? unit.id : null)}
                     sidebarWidth={SIDEBAR}
                     compact={isMobile}
+                    canViewMoney={canViewMoney}
                   />
 
                   {/* Cells: single click-overlay por fila. Las gridlines y el
@@ -2340,6 +2350,8 @@ export function PmsBoard({
                             ? statusColors[b.status]
                             : null
                         }
+                        canEditBookings={canEditBookings}
+                        canViewMoney={canViewMoney}
                       />
                     ))}
                   </div>
@@ -2495,7 +2507,7 @@ export function PmsBoard({
         {/* FAB mobile: la toolbar mobile no tiene espacio para "Nueva reserva".
             Lo escondemos en editMode (reorden) y mientras el usuario arrastra,
             para no tapar el target ni competir con el DragChip. */}
-        {!editMode && !drag && (
+        {canEditBookings && !editMode && !drag && (
           <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
             <button
               type="button"
@@ -2728,6 +2740,7 @@ function UnitCellHeader({
   onOpenChange,
   sidebarWidth = SIDEBAR_WIDTH,
   compact = false,
+  canViewMoney = true,
 }: {
   unit: UnitWithRelations;
   occupancyPct: number;
@@ -2739,6 +2752,7 @@ function UnitCellHeader({
   onOpenChange: (o: boolean) => void;
   sidebarWidth?: number;
   compact?: boolean;
+  canViewMoney?: boolean;
 }) {
   const meta = UNIT_STATUS_META[unit.status];
   const overlay = UNIT_OVERLAY_STYLE[unit.status];
@@ -2836,6 +2850,7 @@ function UnitCellHeader({
           nightsTotal={totalNights}
           revenue={revenue}
           currency={currency}
+          canViewMoney={canViewMoney}
         />
       </PopoverContent>
     </Popover>
@@ -2878,6 +2893,8 @@ interface BookingBarProps {
   unitName: string;
   /** Override del color hex para el status de esta booking (si la org lo configuró). */
   customStatusHex: string | null;
+  canEditBookings: boolean;
+  canViewMoney: boolean;
 }
 
 function BookingBar({
@@ -2901,6 +2918,8 @@ function BookingBar({
   unitCode,
   unitName,
   customStatusHex,
+  canEditBookings,
+  canViewMoney,
 }: BookingBarProps) {
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
   // (14:00 → +0.583 del día; 10:00 → +0.416 del día). Esto hace que la barra "pise"
@@ -2988,18 +3007,19 @@ function BookingBar({
           role="button"
           aria-label={`Reserva de ${booking.guest?.full_name ?? "huésped"} — ${booking.check_in_date} a ${booking.check_out_date}`}
           onPointerDown={(e) => {
+            if (!canEditBookings) return; // solo lectura: el click sigue abriendo el popover
             // si el click es en un handle, lo maneja el handle
             const t = e.target as HTMLElement;
             if (t.closest("[data-resize]")) return;
             onPointerDown(e, booking, "move");
           }}
-          onPointerMove={onPointerMove}
-          onPointerUp={(e) => onPointerUp(e, booking)}
-          onPointerCancel={onPointerCancel}
-          onLostPointerCapture={onPointerCancel}
+          onPointerMove={canEditBookings ? onPointerMove : undefined}
+          onPointerUp={canEditBookings ? (e) => onPointerUp(e, booking) : undefined}
+          onPointerCancel={canEditBookings ? onPointerCancel : undefined}
+          onLostPointerCapture={canEditBookings ? onPointerCancel : undefined}
         >
           {/* Resize handle izquierdo */}
-          {!leftOverflow && booking.status !== "cancelada" && (
+          {canEditBookings && !leftOverflow && booking.status !== "cancelada" && (
             <div
               data-resize="left"
               className="w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
@@ -3118,7 +3138,7 @@ function BookingBar({
           </div>
 
           {/* Resize handle derecho */}
-          {!rightOverflow && booking.status !== "cancelada" && (
+          {canEditBookings && !rightOverflow && booking.status !== "cancelada" && (
             <div
               data-resize="right"
               className="w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
@@ -3173,6 +3193,8 @@ function BookingBar({
           unitName={unitName}
           accounts={accounts}
           onEdit={onEdit}
+          canEditBooking={canEditBookings}
+          canViewMoney={canViewMoney}
           onStatusChanged={() => onOpenChange(false)}
           onRequestDateChange={(field, iso) => {
             onOpenChange(false);

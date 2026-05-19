@@ -10,6 +10,8 @@ import {
   Clock,
 } from "lucide-react";
 import { getBookingRequest } from "@/lib/actions/booking-requests";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { BookingRequestActions } from "@/components/bookings/booking-request-actions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,8 +22,12 @@ type Params = Promise<{ id: string }>;
 
 export default async function BookingRequestDetailPage({ params }: { params: Params }) {
   const { id } = await params;
-  const request = await getBookingRequest(id);
+  const [request, { role }] = await Promise.all([
+    getBookingRequest(id),
+    getCurrentOrg(),
+  ]);
   if (!request) notFound();
+  const canViewMoney = can(role, "payments", "view");
 
   const isPending = request.status === "pendiente";
 
@@ -133,17 +139,19 @@ export default async function BookingRequestDetailPage({ params }: { params: Par
             ) : null}
           </div>
 
-          <div className="pt-4 border-t">
-            <h4 className="text-xs font-semibold uppercase text-neutral-500 mb-2">Total</h4>
-            <div className="text-2xl font-semibold text-neutral-900">
-              {formatMoney(Number(request.total_amount), request.currency)}
-            </div>
-            {request.cleaning_fee && Number(request.cleaning_fee) > 0 ? (
-              <div className="text-xs text-neutral-500 mt-0.5">
-                incluye {formatMoney(Number(request.cleaning_fee), request.currency)} de limpieza
+          {canViewMoney && (
+            <div className="pt-4 border-t">
+              <h4 className="text-xs font-semibold uppercase text-neutral-500 mb-2">Total</h4>
+              <div className="text-2xl font-semibold text-neutral-900">
+                {formatMoney(Number(request.total_amount), request.currency)}
               </div>
-            ) : null}
-          </div>
+              {request.cleaning_fee && Number(request.cleaning_fee) > 0 ? (
+                <div className="text-xs text-neutral-500 mt-0.5">
+                  incluye {formatMoney(Number(request.cleaning_fee), request.currency)} de limpieza
+                </div>
+              ) : null}
+            </div>
+          )}
         </Card>
       </div>
     </div>

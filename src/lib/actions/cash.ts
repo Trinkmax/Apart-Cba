@@ -73,6 +73,8 @@ export type LinkedSettlementPreview = {
 };
 
 export type MovementDetail = EnrichedMovement & {
+  /** Nombre del usuario que creó el movimiento (resuelto de created_by). */
+  created_by_name: string | null;
   linked_booking: LinkedBookingPreview | null;
   linked_schedule: LinkedSchedulePreview | null;
   linked_transfer: LinkedTransferPreview | null;
@@ -671,6 +673,17 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
 
   const movement = m as unknown as EnrichedMovement;
 
+  // Creador: lo disparamos YA, en paralelo con la resolución de vínculos
+  // (no agrega un round-trip secuencial al final).
+  const createdByPromise: PromiseLike<string | null> = movement.created_by
+    ? admin
+        .from("user_profiles")
+        .select("full_name")
+        .eq("user_id", movement.created_by)
+        .maybeSingle()
+        .then(({ data }) => (data?.full_name as string | undefined) ?? null)
+    : Promise.resolve(null);
+
   let linked_booking: LinkedBookingPreview | null = null;
   let linked_schedule: LinkedSchedulePreview | null = null;
   let linked_transfer: LinkedTransferPreview | null = null;
@@ -787,9 +800,12 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
     }
   }
 
+  const created_by_name = await createdByPromise;
+
   return {
     ...movement,
     amount: Number(movement.amount),
+    created_by_name,
     linked_booking,
     linked_schedule,
     linked_transfer,
@@ -801,7 +817,10 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
 // Reutilizado por la pestaña Pagos en /dashboard/reservas/[id].
 export async function listMovementsForBooking(bookingId: string): Promise<EnrichedMovement[]> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "view") && !can(role, "payments", "view")) {
+    return [];
+  }
   const admin = createAdminClient();
 
   const { data: schedules } = await admin
@@ -948,9 +967,9 @@ export async function updateMovement(input: UpdateMovementInput): Promise<Mutati
   const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = updateMovementSchema.parse(input);
-  if (!validated.actor_name?.trim()) {
-    throw new Error("Indicá quién está haciendo el cambio");
-  }
+  // El autor se detecta del usuario logueado; no se confía en el cliente.
+  const actorName =
+    session.profile.full_name?.trim() || session.email || "Usuario";
   await assertCanMutateMovement(validated.id, "update");
   const admin = createAdminClient();
 
@@ -975,7 +994,7 @@ export async function updateMovement(input: UpdateMovementInput): Promise<Mutati
     p_occurred_at: validated.occurred_at ?? new Date().toISOString(),
     p_billable_to: validated.billable_to,
     p_actor_user_id: session.userId,
-    p_actor_name: validated.actor_name.trim(),
+    p_actor_name: actorName,
   });
   if (error) {
     // Errores conocidos del RPC vienen con mensajes en español del RAISE EXCEPTION
@@ -999,15 +1018,13 @@ export async function updateMovement(input: UpdateMovementInput): Promise<Mutati
 export async function deleteMovement(input: {
   id: string;
   force_transfer?: boolean;
-  actor_name: string;
 }): Promise<MutationResult> {
   const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const id = z.string().uuid().parse(input.id);
-  const actorName = input.actor_name?.trim();
-  if (!actorName || actorName.length < 2) {
-    throw new Error("Indicá quién está eliminando el movimiento");
-  }
+  // El autor se detecta del usuario logueado; no se confía en el cliente.
+  const actorName =
+    session.profile.full_name?.trim() || session.email || "Usuario";
   await assertCanMutateMovement(id, "delete");
   const admin = createAdminClient();
 

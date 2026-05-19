@@ -146,6 +146,8 @@ export interface Organization {
   default_commission_pct: number | null;
   logo_url: string | null;
   primary_color: string | null;
+  /** false = en el sidebar se muestra solo el logo (sin el nombre). */
+  brand_show_name: boolean;
   /** Override de colores por status de reserva (hex). Si null o falta una clave, se usa el default. */
   booking_status_colors: BookingStatusColors | null;
   description: string | null;
@@ -586,8 +588,54 @@ export interface OwnerSettlement {
   paid_movement_id: string | null;
   notes: string | null;
   pdf_url: string | null;
+  /** Token aleatorio para el link público de solo lectura /liquidacion/[token]. */
+  public_token: string;
+  /** Email al que se envió la liquidación (audit trail). */
+  sent_to: string | null;
+  /** Último usuario que modificó la liquidación. */
+  last_edited_by: string | null;
+  last_edited_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Entrada del historial inmutable de cambios de una liquidación. */
+export interface SettlementAuditEntry {
+  id: string;
+  settlement_id: string | null;
+  action:
+    | "line_add"
+    | "line_update"
+    | "line_delete"
+    | "row_update"
+    | "status_change"
+    | "payment"
+    | "regenerate";
+  actor_user_id: string | null;
+  actor_name: string;
+  changes: Record<string, { from: unknown; to: unknown } | unknown>;
+  side_effects: string[];
+  occurred_at: string;
+}
+
+/**
+ * Snapshot que viaja en settlement_lines.meta (jsonb). Se llena sobre la línea
+ * de ingreso (booking_revenue / monthly_rent_fraction) en el momento de generar
+ * la liquidación, para reconstruir la planilla por unidad sin re-derivar de
+ * bookings que pueden haber cambiado.
+ */
+export interface SettlementLineMeta {
+  guest_name?: string | null;
+  nights?: number | null;
+  check_in?: string | null;
+  check_out?: string | null;
+  source?: string | null;
+  mode?: "temporario" | "mensual" | null;
+  commission_pct?: number | null;
+  /** Días ocupados del mes (prorrateo mensual). */
+  prorate_days?: number | null;
+  /** Días totales del mes (prorrateo mensual). */
+  prorate_of?: number | null;
 }
 
 export interface SettlementLine {
@@ -607,7 +655,16 @@ export interface SettlementLine {
   description: string;
   amount: number;
   sign: "+" | "-";
+  /** true = ajuste manual; se preserva al regenerar. */
+  is_manual: boolean;
+  /** Snapshot para la planilla (ver SettlementLineMeta). */
+  meta: SettlementLineMeta | null;
   display_order: number;
+  /** Usuario que creó la línea (NULL = autogenerada por el sistema). */
+  created_by: string | null;
+  /** Último usuario que editó la línea manualmente. */
+  updated_by: string | null;
+  updated_at: string;
   created_at: string;
 }
 

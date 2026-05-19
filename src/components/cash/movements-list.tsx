@@ -37,7 +37,13 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: "Otro",
 };
 
-export function MovementsList({ movements }: { movements: Movement[] }) {
+export function MovementsList({
+  movements,
+  onSelect,
+}: {
+  movements: Movement[];
+  onSelect?: (id: string) => void;
+}) {
   if (movements.length === 0) {
     return (
       <Card className="p-12 text-center border-dashed text-sm text-muted-foreground">
@@ -70,7 +76,26 @@ export function MovementsList({ movements }: { movements: Movement[] }) {
               ? `Cobro · ${m.linked_guest_name}`
               : m.description ?? CATEGORY_LABELS[m.category] ?? m.category;
           return (
-            <div key={m.id} className="hover:bg-accent/30 transition-colors">
+            <div
+              key={m.id}
+              className={cn(
+                "hover:bg-accent/30 transition-colors",
+                onSelect && "cursor-pointer",
+              )}
+              role={onSelect ? "button" : undefined}
+              tabIndex={onSelect ? 0 : undefined}
+              onClick={onSelect ? () => onSelect(m.id) : undefined}
+              onKeyDown={
+                onSelect
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSelect(m.id);
+                      }
+                    }
+                  : undefined
+              }
+            >
               {/* MOBILE */}
               <div className="md:hidden flex items-start gap-3 p-3">
                 <div className={iconCls}>{icon}</div>

@@ -1,25 +1,27 @@
 import Image from "next/image";
 import { Logo } from "./logo";
+import { cn } from "@/lib/utils";
 import type { Organization } from "@/lib/types/database";
 
 interface OrgBrandProps {
-  organization: Pick<Organization, "id" | "name" | "logo_url">;
+  organization: Pick<
+    Organization,
+    "id" | "name" | "logo_url" | "brand_show_name"
+  >;
   size?: "sm" | "md";
 }
 
 /**
  * Brand del sidebar:
- * - Si la org tiene logo_url → renderiza ese logo personalizado (white-label).
- * - Si no → fallback al logo rentOS (wordmark expandido / icon "rOS" colapsado).
- *
- * Cuando el Sidebar de shadcn está en `collapsible="icon"`, expone
- * `data-collapsible="icon"` en el group ancestro; los hijos lo leen con
- * `group-data-[collapsible=icon]:*` para reaccionar al estado colapsado.
+ * - Con logo_url → logo personalizado (white-label). Si brand_show_name es
+ *   false, se oculta el nombre y el logo toma más protagonismo (más grande).
+ * - Sin logo → fallback al logo rentOS.
  */
 export function OrgBrand({ organization, size = "sm" }: OrgBrandProps) {
   const dim = size === "sm" ? 32 : 44;
 
   if (organization.logo_url) {
+    const showName = organization.brand_show_name !== false;
     return (
       <div className="flex items-center gap-2 min-w-0">
         <Image
@@ -28,11 +30,16 @@ export function OrgBrand({ organization, size = "sm" }: OrgBrandProps) {
           width={dim}
           height={dim}
           unoptimized
-          className="h-9 w-auto max-w-[120px] object-contain"
+          className={cn(
+            "w-auto object-contain group-data-[collapsible=icon]:h-8",
+            showName ? "h-9 max-w-[120px]" : "h-12 max-w-[180px]",
+          )}
         />
-        <span className="font-semibold text-sm truncate group-data-[collapsible=icon]:hidden">
-          {organization.name}
-        </span>
+        {showName && (
+          <span className="font-semibold text-sm truncate group-data-[collapsible=icon]:hidden">
+            {organization.name}
+          </span>
+        )}
       </div>
     );
   }

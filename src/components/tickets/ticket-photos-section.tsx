@@ -1,8 +1,19 @@
 "use client";
 
-import { useState, useTransition, useRef, useEffect } from "react";
-import Image from "next/image";
-import { Camera, ImageOff, Loader2, Plus, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
+import {
+  Camera,
+  Download,
+  FileWarning,
+  ImageIcon,
+  ImageOff,
+  Loader2,
+  Trash2,
+  X,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,6 +21,7 @@ import {
   deleteTicketAttachment,
   listTicketAttachments,
 } from "@/lib/actions/ticket-attachments";
+import { prepareImageForUpload } from "@/lib/image-compress";
 import { formatTimeAgo } from "@/lib/format";
 import type { TicketAttachment } from "@/lib/types/database";
 import { cn } from "@/lib/utils";
@@ -17,30 +29,58 @@ import { cn } from "@/lib/utils";
 interface Props {
   ticketId: string;
   initialAttachments?: TicketAttachment[];
-  /** When true, the uploader auto-opens the camera on mobile */
+  /** En mobile pone "Cámara" como acción primaria (igual deja elegir galería). */
   preferCamera?: boolean;
+  /** Modo lectura: muestra las fotos pero oculta subir/eliminar (historial). */
+  readOnly?: boolean;
   className?: string;
+}
+
+/** HEIC/HEIF no lo renderiza ningún browser salvo Safari. Las fotos viejas
+ *  quedaron en HEIC; las nuevas ya entran como JPEG (ver image-compress). */
+function isUnviewable(a: TicketAttachment): boolean {
+  const m = (a.mime_type ?? "").toLowerCase();
+  const n = (a.file_name ?? "").toLowerCase();
+  return (
+    m.includes("heic") ||
+    m.includes("heif") ||
+    n.endsWith(".heic") ||
+    n.endsWith(".heif")
+  );
+}
+
+/** Endpoint de transformación de Supabase: imgproxy puede transcodear HEIC→JPEG
+ *  on the fly. Si el add-on no está habilitado devuelve error → cae al onError. */
+function transformUrl(fileUrl: string): string {
+  const out = fileUrl.replace(
+    "/storage/v1/object/public/",
+    "/storage/v1/render/image/public/"
+  );
+  return out === fileUrl ? fileUrl : `${out}?width=1400&quality=80`;
 }
 
 export function TicketPhotosSection({
   ticketId,
   initialAttachments,
   preferCamera = false,
+  readOnly = false,
   className,
 }: Props) {
   const [attachments, setAttachments] = useState<TicketAttachment[]>(
     initialAttachments ?? []
   );
   const [loading, setLoading] = useState(initialAttachments === undefined);
-  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const uploading = uploadProgress !== null;
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewIdx, setPreviewIdx] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-  const inputRef = useRef<HTMLInputElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
+  const cameraRef = useRef<HTMLInputElement>(null);
 
-  // Cuando cambia el ticketId remontamos la fetch sin tocar setLoading dentro
-  // del effect (loading inicial = true cuando no hay attachments precargados).
   useEffect(() => {
     if (initialAttachments !== undefined) return;
     let cancelled = false;
@@ -57,94 +97,88 @@ export function TicketPhotosSection({
     };
   }, [ticketId, initialAttachments]);
 
-  async function handleFiles(files: FileList | null) {
-    if (!files || files.length === 0) return;
-    const list = Array.from(files);
-    setUploadProgress({ done: 0, total: list.length });
-    let succeeded = 0;
-    const errors: string[] = [];
-    await Promise.all(
-      list.map(async (file) => {
-        const fd = new FormData();
-        fd.append("file", file);
+  const handleFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) return;
+      const list = Array.from(files);
+      setUploadProgress({ done: 0, total: list.length });
+      let succeeded = 0;
+      const errors: string[] = [];
+      // Secuencial: el celular comprime en canvas, en paralelo lo cuelga.
+      for (const original of list) {
         try {
+          const file = await prepareImageForUpload(original);
+          const fd = new FormData();
+          fd.append("file", file);
           const att = await uploadTicketPhoto(ticketId, fd);
           setAttachments((cur) => [att, ...cur]);
           succeeded += 1;
-          setUploadProgress((p) =>
-            p ? { done: p.done + 1, total: p.total } : null
-          );
         } catch (e) {
           errors.push((e as Error).message);
+        } finally {
+          setUploadProgress((p) => (p ? { done: p.done + 1, total: p.total } : null));
         }
-      })
-    );
-    if (succeeded > 0) {
-      toast.success(
-        succeeded === 1 ? "Foto subida" : `${succeeded} fotos subidas`
-      );
-    }
-    if (errors.length > 0) {
-      toast.error(
-        errors.length === 1 ? "Error al subir 1 foto" : `Error al subir ${errors.length} fotos`,
-        { description: errors[0] }
-      );
-    }
-    setUploadProgress(null);
-    if (inputRef.current) inputRef.current.value = "";
-  }
-
-  function handleDelete(id: string) {
-    setPendingDelete(id);
-    startTransition(async () => {
-      try {
-        await deleteTicketAttachment(id);
-        setAttachments((cur) => cur.filter((a) => a.id !== id));
-        toast.success("Foto eliminada");
-      } catch (e) {
-        toast.error("Error", { description: (e as Error).message });
-      } finally {
-        setPendingDelete(null);
       }
-    });
-  }
+      if (succeeded > 0) {
+        toast.success(
+          succeeded === 1 ? "Foto subida" : `${succeeded} fotos subidas`
+        );
+      }
+      if (errors.length > 0) {
+        toast.error(
+          errors.length === 1
+            ? "No se pudo subir 1 foto"
+            : `No se pudieron subir ${errors.length} fotos`,
+          { description: errors[0] }
+        );
+      }
+      setUploadProgress(null);
+      if (galleryRef.current) galleryRef.current.value = "";
+      if (cameraRef.current) cameraRef.current.value = "";
+    },
+    [ticketId]
+  );
+
+  const handleDelete = useCallback(
+    (id: string) => {
+      setPendingDelete(id);
+      startTransition(async () => {
+        try {
+          await deleteTicketAttachment(id);
+          setAttachments((cur) => cur.filter((a) => a.id !== id));
+          toast.success("Foto eliminada");
+        } catch (e) {
+          toast.error("Error", { description: (e as Error).message });
+        } finally {
+          setPendingDelete(null);
+        }
+      });
+    },
+    []
+  );
+
+  const count = attachments.length;
 
   return (
     <div className={cn("space-y-2", className)}>
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1.5">
           <Camera size={13} />
           Fotos del trabajo
-          {attachments.length > 0 && (
-            <span className="text-muted-foreground/70">· {attachments.length}</span>
-          )}
+          {count > 0 ? (
+            <span className="text-muted-foreground/70">· {count}</span>
+          ) : null}
         </span>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-          multiple
-          {...(preferCamera ? { capture: "environment" } : {})}
-          className="hidden"
-          onChange={(e) => handleFiles(e.target.files)}
-        />
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="gap-1.5 h-8 tabular-nums"
-          disabled={uploading}
-          onClick={() => inputRef.current?.click()}
-        >
-          {uploading ? (
-            <Loader2 size={13} className="animate-spin" />
-          ) : (
-            <Plus size={13} />
-          )}
-          {uploading
-            ? `Subiendo ${uploadProgress!.done}/${uploadProgress!.total}…`
-            : "Agregar"}
-        </Button>
+        {readOnly ? null : (
+          <UploadButtons
+            galleryRef={galleryRef}
+            cameraRef={cameraRef}
+            preferCamera={preferCamera}
+            uploading={uploading}
+            progress={uploadProgress}
+            onFiles={handleFiles}
+          />
+        )}
       </div>
 
       {loading ? (
@@ -152,92 +186,463 @@ export function TicketPhotosSection({
           {Array.from({ length: 4 }).map((_, i) => (
             <div
               key={i}
-              className="aspect-square rounded-md bg-muted animate-pulse"
+              className="aspect-square rounded-lg bg-muted animate-pulse"
             />
           ))}
         </div>
-      ) : attachments.length === 0 ? (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          disabled={uploading}
-          className="w-full rounded-lg border border-dashed bg-muted/20 hover:bg-muted/40 transition-colors px-4 py-8 flex flex-col items-center gap-2 text-muted-foreground"
-        >
-          <ImageOff size={20} />
-          <span className="text-xs">
-            Tocá para agregar foto del arreglo (evidencia)
-          </span>
-        </button>
+      ) : count === 0 ? (
+        <EmptyState
+          readOnly={readOnly}
+          onClick={() =>
+            (preferCamera ? cameraRef : galleryRef).current?.click()
+          }
+        />
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-          {attachments.map((a) => (
-            <div
+          {attachments.map((a, i) => (
+            <AttachmentTile
               key={a.id}
-              className="group relative aspect-square rounded-md overflow-hidden border bg-muted"
-            >
-              <button
-                type="button"
-                onClick={() => setPreviewUrl(a.file_url)}
-                className="absolute inset-0 w-full h-full"
-                aria-label={`Ver foto ${a.file_name ?? ""}`}
-              >
-                <Image
-                  src={a.file_url}
-                  alt={a.file_name ?? "Foto del trabajo"}
-                  fill
-                  sizes="(max-width: 640px) 33vw, 200px"
-                  className="object-cover transition-transform group-hover:scale-[1.02]"
-                  unoptimized
-                />
-              </button>
-              <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-gradient-to-t from-black/60 to-transparent flex items-center justify-between text-[10px] text-white">
-                <span className="truncate">{formatTimeAgo(a.uploaded_at)}</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(a.id);
-                  }}
-                  disabled={pendingDelete === a.id}
-                  className="size-5 grid place-items-center rounded-sm hover:bg-red-500/80 transition-colors"
-                  aria-label="Eliminar foto"
-                >
-                  {pendingDelete === a.id ? (
-                    <Loader2 size={11} className="animate-spin" />
-                  ) : (
-                    <Trash2 size={11} />
-                  )}
-                </button>
-              </div>
-            </div>
+              attachment={a}
+              onOpen={() => setPreviewIdx(i)}
+              onDelete={readOnly ? undefined : () => handleDelete(a.id)}
+              deleting={pendingDelete === a.id}
+            />
           ))}
         </div>
       )}
 
-      {previewUrl && (
-        <div
-          className="fixed inset-0 z-[100] bg-black/90 grid place-items-center p-4"
-          onClick={() => setPreviewUrl(null)}
-        >
-          <button
-            type="button"
-            onClick={() => setPreviewUrl(null)}
-            className="absolute top-4 right-4 size-9 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white"
-            aria-label="Cerrar"
-          >
-            <X size={18} />
-          </button>
-          <Image
-            src={previewUrl}
-            alt="Foto del trabajo"
-            width={1600}
-            height={1200}
-            unoptimized
-            className="max-h-full max-w-full w-auto h-auto object-contain rounded-md"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
+      {previewIdx !== null && attachments[previewIdx] ? (
+        <Lightbox
+          attachments={attachments}
+          index={previewIdx}
+          onIndex={setPreviewIdx}
+          onClose={() => setPreviewIdx(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function UploadButtons({
+  galleryRef,
+  cameraRef,
+  preferCamera,
+  uploading,
+  progress,
+  onFiles,
+}: {
+  galleryRef: React.RefObject<HTMLInputElement | null>;
+  cameraRef: React.RefObject<HTMLInputElement | null>;
+  preferCamera: boolean;
+  uploading: boolean;
+  progress: { done: number; total: number } | null;
+  onFiles: (f: FileList | null) => void;
+}) {
+  const gallery = (
+    <Button
+      key="g"
+      type="button"
+      size="sm"
+      variant={preferCamera ? "outline" : "default"}
+      className="gap-1.5 h-8 tabular-nums"
+      disabled={uploading}
+      onClick={() => galleryRef.current?.click()}
+    >
+      {uploading ? (
+        <Loader2 size={13} className="animate-spin" />
+      ) : (
+        <ImageIcon size={13} />
+      )}
+      {uploading && progress
+        ? `Subiendo ${progress.done}/${progress.total}…`
+        : "Galería"}
+    </Button>
+  );
+  const camera = (
+    <Button
+      key="c"
+      type="button"
+      size="sm"
+      variant={preferCamera ? "default" : "outline"}
+      className="gap-1.5 h-8"
+      disabled={uploading}
+      onClick={() => cameraRef.current?.click()}
+    >
+      <Camera size={13} />
+      Cámara
+    </Button>
+  );
+  return (
+    <div className="flex items-center gap-1.5">
+      {/* accept="image/*" SIN heic → iOS convierte HEIC→JPEG al elegir.
+          El input de galería NO lleva capture (deja elegir fotos ya tomadas). */}
+      <input
+        ref={galleryRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => onFiles(e.target.files)}
+      />
+      <input
+        ref={cameraRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={(e) => onFiles(e.target.files)}
+      />
+      {preferCamera ? (
+        <>
+          {camera}
+          {gallery}
+        </>
+      ) : (
+        <>
+          {gallery}
+          {camera}
+        </>
       )}
     </div>
+  );
+}
+
+function EmptyState({
+  readOnly,
+  onClick,
+}: {
+  readOnly: boolean;
+  onClick: () => void;
+}) {
+  if (readOnly) {
+    return (
+      <div className="w-full rounded-lg border border-dashed bg-muted/20 px-4 py-8 flex flex-col items-center gap-2 text-muted-foreground">
+        <ImageOff size={20} />
+        <span className="text-xs">No se cargaron fotos para este trabajo</span>
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-lg border border-dashed bg-muted/20 hover:bg-muted/40 transition-colors px-4 py-8 flex flex-col items-center gap-2 text-muted-foreground"
+    >
+      <ImageOff size={20} />
+      <span className="text-xs">
+        Tocá para agregar la foto del arreglo (evidencia)
+      </span>
+    </button>
+  );
+}
+
+function AttachmentTile({
+  attachment: a,
+  onOpen,
+  onDelete,
+  deleting,
+}: {
+  attachment: TicketAttachment;
+  onOpen: () => void;
+  onDelete?: () => void;
+  deleting: boolean;
+}) {
+  const unviewable = isUnviewable(a);
+  const [src, setSrc] = useState(
+    unviewable ? transformUrl(a.file_url) : a.file_url
+  );
+  const [broken, setBroken] = useState(false);
+
+  return (
+    <div className="group relative aspect-square rounded-lg overflow-hidden border bg-muted">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="absolute inset-0 w-full h-full"
+        aria-label={`Ver ${a.file_name ?? "foto del trabajo"}`}
+      >
+        {broken ? (
+          <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-2 text-center text-muted-foreground bg-muted">
+            <FileWarning size={18} />
+            <span className="text-[10px] leading-tight">
+              Formato no previsualizable
+            </span>
+          </span>
+        ) : (
+          // eslint-disable-next-line @next/next/no-img-element -- URL pública externa + fallback onError (transcode HEIC). next/image no permite swap de src en error.
+          <img
+            src={src}
+            alt={a.file_name ?? "Foto del trabajo"}
+            loading="lazy"
+            decoding="async"
+            className="w-full h-full object-cover transition-transform group-hover:scale-[1.03]"
+            onError={() => {
+              if (src !== a.file_url) {
+                setSrc(a.file_url);
+              } else {
+                setBroken(true);
+              }
+            }}
+          />
+        )}
+      </button>
+      <div className="absolute inset-x-0 bottom-0 px-1.5 py-1 bg-gradient-to-t from-black/60 to-transparent flex items-center justify-between text-[10px] text-white pointer-events-none">
+        <span className="truncate">{formatTimeAgo(a.uploaded_at)}</span>
+        {onDelete ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            disabled={deleting}
+            className="pointer-events-auto size-5 grid place-items-center rounded-sm hover:bg-red-500/80 transition-colors"
+            aria-label="Eliminar foto"
+          >
+            {deleting ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <Trash2 size={11} />
+            )}
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Descarga real del archivo. El atributo `download` de un <a> se IGNORA en
+ * URLs cross-origin (Supabase Storage es otro dominio), así que el navegador
+ * abría la foto en vez de bajarla. Lo traemos como blob y forzamos la descarga.
+ */
+async function downloadAttachment(url: string, name: string) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(String(res.status));
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = name || "foto";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  } catch {
+    // Último recurso: abrir en pestaña nueva.
+    window.open(url, "_blank", "noopener,noreferrer");
+    toast.message("Abrimos la foto en otra pestaña", {
+      description: "Mantené apretado / clic derecho para guardarla.",
+    });
+  }
+}
+
+function DownloadButton({
+  url,
+  name,
+  label,
+  className,
+}: {
+  url: string;
+  name: string;
+  label: string;
+  className?: string;
+}) {
+  const [pending, setPending] = useState(false);
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={async (e) => {
+        e.stopPropagation();
+        setPending(true);
+        try {
+          await downloadAttachment(url, name);
+        } finally {
+          setPending(false);
+        }
+      }}
+      className={cn("transition-colors disabled:opacity-60", className)}
+    >
+      {pending ? (
+        <Loader2 size={15} className="animate-spin" />
+      ) : (
+        <Download size={15} />
+      )}
+      {label}
+    </button>
+  );
+}
+
+/** Imagen del lightbox con su propio estado de fallback. Se monta con `key`
+ *  por adjunto, así al cambiar de slide arranca limpia sin useEffect de reset. */
+function LightboxImage({ attachment: a }: { attachment: TicketAttachment }) {
+  const [src, setSrc] = useState(() =>
+    isUnviewable(a) ? transformUrl(a.file_url) : a.file_url
+  );
+  const [broken, setBroken] = useState(false);
+
+  if (broken) {
+    return (
+      <div className="flex flex-col items-center gap-4 text-white/85 px-6 text-center max-w-sm">
+        <span className="size-16 rounded-full bg-white/10 grid place-items-center">
+          <FileWarning size={28} />
+        </span>
+        <p className="text-sm leading-relaxed">
+          Esta foto está en un formato que el navegador no puede mostrar (HEIC
+          de iPhone). Descargala para verla.
+        </p>
+        <DownloadButton
+          url={a.file_url}
+          name={a.file_name ?? "foto"}
+          label="Descargar foto"
+          className="inline-flex items-center gap-2 rounded-lg bg-white/15 hover:bg-white/25 px-4 py-2.5 text-sm font-medium"
+        />
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element -- ver AttachmentTile
+    <img
+      src={src}
+      alt={a.file_name ?? "Foto del trabajo"}
+      className="max-h-full max-w-full w-auto h-auto object-contain rounded-lg shadow-2xl select-none"
+      onError={() => {
+        if (src !== a.file_url) setSrc(a.file_url);
+        else setBroken(true);
+      }}
+    />
+  );
+}
+
+function Lightbox({
+  attachments,
+  index,
+  onIndex,
+  onClose,
+}: {
+  attachments: TicketAttachment[];
+  index: number;
+  onIndex: (i: number) => void;
+  onClose: () => void;
+}) {
+  const total = attachments.length;
+  const a = attachments[index];
+
+  const go = useCallback(
+    (delta: number) => {
+      const next = (index + delta + total) % total;
+      onIndex(next);
+    },
+    [index, total, onIndex]
+  );
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") go(1);
+      else if (e.key === "ArrowLeft") go(-1);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [go, onClose]);
+
+  // Bloquear scroll del fondo mientras el visor está abierto.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  if (typeof document === "undefined") return null;
+
+  // Portal a <body>: el DialogContent de Radix usa transform, lo que crea un
+  // containing block para position:fixed y "atrapaba" el visor adentro del
+  // modal. Sacándolo del árbol del dialog ocupa toda la pantalla, limpio.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[200] bg-black/95 backdrop-blur-sm flex flex-col animate-in fade-in duration-150"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Visor de fotos"
+      onClick={onClose}
+    >
+      {/* Barra superior: contador (izq) + cerrar (der) — simétrica */}
+      <div
+        className="shrink-0 h-14 flex items-center justify-between px-4 sm:px-6 text-white/80"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="text-xs font-medium tabular-nums">
+          {index + 1} / {total}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="size-9 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white transition-colors"
+          aria-label="Cerrar"
+        >
+          <X size={18} />
+        </button>
+      </div>
+
+      {/* Escenario: imagen centrada con flechas a insets simétricos */}
+      <div
+        className="relative flex-1 min-h-0 flex items-center justify-center px-4 sm:px-20"
+        onClick={onClose}
+      >
+        {total > 1 ? (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                go(-1);
+              }}
+              className="absolute left-3 sm:left-5 top-1/2 -translate-y-1/2 size-11 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white transition-colors"
+              aria-label="Anterior"
+            >
+              <ChevronLeft size={22} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                go(1);
+              }}
+              className="absolute right-3 sm:right-5 top-1/2 -translate-y-1/2 size-11 rounded-full bg-white/10 hover:bg-white/20 grid place-items-center text-white transition-colors"
+              aria-label="Siguiente"
+            >
+              <ChevronRight size={22} />
+            </button>
+          </>
+        ) : null}
+
+        <div
+          className="max-h-full max-w-full flex items-center justify-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <LightboxImage key={a.id} attachment={a} />
+        </div>
+      </div>
+
+      {/* Pie: metadatos + descarga, centrado */}
+      <div
+        className="shrink-0 h-16 flex items-center justify-center gap-3 px-4 text-xs text-white/70"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span>{formatTimeAgo(a.uploaded_at)}</span>
+        <span className="text-white/30">·</span>
+        <DownloadButton
+          url={a.file_url}
+          name={a.file_name ?? "foto"}
+          label="Descargar"
+          className="inline-flex items-center gap-1.5 hover:text-white"
+        />
+      </div>
+    </div>,
+    document.body
   );
 }

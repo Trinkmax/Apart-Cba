@@ -1,10 +1,15 @@
+import { redirect } from "next/navigation";
 import { listBookingsMonthlyView } from "@/lib/actions/bookings";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listAccounts } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { PmsMonthlyBoard } from "@/components/units/pms/pms-monthly-board";
 
 export default async function PmsMonthlyPage() {
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "view")) redirect("/dashboard/unidades");
+
   // Ventana por defecto: mes corriente + 5 meses hacia adelante (6 meses).
   const today = new Date();
   const fromYear = today.getFullYear();
@@ -18,11 +23,10 @@ export default async function PmsMonthlyPage() {
   const lastDay = new Date(toYear, toMonth, 0).getDate();
   const toISO = `${toYear}-${String(toMonth).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-  const [cells, schedule, accounts, { organization }] = await Promise.all([
+  const [cells, schedule, accounts] = await Promise.all([
     listBookingsMonthlyView(fromYear, fromMonth, toYear, toMonth),
     listScheduleInRange(fromISO, toISO).catch(() => []),
     listAccounts(),
-    getCurrentOrg(),
   ]);
 
   return (

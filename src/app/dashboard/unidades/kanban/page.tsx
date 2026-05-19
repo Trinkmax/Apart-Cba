@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { listBookingsInRange } from "@/lib/actions/bookings";
 import { listAccounts } from "@/lib/actions/cash";
@@ -8,6 +9,11 @@ import { can } from "@/lib/permissions";
 import { PmsBoard } from "@/components/units/pms/pms-board";
 
 export default async function PmsGridPage() {
+  const { organization, role } = await getCurrentOrg();
+  // El calendario muestra reservas como bloques en el grid; roles sin
+  // acceso a reservas (mantenimiento / limpieza) van a la lista plana.
+  if (!can(role, "bookings", "view")) redirect("/dashboard/unidades");
+
   // Ventana por defecto: 14 días atrás + 75 días hacia adelante = ~90 días
   const today = new Date();
   const start = new Date(today);
@@ -18,15 +24,15 @@ export default async function PmsGridPage() {
   const startISO = start.toISOString().slice(0, 10);
   const endISO = end.toISOString().slice(0, 10);
 
-  const [units, bookings, accounts, schedule, dateMarks, { organization, role }] =
-    await Promise.all([
-      listUnitsEnriched(),
-      listBookingsInRange(startISO, endISO),
-      listAccounts(),
-      listScheduleInRange(startISO, endISO).catch(() => []),
-      listDateMarksInRange(startISO, endISO).catch(() => []),
-      getCurrentOrg(),
-    ]);
+  const canViewMoney = can(role, "payments", "view");
+  const canEditBookings = can(role, "bookings", "update");
+  const [units, bookings, accounts, schedule, dateMarks] = await Promise.all([
+    listUnitsEnriched(),
+    listBookingsInRange(startISO, endISO),
+    canViewMoney ? listAccounts() : Promise.resolve([]),
+    listScheduleInRange(startISO, endISO).catch(() => []),
+    listDateMarksInRange(startISO, endISO).catch(() => []),
+  ]);
 
   return (
     <PmsBoard
@@ -36,6 +42,8 @@ export default async function PmsGridPage() {
       initialSchedule={schedule}
       initialDateMarks={dateMarks}
       canEditDateMarks={can(role, "date_marks", "create")}
+      canEditBookings={canEditBookings}
+      canViewMoney={canViewMoney}
       organizationId={organization.id}
       startISO={startISO}
       days={90}

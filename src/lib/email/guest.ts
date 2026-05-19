@@ -27,6 +27,7 @@ export async function sendGuestMail(args: {
   html: string;
   text?: string;
   replyTo?: string;
+  attachments?: Array<{ filename: string; content: Buffer }>;
 }): Promise<{ ok: true; id: string; from_used: string } | { ok: false; error: string }> {
   const admin = createAdminClient();
   const { data: org, error: orgErr } = await admin
@@ -61,6 +62,9 @@ export async function sendGuestMail(args: {
       html: args.html,
       ...(args.text ? { text: args.text } : {}),
       ...(args.replyTo ? { replyTo: args.replyTo } : {}),
+      ...(args.attachments && args.attachments.length
+        ? { attachments: args.attachments }
+        : {}),
     });
     if (result.error) return { ok: false, error: result.error.message };
     return { ok: true, id: result.data?.id ?? "", from_used: from };

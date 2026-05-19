@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -11,6 +11,7 @@ import {
   Package,
   Pencil,
   Trash2,
+  UserCog,
   Wrench,
   X,
 } from "lucide-react";
@@ -53,7 +54,16 @@ import type {
   TicketEvent,
   TicketStatus,
   Unit,
+  UserRole,
 } from "@/lib/types/database";
+
+export type TicketMember = {
+  user_id: string;
+  full_name: string | null;
+  role: UserRole;
+};
+
+const UNASSIGNED = "__none__";
 
 type TicketEventWithActor = TicketEvent & {
   actor: { full_name: string | null } | null;
@@ -65,6 +75,8 @@ interface Props {
   ticket: TicketWithUnit | null;
   units: Pick<Unit, "id" | "code" | "name">[];
   owners: Owner[];
+  /** Miembros de la org para resolver "abierto por / técnico" y reasignar. */
+  members?: TicketMember[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpdated?: (updated: MaintenanceTicket) => void;
@@ -105,11 +117,19 @@ export function TicketDetailDialog({
   ticket,
   units,
   owners,
+  members = [],
   open,
   onOpenChange,
   onUpdated,
   onDeleted,
 }: Props) {
+  const nameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const x of members) {
+      m.set(x.user_id, x.full_name?.trim() || "Sin nombre");
+    }
+    return m;
+  }, [members]);
   const [isEditing, setIsEditing] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -334,6 +354,47 @@ export function TicketDetailDialog({
               </div>
             )}
           </Field>
+
+          {/* Responsables — quién lo abrió y quién lo está/estuvo arreglando */}
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Abierto por" icon={<UserCog size={13} />}>
+              <span className="text-sm">
+                {ticket.opened_by
+                  ? nameById.get(ticket.opened_by) ?? "Usuario"
+                  : "—"}
+              </span>
+            </Field>
+            <Field label="Técnico asignado" icon={<Wrench size={13} />}>
+              {isEditing && members.length > 0 ? (
+                <Select
+                  value={form.assigned_to ?? UNASSIGNED}
+                  onValueChange={(v) =>
+                    set("assigned_to", v === UNASSIGNED ? null : v)
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value={UNASSIGNED}>Sin asignar</SelectItem>
+                    {members.map((mem) => (
+                      <SelectItem key={mem.user_id} value={mem.user_id}>
+                        {mem.full_name?.trim() || "Sin nombre"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : ticket.assigned_to ? (
+                <span className="text-sm font-medium">
+                  {nameById.get(ticket.assigned_to) ?? "Usuario"}
+                </span>
+              ) : (
+                <span className="text-sm text-muted-foreground italic">
+                  Sin asignar
+                </span>
+              )}
+            </Field>
+          </div>
 
           {/* Descripción */}
           <Field label="Descripción">

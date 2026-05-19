@@ -12,7 +12,7 @@ import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/d
 import type { CurrentOccupancy } from "@/lib/actions/bookings";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { useRealtimeRows } from "@/hooks/use-realtime-rows";
-import { TicketDetailDialog } from "./ticket-detail-dialog";
+import { TicketDetailDialog, type TicketMember } from "./ticket-detail-dialog";
 import { TicketFormDialog } from "./ticket-form-dialog";
 
 type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
@@ -30,10 +30,11 @@ interface Props {
   initialTickets: TicketWithUnit[];
   units: Pick<Unit, "id" | "code" | "name">[];
   owners: Owner[];
+  members?: TicketMember[];
   occupancyByUnit: Record<string, CurrentOccupancy>;
 }
 
-export function TicketsBoard({ organizationId, initialTickets, units, owners, occupancyByUnit }: Props) {
+export function TicketsBoard({ organizationId, initialTickets, units, owners, members, occupancyByUnit }: Props) {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
 
@@ -105,6 +106,7 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, oc
         ticket={openTicket}
         units={units}
         owners={owners}
+        members={members}
         open={!!openTicket}
         onOpenChange={(o) => !o && setOpenTicketId(null)}
         onUpdated={(updated) =>

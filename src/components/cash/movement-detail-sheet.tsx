@@ -356,6 +356,13 @@ function DetailPane({ detail, audit }: { detail: MovementDetail; audit: CashMove
             </Link>
           </Field>
         )}
+        <Field label="Creado por">
+          <span className="flex items-center gap-1.5">
+            <User2 size={12} className="text-muted-foreground shrink-0" />
+            {detail.created_by_name ?? "—"}
+          </span>
+        </Field>
+        <Field label="Registrado">{formatDateTime(detail.created_at)}</Field>
       </div>
 
       {detail.description && (
@@ -609,7 +616,6 @@ function EditPane({
     description: detail.description ?? "",
     occurred_at: detail.occurred_at,
     billable_to: detail.billable_to ?? "apartcba",
-    actor_name: "",
   });
 
   function set<K extends keyof UpdateMovementInput>(k: K, v: UpdateMovementInput[K]) {
@@ -627,8 +633,6 @@ function EditPane({
     (form.description ?? "") !== (detail.description ?? "") ||
     form.occurred_at !== detail.occurred_at ||
     form.billable_to !== (detail.billable_to ?? "apartcba");
-
-  const actorOk = (form.actor_name?.trim().length ?? 0) >= 2;
 
   function runPreview() {
     setPreviewLoading(true);
@@ -854,22 +858,11 @@ function EditPane({
         <Textarea rows={2} value={form.description ?? ""} onChange={(e) => set("description", e.target.value)} />
       </div>
 
-      {/* Auditoría: nombre del administrador que firma el cambio */}
-      <div className="space-y-1.5 rounded-xl border border-amber-300/50 bg-amber-50/60 dark:bg-amber-950/20 dark:border-amber-800/40 p-3">
-        <Label className="text-amber-900 dark:text-amber-200 text-[11px] uppercase tracking-wider font-semibold">
-          ¿Quién está haciendo este cambio? *
-        </Label>
-        <Input
-          required
-          value={form.actor_name ?? ""}
-          onChange={(e) => set("actor_name", e.target.value)}
-          placeholder="Nombre del administrador"
-          className="h-9 bg-background"
-        />
-        <p className="text-[10px] text-amber-800/80 dark:text-amber-200/80">
-          Queda registrado en el historial junto con la fecha y hora.
-        </p>
-      </div>
+      <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+        <User2 size={12} className="shrink-0" />
+        El cambio queda registrado en el historial a tu nombre
+        automáticamente.
+      </p>
 
       {/* Preview de side-effects */}
       <div className="rounded-xl border bg-muted/30 p-3 space-y-2">
@@ -930,9 +923,8 @@ function EditPane({
         </Button>
         <Button
           type="submit"
-          disabled={isPending || !isDirty || !actorOk || (preview?.blockers?.length ?? 0) > 0}
+          disabled={isPending || !isDirty || (preview?.blockers?.length ?? 0) > 0}
           className="gap-1.5"
-          title={!actorOk ? "Indicá tu nombre antes de guardar" : undefined}
         >
           {isPending && <Loader2 size={14} className="animate-spin" />}
           Guardar

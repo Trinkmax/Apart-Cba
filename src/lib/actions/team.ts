@@ -54,6 +54,40 @@ export async function listTeamMembers(): Promise<(OrganizationMember & { profile
   })) as never;
 }
 
+/**
+ * Versión liviana de {@link listTeamMembers}: sólo user_id + nombre + rol, en
+ * una sola query (sin el loop a auth.users por email). Sirve para resolver
+ * "abierto por / técnico asignado" y para el selector de asignado en tickets.
+ */
+export async function listOrgMemberNames(): Promise<
+  { user_id: string; full_name: string | null; role: UserRole }[]
+> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const { data: members } = await admin
+    .from("organization_members")
+    .select("user_id, role")
+    .eq("organization_id", organization.id)
+    .eq("active", true);
+  if (!members || members.length === 0) return [];
+
+  const userIds = members.map((m) => m.user_id);
+  const { data: profiles } = await admin
+    .from("user_profiles")
+    .select("user_id, full_name")
+    .in("user_id", userIds);
+  const nameById = new Map(
+    (profiles ?? []).map((p) => [p.user_id as string, (p.full_name as string | null) ?? null])
+  );
+
+  return members.map((m) => ({
+    user_id: m.user_id as string,
+    full_name: nameById.get(m.user_id as string) ?? null,
+    role: m.role as UserRole,
+  }));
+}
+
 export async function inviteTeamMember(input: InviteInput): Promise<{ userId: string; tempPassword: string }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
