@@ -13,15 +13,15 @@ import {
 import { getOwnerWithUnits } from "@/lib/actions/owners";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { AssignUnitDialog } from "@/components/owners/assign-unit-dialog";
+import { OwnerUnitsList } from "@/components/owners/owner-units-list";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { OwnerFormDialog } from "@/components/owners/owner-form-dialog";
-import { UNIT_STATUS_META } from "@/lib/constants";
-import { getInitials } from "@/lib/format";
-import type { Owner, Unit, UnitOwner, UnitStatus } from "@/lib/types/database";
+import { getInitials, CURRENCY_LABELS } from "@/lib/format";
+import type { Owner, Unit, UnitOwner } from "@/lib/types/database";
 
 type OwnerWithUnits = Owner & {
   unit_owners: (UnitOwner & {
@@ -105,38 +105,7 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
               <AssignUnitDialog ownerId={owner.id} units={availableUnits} />
             </div>
           </div>
-          {owner.unit_owners.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              Este propietario no tiene unidades asignadas
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {owner.unit_owners.map((uo) => {
-                const meta = UNIT_STATUS_META[uo.unit.status as UnitStatus];
-                return (
-                  <Link
-                    key={uo.unit.id}
-                    href={`/dashboard/unidades/${uo.unit.id}`}
-                    className="flex items-center justify-between gap-3 p-3 rounded-lg hover:bg-accent/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <span className="status-dot" style={{ backgroundColor: meta.color }} />
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{uo.unit.code} · {uo.unit.name}</div>
-                        <div className="text-xs text-muted-foreground">{meta.label}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline" className="font-mono">{Number(uo.ownership_pct).toFixed(0)}%</Badge>
-                      {uo.is_primary && (
-                        <Badge className="bg-primary/15 text-primary hover:bg-primary/20">Principal</Badge>
-                      )}
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
-          )}
+          <OwnerUnitsList ownerId={owner.id} unitOwners={owner.unit_owners} />
         </Card>
 
         <Card className="p-5">
@@ -151,7 +120,7 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Cobra en</dt>
-              <dd className="font-medium">{owner.preferred_currency ?? "ARS"}</dd>
+              <dd className="font-medium">{CURRENCY_LABELS[owner.preferred_currency ?? "ARS_EFECTIVO"] ?? owner.preferred_currency}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">CBU</dt>

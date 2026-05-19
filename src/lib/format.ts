@@ -18,11 +18,22 @@ const CURRENCY_LOCALE: Record<string, string> = {
 
 const CURRENCY_SYMBOL: Record<string, string> = {
   ARS: "$",
+  ARS_EFECTIVO: "$",
+  ARS_TRANSFERENCIA: "$",
   USD: "US$",
   EUR: "€",
   USDT: "₮",
   USDC: "USDC",
   BTC: "₿",
+};
+
+export const CURRENCY_LABELS: Record<string, string> = {
+  ARS: "ARS — Efectivo",
+  ARS_EFECTIVO: "ARS — Efectivo",
+  ARS_TRANSFERENCIA: "ARS — Transferencia",
+  USD: "USD — Dólares",
+  EUR: "EUR — Euros",
+  USDT: "USDT",
 };
 
 export function formatMoney(amount: number | null | undefined, currency: string = "ARS"): string {

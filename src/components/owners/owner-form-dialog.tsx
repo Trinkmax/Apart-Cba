@@ -49,7 +49,7 @@ export function OwnerFormDialog({ children, owner }: OwnerFormDialogProps) {
     cbu: owner?.cbu ?? "",
     alias_cbu: owner?.alias_cbu ?? "",
     bank_name: owner?.bank_name ?? "",
-    preferred_currency: owner?.preferred_currency ?? "ARS",
+    preferred_currency: owner?.preferred_currency === "ARS" ? "ARS_EFECTIVO" : (owner?.preferred_currency ?? "ARS_EFECTIVO"),
     notes: owner?.notes ?? "",
   });
 
@@ -189,12 +189,13 @@ export function OwnerFormDialog({ children, owner }: OwnerFormDialogProps) {
               <div className="space-y-1.5">
                 <Label htmlFor="preferred_currency">Cobra en</Label>
                 <Select
-                  value={form.preferred_currency ?? "ARS"}
+                  value={form.preferred_currency ?? "ARS_EFECTIVO"}
                   onValueChange={(v) => set("preferred_currency", v)}
                 >
                   <SelectTrigger id="preferred_currency"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="ARS">ARS — Pesos</SelectItem>
+                    <SelectItem value="ARS_EFECTIVO">ARS — Efectivo</SelectItem>
+                    <SelectItem value="ARS_TRANSFERENCIA">ARS — Transferencia</SelectItem>
                     <SelectItem value="USD">USD — Dólares</SelectItem>
                     <SelectItem value="EUR">EUR — Euros</SelectItem>
                     <SelectItem value="USDT">USDT</SelectItem>
