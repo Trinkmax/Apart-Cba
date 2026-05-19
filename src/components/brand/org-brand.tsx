@@ -16,6 +16,12 @@ interface OrgBrandProps {
  * - Con logo_url → logo personalizado (white-label). Si brand_show_name es
  *   false, se oculta el nombre y el logo toma más protagonismo (más grande).
  * - Sin logo → fallback al logo rentOS.
+ *
+ * El logo subido se renderiza como silueta monocroma adaptable al tema
+ * (`brightness-0 dark:invert`): negro sobre el sidebar claro
+ * (`--sidebar` oklch(0.97)), blanco sobre el oscuro (oklch(0.13)). Así un PNG
+ * pensado para fondo oscuro no queda invisible en modo claro. `brightness(0)`
+ * conserva el canal alpha, por lo que la transparencia del logo se respeta.
  */
 export function OrgBrand({ organization, size = "sm" }: OrgBrandProps) {
   const dim = size === "sm" ? 32 : 44;
@@ -32,6 +38,7 @@ export function OrgBrand({ organization, size = "sm" }: OrgBrandProps) {
           unoptimized
           className={cn(
             "w-auto object-contain group-data-[collapsible=icon]:h-8",
+            "brightness-0 dark:invert",
             showName ? "h-9 max-w-[120px]" : "h-12 max-w-[180px]",
           )}
         />

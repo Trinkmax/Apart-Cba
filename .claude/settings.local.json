@@ -158,7 +158,8 @@
       "Bash(grep -n \"const \\\\[expenses, setExpenses\\\\]\\\\|function save\\(\\)\\\\|updateSettlementBookingRow\\({\\\\|removeSettlementBookingRow\\({\\\\|Neto de esta fila\\\\|delta !== 0 &&\\\\|paid ? \\(\\\\|Genera un{\\\\|Impacta en Caja al registrar\\\\|</div>\\\\s*$\" src/components/settlements/editable-settlement-statement.tsx)",
       "Bash(grep -n \"function ChargeDialog\\\\|const \\\\[unitId, setUnitId\\\\]\\\\|function submit\\(\\)\\\\|updateSettlementLine\\({ id: initial.id\\\\|addSettlementLine\\({\\\\|res?.adjustmentId != null\\\\|La liquidación está pagada: este cargo\\\\|<DialogFooter>\" src/components/settlements/editable-settlement-statement.tsx)",
       "Bash(grep -n \"<AuditSheet\\\\|<ChargeDialog\\\\|{editingRow &&\\\\|</Card>\\\\s*$\\\\|initial={editCharge}\" src/components/settlements/editable-settlement-statement.tsx)",
-      "Bash(echo \"TSC_EXIT:$?\")"
+      "Bash(echo \"TSC_EXIT:$?\")",
+      "Bash(echo \"tsc exit: $?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
