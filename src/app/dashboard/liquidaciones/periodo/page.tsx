@@ -20,22 +20,21 @@ export default async function LiquidacionesPeriodoPage({
   const year = Number(sp.year) || now.getFullYear();
   const monthRaw = Number(sp.month) || now.getMonth() + 1;
   const month = Math.min(12, Math.max(1, monthRaw));
-  const currency = sp.currency || "ARS";
+  // Filtro de vista: "all" = todas las monedas (default).
+  const currency = sp.currency || "all";
 
-  const data = await listOwnersForPeriod(year, month, currency);
+  const data = await listOwnersForPeriod(year, month);
   const canCreate = can(role, "settlements", "create");
 
   const rows = data.map((d) => ({
     owner: { id: d.owner.id, full_name: d.owner.full_name },
     units: d.units,
-    settlement: d.settlement
-      ? {
-          id: d.settlement.id,
-          status: d.settlement.status,
-          net_payable: Number(d.settlement.net_payable),
-          currency: d.settlement.currency,
-        }
-      : null,
+    settlements: d.settlements.map((s) => ({
+      id: s.id,
+      status: s.status,
+      net_payable: Number(s.net_payable),
+      currency: s.currency,
+    })),
   }));
 
   return (

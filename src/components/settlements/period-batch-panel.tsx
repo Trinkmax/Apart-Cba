@@ -28,15 +28,17 @@ import { generateSettlementsForPeriod } from "@/lib/actions/settlements";
 import { MONTHS, SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
 import { formatMoney } from "@/lib/format";
 
+type PeriodSettlement = {
+  id: string;
+  status: string;
+  net_payable: number;
+  currency: string;
+};
+
 type Row = {
   owner: { id: string; full_name: string };
   units: number;
-  settlement: {
-    id: string;
-    status: string;
-    net_payable: number;
-    currency: string;
-  } | null;
+  settlements: PeriodSettlement[];
 };
 
 const CURRENCIES = ["ARS", "USD", "EUR", "USDT"];
@@ -50,6 +52,7 @@ export function PeriodBatchPanel({
 }: {
   year: number;
   month: number;
+  /** Filtro de vista: "all" o una moneda. */
   currency: string;
   rows: Row[];
   canCreate: boolean;
@@ -62,19 +65,21 @@ export function PeriodBatchPanel({
     const y = next.year ?? year;
     const m = next.month ?? month;
     const c = next.currency ?? currency;
-    router.push(`/dashboard/liquidaciones/periodo?year=${y}&month=${m}&currency=${c}`);
+    router.push(
+      `/dashboard/liquidaciones/periodo?year=${y}&month=${m}&currency=${c}`,
+    );
   }
 
   function generateAll() {
     start(async () => {
       try {
-        const res = await generateSettlementsForPeriod(year, month, currency);
+        const res = await generateSettlementsForPeriod(year, month);
         const ok = res.filter((r) => r.ok).length;
         const skipped = res.length - ok;
         toast.success(`${ok} liquidaciones generadas`, {
           description: skipped
-            ? `${skipped} sin cambios (sin unidades o ya cerradas).`
-            : "Todas al día.",
+            ? `${skipped} sin cambios (sin unidades, ya cerradas o sin reservas).`
+            : "Todas al día — una por moneda.",
         });
         router.refresh();
       } catch (e) {
@@ -83,10 +88,39 @@ export function PeriodBatchPanel({
     });
   }
 
-  const generated = rows.filter((r) => r.settlement);
-  const total = generated
-    .filter((r) => r.settlement!.currency === currency)
-    .reduce((acc, r) => acc + Number(r.settlement!.net_payable), 0);
+  // Una fila por liquidación; los propietarios sin ninguna se muestran una vez.
+  type DisplayRow = {
+    owner: { id: string; full_name: string };
+    units: number;
+    st: PeriodSettlement | null;
+  };
+  const display: DisplayRow[] = [];
+  for (const r of rows) {
+    if (r.settlements.length === 0) {
+      display.push({ owner: r.owner, units: r.units, st: null });
+    } else {
+      for (const st of r.settlements) {
+        display.push({ owner: r.owner, units: r.units, st });
+      }
+    }
+  }
+  const visible =
+    currency === "all"
+      ? display
+      : display.filter((d) => !d.st || d.st.currency === currency);
+
+  // Totales por moneda (no se pueden sumar monedas distintas).
+  const totalsByCcy = new Map<string, { count: number; sum: number }>();
+  for (const d of visible) {
+    if (!d.st) continue;
+    const t = totalsByCcy.get(d.st.currency) ?? { count: 0, sum: 0 };
+    t.count += 1;
+    t.sum += Number(d.st.net_payable);
+    totalsByCcy.set(d.st.currency, t);
+  }
+  const ccyTotals = Array.from(totalsByCcy.entries()).sort((a, b) =>
+    a[0].localeCompare(b[0]),
+  );
 
   return (
     <Card className="overflow-hidden p-0 gap-0">
@@ -139,10 +173,11 @@ export function PeriodBatchPanel({
             value={currency}
             onValueChange={(v) => navigate({ currency: v })}
           >
-            <SelectTrigger className="w-[90px]">
+            <SelectTrigger className="w-[110px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="all">Todas</SelectItem>
               {CURRENCIES.map((c) => (
                 <SelectItem key={c} value={c}>
                   {c}
@@ -175,36 +210,46 @@ export function PeriodBatchPanel({
             <TableRow className="bg-muted/50 hover:bg-muted/50">
               <TableHead>Propietario</TableHead>
               <TableHead className="text-center">Unidades</TableHead>
+              <TableHead>Moneda</TableHead>
               <TableHead>Estado</TableHead>
               <TableHead className="text-right">Neto</TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.length === 0 && (
+            {visible.length === 0 && (
               <TableRow>
                 <TableCell
-                  colSpan={5}
+                  colSpan={6}
                   className="text-center text-sm text-muted-foreground py-8"
                 >
                   No hay propietarios activos.
                 </TableCell>
               </TableRow>
             )}
-            {rows.map((r) => {
-              const st = r.settlement;
+            {visible.map((d, i) => {
+              const st = d.st;
               const meta = st
                 ? SETTLEMENT_STATUS_META[
                     st.status as keyof typeof SETTLEMENT_STATUS_META
                   ]
                 : null;
               return (
-                <TableRow key={r.owner.id} className="text-sm">
+                <TableRow key={st ? st.id : `${d.owner.id}-none-${i}`} className="text-sm">
                   <TableCell className="font-medium">
-                    {r.owner.full_name}
+                    {d.owner.full_name}
                   </TableCell>
                   <TableCell className="text-center tabular-nums text-muted-foreground">
-                    {r.units}
+                    {d.units}
+                  </TableCell>
+                  <TableCell>
+                    {st ? (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {st.currency}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     {meta ? (
@@ -248,17 +293,19 @@ export function PeriodBatchPanel({
               );
             })}
           </TableBody>
-          {generated.length > 0 && (
+          {ccyTotals.length > 0 && (
             <TableFooter>
-              <TableRow className="font-semibold">
-                <TableCell colSpan={3} className="text-right">
-                  Total a transferir ({currency}) · {generated.length} liq.
-                </TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {formatMoney(total, currency)}
-                </TableCell>
-                <TableCell />
-              </TableRow>
+              {ccyTotals.map(([ccy, t]) => (
+                <TableRow key={ccy} className="font-semibold">
+                  <TableCell colSpan={4} className="text-right">
+                    Total a transferir ({ccy}) · {t.count} liq.
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatMoney(t.sum, ccy)}
+                  </TableCell>
+                  <TableCell />
+                </TableRow>
+              ))}
             </TableFooter>
           )}
         </Table>

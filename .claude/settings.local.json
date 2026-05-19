@@ -160,7 +160,10 @@
       "Bash(grep -n \"<AuditSheet\\\\|<ChargeDialog\\\\|{editingRow &&\\\\|</Card>\\\\s*$\\\\|initial={editCharge}\" src/components/settlements/editable-settlement-statement.tsx)",
       "Bash(echo \"TSC_EXIT:$?\")",
       "Bash(echo \"tsc exit: $?\")",
-      "Bash(grep -E \"\\\\.\\(ts|tsx|sql\\)$\")"
+      "Bash(grep -E \"\\\\.\\(ts|tsx|sql\\)$\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(grep -E \"\\\\.sql$\")",
+      "Bash(xargs ls -1)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -29,6 +29,22 @@ const LINE_TYPES = [
   "expenses_fraction",
 ] as const;
 
+/**
+ * Estados de reserva que se liquidan. Incluye "pendiente" (reserva sin
+ * confirmar / sin pagar) — se liquida lo que está pago y lo que no.
+ * Quedan afuera "cancelada" y "no_show" (no se liquida una estadía que no
+ * ocurrió; pagos/reintegros de canceladas se manejan aparte en Caja).
+ */
+const SETTLEMENT_BOOKING_STATUSES = [
+  "pendiente",
+  "confirmada",
+  "check_in",
+  "check_out",
+] as const;
+
+/** Moneda base de la org: siempre se genera su liquidación (como hasta hoy). */
+const BASE_CURRENCY = "ARS";
+
 interface ComputedLine {
   line_type: SettlementLine["line_type"];
   ref_type: string | null;
@@ -145,7 +161,7 @@ async function buildSettlementLines(opts: {
     .select("*, guest:guests(full_name)")
     .in("unit_id", unitIds)
     .eq("currency", currency)
-    .in("status", ["check_out", "check_in", "confirmada"])
+    .in("status", SETTLEMENT_BOOKING_STATUSES as unknown as string[])
     .lte("check_in_date", periodEnd)
     .gte("check_out_date", periodStart);
 
@@ -309,7 +325,7 @@ async function buildSettlementLines(opts: {
 // generateOne — genera/regenera 1 liquidación SIN revalidar (lo hace el caller).
 // Preserva las líneas is_manual=true al regenerar.
 // ════════════════════════════════════════════════════════════════════════════
-async function generateOne(opts: {
+async function persistSettlement(opts: {
   admin: Admin;
   organizationId: string;
   ownerId: string;
@@ -317,8 +333,20 @@ async function generateOne(opts: {
   month: number;
   currency: string;
   userId: string;
+  autoLines: ComputedLine[];
+  ticketIds: string[];
 }): Promise<{ settlement: OwnerSettlement; lineCount: number }> {
-  const { admin, organizationId, ownerId, year, month, currency, userId } = opts;
+  const {
+    admin,
+    organizationId,
+    ownerId,
+    year,
+    month,
+    currency,
+    userId,
+    autoLines,
+    ticketIds,
+  } = opts;
 
   const { data: existing } = await admin
     .from("owner_settlements")
@@ -333,14 +361,6 @@ async function generateOne(opts: {
   if (existing && existing.status !== "borrador") {
     throw new Error(`Esta liquidación ya está ${existing.status}; no se puede regenerar`);
   }
-
-  const { lines: autoLines, ticketIds } = await buildSettlementLines({
-    admin,
-    ownerId,
-    year,
-    month,
-    currency,
-  });
 
   // Preservar ajustes manuales
   let manualLines: SettlementLine[] = [];
@@ -446,6 +466,90 @@ async function generateOne(opts: {
   };
 }
 
+/** Calcula las líneas y persiste 1 liquidación owner+moneda. Sin revalidar. */
+async function generateOne(opts: {
+  admin: Admin;
+  organizationId: string;
+  ownerId: string;
+  year: number;
+  month: number;
+  currency: string;
+  userId: string;
+}): Promise<{ settlement: OwnerSettlement; lineCount: number }> {
+  const { admin, ownerId, year, month, currency } = opts;
+  const { lines: autoLines, ticketIds } = await buildSettlementLines({
+    admin,
+    ownerId,
+    year,
+    month,
+    currency,
+  });
+  return persistSettlement({ ...opts, autoLines, ticketIds });
+}
+
+/** Unidades asignadas a un propietario (ids). */
+async function ownerUnitIds(admin: Admin, ownerId: string): Promise<string[]> {
+  const { data } = await admin
+    .from("unit_owners")
+    .select("unit_id")
+    .eq("owner_id", ownerId);
+  return (data ?? []).map((r) => r.unit_id as string);
+}
+
+/**
+ * Monedas con actividad para un owner en el período: monedas de reservas
+ * liquidables + monedas de tickets a cargo del propietario + monedas de
+ * liquidaciones ya existentes (para no dejarlas huérfanas al regenerar).
+ * Siempre incluye la moneda base (se sigue generando como hasta hoy).
+ */
+async function ownerCurrenciesForPeriod(opts: {
+  admin: Admin;
+  organizationId: string;
+  ownerId: string;
+  unitIds: string[];
+  year: number;
+  month: number;
+}): Promise<string[]> {
+  const { admin, organizationId, ownerId, unitIds, year, month } = opts;
+  const periodStart = new Date(year, month - 1, 1).toISOString().slice(0, 10);
+  const periodEnd = new Date(year, month, 0).toISOString().slice(0, 10);
+
+  const set = new Set<string>([BASE_CURRENCY]);
+
+  if (unitIds.length > 0) {
+    const { data: bk } = await admin
+      .from("bookings")
+      .select("currency")
+      .in("unit_id", unitIds)
+      .in("status", SETTLEMENT_BOOKING_STATUSES as unknown as string[])
+      .lte("check_in_date", periodEnd)
+      .gte("check_out_date", periodStart);
+    for (const b of bk ?? []) if (b.currency) set.add(b.currency as string);
+
+    const { data: tk } = await admin
+      .from("maintenance_tickets")
+      .select("cost_currency")
+      .in("unit_id", unitIds)
+      .eq("billable_to", "owner")
+      .eq("related_owner_id", ownerId)
+      .is("charged_to_owner_at", null)
+      .not("actual_cost", "is", null);
+    for (const t of tk ?? [])
+      if (t.cost_currency) set.add(t.cost_currency as string);
+  }
+
+  const { data: ex } = await admin
+    .from("owner_settlements")
+    .select("currency")
+    .eq("organization_id", organizationId)
+    .eq("owner_id", ownerId)
+    .eq("period_year", year)
+    .eq("period_month", month);
+  for (const s of ex ?? []) if (s.currency) set.add(s.currency as string);
+
+  return Array.from(set);
+}
+
 /**
  * Genera (o regenera) la liquidación de un owner para un período mes/año.
  * Si está revisada/enviada/pagada, error. Preserva ajustes manuales.
@@ -481,6 +585,62 @@ export async function generateSettlement(
     throw e;
   }
 
+  // Asegurar también las liquidaciones del owner en las OTRAS monedas con
+  // actividad en el período. Best-effort: una moneda cerrada o sin cambios no
+  // bloquea la regeneración pedida.
+  try {
+    const unitIds = await ownerUnitIds(admin, ownerId);
+    if (unitIds.length > 0) {
+      const currencies = await ownerCurrenciesForPeriod({
+        admin,
+        organizationId: organization.id,
+        ownerId,
+        unitIds,
+        year,
+        month,
+      });
+      for (const cur of currencies) {
+        if (cur === currency) continue;
+        try {
+          const { lines: autoLines, ticketIds } = await buildSettlementLines({
+            admin,
+            ownerId,
+            year,
+            month,
+            currency: cur,
+          });
+          if (autoLines.length === 0 && cur !== BASE_CURRENCY) {
+            const { data: ex } = await admin
+              .from("owner_settlements")
+              .select("id")
+              .eq("organization_id", organization.id)
+              .eq("owner_id", ownerId)
+              .eq("period_year", year)
+              .eq("period_month", month)
+              .eq("currency", cur)
+              .maybeSingle();
+            if (!ex) continue;
+          }
+          await persistSettlement({
+            admin,
+            organizationId: organization.id,
+            ownerId,
+            year,
+            month,
+            currency: cur,
+            userId: session.userId,
+            autoLines,
+            ticketIds,
+          });
+        } catch {
+          /* moneda cerrada / sin cambios: no bloquea la principal */
+        }
+      }
+    }
+  } catch {
+    /* detección de monedas falló: la liquidación pedida igual se generó */
+  }
+
   const { data: linesData } = await admin
     .from("settlement_lines")
     .select("*")
@@ -501,7 +661,6 @@ export async function generateSettlement(
 export async function generateSettlementsForPeriod(
   year: number,
   month: number,
-  currency: string = "ARS",
 ): Promise<PeriodGenerationResult[]> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
@@ -519,37 +678,85 @@ export async function generateSettlementsForPeriod(
 
   const results: PeriodGenerationResult[] = [];
   for (const o of owners ?? []) {
-    try {
-      const r = await generateOne({
-        admin,
-        organizationId: organization.id,
-        ownerId: o.id,
-        year,
-        month,
-        currency,
-        userId: session.userId,
-      });
-      results.push({
-        owner_id: o.id,
-        owner_name: o.full_name,
-        ok: true,
-        net: Number(r.settlement.net_payable),
-        currency,
-        lines: r.lineCount,
-      });
-    } catch (e) {
-      const msg = (e as Error).message;
+    const unitIds = await ownerUnitIds(admin, o.id);
+    if (unitIds.length === 0) {
       results.push({
         owner_id: o.id,
         owner_name: o.full_name,
         ok: false,
-        skipped:
-          msg === "NO_UNITS"
-            ? "Sin unidades asignadas"
-            : /ya está/.test(msg)
-              ? "Ya cerrada (no se regenera)"
-              : msg,
+        skipped: "Sin unidades asignadas",
       });
+      continue;
+    }
+
+    const currencies = await ownerCurrenciesForPeriod({
+      admin,
+      organizationId: organization.id,
+      ownerId: o.id,
+      unitIds,
+      year,
+      month,
+    });
+
+    for (const cur of currencies) {
+      try {
+        const { lines: autoLines, ticketIds } = await buildSettlementLines({
+          admin,
+          ownerId: o.id,
+          year,
+          month,
+          currency: cur,
+        });
+
+        // No crear liquidaciones vacías en monedas != base si no existían
+        // (ej. una reserva en USD que recién cierra el mes que viene).
+        if (autoLines.length === 0 && cur !== BASE_CURRENCY) {
+          const { data: ex } = await admin
+            .from("owner_settlements")
+            .select("id")
+            .eq("organization_id", organization.id)
+            .eq("owner_id", o.id)
+            .eq("period_year", year)
+            .eq("period_month", month)
+            .eq("currency", cur)
+            .maybeSingle();
+          if (!ex) continue;
+        }
+
+        const r = await persistSettlement({
+          admin,
+          organizationId: organization.id,
+          ownerId: o.id,
+          year,
+          month,
+          currency: cur,
+          userId: session.userId,
+          autoLines,
+          ticketIds,
+        });
+        results.push({
+          owner_id: o.id,
+          owner_name: o.full_name,
+          ok: true,
+          net: Number(r.settlement.net_payable),
+          currency: cur,
+          lines: r.lineCount,
+        });
+      } catch (e) {
+        const msg = (e as Error).message;
+        results.push({
+          owner_id: o.id,
+          owner_name: o.full_name,
+          ok: false,
+          currency: cur,
+          skipped:
+            msg === "NO_UNITS"
+              ? "Sin unidades asignadas"
+              : /ya está/.test(msg)
+                ? "Ya cerrada (no se regenera)"
+                : msg,
+        });
+      }
     }
   }
 
@@ -1278,6 +1485,47 @@ export async function getSettlement(id: string) {
 }
 
 /**
+ * Otras liquidaciones del MISMO propietario y período en OTRAS monedas.
+ * Las liquidaciones son por moneda (no se pueden sumar USD + ARS), así que
+ * desde el detalle se linkean las hermanas para que no "desaparezcan".
+ */
+export async function listSettlementSiblings(
+  settlementId: string,
+): Promise<
+  Array<{ id: string; currency: string; status: string; net_payable: number }>
+> {
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) return [];
+  const id = z.string().uuid().parse(settlementId);
+  const admin = createAdminClient();
+
+  const { data: base } = await admin
+    .from("owner_settlements")
+    .select("owner_id, period_year, period_month")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!base) return [];
+
+  const { data } = await admin
+    .from("owner_settlements")
+    .select("id, currency, status, net_payable")
+    .eq("organization_id", organization.id)
+    .eq("owner_id", base.owner_id)
+    .eq("period_year", base.period_year)
+    .eq("period_month", base.period_month)
+    .neq("id", id)
+    .order("currency");
+
+  return (data ?? []).map((s) => ({
+    id: s.id as string,
+    currency: s.currency as string,
+    status: s.status as string,
+    net_payable: Number(s.net_payable),
+  }));
+}
+
+/**
  * Lectura PÚBLICA por token aleatorio — para /liquidacion/[token].
  * No usa sesión/cookie de org: el token (uuid, 122 bits) ES el secreto.
  * Expone solo campos de presentación del propietario y branding de la org.
@@ -1311,13 +1559,10 @@ export async function getSettlementByToken(token: string) {
 
 /**
  * Para el panel de período (lote): todos los propietarios activos de la org
- * con su cantidad de unidades y la liquidación de ese período (si existe).
+ * con su cantidad de unidades y TODAS sus liquidaciones de ese período (una
+ * por moneda: ARS, USD, etc.).
  */
-export async function listOwnersForPeriod(
-  year: number,
-  month: number,
-  currency: string = "ARS",
-) {
+export async function listOwnersForPeriod(year: number, month: number) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "view")) {
@@ -1344,7 +1589,7 @@ export async function listOwnersForPeriod(
       .eq("organization_id", organization.id)
       .eq("period_year", year)
       .eq("period_month", month)
-      .eq("currency", currency),
+      .order("currency"),
     unitIds.length
       ? admin.from("unit_owners").select("owner_id, unit_id").in("unit_id", unitIds)
       : Promise.resolve({ data: [] as Array<{ owner_id: string; unit_id: string }> }),
@@ -1353,12 +1598,26 @@ export async function listOwnersForPeriod(
   const unitCount = new Map<string, number>();
   for (const r of uo ?? [])
     unitCount.set(r.owner_id, (unitCount.get(r.owner_id) ?? 0) + 1);
-  const byOwner = new Map((settles ?? []).map((s) => [s.owner_id, s]));
+
+  type PeriodSettlement = {
+    id: string;
+    owner_id: string;
+    status: string;
+    net_payable: number;
+    currency: string;
+    generated_at: string | null;
+  };
+  const byOwner = new Map<string, PeriodSettlement[]>();
+  for (const s of (settles ?? []) as PeriodSettlement[]) {
+    const arr = byOwner.get(s.owner_id) ?? [];
+    arr.push(s);
+    byOwner.set(s.owner_id, arr);
+  }
 
   return (owners ?? []).map((o) => ({
     owner: o,
     units: unitCount.get(o.id) ?? 0,
-    settlement: byOwner.get(o.id) ?? null,
+    settlements: byOwner.get(o.id) ?? [],
   }));
 }
 
