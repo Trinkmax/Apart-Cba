@@ -828,6 +828,10 @@ export function EditableSettlementStatement({
     signed: number;
   } | null>(null);
   const [delImpact, setDelImpact] = useState(true);
+  const [deletingRow, setDeletingRow] = useState<
+    StatementModel["units"][number]["rows"][number] | null
+  >(null);
+  const [delRowImpact, setDelRowImpact] = useState(true);
   const router = useRouter();
   const [pending, start] = useTransition();
 
@@ -858,6 +862,34 @@ export function EditableSettlementStatement({
         router.refresh();
       } catch (e) {
         toast.error("No se pudo eliminar", {
+          description: (e as Error).message,
+        });
+      }
+    });
+  }
+
+  function confirmRemoveRow() {
+    const r = deletingRow;
+    if (!r?.ref_id) return;
+    start(async () => {
+      try {
+        const res = await removeSettlementBookingRow({
+          settlement_id: settlementId,
+          ref_id: r.ref_id!,
+          impact_caja: delRowImpact,
+        });
+        toast.success("Reserva quitada de la liquidación", {
+          description:
+            res.adjustmentId != null
+              ? `Asiento de ajuste en Caja de ${formatMoney(Math.abs(res.delta), c)}`
+              : res.visualOnly && paid
+                ? "Solo visual — Caja sin cambios"
+                : undefined,
+        });
+        setDeletingRow(null);
+        router.refresh();
+      } catch (e) {
+        toast.error("No se pudo quitar", {
           description: (e as Error).message,
         });
       }
@@ -1035,7 +1067,7 @@ export function EditableSettlementStatement({
                     <TableHead className="h-9 text-right">Gastos</TableHead>
                     <TableHead className="h-9 text-right">Neto</TableHead>
                     {editable && (
-                      <TableHead className="h-9 w-9" aria-label="Editar" />
+                      <TableHead className="h-9 w-14" aria-label="Acciones" />
                     )}
                   </TableRow>
                 </TableHeader>
@@ -1085,12 +1117,28 @@ export function EditableSettlementStatement({
                         {formatMoney(b.net, c)}
                       </TableCell>
                       {editable && (
-                        <TableCell className="w-9 p-0">
+                        <TableCell className="w-14 p-0">
                           {b.ref_id && (
-                            <Pencil
-                              size={13}
-                              className="mx-auto text-muted-foreground opacity-0 group-hover/row:opacity-100 transition-opacity"
-                            />
+                            <div className="flex items-center justify-center gap-0.5 pr-1 opacity-100 sm:opacity-0 sm:group-hover/row:opacity-100 transition-opacity">
+                              <Pencil
+                                size={13}
+                                className="hidden sm:block text-muted-foreground"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-7 text-muted-foreground hover:text-rose-600"
+                                aria-label="Quitar reserva"
+                                disabled={pending}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDelRowImpact(true);
+                                  setDeletingRow(b);
+                                }}
+                              >
+                                <Trash2 size={13} />
+                              </Button>
+                            </div>
                           )}
                         </TableCell>
                       )}
@@ -1114,7 +1162,7 @@ export function EditableSettlementStatement({
                     <TableCell className="text-right tabular-nums">
                       {formatMoney(u.subtotal.net, c)}
                     </TableCell>
-                    {editable && <TableCell className="w-9" />}
+                    {editable && <TableCell className="w-14" />}
                   </TableRow>
                 </TableFooter>
               </Table>
@@ -1326,6 +1374,46 @@ export function EditableSettlementStatement({
               className="bg-rose-600 hover:bg-rose-700"
             >
               Eliminar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!deletingRow}
+        onOpenChange={(o) => !o && setDeletingRow(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Quitar la reserva?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingRow && deletingRow.guest !== "—"
+                ? `“${deletingRow.guest}”`
+                : "Esta reserva"}
+              {deletingRow?.check_in && deletingRow?.check_out
+                ? ` · ${formatDate(deletingRow.check_in)} → ${formatDate(deletingRow.check_out)}`
+                : ""}
+              . Se eliminan todas sus líneas de la liquidación y no se le cobra
+              en este período. Queda registrado en el historial.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <CajaImpactToggle
+            value={delRowImpact}
+            onChange={setDelRowImpact}
+            currency={c}
+            paid={paid}
+            delta={deletingRow ? round2(-deletingRow.net) : 0}
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={pending}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmRemoveRow}
+              disabled={pending}
+              className="bg-rose-600 hover:bg-rose-700"
+            >
+              Quitar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
