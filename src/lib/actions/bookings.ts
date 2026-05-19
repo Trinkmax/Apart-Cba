@@ -72,8 +72,11 @@ export type BookingInput = z.infer<typeof bookingSchema>;
 // Input extendido con account_id para imputar el cobro a una cuenta de caja.
 // account_id no se persiste en bookings — sólo dispara la creación de un
 // cash_movement equivalente al delta de paid_amount.
+// skip_split: si true, crea una sola reserva sin dividir aunque exceda
+// MAX_BOOKING_NIGHTS. El usuario lo decide vía el diálogo de confirmación.
 export type BookingInputWithAccount = BookingInput & {
   account_id?: string | null;
+  skip_split?: boolean;
 };
 
 // Sincroniza `paid_amount` con caja: genera un cash_movement por el delta
@@ -163,6 +166,10 @@ async function enforceLeaseSplitOnExisting(params: {
     MAX_BOOKING_NIGHTS
   );
   if (segments.length < 2) return; // ya cabe en el cap
+
+  // Si la reserva NO pertenece a un lease group, fue creada intencionalmente
+  // como "reserva única" (el usuario eligió no dividir). No forzamos el split.
+  if (!original.lease_group_id) return;
 
   const totalNights = nightsBetween(
     original.check_in_date,
@@ -493,7 +500,7 @@ export async function createBooking(
   if (!can(role, "bookings", "create")) {
     throw new Error("No tenés permisos para crear reservas");
   }
-  const { account_id: accountId, ...rest } = input;
+  const { account_id: accountId, skip_split: skipSplit, ...rest } = input;
   const validated = bookingSchema.parse(rest);
 
   // Buscar comisión default de la unit si no fue dada
@@ -509,14 +516,16 @@ export async function createBooking(
 
   const admin = createAdminClient();
 
-  // ─── Split universal: ninguna reserva puede exceder MAX_BOOKING_NIGHTS ───
-  // Aplica a cualquier modo (temporario, mensual, etc). Si excede el cap, se
-  // divide en chunks consecutivos de MAX noches + remanente.
-  const segments = splitBookingSegments(
-    validated.check_in_date,
-    validated.check_out_date,
-    MAX_BOOKING_NIGHTS
-  );
+  // ─── Split condicional: si el usuario eligió "reserva única", se respeta ───
+  // El flag skipSplit viene del diálogo de confirmación en el form cuando la
+  // estadía excede MAX_BOOKING_NIGHTS. Si no lo marcó, aplica split automático.
+  const segments = skipSplit
+    ? []
+    : splitBookingSegments(
+        validated.check_in_date,
+        validated.check_out_date,
+        MAX_BOOKING_NIGHTS
+      );
 
   if (segments.length >= 2) {
     // Generamos lease_group_id en cliente (UUID v4 via crypto)
@@ -1679,4 +1688,167 @@ export async function resendBookingConfirmation(
 
   if (!result.ok) return { ok: false, error: result.error };
   return { ok: true, channels_sent: ["email"], channels_failed: [] };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Merge / Split manual de lease groups (reservas largas)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Reunifica todos los segmentos de un lease group en una sola reserva.
+ * - Extiende el primer segmento (el más antiguo) desde su check_in hasta el
+ *   check_out del último segmento.
+ * - Suma total_amount, paid_amount de todos los segmentos.
+ * - Recalcula commission_amount.
+ * - Elimina los segmentos restantes (N-1).
+ * - Regenera payment schedule si es mensual.
+ */
+export async function mergeLeaseGroup(
+  leaseGroupId: string
+): Promise<Booking> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update")) {
+    throw new Error("No tenés permisos para editar reservas");
+  }
+
+  const admin = createAdminClient();
+  const { data: segments, error } = await admin
+    .from("bookings")
+    .select("*")
+    .eq("lease_group_id", leaseGroupId)
+    .eq("organization_id", organization.id)
+    .order("check_in_date", { ascending: true });
+
+  if (error) throw new Error(error.message);
+  if (!segments || segments.length < 2) {
+    throw new Error("No hay segmentos suficientes para reunificar");
+  }
+
+  const first = segments[0];
+  const last = segments[segments.length - 1];
+  const totalAmount = segments.reduce(
+    (sum, s) => sum + (Number(s.total_amount) || 0),
+    0
+  );
+  const totalPaid = segments.reduce(
+    (sum, s) => sum + (Number(s.paid_amount) || 0),
+    0
+  );
+  const totalCleaning = segments.reduce(
+    (sum, s) => sum + (Number(s.cleaning_fee) || 0),
+    0
+  );
+  const commissionPct = Number(first.commission_pct) || 0;
+  const commissionAmount =
+    Math.round((totalAmount * commissionPct) / 100 * 100) / 100;
+
+  // Extender el primer segmento para cubrir todo el rango
+  const { data: merged, error: errUpd } = await admin
+    .from("bookings")
+    .update({
+      check_out_date: last.check_out_date,
+      check_out_time: last.check_out_time,
+      total_amount: Math.round(totalAmount * 100) / 100,
+      paid_amount: Math.round(totalPaid * 100) / 100,
+      commission_amount: commissionAmount,
+      cleaning_fee: Math.round(totalCleaning * 100) / 100,
+      lease_group_id: null, // ya no es un grupo
+    })
+    .eq("id", first.id)
+    .eq("organization_id", organization.id)
+    .select()
+    .single();
+
+  if (errUpd) throw new Error(errUpd.message);
+
+  // Eliminar los segmentos restantes
+  const otherIds = segments.slice(1).map((s) => s.id);
+  // Cancelar cuotas de payment_schedule de los segmentos a eliminar
+  await admin
+    .from("booking_payment_schedule")
+    .delete()
+    .in("booking_id", otherIds)
+    .eq("organization_id", organization.id);
+  const { error: errDel } = await admin
+    .from("bookings")
+    .delete()
+    .in("id", otherIds)
+    .eq("organization_id", organization.id);
+  if (errDel) throw new Error(errDel.message);
+
+  // Regenerar payment schedule si es mensual
+  if (first.mode === "mensual") {
+    const { error: schedErr } = await admin.rpc(
+      "generate_payment_schedule_for_booking",
+      { p_booking_id: first.id }
+    );
+    if (schedErr) {
+      console.error("generate_payment_schedule_for_booking failed", schedErr);
+    }
+  }
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
+  return merged as Booking;
+}
+
+/**
+ * Divide una reserva existente (standalone, sin lease_group_id) en segmentos
+ * de MAX_BOOKING_NIGHTS. Esencialmente lo mismo que enforceLeaseSplitOnExisting
+ * pero gatillado manualmente por el usuario.
+ */
+export async function splitBookingIntoSegments(
+  bookingId: string
+): Promise<void> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update")) {
+    throw new Error("No tenés permisos para editar reservas");
+  }
+
+  const admin = createAdminClient();
+  const { data: booking, error } = await admin
+    .from("bookings")
+    .select("*")
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!booking) throw new Error("Reserva no encontrada");
+
+  const totalNights = nightsBetween(booking.check_in_date, booking.check_out_date);
+  if (totalNights <= MAX_BOOKING_NIGHTS) {
+    throw new Error(
+      `La reserva tiene ${totalNights} noches, no necesita ser dividida (máx ${MAX_BOOKING_NIGHTS})`
+    );
+  }
+
+  if (booking.lease_group_id) {
+    throw new Error("La reserva ya pertenece a un grupo — no se puede volver a dividir");
+  }
+
+  // Forzamos el lease_group_id para que enforceLeaseSplitOnExisting lo procese
+  const leaseGroupId = crypto.randomUUID();
+  await admin
+    .from("bookings")
+    .update({ lease_group_id: leaseGroupId })
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id);
+
+  await enforceLeaseSplitOnExisting({
+    bookingId,
+    organizationId: organization.id,
+    userId: session.userId,
+  });
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
 }

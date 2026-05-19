@@ -43,6 +43,16 @@ import {
   splitBookingSegments,
 } from "@/lib/booking-split";
 import { cn } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import type {
   Booking,
   BookingMode,
@@ -398,7 +408,7 @@ export function BookingFormDialog({
   // para no perder data en edición; el server decide el fallback definitivo.
   const commissionPctNum = parseMoneyInput(form.commission_pct);
 
-  // ─── Split preview: cualquier reserva > MAX_BOOKING_NIGHTS se divide ───
+  // ─── Split: reservas > MAX_BOOKING_NIGHTS ───
   const splitSegments =
     !isEdit &&
     form.check_in_date &&
@@ -410,6 +420,21 @@ export function BookingFormDialog({
           MAX_BOOKING_NIGHTS
         )
       : [];
+  const needsSplitDecision = splitSegments.length >= 2;
+
+  // Elección del usuario: "unified" = una sola reserva, "split" = dividir
+  const [splitChoice, setSplitChoice] = useState<"unified" | "split" | null>(null);
+  // Resetear la elección si las fechas cambian y ya no necesita split
+  const splitKey = `${form.check_in_date}|${form.check_out_date}`;
+  const [prevSplitKey, setPrevSplitKey] = useState(splitKey);
+  if (prevSplitKey !== splitKey) {
+    setPrevSplitKey(splitKey);
+    setSplitChoice(null);
+  }
+
+  // Diálogo de confirmación: se muestra cuando el usuario intenta crear sin
+  // haber elegido split/unified (se intercepta en handleSubmit).
+  const [showSplitDialog, setShowSplitDialog] = useState(false);
 
   // ─── Warning si la unidad tiene vocación distinta al modo elegido (excepto mixto) ───
   const selectedUnit = units.find((u) => u.id === form.unit_id);
@@ -422,18 +447,13 @@ export function BookingFormDialog({
   // Filtrar cuentas por moneda elegida
   const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    // En edición, el delta a cobrar viene de "Agregar pago" y se SUMA al
-    // paid_amount existente. En creación se usa el paid_amount tipeado.
+  function doSubmit(skipSplit: boolean) {
     const addPayment = isEdit ? parseMoneyInput(form.add_payment) ?? 0 : 0;
     const paidAmount = isEdit
       ? previousPaid + addPayment
       : parseMoneyInput(form.paid_amount) ?? 0;
-    // El "delta" (lo que va a generar movimiento de caja) es lo nuevo: en
-    // edición, sólo el `add_payment`; en creación, el `paid_amount` inicial.
     const cashDelta = isEdit ? addPayment : paidAmount;
-    const payload: BookingInput & { account_id?: string | null } = {
+    const payload: BookingInput & { account_id?: string | null; skip_split?: boolean } = {
       unit_id: form.unit_id,
       guest_id: form.guest_id,
       source: form.source,
@@ -458,6 +478,7 @@ export function BookingFormDialog({
       notes: form.notes,
       internal_notes: form.internal_notes,
       account_id: cashDelta > 0 ? form.account_id : null,
+      skip_split: skipSplit,
     };
     if (cashDelta > 0 && !payload.account_id && accountsForCurrency.length > 0) {
       toast.error("Falta seleccionar cuenta de cobro", {
@@ -465,10 +486,6 @@ export function BookingFormDialog({
       });
       return;
     }
-    // Pre-check de overlap (mismo unit, status confirmada/check_in, rangos
-    // [in, out) que se solapan). Replica el constraint bookings_no_overlap
-    // del Postgres para dar un mensaje claro antes de pegarle al server,
-    // donde Next.js enmascara el Error.message en producción.
     if (existingBookings && form.unit_id && form.check_in_date && form.check_out_date) {
       const conflict = existingBookings.find((b) => {
         if (b.unit_id !== form.unit_id) return false;
@@ -494,7 +511,13 @@ export function BookingFormDialog({
           toast.success("Reserva actualizada");
         } else {
           await createBooking(payload);
-          toast.success("Reserva creada");
+          toast.success(
+            skipSplit
+              ? "Reserva creada como reserva única"
+              : splitSegments.length >= 2
+                ? `Reserva dividida en ${splitSegments.length} períodos`
+                : "Reserva creada"
+          );
         }
         setOpen(false);
         router.refresh();
@@ -502,6 +525,17 @@ export function BookingFormDialog({
         toast.error("Error", { description: (e as Error).message });
       }
     });
+  }
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    // Si la reserva excede MAX_BOOKING_NIGHTS y el usuario NO pre-eligió en
+    // el panel inline, mostramos el diálogo de confirmación.
+    if (!isEdit && needsSplitDecision && splitChoice === null) {
+      setShowSplitDialog(true);
+      return;
+    }
+    doSubmit(!isEdit && needsSplitDecision && splitChoice === "unified");
   }
 
   return (
@@ -805,41 +839,72 @@ export function BookingFormDialog({
             </div>
           )}
 
-          {/* Split preview: la reserva se va a dividir en N períodos */}
-          {splitSegments.length >= 2 && (
-            <div className="rounded-lg border border-violet-300/60 bg-violet-50 dark:bg-violet-950/30 dark:border-violet-800/40 p-3 space-y-2">
+          {/* Elección split/unificado para reservas > MAX_BOOKING_NIGHTS */}
+          {needsSplitDecision && (
+            <div className="rounded-lg border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/40 p-3 space-y-3">
               <div className="flex items-center gap-2">
-                <House size={14} className="text-violet-700 dark:text-violet-300" />
-                <span className="text-xs font-semibold text-violet-900 dark:text-violet-100">
-                  Esta reserva se dividirá en {splitSegments.length} períodos de hasta {MAX_BOOKING_NIGHTS} noches
+                <CalendarRange size={14} className="text-amber-700 dark:text-amber-300" />
+                <span className="text-xs font-semibold text-amber-900 dark:text-amber-100">
+                  La reserva tiene {nights} noches (más de {MAX_BOOKING_NIGHTS})
                 </span>
               </div>
-              <p className="text-[11px] text-violet-800/80 dark:text-violet-300/80">
-                Una reserva no puede exceder {MAX_BOOKING_NIGHTS} noches. Cada
-                período se factura, cobra y liquida de forma independiente.
-                Quedan agrupados en el mismo contrato (lease group) y se ven
-                consecutivos en el calendario.
+              <p className="text-[11px] text-amber-800/80 dark:text-amber-300/80">
+                Elegí cómo querés cargarla. Podés cambiar esto después desde la reserva.
               </p>
-              <ol className="space-y-1 text-[11px]">
-                {splitSegments.map((seg, i) => (
-                  <li
-                    key={`${seg.from}-${seg.to}`}
-                    className="flex items-center justify-between gap-2 rounded bg-background/60 px-2 py-1"
-                  >
-                    <span className="flex items-center gap-2 min-w-0">
-                      <span className="font-mono text-[10px] text-violet-700 dark:text-violet-300 tabular-nums">
-                        {i + 1}/{splitSegments.length}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSplitChoice("unified")}
+                  className={cn(
+                    "rounded-lg border px-3 py-2.5 text-left text-xs transition-all",
+                    splitChoice === "unified"
+                      ? "border-sky-400 bg-sky-50 dark:bg-sky-950/40 dark:border-sky-700 ring-1 ring-sky-300 dark:ring-sky-700"
+                      : "border-border hover:bg-background/60"
+                  )}
+                >
+                  <div className="font-semibold mb-0.5">Reserva única</div>
+                  <div className="text-muted-foreground">
+                    Una sola reserva de {nights} noches, sin dividir.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSplitChoice("split")}
+                  className={cn(
+                    "rounded-lg border px-3 py-2.5 text-left text-xs transition-all",
+                    splitChoice === "split"
+                      ? "border-violet-400 bg-violet-50 dark:bg-violet-950/40 dark:border-violet-700 ring-1 ring-violet-300 dark:ring-violet-700"
+                      : "border-border hover:bg-background/60"
+                  )}
+                >
+                  <div className="font-semibold mb-0.5">Dividir en {splitSegments.length} períodos</div>
+                  <div className="text-muted-foreground">
+                    Períodos de hasta {MAX_BOOKING_NIGHTS} noches, cada uno se factura independiente.
+                  </div>
+                </button>
+              </div>
+              {splitChoice === "split" && (
+                <ol className="space-y-1 text-[11px] mt-1">
+                  {splitSegments.map((seg, i) => (
+                    <li
+                      key={`${seg.from}-${seg.to}`}
+                      className="flex items-center justify-between gap-2 rounded bg-background/60 px-2 py-1"
+                    >
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-[10px] text-violet-700 dark:text-violet-300 tabular-nums">
+                          {i + 1}/{splitSegments.length}
+                        </span>
+                        <span className="truncate">
+                          {seg.from} → {seg.to}
+                        </span>
                       </span>
-                      <span className="truncate">
-                        {seg.from} → {seg.to}
+                      <span className="font-mono text-muted-foreground tabular-nums shrink-0">
+                        {seg.nights}n
                       </span>
-                    </span>
-                    <span className="font-mono text-muted-foreground tabular-nums shrink-0">
-                      {seg.nights}n
-                    </span>
-                  </li>
-                ))}
-              </ol>
+                    </li>
+                  ))}
+                </ol>
+              )}
             </div>
           )}
 
@@ -1192,6 +1257,49 @@ export function BookingFormDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+
+      {/* Diálogo de confirmación cuando el usuario intenta crear sin elegir */}
+      <AlertDialog open={showSplitDialog} onOpenChange={setShowSplitDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reserva de {nights} noches</AlertDialogTitle>
+            <AlertDialogDescription>
+              La reserva excede {MAX_BOOKING_NIGHTS} noches. ¿Cómo querés cargarla?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground">
+            <p>
+              <span className="font-semibold text-foreground">Reserva única:</span>{" "}
+              Una sola reserva sin dividir. Ideal para estadías de 31-60 noches.
+            </p>
+            <p>
+              <span className="font-semibold text-foreground">Dividir en {splitSegments.length} períodos:</span>{" "}
+              Cada período se factura y liquida independientemente.
+            </p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowSplitDialog(false);
+                doSubmit(true);
+              }}
+              className="bg-sky-600 hover:bg-sky-700"
+            >
+              Reserva única
+            </AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => {
+                setShowSplitDialog(false);
+                doSubmit(false);
+              }}
+              className="bg-violet-600 hover:bg-violet-700"
+            >
+              Dividir en {splitSegments.length}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   );
 }
