@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, User, Camera, Shield } from "lucide-react";
+import { ChevronDown, User, Camera, Shield, IdCard } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -12,6 +12,7 @@ import { AvatarUploader } from "@/app/dashboard/perfil/avatar-uploader";
 import { PasswordCard } from "@/app/dashboard/perfil/security/password-card";
 import { EmailCard } from "@/app/dashboard/perfil/security/email-card";
 import { TwoFactorCard } from "@/app/dashboard/perfil/security/two-factor-card";
+import { DniSection } from "@/components/team/dni-section";
 import type { UserProfile } from "@/lib/types/database";
 
 interface Props {
@@ -22,7 +23,9 @@ interface Props {
 
 export function MobileProfile({ profile, email, mfaStatus }: Props) {
   const noop = () => {};
-  const [open, setOpen] = useState<"datos" | "foto" | "seguridad" | null>("datos");
+  const [open, setOpen] = useState<"datos" | "foto" | "documento" | "seguridad" | null>(
+    "datos"
+  );
 
   return (
     <div className="space-y-2">
@@ -49,6 +52,16 @@ export function MobileProfile({ profile, email, mfaStatus }: Props) {
         onToggle={() => setOpen((o) => (o === "foto" ? null : "foto"))}
       >
         <AvatarUploader currentUrl={profile.avatar_url} />
+      </Section>
+
+      <Section
+        id="documento"
+        icon={IdCard}
+        title="Documento (DNI)"
+        open={open === "documento"}
+        onToggle={() => setOpen((o) => (o === "documento" ? null : "documento"))}
+      >
+        <DniSection userId={profile.user_id} canEdit />
       </Section>
 
       <Section

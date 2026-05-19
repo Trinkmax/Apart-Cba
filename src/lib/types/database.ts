@@ -170,6 +170,9 @@ export interface UserProfile {
   is_superadmin: boolean;
   active: boolean;
   preferred_locale: string | null;
+  dni_front_path: string | null;
+  dni_back_path: string | null;
+  dni_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }

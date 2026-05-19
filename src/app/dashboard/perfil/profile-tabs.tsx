@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProfileDataForm } from "./profile-data-form";
 import { AvatarUploader } from "./avatar-uploader";
 import { SecuritySection } from "./security-section";
+import { DniSection } from "@/components/team/dni-section";
 import type { UserProfile } from "@/lib/types/database";
 
 interface ProfileTabsProps {
@@ -21,6 +22,7 @@ export function ProfileTabs({ profile, email, mfaStatus }: ProfileTabsProps) {
       <TabsList className="mb-6">
         <TabsTrigger value="datos">Datos</TabsTrigger>
         <TabsTrigger value="foto">Foto</TabsTrigger>
+        <TabsTrigger value="documento">Documento</TabsTrigger>
         <TabsTrigger value="seguridad">Seguridad</TabsTrigger>
       </TabsList>
 
@@ -35,6 +37,10 @@ export function ProfileTabs({ profile, email, mfaStatus }: ProfileTabsProps) {
 
       <TabsContent value="foto">
         <AvatarUploader currentUrl={profile.avatar_url} />
+      </TabsContent>
+
+      <TabsContent value="documento">
+        <DniSection userId={profile.user_id} canEdit />
       </TabsContent>
 
       <TabsContent value="seguridad">
