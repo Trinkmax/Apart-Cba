@@ -1485,6 +1485,47 @@ export async function getSettlement(id: string) {
 }
 
 /**
+ * Otras liquidaciones del MISMO propietario y período en OTRAS monedas.
+ * Las liquidaciones son por moneda (no se pueden sumar USD + ARS), así que
+ * desde el detalle se linkean las hermanas para que no "desaparezcan".
+ */
+export async function listSettlementSiblings(
+  settlementId: string,
+): Promise<
+  Array<{ id: string; currency: string; status: string; net_payable: number }>
+> {
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) return [];
+  const id = z.string().uuid().parse(settlementId);
+  const admin = createAdminClient();
+
+  const { data: base } = await admin
+    .from("owner_settlements")
+    .select("owner_id, period_year, period_month")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!base) return [];
+
+  const { data } = await admin
+    .from("owner_settlements")
+    .select("id, currency, status, net_payable")
+    .eq("organization_id", organization.id)
+    .eq("owner_id", base.owner_id)
+    .eq("period_year", base.period_year)
+    .eq("period_month", base.period_month)
+    .neq("id", id)
+    .order("currency");
+
+  return (data ?? []).map((s) => ({
+    id: s.id as string,
+    currency: s.currency as string,
+    status: s.status as string,
+    net_payable: Number(s.net_payable),
+  }));
+}
+
+/**
  * Lectura PÚBLICA por token aleatorio — para /liquidacion/[token].
  * No usa sesión/cookie de org: el token (uuid, 122 bits) ES el secreto.
  * Expone solo campos de presentación del propietario y branding de la org.

@@ -1,10 +1,16 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
-import { getSettlement, listSettlementAudit } from "@/lib/actions/settlements";
+import { ArrowLeft, Coins } from "lucide-react";
+import {
+  getSettlement,
+  listSettlementAudit,
+  listSettlementSiblings,
+} from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
 import { can } from "@/lib/permissions";
+import { formatMoney } from "@/lib/format";
+import { SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
 import { SettlementStatement } from "@/components/settlements/settlement-statement";
 import { EditableSettlementStatement } from "@/components/settlements/editable-settlement-statement";
 import { SettlementActions } from "@/components/settlements/settlement-actions";
@@ -40,10 +46,11 @@ export default async function SettlementDetailPage({
   )) as unknown as SettlementDetail | null;
   if (!settlement) notFound();
 
-  const [branding, accounts, audit] = await Promise.all([
+  const [branding, accounts, audit, siblings] = await Promise.all([
     getOrganizationBranding(),
     listAccounts(),
     listSettlementAudit(id),
+    listSettlementSiblings(id),
   ]);
 
   const canCreate = can(role, "settlements", "create");
@@ -126,6 +133,48 @@ export default async function SettlementDetailPage({
         canCreate={canCreate}
         canUpdate={canUpdate}
       />
+
+      {siblings.length > 0 && (
+        <div className="rounded-lg border bg-muted/40 px-4 py-3">
+          <div className="text-xs text-muted-foreground mb-2 flex items-center gap-1.5">
+            <Coins size={14} className="shrink-0" />
+            Este propietario también tiene liquidaciones en otras monedas en
+            este período (las monedas no se suman entre sí):
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {siblings.map((sib) => {
+              const meta =
+                SETTLEMENT_STATUS_META[
+                  sib.status as keyof typeof SETTLEMENT_STATUS_META
+                ] ?? { label: sib.status, color: "#64748b" };
+              return (
+                <Link
+                  key={sib.id}
+                  href={`/dashboard/liquidaciones/${sib.id}`}
+                  className="inline-flex items-center gap-2 rounded-md border bg-card px-3 py-1.5 text-sm hover:bg-accent/40 transition-colors"
+                >
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {sib.currency}
+                  </span>
+                  <span className="font-semibold tabular-nums">
+                    {formatMoney(sib.net_payable, sib.currency)}
+                  </span>
+                  <span
+                    className="inline-flex items-center gap-1 text-[11px]"
+                    style={{ color: meta.color }}
+                  >
+                    <span
+                      className="size-1.5 rounded-full"
+                      style={{ backgroundColor: meta.color }}
+                    />
+                    {meta.label}
+                  </span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {canUpdate ? (
         <EditableSettlementStatement
