@@ -3,7 +3,8 @@
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+# Reproducible si hay lockfile commiteado; si no, install (deploy directo del repo).
+RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
