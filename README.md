@@ -34,8 +34,8 @@ npm run dev                         # http://localhost:3001
 | `RESEND_API_KEY` | solo server | API key de [Resend](https://resend.com) para enviar mails (auth + huésped) |
 | `SYSTEM_EMAIL_FROM` | solo server | Dirección `from` para emails del sistema (2FA, cambio de email, recovery) — ej. `auth@apartcba.com` |
 | `SYSTEM_EMAIL_FROM_NAME` | solo server | Nombre visible del remitente sistema — ej. `"Apart Cba Seguridad"` |
-| `APART_CBA_FALLBACK_FROM` | solo server | Dirección `from` fallback cuando una org no tiene su propio dominio verificado |
-| `APART_CBA_FALLBACK_FROM_NAME` | solo server | Nombre visible del remitente fallback — ej. `"Apart Cba"` |
+| `PLATFORM_FALLBACK_FROM` | solo server | Dirección `from` fallback cuando una org no tiene su propio dominio verificado |
+| `PLATFORM_FALLBACK_FROM_NAME` | solo server | Nombre visible del remitente fallback — ej. `"Apart Cba"` |
 
 ⚠️ **Nunca** pegar la `service_role` en un slot `NEXT_PUBLIC_*`: quedaría expuesta en el navegador.
 
