@@ -2,6 +2,11 @@
 # Multi-stage: build TS → slim runtime. Runs as non-root.
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
+# Baileys instala `libsignal` desde git (+ binding nativo curve25519) →
+# se necesita git y toolchain de compilación en el stage de build.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git python3 make g++ ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
 # Reproducible si hay lockfile commiteado; si no, install (deploy directo del repo).
 RUN if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
