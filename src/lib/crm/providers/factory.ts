@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getSecret } from "../encryption";
 import { MetaCloudProvider } from "./meta-cloud";
 import { InstagramProvider } from "./instagram";
+import { BaileysProvider } from "./baileys";
 import type { ChannelProvider, ChannelProviderContext } from "./types";
 
 /**
@@ -20,6 +21,14 @@ export async function getProviderForChannel(channelId: string): Promise<ChannelP
 
   if (error || !channel) {
     throw new Error(`Channel ${channelId} not found`);
+  }
+
+  // Baileys no usa Vault (no hay token de Meta): el gateway tiene la sesión.
+  if (channel.provider === "baileys") {
+    return new BaileysProvider({
+      channelId: channel.id,
+      organizationId: channel.organization_id,
+    });
   }
 
   const accessToken = await getSecret(channel.access_token_secret_id);

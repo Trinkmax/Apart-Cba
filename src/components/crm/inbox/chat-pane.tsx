@@ -70,9 +70,13 @@ export function ChatPane({ conversationId, onContextToggle, contextPanelOpen }: 
 
   const { conversation, messages, contact } = detail;
   const isClosed = conversation.status === "closed";
-  const sessionExpired = !conversation.last_customer_message_at ||
-    // eslint-disable-next-line react-hooks/purity
-    Date.now() - new Date(conversation.last_customer_message_at).getTime() > 24 * 3_600_000;
+  // Baileys = cuenta normal de WhatsApp: no hay ventana de 24h ni plantillas.
+  const isBaileys = conversation.channel.provider === "baileys";
+  const sessionExpired =
+    !isBaileys &&
+    (!conversation.last_customer_message_at ||
+      // eslint-disable-next-line react-hooks/purity
+      Date.now() - new Date(conversation.last_customer_message_at).getTime() > 24 * 3_600_000);
 
   const labelForInitials = contact.name ?? contact.instagram_username ?? contact.phone ?? contact.external_id ?? "?";
   const initials = labelForInitials

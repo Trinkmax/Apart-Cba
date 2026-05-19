@@ -184,22 +184,27 @@ export async function sendTextMessage(input: z.infer<typeof sendTextSchema>) {
 
   const { data: conv } = await admin
     .from("crm_conversations")
-    .select("id,contact_id,channel_id,status,last_customer_message_at")
+    .select("id,contact_id,channel_id,status,last_customer_message_at, channel:crm_channels(provider)")
     .eq("id", validated.conversationId)
     .eq("organization_id", organization.id)
     .single();
   if (!conv) throw new Error("Conversación no encontrada");
 
-  // Validar ventana 24h WhatsApp
-  if (conv.last_customer_message_at) {
-    const last = new Date(conv.last_customer_message_at).getTime();
-    const ageHours = (Date.now() - last) / 3_600_000;
-    if (ageHours > 24) {
+  // La ventana 24h / plantillas es una restricción de la API oficial de Meta.
+  // Baileys es una cuenta normal de WhatsApp: no aplica. Sólo se valida para
+  // canales meta_cloud / meta_instagram.
+  const channelProvider = (conv.channel as { provider?: string } | null)?.provider;
+  if (channelProvider !== "baileys") {
+    if (conv.last_customer_message_at) {
+      const last = new Date(conv.last_customer_message_at).getTime();
+      const ageHours = (Date.now() - last) / 3_600_000;
+      if (ageHours > 24) {
+        throw new Error("session_expired_use_template");
+      }
+    } else {
+      // No hay mensaje del cliente nunca → no se puede enviar free-form
       throw new Error("session_expired_use_template");
     }
-  } else {
-    // No hay mensaje del cliente nunca → no se puede enviar free-form
-    throw new Error("session_expired_use_template");
   }
 
   const { sendMessageNow } = await import("@/lib/crm/message-sender");

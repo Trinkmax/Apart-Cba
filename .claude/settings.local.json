@@ -163,7 +163,18 @@
       "Bash(grep -E \"\\\\.\\(ts|tsx|sql\\)$\")",
       "Bash(echo \"EXIT: $?\")",
       "Bash(grep -E \"\\\\.sql$\")",
-      "Bash(xargs ls -1)"
+      "Bash(xargs ls -1)",
+      "Bash(sed 's/=$//')",
+      "Bash(vercel whoami *)",
+      "Bash(lsof -iTCP:3001 -sTCP:LISTEN -n)",
+      "Bash(vercel env *)",
+      "Bash(sed -E 's/\\(^RESEND_API_KEY=.{6}\\).*/\\\\1…<redacted>/')",
+      "Bash(rm -f /tmp/apartcba-prod.env)",
+      "Bash(sed -n '1388,1402p' src/lib/actions/parte-diario.ts)",
+      "Bash(sed -n '20,50p' src/lib/crm/workflows/types.ts)",
+      "Bash(sed -n '1,20p' src/lib/crm/workflows/executor.ts)",
+      "Bash(vercel ls *)",
+      "Bash(echo \"EXIT_TSC=$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
