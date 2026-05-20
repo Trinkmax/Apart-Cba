@@ -122,6 +122,18 @@ export interface ParsedInboundMessage {
   interactiveReply?: { id: string; title: string; type: "button" | "list" };
   reaction?: { messageId: string; emoji: string };
   replyToWaMessageId?: string;
+  /**
+   * Set by providers that download media themselves (Baileys → Storage). When
+   * present the inbound handler persists these columns directly instead of
+   * firing the Meta media-download job.
+   */
+  prefetchedMedia?: {
+    storagePath: string;
+    mime: string;
+    sizeBytes?: number;
+    durationMs?: number;
+    filename?: string;
+  };
   rawPayload: unknown;
 }
 

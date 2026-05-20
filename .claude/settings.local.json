@@ -173,7 +173,18 @@
       "Bash(netstat -ano)",
       "Bash(taskkill /F /PID 732)",
       "Bash(taskkill /F /PID 18460)",
-      "PowerShell(Stop-Process *)"
+      "PowerShell(Stop-Process *)",
+      "Bash(sed 's/=$//')",
+      "Bash(vercel whoami *)",
+      "Bash(lsof -iTCP:3001 -sTCP:LISTEN -n)",
+      "Bash(vercel env *)",
+      "Bash(sed -E 's/\\(^RESEND_API_KEY=.{6}\\).*/\\\\1…<redacted>/')",
+      "Bash(rm -f /tmp/apartcba-prod.env)",
+      "Bash(sed -n '1388,1402p' src/lib/actions/parte-diario.ts)",
+      "Bash(sed -n '20,50p' src/lib/crm/workflows/types.ts)",
+      "Bash(sed -n '1,20p' src/lib/crm/workflows/executor.ts)",
+      "Bash(vercel ls *)",
+      "Bash(echo \"EXIT_TSC=$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,

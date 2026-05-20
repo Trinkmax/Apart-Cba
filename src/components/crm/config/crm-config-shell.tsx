@@ -3,7 +3,10 @@ import { listChannels } from "@/lib/actions/crm-channels";
 import { getAISettings } from "@/lib/actions/crm-ai-settings";
 import { listTemplates } from "@/lib/actions/crm-templates";
 import { listTags } from "@/lib/actions/crm-tags";
+import { getBaileysState } from "@/lib/actions/crm-baileys";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { CrmConfigClient } from "./crm-config-client";
+import { BaileysConnectCard } from "./baileys-connect-card";
 
 /**
  * Resuelve la URL pública real para mostrar en la sección "URL del webhook":
@@ -25,21 +28,27 @@ async function resolveAppUrl(): Promise<string> {
 }
 
 export async function CrmConfigShell() {
-  const [channels, aiSettings, templates, tags, appUrl] = await Promise.all([
-    listChannels(),
-    getAISettings(),
-    listTemplates(),
-    listTags(),
-    resolveAppUrl(),
-  ]);
+  const [channels, aiSettings, templates, tags, appUrl, baileys, { organization }] =
+    await Promise.all([
+      listChannels(),
+      getAISettings(),
+      listTemplates(),
+      listTags(),
+      resolveAppUrl(),
+      getBaileysState(),
+      getCurrentOrg(),
+    ]);
 
   return (
-    <CrmConfigClient
-      channels={channels}
-      aiSettings={aiSettings}
-      templates={templates}
-      tags={tags}
-      appUrl={appUrl}
-    />
+    <div className="space-y-5">
+      <BaileysConnectCard organizationId={organization.id} initial={baileys} />
+      <CrmConfigClient
+        channels={channels}
+        aiSettings={aiSettings}
+        templates={templates}
+        tags={tags}
+        appUrl={appUrl}
+      />
+    </div>
   );
 }

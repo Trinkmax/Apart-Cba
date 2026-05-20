@@ -920,7 +920,7 @@ export type MessagingContentType =
 // CRM (migration 010)
 // ════════════════════════════════════════════════════════════════════════════
 
-export type CrmChannelProvider = "meta_cloud" | "meta_instagram";
+export type CrmChannelProvider = "meta_cloud" | "meta_instagram" | "baileys";
 export type CrmChannelStatus = "pending" | "active" | "disabled" | "error";
 
 export interface CrmChannel {
@@ -946,6 +946,35 @@ export interface CrmChannel {
   last_health_check_at: string | null;
   webhook_subscribed_fields: string[];
   provider_metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CrmBaileysSessionStatus =
+  | "disconnected"
+  | "connecting"
+  | "qr"
+  | "pairing"
+  | "connected"
+  | "logged_out"
+  | "conflict"
+  | "error"
+  | "banned";
+
+export interface CrmBaileysSession {
+  id: string;
+  organization_id: string;
+  channel_id: string;
+  status: CrmBaileysSessionStatus;
+  phone: string | null;
+  device_name: string | null;
+  qr: string | null;
+  qr_expires_at: string | null;
+  pairing_code: string | null;
+  last_error: string | null;
+  connected_at: string | null;
+  disconnected_at: string | null;
+  last_seen_at: string | null;
   created_at: string;
   updated_at: string;
 }

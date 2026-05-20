@@ -16,7 +16,7 @@ function getResend(): Resend {
  *
  * Lookup del dominio de la org:
  * - Si `email_domain_verified_at` IS NOT NULL → from = "{sender_name} <{local_part}@{domain}>"
- * - Si NO verificado → from = "{org.name} <APART_CBA_FALLBACK_FROM>"
+ * - Si NO verificado → from = "{org.name} <PLATFORM_FALLBACK_FROM>"
  *
  * Best-effort: si Resend falla, devuelve { ok: false, error } sin throw.
  */
@@ -49,8 +49,8 @@ export async function sendGuestMail(args: {
     const senderName = org.email_sender_name ?? org.name;
     from = `${senderName} <${org.email_sender_local_part}@${org.email_domain}>`;
   } else {
-    const fallbackFrom = process.env.APART_CBA_FALLBACK_FROM;
-    if (!fallbackFrom) return { ok: false, error: "APART_CBA_FALLBACK_FROM no configurada" };
+    const fallbackFrom = process.env.PLATFORM_FALLBACK_FROM;
+    if (!fallbackFrom) return { ok: false, error: "PLATFORM_FALLBACK_FROM no configurada" };
     from = `${org.name} <${fallbackFrom}>`;
   }
 

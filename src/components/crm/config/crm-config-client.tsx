@@ -272,7 +272,11 @@ function ChannelsSection({ channels, appUrl }: { channels: CrmChannel[]; appUrl:
 function ChannelForm({ initial, onClose }: { initial: CrmChannel | null; onClose: () => void }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
-  const [provider, setProvider] = useState<"meta_cloud" | "meta_instagram">(initial?.provider ?? "meta_cloud");
+  // Este form sólo configura canales Meta. Los canales Baileys se gestionan en
+  // BaileysConnectCard, así que un provider 'baileys' cae a meta_cloud acá.
+  const [provider, setProvider] = useState<"meta_cloud" | "meta_instagram">(
+    initial?.provider === "meta_instagram" ? "meta_instagram" : "meta_cloud",
+  );
   const [displayName, setDisplayName] = useState(initial?.display_name ?? "");
   const [phoneNumber, setPhoneNumber] = useState(initial?.phone_number ?? "");
   const [phoneNumberId, setPhoneNumberId] = useState(initial?.phone_number_id ?? "");

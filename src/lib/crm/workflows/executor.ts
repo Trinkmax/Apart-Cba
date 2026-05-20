@@ -2,6 +2,7 @@
 
 import { createAdminClient } from "@/lib/supabase/server";
 import { getNode } from "./registry";
+import { resolveOrgChannelId } from "@/lib/crm/channel-resolver";
 import type { NodeContext, NodeResult } from "./types";
 import type { CrmWorkflowGraph, CrmWorkflowNode } from "@/lib/types/database";
 
@@ -44,6 +45,14 @@ export async function runWorkflow({ runId }: ExecuteOptions): Promise<void> {
   let variables: Record<string, unknown> = (run.variables ?? {}) as Record<string, unknown>;
   let stepsExecuted: number = run.steps_executed ?? 0;
 
+  // Canal de la org (selección de proveedor por org: Baileys conectado tiene
+  // prioridad). Antes esto no se resolvía → los nodos send_* fallaban siempre.
+  const channelId = await resolveOrgChannelId(
+    admin,
+    run.organization_id,
+    run.conversation_id,
+  );
+
   while (currentNodeId && stepsExecuted < MAX_STEPS_PER_RUN) {
     const node = graph.nodes.find((n) => n.id === currentNodeId);
     if (!node) break;
@@ -57,6 +66,7 @@ export async function runWorkflow({ runId }: ExecuteOptions): Promise<void> {
       organizationId: run.organization_id,
       conversationId: run.conversation_id ?? undefined,
       contactId: run.contact_id ?? undefined,
+      channelId: channelId ?? undefined,
       triggerMessageId: (run.trigger_payload as { message_id?: string } | null)?.message_id,
       variables,
       workflowId: run.workflow_id,
