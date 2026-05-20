@@ -7,6 +7,7 @@ import {
   Bath,
   Users,
   Square,
+  DollarSign,
 } from "lucide-react";
 import { getUnit } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
@@ -89,6 +90,13 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
                 Live
               </span>
             ) : null}
+          </Link>
+          <Link
+            href={`/dashboard/unidades/${u.id}/precios`}
+            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
+            <DollarSign size={14} />
+            Tarifas
           </Link>
           <EditUnitButton unit={u} />
         </div>

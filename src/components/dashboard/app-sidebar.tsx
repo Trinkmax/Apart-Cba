@@ -20,6 +20,7 @@ import {
   MessageSquareText,
   ScrollText,
   Inbox,
+  Mail,
 } from "lucide-react";
 import {
   Sidebar,
@@ -92,6 +93,7 @@ const NAV: NavGroup[] = [
     label: "Integraciones",
     items: [
       { label: "Channel Manager", href: "/dashboard/channel-manager", icon: Cable, resource: "ical" },
+      { label: "Email Parser", href: "/dashboard/configuracion/inbound-email", icon: Mail, resource: "ical" },
     ],
   },
 ];

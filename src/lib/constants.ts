@@ -280,6 +280,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     crm_rapidos: ["view"],
     parte_diario: ["view", "update", "create"],
     date_marks: ["view", "create", "update", "delete"],
+    ical: ["view", "create", "update", "delete"],
   },
   mantenimiento: {
     units: ["view"],

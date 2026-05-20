@@ -2,11 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import ICAL from "ical.js";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import type { IcalFeed, BookingSource, Unit } from "@/lib/types/database";
+import { syncSingleFeed } from "@/lib/ical/sync";
+import type {
+  IcalFeed,
+  IcalFeedWithHealth,
+  IcalFeedHealthStatus,
+  IcalSyncRun,
+  Unit,
+} from "@/lib/types/database";
 
 const feedSchema = z.object({
   unit_id: z.string().uuid(),
@@ -29,19 +35,64 @@ export async function listIcalFeeds() {
   return data ?? [];
 }
 
+export async function listIcalFeedsWithHealth(): Promise<IcalFeedWithHealth[]> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  const [{ data: feeds, error: feedsErr }, { data: healthRows, error: healthErr }] =
+    await Promise.all([
+      admin
+        .from("ical_feeds")
+        .select(`*, unit:units(id, code, name)`)
+        .eq("organization_id", organization.id)
+        .order("created_at", { ascending: false }),
+      admin
+        .from("ical_feed_health")
+        .select("*")
+        .eq("organization_id", organization.id),
+    ]);
+
+  if (feedsErr) throw new Error(feedsErr.message);
+  if (healthErr) throw new Error(healthErr.message);
+
+  const healthMap = new Map(
+    (healthRows ?? []).map((h: { feed_id: string; health: string; errors_24h: number; last_ok_at: string | null }) => [h.feed_id, h])
+  );
+
+  return (feeds ?? []).map((f: IcalFeed & { unit: Pick<Unit, "id" | "code" | "name"> }) => {
+    const h = healthMap.get(f.id);
+    return {
+      ...f,
+      health: (h?.health ?? "ok") as IcalFeedHealthStatus,
+      errors_24h: h?.errors_24h ?? 0,
+      last_ok_at: h?.last_ok_at ?? null,
+    };
+  });
+}
+
 export async function createIcalFeed(input: IcalFeedInput) {
   await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = feedSchema.parse(input);
   const admin = createAdminClient();
+
   const { data, error } = await admin
     .from("ical_feeds")
     .insert({ ...validated, organization_id: organization.id })
-    .select()
+    .select("id, organization_id, unit_id, source, feed_url, events_imported_count")
     .single();
   if (error) throw new Error(error.message);
+
+  // Sync inmediato de prueba — si falla, eliminamos el feed
+  const result = await syncSingleFeed(admin, data, "create_feed");
+  if (result.error) {
+    await admin.from("ical_feeds").delete().eq("id", data.id);
+    throw new Error(`Feed inválido: ${result.error}`);
+  }
+
   revalidatePath("/dashboard/channel-manager");
-  return data as IcalFeed;
+  revalidatePath("/dashboard/reservas");
+  return data as unknown as IcalFeed;
 }
 
 export async function deleteIcalFeed(id: string) {
@@ -57,10 +108,6 @@ export async function deleteIcalFeed(id: string) {
   revalidatePath("/dashboard/channel-manager");
 }
 
-/**
- * Sincroniza un feed iCal: descarga, parsea, e inserta nuevas reservas.
- * Idempotente: usa external_id (UID del evento) para evitar duplicados.
- */
 export async function syncIcalFeed(feedId: string): Promise<{ imported: number; skipped: number }> {
   await requireSession();
   const { organization } = await getCurrentOrg();
@@ -68,102 +115,73 @@ export async function syncIcalFeed(feedId: string): Promise<{ imported: number; 
 
   const { data: feed } = await admin
     .from("ical_feeds")
-    .select("*, unit:units(id)")
+    .select("id, organization_id, unit_id, source, feed_url, events_imported_count")
     .eq("id", feedId)
     .eq("organization_id", organization.id)
     .maybeSingle();
   if (!feed) throw new Error("Feed no encontrado");
 
-  let imported = 0;
-  let skipped = 0;
-  let errorMsg: string | null = null;
+  const result = await syncSingleFeed(admin, feed, "manual");
+  if (result.error) throw new Error(result.error);
 
-  try {
-    const res = await fetch(feed.feed_url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const icsText = await res.text();
+  revalidatePath("/dashboard/channel-manager");
+  revalidatePath("/dashboard/reservas");
+  return { imported: result.imported, skipped: result.skipped };
+}
 
-    const jcalData = ICAL.parse(icsText);
-    const comp = new ICAL.Component(jcalData);
-    const events = comp.getAllSubcomponents("vevent");
+export async function syncAllFeeds(): Promise<{ totalImported: number; totalSkipped: number; errors: number }> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data: feeds } = await admin
+    .from("ical_feeds")
+    .select("id, organization_id, unit_id, source, feed_url, events_imported_count")
+    .eq("organization_id", organization.id)
+    .eq("active", true);
 
-    for (const ev of events) {
-      const event = new ICAL.Event(ev);
-      const uid = event.uid;
-      if (!uid) { skipped++; continue; }
-      const startDate = event.startDate.toJSDate();
-      const endDate = event.endDate.toJSDate();
-      const summary = event.summary ?? "";
-
-      // Detectar bloqueos (Airbnb los marca "Not available", "Reserved" puede
-      // ser reserva o bloqueo manual del host — lo importamos igual).
-      const isBlock = /not available|blocked|unavailable|closed/i.test(summary);
-
-      // Self-import guard: si la reserva ya está en Apart-Cba (por nuestro
-      // feed de salida), Airbnb/Booking nos la devuelven con un UID que
-      // contiene "apartcba-<id>". No re-importar.
-      if (uid.includes("apartcba-")) { skipped++; continue; }
-
-      // Dedup por (organization_id, unit_id, source, external_id) — evita
-      // colisiones entre orgs y entre unidades del mismo source.
-      const { data: existing } = await admin
-        .from("bookings")
-        .select("id")
-        .eq("organization_id", organization.id)
-        .eq("unit_id", feed.unit_id)
-        .eq("source", feed.source as BookingSource)
-        .eq("external_id", uid)
-        .maybeSingle();
-      if (existing) {
-        skipped++;
-        continue;
-      }
-
-      const { error: insertError } = await admin.from("bookings").insert({
-        organization_id: organization.id,
-        unit_id: feed.unit_id,
-        source: feed.source as BookingSource,
-        external_id: uid,
-        status: "confirmada",
-        check_in_date: startDate.toISOString().slice(0, 10),
-        check_in_time: "14:00",
-        check_out_date: endDate.toISOString().slice(0, 10),
-        check_out_time: "10:00",
-        currency: "ARS",
-        total_amount: 0,
-        notes: isBlock ? "Bloqueo (sin reserva real)" : `Importado de ${feed.source}: ${summary}`,
-        guests_count: 1,
-      });
-
-      if (!insertError) imported++;
-      else if (insertError.message.includes("bookings_no_overlap")) skipped++;
-    }
-
-    await admin
-      .from("ical_feeds")
-      .update({
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: "ok",
-        last_sync_error: null,
-        events_imported_count: feed.events_imported_count + imported,
-      })
-      .eq("id", feedId);
-  } catch (e) {
-    errorMsg = (e as Error).message;
-    await admin
-      .from("ical_feeds")
-      .update({
-        last_sync_at: new Date().toISOString(),
-        last_sync_status: "error",
-        last_sync_error: errorMsg,
-      })
-      .eq("id", feedId);
-    throw new Error(errorMsg);
+  let totalImported = 0;
+  let totalSkipped = 0;
+  let errors = 0;
+  for (const f of feeds ?? []) {
+    const r = await syncSingleFeed(admin, f, "manual");
+    totalImported += r.imported;
+    totalSkipped += r.skipped;
+    if (r.error) errors++;
   }
 
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");
-  return { imported, skipped };
+  return { totalImported, totalSkipped, errors };
+}
+
+export async function getSyncRunsForFeed(feedId: string, limit = 20): Promise<IcalSyncRun[]> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("ical_sync_runs")
+    .select("*")
+    .eq("feed_id", feedId)
+    .eq("organization_id", organization.id)
+    .order("started_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as IcalSyncRun[];
+}
+
+export async function getFeedHealthSummary(): Promise<{ broken: number; warning: number }> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("ical_feed_health")
+    .select("health")
+    .eq("organization_id", organization.id);
+  if (error) return { broken: 0, warning: 0 };
+  let broken = 0;
+  let warning = 0;
+  for (const row of data ?? []) {
+    if (row.health === "broken") broken++;
+    else if (row.health === "warning") warning++;
+  }
+  return { broken, warning };
 }
 
 export type UnitExportRow = Pick<Unit, "id" | "code" | "name"> & {
@@ -171,10 +189,6 @@ export type UnitExportRow = Pick<Unit, "id" | "code" | "name"> & {
   export_url: string;
 };
 
-/**
- * Devuelve cada unidad activa con su URL pública de exportación iCal,
- * lista para pegar en Airbnb/Booking ("Import calendar").
- */
 export async function listUnitExportFeeds(): Promise<UnitExportRow[]> {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
@@ -196,10 +210,6 @@ export async function listUnitExportFeeds(): Promise<UnitExportRow[]> {
   }));
 }
 
-/**
- * Rota el token de exportación de una unidad. Las URLs viejas dejan de
- * funcionar — usar solo si el token se filtró.
- */
 export async function rotateExportToken(unitId: string): Promise<string> {
   await requireSession();
   const { organization } = await getCurrentOrg();
@@ -218,28 +228,4 @@ export async function rotateExportToken(unitId: string): Promise<string> {
 
   revalidatePath("/dashboard/channel-manager");
   return token;
-}
-
-export async function syncAllFeeds(): Promise<{ totalImported: number; totalSkipped: number; errors: number }> {
-  const { organization } = await getCurrentOrg();
-  const admin = createAdminClient();
-  const { data: feeds } = await admin
-    .from("ical_feeds")
-    .select("id")
-    .eq("organization_id", organization.id)
-    .eq("active", true);
-
-  let totalImported = 0;
-  let totalSkipped = 0;
-  let errors = 0;
-  for (const f of feeds ?? []) {
-    try {
-      const r = await syncIcalFeed(f.id);
-      totalImported += r.imported;
-      totalSkipped += r.skipped;
-    } catch {
-      errors++;
-    }
-  }
-  return { totalImported, totalSkipped, errors };
 }

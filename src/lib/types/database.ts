@@ -159,6 +159,7 @@ export interface Organization {
   email_sender_local_part: string | null;
   email_domain_verified_at: string | null;
   email_domain_dns_records: ResendDnsRecord[] | null;
+  inbound_email_token: string;
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -701,6 +702,36 @@ export interface IcalFeed {
   events_imported_count: number;
   created_at: string;
 }
+
+export interface IcalSyncRun {
+  id: string;
+  feed_id: string;
+  organization_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: "running" | "ok" | "error";
+  imported_count: number;
+  skipped_count: number;
+  error_message: string | null;
+  trigger_source: "cron" | "manual" | "create_feed";
+}
+
+export type IcalFeedHealthStatus = "ok" | "warning" | "broken";
+
+export interface IcalFeedHealth {
+  feed_id: string;
+  organization_id: string;
+  errors_24h: number;
+  last_ok_at: string | null;
+  health: IcalFeedHealthStatus;
+}
+
+export type IcalFeedWithHealth = IcalFeed & {
+  unit: Pick<Unit, "id" | "code" | "name">;
+  health: IcalFeedHealthStatus;
+  errors_24h: number;
+  last_ok_at: string | null;
+};
 
 export interface Amenity {
   id: string;

@@ -1,5 +1,5 @@
-import { Cable, Wifi, Download, Upload } from "lucide-react";
-import { listIcalFeeds, listUnitExportFeeds } from "@/lib/actions/ical";
+import { Cable, Wifi, Download, Upload, AlertTriangle } from "lucide-react";
+import { listIcalFeedsWithHealth, listUnitExportFeeds } from "@/lib/actions/ical";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,10 +10,12 @@ import { ExportFeedsList } from "@/components/channel-manager/export-feeds-list"
 
 export default async function ChannelManagerPage() {
   const [feeds, units, exportFeeds] = await Promise.all([
-    listIcalFeeds(),
+    listIcalFeedsWithHealth(),
     listUnitsEnriched(),
     listUnitExportFeeds(),
   ]);
+
+  const brokenCount = feeds.filter((f) => f.health === "broken").length;
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-6xl mx-auto">
@@ -32,6 +34,22 @@ export default async function ChannelManagerPage() {
           <IcalFeedDialog units={units} />
         </div>
       </div>
+
+      {brokenCount > 0 && (
+        <Card className="p-4 border-l-4 border-l-rose-500 bg-rose-500/5">
+          <div className="flex gap-3 items-center">
+            <AlertTriangle className="size-5 text-rose-600 dark:text-rose-400 shrink-0" />
+            <div className="text-sm">
+              <span className="font-medium text-rose-700 dark:text-rose-300">
+                {brokenCount} feed{brokenCount > 1 ? "s" : ""} con errores persistentes.
+              </span>{" "}
+              <span className="text-muted-foreground">
+                Revisá la URL del feed o verificá que el calendario sigue publicado en la OTA.
+              </span>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Tabs defaultValue="import" className="space-y-4">
         <TabsList>
@@ -59,7 +77,7 @@ export default async function ChannelManagerPage() {
             </div>
           </Card>
 
-          <ChannelManagerList feeds={feeds as never} />
+          <ChannelManagerList feeds={feeds} />
         </TabsContent>
 
         <TabsContent value="export" className="space-y-4">

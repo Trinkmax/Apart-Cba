@@ -122,7 +122,11 @@ export function ListingManagerClient(props: Props) {
     const next = !published;
     startPublish(async () => {
       try {
-        await setListingPublished(props.unit.id, next);
+        const r = await setListingPublished(props.unit.id, next);
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
         setPublished(next);
         toast.success(
           next ? "¡Publicada en el marketplace!" : "Listing despublicado",
@@ -205,13 +209,14 @@ export function ListingManagerClient(props: Props) {
                 longitude: unit.longitude ?? null,
               }}
               onSave={async (v) => {
-                await updateListingLocation({
+                const r = await updateListingLocation({
                   unit_id: unit.id,
                   address: v.address || null,
                   neighborhood: v.neighborhood || null,
                   latitude: v.latitude,
                   longitude: v.longitude,
                 });
+                if (!r.ok) throw new Error(r.error);
                 setUnit({
                   ...unit,
                   address: v.address,
@@ -493,6 +498,10 @@ function BasicsTab({
           unit_id: unit.id,
           ...form,
         });
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
         setSavedSnapshot(form);
         onUpdated({
           ...unit,
@@ -1275,7 +1284,11 @@ function AmenitiesTab({
     saveTimer.current = setTimeout(async () => {
       setSaving(true);
       try {
-        await setListingAmenities(unitId, current);
+        const r = await setListingAmenities(unitId, current);
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
         initialRef.current = new Set(current);
         setSavedAt(Date.now());
         onChange(current);
@@ -1429,7 +1442,11 @@ function PricingTab({
 
   async function toggleActive(id: string, active: boolean) {
     try {
-      await togglePricingRule(id, active);
+      const r = await togglePricingRule(id, active);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
       setRules((p) => p.map((r) => (r.id === id ? { ...r, active } : r)));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Error");
@@ -1439,7 +1456,11 @@ function PricingTab({
   async function remove(id: string) {
     if (!confirm("¿Borrar esta regla?")) return;
     try {
-      await deletePricingRule(id);
+      const r = await deletePricingRule(id);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
       setRules((p) => p.filter((r) => r.id !== id));
       toast.success("Regla eliminada");
     } catch (e) {
@@ -1671,11 +1692,13 @@ function NewRuleDialog({
               : null,
           priority: draft.priority,
         });
-        if (r.ok && r.rule) {
-          toast.success("Regla creada");
-          onCreated(r.rule as UnitPricingRule);
-          reset();
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
         }
+        toast.success("Regla creada");
+        onCreated(r.rule);
+        reset();
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Error");
       }

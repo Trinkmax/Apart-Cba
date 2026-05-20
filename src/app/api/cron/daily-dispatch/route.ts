@@ -29,13 +29,12 @@ export async function GET(req: Request) {
 
   const startedAt = Date.now();
   const results: Record<string, unknown> = {};
+  const admin = createAdminClient();
 
-  // 1. Sync iCal
+  // 1. Sync iCal (llamada directa, sin HTTP roundtrip)
   try {
-    const icalRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/cron/sync-ical`, {
-      headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {},
-    });
-    results.ical = await icalRes.json();
+    const { syncAllFeedsCron } = await import("@/lib/ical/sync");
+    results.ical = await syncAllFeedsCron(admin, "cron");
   } catch (err) {
     results.ical = { error: (err as Error).message };
   }
@@ -50,7 +49,6 @@ export async function GET(req: Request) {
 
   // 3. Workflow scheduler — daily schedules
   try {
-    const admin = createAdminClient();
     const { data: dailySchedules } = await admin
       .from("crm_workflow_schedules")
       .select("id,workflow_id,organization_id,cron_expression")
