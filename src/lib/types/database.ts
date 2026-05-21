@@ -629,6 +629,7 @@ export interface SettlementAuditEntry {
   settlement_id: string | null;
   action:
     | "line_add"
+    | "row_add"
     | "line_update"
     | "line_delete"
     | "row_update"

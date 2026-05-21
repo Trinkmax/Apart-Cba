@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg, getOrganizationBranding } from "./org";
 import { requireSession } from "./auth";
@@ -1460,6 +1461,162 @@ export async function updateSettlementBookingRow(
   });
 }
 
+const addBookingRowSchema = z.object({
+  settlement_id: z.string().uuid(),
+  unit_id: z.string().uuid(),
+  guest_name: z.string().trim().max(160).optional().nullable(),
+  check_in: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .nullable(),
+  check_out: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .nullable(),
+  nights: z.coerce.number().int().min(0).max(366),
+  gross: z.coerce.number().min(0, "El bruto no puede ser negativo"),
+  commission: z.coerce.number().min(0),
+  expenses: z.coerce.number().min(0),
+});
+
+/**
+ * Agrega una reserva cargada a mano a la liquidación: un grupo de líneas
+ * (ingreso + comisión + gastos) con ref_type='booking' y un ref_id SINTÉTICO
+ * — no apunta a ninguna fila de `bookings`. Suma al neto del documento pero NO
+ * crea una reserva en el calendario ni mueve Caja (reconcilia con
+ * impactCaja=false). Queda is_manual=true: se edita/elimina como cualquier fila
+ * y sobrevive a "Regenerar" (buildSettlementLines nunca recrea un ref_id que no
+ * corresponde a una reserva real).
+ */
+export async function addSettlementBookingRow(
+  input: z.input<typeof addBookingRowSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = addBookingRowSchema.parse(input);
+  const admin = createAdminClient();
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  const { data: unit } = await admin
+    .from("units")
+    .select("id, code")
+    .eq("id", v.unit_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!unit) throw new Error("Unidad no encontrada");
+
+  // ref_id sintético: agrupa las líneas como una fila de reserva en la planilla
+  // sin tocar la tabla `bookings`.
+  const refId = randomUUID();
+  const now = new Date().toISOString();
+
+  const { data: last } = await admin
+    .from("settlement_lines")
+    .select("display_order")
+    .eq("settlement_id", v.settlement_id)
+    .order("display_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const baseOrder = (Number(last?.display_order ?? -1) || 0) + 1;
+
+  const commissionPct =
+    v.gross > 0 ? round2((v.commission / v.gross) * 100) : null;
+  const guestName = v.guest_name?.trim() || null;
+  const rangeLabel =
+    v.check_in && v.check_out
+      ? `${v.check_in} → ${v.check_out}`
+      : `${v.nights} noches`;
+
+  const stamp = {
+    is_manual: true,
+    created_by: session.userId,
+    updated_by: session.userId,
+    updated_at: now,
+  };
+
+  const lines: Array<Record<string, unknown>> = [
+    {
+      settlement_id: v.settlement_id,
+      line_type: "booking_revenue",
+      ref_type: "booking",
+      ref_id: refId,
+      unit_id: v.unit_id,
+      description: `Reserva ${rangeLabel} (${unit.code})`,
+      amount: round2(v.gross),
+      sign: "+",
+      meta: {
+        guest_name: guestName,
+        nights: v.nights,
+        check_in: v.check_in ?? null,
+        check_out: v.check_out ?? null,
+        source: "manual",
+        mode: "temporario",
+        commission_pct: commissionPct,
+      },
+      display_order: baseOrder,
+      ...stamp,
+    },
+  ];
+  if (v.commission > 0) {
+    lines.push({
+      settlement_id: v.settlement_id,
+      line_type: "commission",
+      ref_type: "booking",
+      ref_id: refId,
+      unit_id: v.unit_id,
+      description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}`,
+      amount: round2(v.commission),
+      sign: "-",
+      meta: null,
+      display_order: baseOrder + 1,
+      ...stamp,
+    });
+  }
+  if (v.expenses > 0) {
+    lines.push({
+      settlement_id: v.settlement_id,
+      line_type: "expenses_fraction",
+      ref_type: "booking",
+      ref_id: refId,
+      unit_id: v.unit_id,
+      description: "Gastos",
+      amount: round2(v.expenses),
+      sign: "-",
+      meta: null,
+      display_order: baseOrder + 2,
+      ...stamp,
+    });
+  }
+
+  const { error } = await admin.from("settlement_lines").insert(lines);
+  if (error) throw new Error(error.message);
+
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "row_add",
+    changes: {
+      reserva: guestName ?? unit.code,
+      bruto: { from: 0, to: round2(v.gross) },
+      comision: { from: 0, to: round2(v.commission) },
+      gastos: { from: 0, to: round2(v.expenses) },
+    },
+    reason: `agregó la reserva de ${guestName ?? unit.code} (${formatMoney(v.gross, before.currency)})`,
+    impactCaja: false,
+  });
+}
+
 /** Historial de cambios de la liquidación (más recientes primero). */
 export async function listSettlementAudit(
   settlementId: string,
@@ -1535,6 +1692,29 @@ export async function getSettlement(id: string) {
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;
+}
+
+/**
+ * Unidades del propietario de una liquidación. Alimenta los selectores de
+ * unidad del detalle ("Agregar reserva", "Agregar cargo").
+ */
+export async function listOwnerUnits(
+  ownerId: string,
+): Promise<Array<{ id: string; code: string; name: string }>> {
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) return [];
+  const oid = z.string().uuid().parse(ownerId);
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("unit_owners")
+    .select("unit:units(id, code, name, organization_id)")
+    .eq("owner_id", oid);
+  type U = { id: string; code: string; name: string; organization_id: string };
+  return (data ?? [])
+    .map((r) => r.unit as unknown as U | null)
+    .filter((u): u is U => !!u && u.organization_id === organization.id)
+    .map((u) => ({ id: u.id, code: u.code, name: u.name }))
+    .sort((a, b) => a.code.localeCompare(b.code));
 }
 
 /**
@@ -1733,6 +1913,52 @@ export async function changeSettlementStatus(
     });
   }
   revalidateSettlement(id);
+}
+
+/**
+ * Elimina definitivamente una liquidación. El borrado en cascada se lleva sus
+ * settlement_lines y settlement_audit. Bloqueada si está pagada: dejaría
+ * huérfano el egreso (y los ajustes) en Caja. Libera los tickets de
+ * mantenimiento cobrados para que puedan volver a liquidarse.
+ */
+export async function deleteSettlement(settlementId: string) {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "delete")) {
+    throw new Error("No tenés permisos para eliminar liquidaciones");
+  }
+  const id = z.string().uuid().parse(settlementId);
+  const admin = createAdminClient();
+
+  const { data: s } = await admin
+    .from("owner_settlements")
+    .select("id, status, paid_movement_id")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!s) throw new Error("Liquidación no encontrada");
+  if (s.status === "pagada" || s.paid_movement_id) {
+    throw new Error(
+      "No se puede eliminar una liquidación pagada. Anulá primero el pago en Caja.",
+    );
+  }
+
+  // Liberar los tickets de mantenimiento cobrados a esta liquidación: sin esto
+  // quedarían marcados como "ya cobrados" y no volverían a ninguna liquidación.
+  await admin
+    .from("maintenance_tickets")
+    .update({ charged_to_owner_at: null, charged_to_settlement_id: null })
+    .eq("charged_to_settlement_id", id);
+
+  const { error } = await admin
+    .from("owner_settlements")
+    .delete()
+    .eq("id", id)
+    .eq("organization_id", organization.id);
+  if (error) throw new Error(error.message);
+
+  revalidateSettlement();
+  return { ok: true as const };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

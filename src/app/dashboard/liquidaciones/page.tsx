@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { GenerateSettlementDialog } from "@/components/settlements/generate-settlement-dialog";
 import { SettlementsViewTabs } from "@/components/settlements/settlements-view-tabs";
+import { SettlementDeleteButton } from "@/components/settlements/settlement-delete-button";
 import { formatMoney, getInitials } from "@/lib/format";
 import { formatPeriod, SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
 import { cn } from "@/lib/utils";
@@ -66,25 +67,58 @@ export default async function LiquidacionesPage() {
                   s.status as keyof typeof SETTLEMENT_STATUS_META
                 ];
               return (
-                <Link
+                <div
                   key={s.id}
-                  href={`/dashboard/liquidaciones/${s.id}`}
-                  className="flex items-center gap-3 p-3 sm:p-4 hover:bg-accent/30 transition-colors group"
+                  className="flex items-center group hover:bg-accent/30 transition-colors"
                 >
-                  <Avatar className="size-9 sm:size-10 shrink-0">
-                    <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-                      {getInitials(s.owner.full_name)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-sm truncate">
-                      {s.owner.full_name}
+                  <Link
+                    href={`/dashboard/liquidaciones/${s.id}`}
+                    className="flex items-center gap-3 p-3 sm:p-4 flex-1 min-w-0"
+                  >
+                    <Avatar className="size-9 sm:size-10 shrink-0">
+                      <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                        {getInitials(s.owner.full_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-sm truncate">
+                        {s.owner.full_name}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatPeriod(s.period_year, s.period_month)}
+                      </div>
+                      <Badge
+                        className="font-normal gap-1.5 mt-1 sm:hidden text-[10px] h-4 px-1.5"
+                        style={{
+                          color: meta.color,
+                          backgroundColor: meta.color + "15",
+                          borderColor: meta.color + "30",
+                        }}
+                      >
+                        <span
+                          className="status-dot"
+                          style={{ backgroundColor: meta.color }}
+                        />
+                        {meta.label}
+                      </Badge>
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      {formatPeriod(s.period_year, s.period_month)}
+                    <div className="text-right shrink-0">
+                      <div className="text-[10px] sm:text-xs text-muted-foreground">
+                        Neto
+                      </div>
+                      <div
+                        className={cn(
+                          "font-semibold tabular-nums text-sm sm:text-base",
+                          s.net_payable >= 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-rose-600 dark:text-rose-400",
+                        )}
+                      >
+                        {formatMoney(s.net_payable, s.currency)}
+                      </div>
                     </div>
                     <Badge
-                      className="font-normal gap-1.5 mt-1 sm:hidden text-[10px] h-4 px-1.5"
+                      className="hidden sm:inline-flex font-normal gap-1.5"
                       style={{
                         color: meta.color,
                         backgroundColor: meta.color + "15",
@@ -97,41 +131,20 @@ export default async function LiquidacionesPage() {
                       />
                       {meta.label}
                     </Badge>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <div className="text-[10px] sm:text-xs text-muted-foreground">
-                      Neto
-                    </div>
-                    <div
-                      className={cn(
-                        "font-semibold tabular-nums text-sm sm:text-base",
-                        s.net_payable >= 0
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : "text-rose-600 dark:text-rose-400",
-                      )}
-                    >
-                      {formatMoney(s.net_payable, s.currency)}
-                    </div>
-                  </div>
-                  <Badge
-                    className="hidden sm:inline-flex font-normal gap-1.5"
-                    style={{
-                      color: meta.color,
-                      backgroundColor: meta.color + "15",
-                      borderColor: meta.color + "30",
-                    }}
-                  >
-                    <span
-                      className="status-dot"
-                      style={{ backgroundColor: meta.color }}
+                    <ChevronRight
+                      size={16}
+                      className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0"
                     />
-                    {meta.label}
-                  </Badge>
-                  <ChevronRight
-                    size={16}
-                    className="text-muted-foreground group-hover:text-foreground transition-colors shrink-0"
-                  />
-                </Link>
+                  </Link>
+                  <div className="pr-2 sm:pr-3 shrink-0">
+                    <SettlementDeleteButton
+                      id={s.id}
+                      ownerName={s.owner.full_name}
+                      period={formatPeriod(s.period_year, s.period_month)}
+                      paid={s.status === "pagada" || !!s.paid_movement_id}
+                    />
+                  </div>
+                </div>
               );
             })}
           </div>

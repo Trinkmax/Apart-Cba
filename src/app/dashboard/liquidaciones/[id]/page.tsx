@@ -5,6 +5,7 @@ import {
   getSettlement,
   listSettlementAudit,
   listSettlementSiblings,
+  listOwnerUnits,
 } from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
@@ -46,11 +47,12 @@ export default async function SettlementDetailPage({
   )) as unknown as SettlementDetail | null;
   if (!settlement) notFound();
 
-  const [branding, accounts, audit, siblings] = await Promise.all([
+  const [branding, accounts, audit, siblings, ownerUnits] = await Promise.all([
     getOrganizationBranding(),
     listAccounts(),
     listSettlementAudit(id),
     listSettlementSiblings(id),
+    listOwnerUnits(settlement.owner_id),
   ]);
 
   const canCreate = can(role, "settlements", "create");
@@ -93,15 +95,6 @@ export default async function SettlementDetailPage({
   };
 
   const model = buildStatementModel(statementInput);
-
-  // Unidades distintas presentes (para el dropdown del editor de ajustes)
-  const unitMap = new Map<string, { id: string; code: string; name: string }>();
-  for (const l of settlement.lines ?? []) {
-    if (l.unit) unitMap.set(l.unit.id, l.unit);
-  }
-  const units = Array.from(unitMap.values()).sort((a, b) =>
-    a.code.localeCompare(b.code),
-  );
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5">
@@ -183,7 +176,7 @@ export default async function SettlementDetailPage({
           currency={settlement.currency}
           status={settlement.status}
           paid={paid}
-          units={units}
+          units={ownerUnits}
           audit={audit}
         />
       ) : (

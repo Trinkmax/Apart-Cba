@@ -74,12 +74,14 @@ import {
 } from "@/lib/actions/settlements";
 import type { StatementModel } from "@/lib/settlements/statement-model";
 import type { SettlementLine, SettlementAuditEntry } from "@/lib/types/database";
+import { AddBookingRowDialog } from "./add-booking-row-dialog";
 
 type LineType = SettlementLine["line_type"];
 type Unit = { id: string; code: string; name: string };
 
 const ACTION_LABEL: Record<SettlementAuditEntry["action"], string> = {
   line_add: "Cargo agregado",
+  row_add: "Reserva agregada",
   line_update: "Cargo editado",
   line_delete: "Cargo eliminado",
   row_update: "Reserva editada",
@@ -810,6 +812,7 @@ export function EditableSettlementStatement({
     StatementModel["units"][number]["rows"][number] | null
   >(null);
   const [addCharge, setAddCharge] = useState(false);
+  const [addBooking, setAddBooking] = useState(false);
   const [editCharge, setEditCharge] = useState<
     | {
         id: string;
@@ -1037,9 +1040,26 @@ export function EditableSettlementStatement({
 
       {/* Planilla */}
       <div className="p-4 sm:p-6 space-y-6">
-        {model.units.length === 0 && otros.length === 0 && (
-          <p className="text-sm text-muted-foreground text-center py-8">
-            La liquidación no tiene movimientos.
+        {editable && (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="h-4 w-1 rounded-full bg-primary" />
+              <h3 className="text-sm font-semibold">Reservas</h3>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1.5"
+              onClick={() => setAddBooking(true)}
+            >
+              <Plus size={13} /> Agregar reserva
+            </Button>
+          </div>
+        )}
+        {model.units.length === 0 && (
+          <p className="text-xs text-muted-foreground rounded-lg border border-dashed py-4 text-center">
+            Sin reservas en este período. Usá “Agregar reserva” para cargar una
+            a mano.
           </p>
         )}
 
@@ -1326,6 +1346,14 @@ export function EditableSettlementStatement({
         currency={c}
         paid={paid}
         units={units}
+      />
+      <AddBookingRowDialog
+        open={addBooking}
+        onOpenChange={setAddBooking}
+        settlementId={settlementId}
+        currency={c}
+        units={units}
+        currentNet={model.totals.net}
       />
       {editCharge && (
         <ChargeDialog
