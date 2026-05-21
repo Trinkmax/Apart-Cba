@@ -23,6 +23,7 @@ import {
 } from "@/lib/actions/bookings";
 import { listAccounts } from "@/lib/actions/cash";
 import { formatMoney } from "@/lib/format";
+import { isAdminLevel } from "@/lib/permissions";
 import type { Booking, CashAccount } from "@/lib/types/database";
 import { CheckInReadinessDialog } from "./check-in-readiness-dialog";
 import { QuickPayCard } from "./quick-pay-card";
@@ -50,7 +51,7 @@ export function BookingActions({ booking, role, canEditBooking = true, canViewMo
   const total = Number(booking.total_amount ?? 0);
   const paid = Number(booking.paid_amount ?? 0);
   const pending = Number((total - paid).toFixed(2));
-  const isAdmin = role === "admin";
+  const isAdmin = isAdminLevel(role);
 
   const isResend = booking.status !== "pendiente";
   const { openConfirmDialog, dialogProps, ConfirmBookingDialog } = useConfirmBookingDialog({

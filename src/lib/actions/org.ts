@@ -9,6 +9,7 @@ import { z } from "zod";
 import { Resend } from "resend";
 import { requireSession } from "./auth";
 import { createAdminClient } from "@/lib/supabase/server";
+import { isAdminLevel } from "@/lib/permissions";
 import { BOOKING_STATUS_META } from "@/lib/constants";
 import { findInvalidVariables } from "@/lib/email/templates/variables";
 import type {
@@ -87,7 +88,7 @@ export async function updateBookingStatusColors(
 ): Promise<void> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") {
+  if (!isAdminLevel(role)) {
     throw new Error("Solo un administrador puede cambiar la configuración");
   }
   const cleaned: BookingStatusColors = {};
@@ -160,7 +161,7 @@ export async function updateOrganizationProfile(
 ): Promise<void> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") {
+  if (!isAdminLevel(role)) {
     throw new Error("Solo un administrador puede cambiar la configuración");
   }
   const validated = organizationProfileSchema.parse(input);
@@ -185,7 +186,7 @@ export async function updateOrganizationProfile(
 export async function setOrgBrandShowName(value: boolean): Promise<void> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") {
+  if (!isAdminLevel(role)) {
     throw new Error("Solo un administrador puede cambiar la configuración");
   }
   const admin = createAdminClient();
@@ -216,7 +217,7 @@ function objectPathFromPublicUrl(publicUrl: string): string | null {
 export async function uploadOrganizationLogo(formData: FormData): Promise<string> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") {
+  if (!isAdminLevel(role)) {
     throw new Error("Solo un administrador puede cambiar el logo");
   }
   const file = formData.get("file");
@@ -288,7 +289,7 @@ export async function getOrganizationBranding(): Promise<{
 export async function removeOrganizationLogo(): Promise<void> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") {
+  if (!isAdminLevel(role)) {
     throw new Error("Solo un administrador puede cambiar el logo");
   }
   const admin = createAdminClient();

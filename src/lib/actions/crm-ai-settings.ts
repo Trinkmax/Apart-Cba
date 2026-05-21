@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { createAdminClient } from "@/lib/supabase/server";
+import { isAdminLevel } from "@/lib/permissions";
 import { createSecret, updateSecret } from "@/lib/crm/encryption";
 import type { CrmAiSettings } from "@/lib/types/database";
 
@@ -32,7 +33,7 @@ const updateSchema = z.object({
 export async function updateAISettings(input: z.infer<typeof updateSchema>) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const v = updateSchema.parse(input);
   const admin = createAdminClient();

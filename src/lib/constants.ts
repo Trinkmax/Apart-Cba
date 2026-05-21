@@ -10,6 +10,16 @@ import type {
   UnitDefaultMode,
 } from "./types/database";
 
+// ─── Join de unidad para tickets / limpieza ─────────────────────────────────
+/**
+ * Columnas que trae el join `unit:units(...)` en las acciones de tickets de
+ * mantenimiento y tareas de limpieza. Hidrata un `UnitRef` (ver `database.ts`):
+ * lo necesario para que el personal de campo llegue e ingrese a la unidad.
+ * Mantener sincronizado con el `Pick` de `UnitRef`.
+ */
+export const UNIT_REF_SELECT =
+  "id, code, name, address, neighborhood, tower, floor, apartment, internal_extra";
+
 // ─── Estados de unidad (Kanban) ─────────────────────────────────────────────
 export const UNIT_STATUSES: UnitStatus[] = [
   "disponible",
@@ -268,19 +278,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     "*": ["view", "create", "update", "delete"],
   },
   recepcion: {
-    units: ["view", "update"],
-    owners: ["view"],
-    bookings: ["view"],
-    guests: ["view", "create", "update"],
-    tickets: ["view", "create"],
-    cleaning: ["view"],
-    concierge: ["view", "create", "update"],
-    messaging: ["view", "create", "update"],
-    crm_inbox: ["view", "create", "update"],
-    crm_rapidos: ["view"],
-    parte_diario: ["view", "update", "create"],
-    date_marks: ["view", "create", "update", "delete"],
-    ical: ["view", "create", "update", "delete"],
+    // TEMPORAL: recepción opera con permisos completos (equivalente a admin).
+    // TODO: rebajar a un set acotado más adelante. El set original era:
+    //   units ["view","update"], owners ["view"], bookings ["view"],
+    //   guests ["view","create","update"], tickets ["view","create"],
+    //   cleaning ["view"], concierge ["view","create","update"],
+    //   messaging ["view","create","update"], crm_inbox ["view","create","update"],
+    //   crm_rapidos ["view"], parte_diario ["view","update","create"],
+    //   date_marks [CRUD], ical [CRUD]
+    "*": ["view", "create", "update", "delete"],
   },
   mantenimiento: {
     units: ["view"],

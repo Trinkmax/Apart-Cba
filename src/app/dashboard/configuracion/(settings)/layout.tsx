@@ -1,11 +1,12 @@
 import { redirect } from "next/navigation";
 import { Settings } from "lucide-react";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
 import { SettingsNav } from "@/components/settings/settings-nav";
 
 export default async function SettingsLayout({ children }: { children: React.ReactNode }) {
   const { role } = await getCurrentOrg();
-  if (role !== "admin") redirect("/dashboard");
+  if (!isAdminLevel(role)) redirect("/dashboard");
 
   return (
     <div className="page-x page-y">

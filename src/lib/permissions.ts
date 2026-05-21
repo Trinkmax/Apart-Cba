@@ -34,3 +34,18 @@ export function can(role: UserRole, resource: Resource, action: Action = "view")
 export function canAny(role: UserRole, checks: Array<[Resource, Action?]>): boolean {
   return checks.some(([res, act]) => can(role, res, act ?? "view"));
 }
+
+/**
+ * TEMPORAL: recepción opera con acceso equivalente a admin.
+ *
+ * Hay gates en el código que usan checks literales `role === "admin"` y NO
+ * pasan por `can()` (grupo Configuración del sidebar, acciones de organización
+ * y equipo, infraestructura de CRM, forzados de reservas). Este helper los
+ * unifica para que recepción los cruce igual que admin.
+ *
+ * Para rebajar recepción más adelante: quitá "recepcion" de este helper y
+ * revisá `DEFAULT_ROLE_PERMISSIONS.recepcion` en `constants.ts`.
+ */
+export function isAdminLevel(role: UserRole | null | undefined): boolean {
+  return role === "admin" || role === "recepcion";
+}

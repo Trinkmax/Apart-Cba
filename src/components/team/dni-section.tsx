@@ -55,9 +55,30 @@ export function DniSection({ userId, canEdit, title = "Documento (DNI)" }: DniSe
     }
   }, [userId]);
 
+  // Carga inicial al montar / al cambiar de userId. Va inline (en vez de
+  // `refetch()`) para que la regla set-state-in-effect vea que el setState es
+  // post-await, y para poder cancelar si el componente se desmonta antes de
+  // que la promesa resuelva.
   useEffect(() => {
-    void refetch();
-  }, [refetch]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const { front: f, back: b } = await getDniSignedUrls(userId);
+        if (cancelled) return;
+        setFront({ url: f?.url ?? null, loading: false });
+        setBack({ url: b?.url ?? null, loading: false });
+        setFetchedAt(Date.now());
+      } catch (e) {
+        if (cancelled) return;
+        setFront({ url: null, loading: false });
+        setBack({ url: null, loading: false });
+        toast.error("No se pudo cargar el DNI", { description: (e as Error).message });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   // Auto-refresh antes de los 60s de expiración de las signed URLs.
   useEffect(() => {
