@@ -10,6 +10,16 @@ import type {
   UnitDefaultMode,
 } from "./types/database";
 
+// ─── Join de unidad para tickets / limpieza ─────────────────────────────────
+/**
+ * Columnas que trae el join `unit:units(...)` en las acciones de tickets de
+ * mantenimiento y tareas de limpieza. Hidrata un `UnitRef` (ver `database.ts`):
+ * lo necesario para que el personal de campo llegue e ingrese a la unidad.
+ * Mantener sincronizado con el `Pick` de `UnitRef`.
+ */
+export const UNIT_REF_SELECT =
+  "id, code, name, address, neighborhood, tower, floor, apartment, internal_extra";
+
 // ─── Estados de unidad (Kanban) ─────────────────────────────────────────────
 export const UNIT_STATUSES: UnitStatus[] = [
   "disponible",

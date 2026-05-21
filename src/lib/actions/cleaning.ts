@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { UNIT_REF_SELECT } from "@/lib/constants";
 import type { CleaningEvent, CleaningStatus, CleaningTask } from "@/lib/types/database";
 
 // Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
@@ -91,7 +92,7 @@ export async function listCleaningTasks(filters?: {
   const admin = createAdminClient();
   let q = admin
     .from("cleaning_tasks")
-    .select(`*, unit:units(id, code, name)`)
+    .select(`*, unit:units(${UNIT_REF_SELECT})`)
     .eq("organization_id", organization.id);
   if (filters?.showArchived) {
     q = q.not("archived_at", "is", null);

@@ -296,6 +296,25 @@ export interface Unit {
   marketplace_rating_count: number;
 }
 
+/**
+ * Subconjunto de `Unit` embebido en los tickets de mantenimiento y en las
+ * tareas de limpieza: los datos que el personal de campo necesita para llegar
+ * e ingresar a la unidad sin consultar a administración. Lo hidrata el join
+ * `unit:units(...)` con las columnas de `UNIT_REF_SELECT` (ver `constants.ts`).
+ */
+export type UnitRef = Pick<
+  Unit,
+  | "id"
+  | "code"
+  | "name"
+  | "address"
+  | "neighborhood"
+  | "tower"
+  | "floor"
+  | "apartment"
+  | "internal_extra"
+>;
+
 export interface UnitOwner {
   id: string;
   unit_id: string;

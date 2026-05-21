@@ -11,9 +11,9 @@ import {
   type HistoryRow,
 } from "@/components/shared/weekly-history-table";
 import { CLEANING_STATUS_META } from "@/lib/constants";
-import type { CleaningTask, CleaningStatus, Unit } from "@/lib/types/database";
+import type { CleaningTask, CleaningStatus, UnitRef } from "@/lib/types/database";
 
-type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
+type CT = CleaningTask & { unit: UnitRef };
 
 export default async function LimpiezaPage({
   searchParams,
@@ -30,7 +30,17 @@ export default async function LimpiezaPage({
   ]);
 
   const pendientes = tasks.filter((t) => t.status === "pendiente").length;
-  const unitsLite = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
+  const unitsLite = units.map((u) => ({
+    id: u.id,
+    code: u.code,
+    name: u.name,
+    address: u.address,
+    neighborhood: u.neighborhood,
+    tower: u.tower,
+    floor: u.floor,
+    apartment: u.apartment,
+    internal_extra: u.internal_extra,
+  }));
 
   const historyRows: HistoryRow[] = showArchived
     ? tasks.map((t) => {
