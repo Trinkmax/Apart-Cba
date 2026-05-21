@@ -8,13 +8,13 @@ import { CLEANING_STATUS_META } from "@/lib/constants";
 import { formatDateTime } from "@/lib/format";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
-import type { CleaningStatus, CleaningTask, Unit } from "@/lib/types/database";
+import type { CleaningStatus, CleaningTask, UnitRef } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { useRealtimeRows } from "@/hooks/use-realtime-rows";
 import { CleaningDetailDialog } from "./cleaning-detail-dialog";
 import { CleaningFormDialog } from "./cleaning-form-dialog";
 
-type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
+type CT = CleaningTask & { unit: UnitRef };
 
 const COLUMNS: KanbanColumn<CleaningStatus>[] = [
   { key: "pendiente", label: CLEANING_STATUS_META.pendiente.label, color: CLEANING_STATUS_META.pendiente.color, icon: Clock, emptyText: "Sin tareas pendientes" },
@@ -27,7 +27,7 @@ const COLUMNS: KanbanColumn<CleaningStatus>[] = [
 interface Props {
   organizationId: string;
   initialTasks: CT[];
-  units: Pick<Unit, "id" | "code" | "name">[];
+  units: UnitRef[];
 }
 
 export function CleaningBoard({ organizationId, initialTasks, units }: Props) {
@@ -35,7 +35,7 @@ export function CleaningBoard({ organizationId, initialTasks, units }: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const unitsById = useMemo(() => {
-    const m = new Map<string, Pick<Unit, "id" | "code" | "name">>();
+    const m = new Map<string, UnitRef>();
     for (const u of units) m.set(u.id, u);
     return m;
   }, [units]);
@@ -43,7 +43,17 @@ export function CleaningBoard({ organizationId, initialTasks, units }: Props) {
   const enrich = useCallback(
     (row: CleaningTask): CT => ({
       ...row,
-      unit: unitsById.get(row.unit_id) ?? { id: row.unit_id, code: "", name: "" },
+      unit: unitsById.get(row.unit_id) ?? {
+        id: row.unit_id,
+        code: "",
+        name: "",
+        address: null,
+        neighborhood: null,
+        tower: null,
+        floor: null,
+        apartment: null,
+        internal_extra: null,
+      },
     }),
     [unitsById]
   );

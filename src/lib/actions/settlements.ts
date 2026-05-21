@@ -378,8 +378,27 @@ async function persistSettlement(opts: {
       .eq("is_manual", false);
   }
 
+  // Reservas cuya fila fue editada a mano: updateSettlementBookingRow marca sus
+  // líneas con is_manual=true, así que ya quedaron preservadas arriba. NO volver
+  // a insertar la línea automática de esas reservas — duplicaría ingreso y
+  // comisión para el mismo ref_id, y entonces el editor mostraría la suma de
+  // ambas líneas mientras la edición solo toca una ("se guarda pero no cambia").
+  const editedBookingRefIds = new Set(
+    manualLines
+      .filter((l) => l.ref_type === "booking" && l.ref_id != null)
+      .map((l) => l.ref_id as string),
+  );
+  const autoLinesToInsert = autoLines.filter(
+    (l) =>
+      !(
+        l.ref_type === "booking" &&
+        l.ref_id != null &&
+        editedBookingRefIds.has(l.ref_id)
+      ),
+  );
+
   const totals = computeTotals([
-    ...autoLines.map((l) => ({ amount: l.amount, sign: l.sign, line_type: l.line_type })),
+    ...autoLinesToInsert.map((l) => ({ amount: l.amount, sign: l.sign, line_type: l.line_type })),
     ...manualLines.map((l) => ({
       amount: Number(l.amount),
       sign: l.sign,
@@ -417,9 +436,9 @@ async function persistSettlement(opts: {
     settlementId = data.id as string;
   }
 
-  if (autoLines.length > 0) {
+  if (autoLinesToInsert.length > 0) {
     const { error } = await admin.from("settlement_lines").insert(
-      autoLines.map((l, idx) => ({
+      autoLinesToInsert.map((l, idx) => ({
         settlement_id: settlementId,
         line_type: l.line_type,
         ref_type: l.ref_type,
@@ -440,7 +459,7 @@ async function persistSettlement(opts: {
   for (let i = 0; i < manualLines.length; i++) {
     await admin
       .from("settlement_lines")
-      .update({ display_order: autoLines.length + i })
+      .update({ display_order: autoLinesToInsert.length + i })
       .eq("id", manualLines[i].id);
   }
 
@@ -1252,23 +1271,45 @@ export async function updateSettlementBookingRow(
   >;
   if (group.length === 0) throw new Error("Reserva no encontrada en la liquidación");
 
-  const revenue =
-    group.find(
-      (g) =>
-        g.sign === "+" &&
-        (g.line_type === "booking_revenue" ||
-          g.line_type === "monthly_rent_fraction"),
-    ) ?? group.find((g) => g.sign === "+");
+  // Una reserva puede tener líneas de ingreso/comisión DUPLICADAS para el mismo
+  // ref_id (regeneraciones previas las generaban). statement-model las SUMA al
+  // dibujar la fila, así que el editor abre con esa suma; pero la edición solo
+  // toca una línea. Tomamos la primera como canónica y colapsamos las sobrantes
+  // —igual que ya se hace con los gastos— para que la liquidación quede sana y
+  // la edición se refleje 1:1.
+  const primaryRevenueLines = group.filter(
+    (g) =>
+      g.sign === "+" &&
+      (g.line_type === "booking_revenue" ||
+        g.line_type === "monthly_rent_fraction"),
+  );
+  const revenueLines =
+    primaryRevenueLines.length > 0
+      ? primaryRevenueLines
+      : group.filter((g) => g.sign === "+");
+  const revenue = revenueLines[0];
   if (!revenue) throw new Error("La reserva no tiene línea de ingreso");
-  const commissionLine = group.find((g) => g.line_type === "commission");
+  const commissionLines = group.filter((g) => g.line_type === "commission");
+  const commissionLine = commissionLines[0];
   const deductionLines = group.filter(
     (g) => g.sign === "-" && g.line_type !== "commission",
   );
+  // Líneas de ingreso/comisión duplicadas a eliminar (queda solo la primera).
+  const staleDuplicateIds = [
+    ...revenueLines.slice(1),
+    ...commissionLines.slice(1),
+  ].map((g) => g.id);
 
   const oldMeta: SettlementLineMeta = revenue.meta ?? {};
   const oldNights = oldMeta.nights ?? null;
-  const oldGross = Number(revenue.amount);
-  const oldCommission = commissionLine ? Number(commissionLine.amount) : 0;
+  // Los valores "viejos" para el historial reflejan lo que el usuario veía en
+  // la planilla: la SUMA del grupo (statement-model agrupa por ref_id y suma).
+  const oldGross = round2(
+    revenueLines.reduce((a, g) => a + Number(g.amount), 0),
+  );
+  const oldCommission = round2(
+    commissionLines.reduce((a, g) => a + Number(g.amount), 0),
+  );
   const oldExpenses = round2(
     deductionLines.reduce((a, g) => a + Number(g.amount), 0),
   );
@@ -1384,6 +1425,18 @@ export async function updateSettlementBookingRow(
         "id",
         deductionLines.map((g) => g.id),
       );
+  }
+
+  // 4) Eliminar las líneas de ingreso/comisión duplicadas del grupo. Esto
+  //    auto-sana las liquidaciones afectadas por la duplicación histórica: con
+  //    una sola línea de cada tipo, recomputeSettlementTotals vuelve a dar el
+  //    total correcto y la fila pasa a mostrar exactamente lo editado.
+  if (staleDuplicateIds.length > 0) {
+    const { error } = await admin
+      .from("settlement_lines")
+      .delete()
+      .in("id", staleDuplicateIds);
+    if (error) throw new Error(error.message);
   }
 
   return reconcileAfterEdit({

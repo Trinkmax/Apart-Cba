@@ -4,7 +4,6 @@ export interface ResendInboundEmail {
   subject: string;
   html: string;
   text: string;
-  headers: Record<string, string>;
 }
 
 export type ParsedEventType = "new_booking" | "cancellation";
@@ -20,6 +19,9 @@ export interface ParsedBookingEvent {
   guestPhone?: string;
   totalAmount?: number;
   currency?: string;
+  /** ID del listing en la OTA (Airbnb: número de listing, Booking: hotel_id). Si el parser lo extrae del email, el matcher hace lookup determinístico contra ota_listings antes del fuzzy. */
+  externalListingId?: string;
+  /** Texto libre del listing (nombre, título). Fallback fuzzy contra units.name/marketplace_title. */
   listingHint?: string;
 }
 

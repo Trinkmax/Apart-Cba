@@ -15,9 +15,13 @@ export function SyncAllButton() {
     startTransition(async () => {
       try {
         const r = await syncAllFeeds();
-        toast.success(`Sync completo`, {
-          description: `${r.totalImported} importadas, ${r.totalSkipped} omitidas, ${r.errors} errores`,
-        });
+        const parts = [
+          `${r.totalImported} importadas`,
+          `${r.totalSkipped} omitidas`,
+        ];
+        if (r.totalCancelled > 0) parts.push(`${r.totalCancelled} canceladas`);
+        if (r.errors > 0) parts.push(`${r.errors} errores`);
+        toast.success("Sync completo", { description: parts.join(" · ") });
         router.refresh();
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });

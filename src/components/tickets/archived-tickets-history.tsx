@@ -15,10 +15,11 @@ import type {
   Owner,
   TicketStatus,
   Unit,
+  UnitRef,
 } from "@/lib/types/database";
 
 type TicketWithUnit = MaintenanceTicket & {
-  unit: Pick<Unit, "id" | "code" | "name">;
+  unit: UnitRef;
 };
 
 interface Props {

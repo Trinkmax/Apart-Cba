@@ -10,6 +10,29 @@ function normalize(s: string): string {
     .trim();
 }
 
+/**
+ * Lookup determin\u00edstico contra ota_listings. Si la OTA puso el listing_id en
+ * el email y el operador configur\u00f3 el mapping en /dashboard/channel-manager,
+ * resuelve sin ambig\u00fcedad. Se llama antes del matcher fuzzy.
+ */
+export async function matchUnitByListingId(
+  admin: AdminClient,
+  orgId: string,
+  provider: ParsedBookingEvent["source"],
+  externalListingId: string | undefined,
+): Promise<string | null> {
+  if (!externalListingId) return null;
+  const { data } = await admin
+    .from("ota_listings")
+    .select("unit_id")
+    .eq("organization_id", orgId)
+    .eq("provider", provider)
+    .eq("external_listing_id", externalListingId)
+    .eq("active", true)
+    .maybeSingle();
+  return data?.unit_id ?? null;
+}
+
 function levenshtein(a: string, b: string): number {
   const m = a.length;
   const n = b.length;

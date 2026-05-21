@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatDate, formatTimeAgo } from "@/lib/format";
 import { MobileTicketEditor } from "@/components/tickets/mobile-ticket-editor";
+import { UnitAccessInfo } from "@/components/units/unit-access-info";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -77,6 +78,7 @@ export default async function MobileTicketDetailPage({ params }: PageProps) {
               <span>· {ticket.unit.name}</span>
             </div>
           )}
+          {ticket.unit && <UnitAccessInfo unit={ticket.unit} />}
           {ticket.description && (
             <p className="text-sm leading-relaxed whitespace-pre-wrap text-foreground/90">
               {ticket.description}
