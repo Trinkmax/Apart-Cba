@@ -102,7 +102,7 @@ interface DniInvitePickerProps {
 - Acepta click (input `type="file"` oculto, `accept` armado desde `ALLOWED_DNI_MIME`) y drag & drop.
 - Valida con `validateDniFile`; si falla, `toast.error(mensaje)` y no cambia el estado.
 - "Quitar" sólo limpia el estado local (`onChange(side, null)`) — **no** hay llamada al server.
-- **Object URL:** se crea con `URL.createObjectURL(file)` dentro de un `useEffect` por slot y se **revoca en el cleanup** (al cambiar el archivo o al desmontar) para no filtrar memoria.
+- **Object URL:** se crea con `URL.createObjectURL` en los handlers de elegir/quitar archivo y se **revoca** en un `useEffect` de cleanup (al reemplazarlo o al desmontar) para no filtrar memoria. No se crea dentro del effect, para no violar la regla de lint `react-hooks/set-state-in-effect`.
 - Respeta `disabled`: deshabilita click, drop y botones mientras el invite está en curso.
 
 No tiene estados de fetch ni skeleton (el archivo es local) y no llama a `uploadDni` (eso lo orquesta el dialog).

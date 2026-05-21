@@ -14,13 +14,18 @@
 
 ## Enfoque de testing
 
-Este repo **no tiene test runner** (ver `CLAUDE.md`). No se escriben tests unitarios. La verificación de cada tarea es:
+Este repo **no tiene test runner** (ver `CLAUDE.md`). No se escriben tests unitarios. La verificación de cada tarea es `npx tsc --noEmit` + `npm run lint`, más la verificación manual de la Tarea 4.
 
-- `npx tsc --noEmit` — sin errores de tipos.
-- `npm run lint` — sin errores de ESLint.
-- La **Tarea 4** es verificación manual en el navegador.
+### Baseline (medido en la rama `feat/dni-invitacion-equipo` antes de empezar)
 
-> El working tree puede tener cambios previos no relacionados con este plan. Si `tsc` o `lint` reportan errores en archivos que **no** tocaste, son preexistentes — concentrate en que los archivos de este plan queden limpios.
+- **`npx tsc --noEmit` → 0 errores.** Cualquier error de tipos que aparezca es **nuevo** y hay que corregirlo.
+- **`npm run lint` → `✖ 6 problems (1 error, 5 warnings)`.** Estos 6 son **preexistentes** (WIP del usuario / código ya commiteado) y **NO se tocan**:
+  1. `src/app/api/cron/from-pg/route.ts:165` — warning, unused var.
+  2. `src/components/forms/guest/new-guest-form.tsx:112` — warning, `react-hooks/incompatible-library`.
+  3. **`src/components/team/dni-section.tsx` — error, `react-hooks/set-state-in-effect` sobre `void refetch()`.** ⚠️ La Tarea 1 edita este archivo en *otras* líneas; **dejá este error intacto** (su número de línea se corre al borrar líneas, pero sigue siendo el mismo error).
+  4-6. `src/lib/crm/providers/instagram.ts` — 3 warnings, unused vars.
+
+> `npm run lint` **sale con código ≠ 0** por ese 1 error preexistente: es esperado. Una tarea **pasa** la verificación de lint si el conteo total sigue siendo exactamente **`6 problems (1 error, 5 warnings)`**. Si aparece algo nuevo (7+ problemas, o un 2º error), corregilo en tus archivos — **sin tocar los 6 preexistentes**.
 
 ---
 
@@ -213,7 +218,7 @@ Expected: sin errores en `src/lib/dni-upload.ts`, `src/lib/actions/team-dni.ts` 
 - [ ] **Step 8: Lint**
 
 Run: `npm run lint`
-Expected: sin errores ni warnings nuevos.
+Expected: `✖ 6 problems (1 error, 5 warnings)` — mismo conteo que el baseline. `dni-section.tsx` conserva su error preexistente (`void refetch()`) — **no lo toques**. Sin problemas nuevos.
 
 - [ ] **Step 9: Commit**
 
@@ -324,17 +329,14 @@ function InvitePickerSlot({
   const [isDragging, setIsDragging] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  // Object URL para previsualizar el archivo local. Se revoca al cambiar de
-  // archivo o al desmontar para no filtrar memoria.
+  // El object URL se crea en los handlers (abajo), NO dentro de un effect:
+  // la regla `react-hooks/set-state-in-effect` prohíbe llamar setState dentro
+  // de un useEffect. Este effect sólo *revoca* el URL —al reemplazarlo o al
+  // desmontar el slot— para no filtrar memoria.
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+    if (!previewUrl) return;
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
   function handleFile(picked: File) {
     const err = validateDniFile(picked);
@@ -342,7 +344,13 @@ function InvitePickerSlot({
       toast.error(err);
       return;
     }
+    setPreviewUrl(URL.createObjectURL(picked));
     onChange(side, picked);
+  }
+
+  function handleRemove() {
+    setPreviewUrl(null);
+    onChange(side, null);
   }
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -426,7 +434,7 @@ function InvitePickerSlot({
             variant="ghost"
             size="sm"
             className="h-7 px-2.5 text-xs text-destructive"
-            onClick={() => onChange(side, null)}
+            onClick={handleRemove}
             disabled={disabled}
           >
             <X size={12} /> Quitar
@@ -446,7 +454,7 @@ Expected: sin errores en `src/components/team/dni-invite-picker.tsx`.
 - [ ] **Step 3: Lint**
 
 Run: `npm run lint`
-Expected: sin errores ni warnings nuevos.
+Expected: `✖ 6 problems (1 error, 5 warnings)` — mismo conteo que el baseline, sin problemas nuevos en los archivos de esta tarea.
 
 - [ ] **Step 4: Commit**
 
@@ -690,7 +698,7 @@ Expected: sin errores en `src/components/team/invite-dialog.tsx`.
 - [ ] **Step 3: Lint**
 
 Run: `npm run lint`
-Expected: sin errores ni warnings nuevos.
+Expected: `✖ 6 problems (1 error, 5 warnings)` — mismo conteo que el baseline, sin problemas nuevos en los archivos de esta tarea.
 
 - [ ] **Step 4: Commit**
 
