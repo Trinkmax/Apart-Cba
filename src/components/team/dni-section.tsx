@@ -17,11 +17,10 @@ import {
   deleteDni,
   getDniSignedUrls,
 } from "@/lib/actions/team-dni";
+import { ALLOWED_DNI_MIME, validateDniFile } from "@/lib/dni-upload";
 
 type Side = "front" | "back";
 
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 const REFRESH_MS = 50_000; // refrescar signed URLs antes de los 60s de TTL
 
 interface DniSectionProps {
@@ -131,14 +130,8 @@ function DniSlot({
   const [isDragging, setIsDragging] = useState(false);
   const [isPending, startTransition] = useTransition();
 
-  function validate(file: File): string | null {
-    if (!ALLOWED_TYPES.includes(file.type)) return "Solo JPG, PNG o WebP";
-    if (file.size > MAX_BYTES) return "Máximo 5 MB";
-    return null;
-  }
-
   function handleFile(file: File) {
-    const err = validate(file);
+    const err = validateDniFile(file);
     if (err) {
       toast.error(err);
       return;
@@ -239,7 +232,7 @@ function DniSlot({
           <input
             ref={inputRef}
             type="file"
-            accept={ALLOWED_TYPES.join(",")}
+            accept={ALLOWED_DNI_MIME.join(",")}
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
