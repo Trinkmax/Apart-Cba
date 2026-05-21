@@ -47,6 +47,7 @@ import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { EventTimeline } from "@/components/shared/event-timeline";
+import { UnitAccessInfo } from "@/components/units/unit-access-info";
 import { TicketPhotosSection } from "./ticket-photos-section";
 import type {
   MaintenanceTicket,
@@ -54,6 +55,7 @@ import type {
   TicketEvent,
   TicketStatus,
   Unit,
+  UnitRef,
   UserRole,
 } from "@/lib/types/database";
 
@@ -69,7 +71,7 @@ type TicketEventWithActor = TicketEvent & {
   actor: { full_name: string | null } | null;
 };
 
-type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
+type TicketWithUnit = MaintenanceTicket & { unit: UnitRef };
 
 interface Props {
   ticket: TicketWithUnit | null;
@@ -347,10 +349,13 @@ export function TicketDetailDialog({
                 </SelectContent>
               </Select>
             ) : (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="font-mono font-semibold">{ticket.unit.code}</span>
-                <span className="text-muted-foreground">·</span>
-                <span>{ticket.unit.name}</span>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="font-mono font-semibold">{ticket.unit.code}</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span>{ticket.unit.name}</span>
+                </div>
+                <UnitAccessInfo unit={ticket.unit} />
               </div>
             )}
           </Field>

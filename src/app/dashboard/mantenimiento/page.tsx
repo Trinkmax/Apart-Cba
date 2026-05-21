@@ -10,9 +10,9 @@ import { TicketFormDialog } from "@/components/tickets/ticket-form-dialog";
 import { TicketsBoard } from "@/components/tickets/tickets-board";
 import { ArchivedTicketsHistory } from "@/components/tickets/archived-tickets-history";
 import { HistoryToggle } from "@/components/shared/history-toggle";
-import type { MaintenanceTicket, Unit } from "@/lib/types/database";
+import type { MaintenanceTicket, UnitRef } from "@/lib/types/database";
 
-type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
+type TicketWithUnit = MaintenanceTicket & { unit: UnitRef };
 
 export default async function MantenimientoPage({
   searchParams,
@@ -83,7 +83,17 @@ export default async function MantenimientoPage({
         <TicketsBoard
           organizationId={organization.id}
           initialTickets={tickets as TicketWithUnit[]}
-          units={units.map((u) => ({ id: u.id, code: u.code, name: u.name }))}
+          units={units.map((u) => ({
+            id: u.id,
+            code: u.code,
+            name: u.name,
+            address: u.address,
+            neighborhood: u.neighborhood,
+            tower: u.tower,
+            floor: u.floor,
+            apartment: u.apartment,
+            internal_extra: u.internal_extra,
+          }))}
           owners={owners}
           members={members}
           occupancyByUnit={occupancyByUnit}

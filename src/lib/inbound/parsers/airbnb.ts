@@ -1,8 +1,14 @@
 import type { InboundEmailParser, ResendInboundEmail, ParsedEvent } from "../types";
+import { htmlToText, normalizeDate, parseAmount } from "../parse-utils";
+
+// Formatos de fecha aceptados: ISO, "May 15, 2026", "15 de mayo de 2026", "15 mayo 2026".
+const DATE =
+  "(\\d{4}-\\d{2}-\\d{2}|[A-Za-zÀ-ÿ]+\\s+\\d{1,2},?\\s*\\d{4}|\\d{1,2}\\s+(?:de\\s+)?[A-Za-zÀ-ÿ]+\\s+(?:de\\s+)?\\d{4})";
 
 /**
  * Parser para emails de confirmación y cancelación de Airbnb.
- * Soporta subjects en inglés y español.
+ * Corre sobre el texto plano del email (HTML convertido) para evitar falsos
+ * positivos contra tags/estilos. Soporta subjects en inglés y español.
  */
 export const airbnbParser: InboundEmailParser = {
   name: "airbnb",
@@ -13,77 +19,65 @@ export const airbnbParser: InboundEmailParser = {
 
   parse(email: ResendInboundEmail): ParsedEvent | null {
     const subject = email.subject ?? "";
-    const body = email.html || email.text || "";
+    const body = htmlToText(email.html) || email.text || "";
 
-    // Cancellation
-    if (/cancel(led|lation|ada)/i.test(subject)) {
-      const confMatch = body.match(/(?:confirmation code|código de confirmación)[:\s]*([A-Z0-9]{8,12})/i);
-      if (confMatch) {
-        return {
-          type: "cancellation",
-          source: "airbnb",
-          externalId: confMatch[1],
-        };
-      }
-      return null;
+    // Cancelación
+    if (/cancel(led|lation|ada|aci[oó]n)/i.test(subject)) {
+      const code = confirmationCode(body);
+      return code ? { type: "cancellation", source: "airbnb", externalId: code } : null;
     }
 
-    // New booking (Reservation Confirmed / Reserva confirmada / New reservation)
+    // Reserva nueva (Reservation confirmed / Reserva confirmada / etc.)
     if (!/reserv|booking|confirm/i.test(subject)) return null;
 
-    // Confirmation code
-    const confCode =
-      body.match(/(?:confirmation code|código de confirmación)[:\s]*([A-Z0-9]{8,12})/i)?.[1] ??
-      body.match(/(?:HM)[A-Z0-9]{6,10}/)?.[0];
-    if (!confCode) return null;
+    const externalId = confirmationCode(body);
+    if (!externalId) return null;
 
-    // Dates — try multiple formats
-    // "Check-in: May 15, 2026" or "Llegada: 15 de mayo de 2026" or "2026-05-15"
-    const checkInMatch =
-      body.match(/(?:check.?in|llegada|check-in)[:\s]*(\d{4}-\d{2}-\d{2})/i) ??
-      body.match(/(?:check.?in|llegada)[:\s]*(\w+ \d{1,2},?\s*\d{4})/i);
-    const checkOutMatch =
-      body.match(/(?:check.?out|salida|check-out)[:\s]*(\d{4}-\d{2}-\d{2})/i) ??
-      body.match(/(?:check.?out|salida)[:\s]*(\w+ \d{1,2},?\s*\d{4})/i);
-
-    const checkIn = checkInMatch ? normalizeDate(checkInMatch[1]) : null;
-    const checkOut = checkOutMatch ? normalizeDate(checkOutMatch[1]) : null;
+    const checkIn = matchDate(body, "check.?in|llegada|entrada");
+    const checkOut = matchDate(body, "check.?out|salida");
     if (!checkIn || !checkOut) return null;
 
-    // Guest name
     const guestName =
-      body.match(/(?:guest|huésped|nombre)[:\s]*([A-Za-zÀ-ÿ\s]+?)(?:<|,|\n|\r|$)/i)?.[1]?.trim() ??
-      "Huésped Airbnb";
+      body
+        .match(/(?:guest|hu[ée]sped|nombre)[:\s]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'\s]{1,48}?)(?:\n|[·|]|$)/i)?.[1]
+        ?.trim() || "Huésped Airbnb";
 
-    // Amount
-    const amountMatch = body.match(/(?:total|monto|payout)[:\s]*\$?([\d,.]+)/i);
-    const totalAmount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, "")) : undefined;
-
-    // Listing hint
-    const listingHint =
-      body.match(/(?:listing|propiedad|alojamiento)[:\s]*([^\n<]+)/i)?.[1]?.trim();
+    const amount = body.match(/(?:total|monto|payout|ganancia)[:\s]*\$?\s*([\d.,]+)/i)?.[1];
+    const listingHint = body
+      .match(/(?:listing|propiedad|alojamiento)[:\s]+([^\n·|]{2,80})/i)?.[1]
+      ?.trim();
+    // Listing ID determinístico — URL airbnb.com/rooms/<id> en el cuerpo.
+    const externalListingId = body.match(/airbnb\.[a-z.]+\/rooms\/(\d{4,14})/i)?.[1];
 
     return {
       type: "new_booking",
       source: "airbnb",
-      externalId: confCode,
+      externalId,
       checkIn,
       checkOut,
       guestName,
-      totalAmount,
+      totalAmount: parseAmount(amount),
+      externalListingId,
       listingHint,
     };
   },
 };
 
-function normalizeDate(raw: string): string | null {
-  // Already ISO
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-  try {
-    const d = new Date(raw);
-    if (isNaN(d.getTime())) return null;
-    return d.toISOString().slice(0, 10);
-  } catch {
-    return null;
-  }
+/**
+ * Código de confirmación de Airbnb. Prioriza el match con etiqueta; el fallback
+ * "HM..." está anclado al prefijo real de los códigos de Airbnb para no matchear
+ * texto cualquiera.
+ */
+function confirmationCode(body: string): string | null {
+  const labeled = body.match(
+    /(?:confirmation code|c[oó]digo de confirmaci[oó]n)[:\s]+([A-Z0-9]{6,12})/i,
+  )?.[1];
+  if (labeled) return labeled.toUpperCase();
+  const hm = body.match(/\bHM[A-Z0-9]{6,10}\b/)?.[0];
+  return hm ? hm.toUpperCase() : null;
+}
+
+function matchDate(body: string, labels: string): string | null {
+  const m = body.match(new RegExp(`(?:${labels})[:\\s]+${DATE}`, "i"));
+  return m ? normalizeDate(m[1]) : null;
 }

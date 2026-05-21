@@ -8,14 +8,14 @@ import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatTimeAgo, formatMoney } from "@/lib/format";
 import { changeTicketStatus } from "@/lib/actions/tickets";
 import { cn } from "@/lib/utils";
-import type { MaintenanceTicket, Owner, TicketStatus, Unit } from "@/lib/types/database";
+import type { MaintenanceTicket, Owner, TicketStatus, UnitRef } from "@/lib/types/database";
 import type { CurrentOccupancy } from "@/lib/actions/bookings";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { useRealtimeRows } from "@/hooks/use-realtime-rows";
 import { TicketDetailDialog, type TicketMember } from "./ticket-detail-dialog";
 import { TicketFormDialog } from "./ticket-form-dialog";
 
-type TicketWithUnit = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
+type TicketWithUnit = MaintenanceTicket & { unit: UnitRef };
 
 const COLUMNS: KanbanColumn<TicketStatus>[] = [
   { key: "abierto", label: TICKET_STATUS_META.abierto.label, color: TICKET_STATUS_META.abierto.color, icon: AlertTriangle, emptyText: "Sin tickets abiertos" },
@@ -28,7 +28,7 @@ const COLUMNS: KanbanColumn<TicketStatus>[] = [
 interface Props {
   organizationId: string;
   initialTickets: TicketWithUnit[];
-  units: Pick<Unit, "id" | "code" | "name">[];
+  units: UnitRef[];
   owners: Owner[];
   members?: TicketMember[];
   occupancyByUnit: Record<string, CurrentOccupancy>;
@@ -39,7 +39,7 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, me
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
 
   const unitsById = useMemo(() => {
-    const m = new Map<string, Pick<Unit, "id" | "code" | "name">>();
+    const m = new Map<string, UnitRef>();
     for (const u of units) m.set(u.id, u);
     return m;
   }, [units]);
@@ -47,7 +47,17 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, me
   const enrich = useCallback(
     (row: MaintenanceTicket): TicketWithUnit => ({
       ...row,
-      unit: unitsById.get(row.unit_id) ?? { id: row.unit_id, code: "", name: "" },
+      unit: unitsById.get(row.unit_id) ?? {
+        id: row.unit_id,
+        code: "",
+        name: "",
+        address: null,
+        neighborhood: null,
+        tower: null,
+        floor: null,
+        apartment: null,
+        internal_extra: null,
+      },
     }),
     [unitsById]
   );

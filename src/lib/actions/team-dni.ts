@@ -3,11 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
+import { ALLOWED_DNI_MIME, MAX_DNI_BYTES } from "@/lib/dni-upload";
 import { requireSession } from "./auth";
 
 const BUCKET = "team-dni";
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 const SIGNED_URL_TTL_SECONDS = 60;
 
 type Side = "front" | "back";
@@ -82,10 +81,10 @@ export async function uploadDni(
   if (!sideParsed.success) return { ok: false, error: "side inválido" };
   if (!(file instanceof File)) return { ok: false, error: "No se recibió archivo" };
 
-  if (!ALLOWED_TYPES.includes(file.type)) {
+  if (!ALLOWED_DNI_MIME.includes(file.type)) {
     return { ok: false, error: "Solo JPG, PNG o WebP" };
   }
-  if (file.size > MAX_BYTES) {
+  if (file.size > MAX_DNI_BYTES) {
     return { ok: false, error: "Máximo 5 MB" };
   }
   const ext = extFromMime(file.type);

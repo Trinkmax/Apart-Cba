@@ -10,13 +10,14 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { UnitAccessInfo } from "@/components/units/unit-access-info";
 import { changeCleaningStatus, updateCleaningChecklist } from "@/lib/actions/cleaning";
 import { CLEANING_STATUS_META } from "@/lib/constants";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { CleaningTask, Unit } from "@/lib/types/database";
+import type { CleaningTask, UnitRef } from "@/lib/types/database";
 
-type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
+type CT = CleaningTask & { unit: UnitRef };
 type ChecklistItem = { item: string; done: boolean; note?: string };
 
 export function MobileCleaningList({ tasks }: { tasks: CT[] }) {
@@ -107,6 +108,8 @@ export function MobileCleaningList({ tasks }: { tasks: CT[] }) {
 
             {isOpen && (
               <div className="border-t p-4 space-y-3 bg-muted/20 animate-fade-up">
+                <UnitAccessInfo unit={t.unit} />
+
                 {checklist.length > 0 && (
                   <div className="space-y-2">
                     {checklist.map((item, idx) => (

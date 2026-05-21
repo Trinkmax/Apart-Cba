@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { createAdminClient } from "@/lib/supabase/server";
+import { isAdminLevel } from "@/lib/permissions";
 import { gatewayConfigured, gatewayFetch } from "@/lib/crm/baileys-gateway";
 import type { CrmBaileysSession, CrmChannel } from "@/lib/types/database";
 
@@ -13,7 +14,7 @@ type Admin = ReturnType<typeof createAdminClient>;
 async function adminGuard() {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
   return { organization };
 }
 

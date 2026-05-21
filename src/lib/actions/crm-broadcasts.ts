@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { createAdminClient } from "@/lib/supabase/server";
+import { isAdminLevel } from "@/lib/permissions";
 import { normalizePhone } from "@/lib/crm/phone";
 import { renderTemplate } from "@/lib/crm/render-vars";
 import { sendMessageNow } from "@/lib/crm/message-sender";
@@ -105,7 +106,7 @@ const createSchema = z.object({
 export async function createBroadcast(input: z.infer<typeof createSchema>): Promise<{ id: string; recipientsCount: number }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const v = createSchema.parse(input);
   const admin = createAdminClient();
@@ -304,7 +305,7 @@ function resolveParams(
 export async function startBroadcast(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   const { data: bcast } = await admin
@@ -334,7 +335,7 @@ export async function startBroadcast(id: string) {
 export async function cancelBroadcast(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
   const admin = createAdminClient();
   await admin
     .from("crm_broadcasts")
@@ -353,7 +354,7 @@ export async function cancelBroadcast(id: string) {
 export async function deleteBroadcast(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
   const admin = createAdminClient();
   await admin.from("crm_broadcasts").delete().eq("id", id).eq("organization_id", organization.id);
   revalidatePath("/dashboard/crm/difusiones");

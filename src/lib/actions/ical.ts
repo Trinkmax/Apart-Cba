@@ -108,7 +108,9 @@ export async function deleteIcalFeed(id: string) {
   revalidatePath("/dashboard/channel-manager");
 }
 
-export async function syncIcalFeed(feedId: string): Promise<{ imported: number; skipped: number }> {
+export async function syncIcalFeed(
+  feedId: string,
+): Promise<{ imported: number; skipped: number; cancelled: number }> {
   await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
@@ -126,10 +128,15 @@ export async function syncIcalFeed(feedId: string): Promise<{ imported: number; 
 
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");
-  return { imported: result.imported, skipped: result.skipped };
+  return { imported: result.imported, skipped: result.skipped, cancelled: result.cancelled };
 }
 
-export async function syncAllFeeds(): Promise<{ totalImported: number; totalSkipped: number; errors: number }> {
+export async function syncAllFeeds(): Promise<{
+  totalImported: number;
+  totalSkipped: number;
+  totalCancelled: number;
+  errors: number;
+}> {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
   const { data: feeds } = await admin
@@ -140,17 +147,19 @@ export async function syncAllFeeds(): Promise<{ totalImported: number; totalSkip
 
   let totalImported = 0;
   let totalSkipped = 0;
+  let totalCancelled = 0;
   let errors = 0;
   for (const f of feeds ?? []) {
     const r = await syncSingleFeed(admin, f, "manual");
     totalImported += r.imported;
     totalSkipped += r.skipped;
+    totalCancelled += r.cancelled;
     if (r.error) errors++;
   }
 
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");
-  return { totalImported, totalSkipped, errors };
+  return { totalImported, totalSkipped, totalCancelled, errors };
 }
 
 export async function getSyncRunsForFeed(feedId: string, limit = 20): Promise<IcalSyncRun[]> {

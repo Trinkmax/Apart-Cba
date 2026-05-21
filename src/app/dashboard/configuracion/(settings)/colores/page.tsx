@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
 import { BookingStatusColorsForm } from "@/components/settings/booking-status-colors-form";
 
 export default async function ColoresPage() {
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") redirect("/dashboard");
+  if (!isAdminLevel(role)) redirect("/dashboard");
 
   return (
     <section className="space-y-5">

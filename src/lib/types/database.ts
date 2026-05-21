@@ -122,6 +122,10 @@ export type NotificationType =
   | "lease_ending_soon"
   | "lease_split_created"
   | "task_reminder"
+  | "inbound_booking_pending"
+  | "inbound_booking_cancelled"
+  | "inbound_booking_unmatched_unit"
+  | "channel_feed_error"
   | "manual"
   | "other";
 
@@ -295,6 +299,25 @@ export interface Unit {
   marketplace_rating_avg: number;
   marketplace_rating_count: number;
 }
+
+/**
+ * Subconjunto de `Unit` embebido en los tickets de mantenimiento y en las
+ * tareas de limpieza: los datos que el personal de campo necesita para llegar
+ * e ingresar a la unidad sin consultar a administración. Lo hidrata el join
+ * `unit:units(...)` con las columnas de `UNIT_REF_SELECT` (ver `constants.ts`).
+ */
+export type UnitRef = Pick<
+  Unit,
+  | "id"
+  | "code"
+  | "name"
+  | "address"
+  | "neighborhood"
+  | "tower"
+  | "floor"
+  | "apartment"
+  | "internal_extra"
+>;
 
 export interface UnitOwner {
   id: string;
@@ -711,7 +734,9 @@ export interface IcalSyncRun {
   finished_at: string | null;
   status: "running" | "ok" | "error";
   imported_count: number;
+  updated_count: number;
   skipped_count: number;
+  conflict_count: number;
   error_message: string | null;
   trigger_source: "cron" | "manual" | "create_feed";
 }
@@ -731,6 +756,26 @@ export type IcalFeedWithHealth = IcalFeed & {
   health: IcalFeedHealthStatus;
   errors_24h: number;
   last_ok_at: string | null;
+};
+
+export type OtaProvider = "airbnb" | "booking" | "expedia" | "vrbo" | "otro";
+
+export interface OtaListing {
+  id: string;
+  organization_id: string;
+  unit_id: string;
+  provider: OtaProvider;
+  external_listing_id: string;
+  external_listing_url: string | null;
+  external_account_email: string | null;
+  label: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type OtaListingWithUnit = OtaListing & {
+  unit: Pick<Unit, "id" | "code" | "name">;
 };
 
 export interface Amenity {

@@ -36,14 +36,15 @@ import {
 } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
 import { EventTimeline } from "@/components/shared/event-timeline";
+import { UnitAccessInfo } from "@/components/units/unit-access-info";
 import type {
   CleaningEvent,
   CleaningStatus,
   CleaningTask,
-  Unit,
+  UnitRef,
 } from "@/lib/types/database";
 
-type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
+type CT = CleaningTask & { unit: UnitRef };
 type ChecklistItem = { item: string; done: boolean; note?: string };
 type CleaningEventWithActor = CleaningEvent & {
   actor: { full_name: string | null } | null;
@@ -201,6 +202,8 @@ export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDe
         <Separator />
 
         <div className="px-6 py-5 space-y-5">
+          <UnitAccessInfo unit={task.unit} />
+
           {/* Status pills */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Mover a:</span>

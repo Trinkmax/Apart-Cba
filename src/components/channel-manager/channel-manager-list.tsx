@@ -27,7 +27,9 @@ export function ChannelManagerList({ feeds }: { feeds: IcalFeedWithHealth[] }) {
     startTransition(async () => {
       try {
         const r = await syncIcalFeed(id);
-        toast.success(`Sync OK · ${r.imported} importadas, ${r.skipped} omitidas`);
+        const parts = [`${r.imported} importadas`, `${r.skipped} omitidas`];
+        if (r.cancelled > 0) parts.push(`${r.cancelled} canceladas`);
+        toast.success("Sync OK", { description: parts.join(" · ") });
         router.refresh();
       } catch (e) {
         toast.error("Error sincronizando", { description: (e as Error).message });

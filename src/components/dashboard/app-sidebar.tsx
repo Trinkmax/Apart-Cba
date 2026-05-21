@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/sidebar";
 import { OrgBrand } from "@/components/brand/org-brand";
 import { cn } from "@/lib/utils";
-import { can, type Resource } from "@/lib/permissions";
+import { can, isAdminLevel, type Resource } from "@/lib/permissions";
 import type { Organization, OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
 
 interface NavItem {
@@ -107,7 +107,7 @@ interface AppSidebarProps {
 
 export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
   const pathname = usePathname();
-  const isAdmin = currentRole === "admin";
+  const isAdmin = isAdminLevel(currentRole);
 
   // El item activo es el de href más largo que coincida con el pathname.
   // Evita que "Unidades" se marque también cuando estás en "Kanban".

@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
+import { UNIT_REF_SELECT } from "@/lib/constants";
 import type { MaintenanceTicket, TicketEvent, TicketStatus } from "@/lib/types/database";
 
 const ticketSchema = z.object({
@@ -37,7 +38,7 @@ export async function listTickets(filters?: {
   const admin = createAdminClient();
   let q = admin
     .from("maintenance_tickets")
-    .select(`*, unit:units(id, code, name)`)
+    .select(`*, unit:units(${UNIT_REF_SELECT})`)
     .eq("organization_id", organization.id);
   if (filters?.showArchived) {
     q = q.not("archived_at", "is", null);
@@ -59,7 +60,7 @@ export async function getTicket(id: string) {
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("maintenance_tickets")
-    .select(`*, unit:units(id, code, name), attachments:ticket_attachments(*), related_owner:owners(id, full_name)`)
+    .select(`*, unit:units(${UNIT_REF_SELECT}), attachments:ticket_attachments(*), related_owner:owners(id, full_name)`)
     .eq("id", id)
     .eq("organization_id", organization.id)
     .maybeSingle();

@@ -2,9 +2,9 @@ import { Sparkles } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { listCleaningTasks } from "@/lib/actions/cleaning";
 import { MobileCleaningList } from "@/components/cleaning/mobile-cleaning-list";
-import type { CleaningTask, Unit } from "@/lib/types/database";
+import type { CleaningTask, UnitRef } from "@/lib/types/database";
 
-type CT = CleaningTask & { unit: Pick<Unit, "id" | "code" | "name"> };
+type CT = CleaningTask & { unit: UnitRef };
 
 export default async function MobileLimpiezaPage() {
   const session = await getSession();

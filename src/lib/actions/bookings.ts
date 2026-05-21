@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import { can } from "@/lib/permissions";
+import { can, isAdminLevel } from "@/lib/permissions";
 import {
   MAX_BOOKING_NIGHTS,
   nightsBetween,
@@ -933,8 +933,8 @@ export async function changeBookingStatus(
           `CHECKOUT_PENDING_BALANCE: La reserva tiene un saldo pendiente de ${pending.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${bk.currency}. Cobrá el saldo antes de hacer check-out.`
         );
       }
-      // Forzado: requiere razón explícita y rol admin
-      if (role !== "admin") {
+      // Forzado: requiere razón explícita y rol admin-level
+      if (!isAdminLevel(role)) {
         throw new Error("Solo un administrador puede forzar un check-out con saldo pendiente.");
       }
       const trimmedReason = reason?.trim();
@@ -1239,19 +1239,9 @@ export async function moveBookingTransaction(input: {
     throw new Error("No se puede mover una reserva cancelada o no-show");
   }
 
-  // Cap de delta para recepción: 60 días
-  const deltaCheckOut = Math.abs(
-    nightsBetween(original.check_out_date, input.check_out_date)
-  );
-  const deltaCheckIn = Math.abs(
-    nightsBetween(original.check_in_date, input.check_in_date)
-  );
-  const totalDelta = deltaCheckOut + deltaCheckIn;
-  if (role === "recepcion" && totalDelta > 60) {
-    throw new Error(
-      "Solo un administrador puede mover reservas más de 60 días. Pedí aprobación."
-    );
-  }
+  // NOTA: existía un tope de 60 días para mover reservas con rol "recepcion".
+  // Se quitó porque recepción opera con acceso equivalente a admin. Si más
+  // adelante se rebaja recepción, reponer el cap (delta de check-in + check-out).
 
   const update: Record<string, unknown> = {
     unit_id: input.unit_id,

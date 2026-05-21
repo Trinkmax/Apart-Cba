@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { createAdminClient } from "@/lib/supabase/server";
+import { isAdminLevel } from "@/lib/permissions";
 import { createSecret, updateSecret } from "@/lib/crm/encryption";
 import type { CrmChannel } from "@/lib/types/database";
 
@@ -50,7 +51,7 @@ const upsertSchema = z.object({
 export async function upsertChannel(input: z.infer<typeof upsertSchema>) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const v = upsertSchema.parse(input);
   const admin = createAdminClient();
@@ -151,7 +152,7 @@ export async function upsertChannel(input: z.infer<typeof upsertSchema>) {
 export async function setChannelStatus(id: string, status: "active" | "disabled") {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   await admin
@@ -165,7 +166,7 @@ export async function setChannelStatus(id: string, status: "active" | "disabled"
 export async function deleteChannel(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   await admin.from("crm_channels").delete().eq("id", id).eq("organization_id", organization.id);
@@ -179,7 +180,7 @@ export async function deleteChannel(id: string) {
 export async function testChannelHealth(id: string): Promise<{ ok: boolean; message: string; details?: Record<string, unknown> }> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   const { data: channel, error } = await admin
@@ -282,7 +283,7 @@ export async function verifyChannelSubscription(
 }> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   const { data: channel, error } = await admin
@@ -421,7 +422,7 @@ export async function subscribeChannelPage(
 ): Promise<{ ok: boolean; message: string; details?: { fields: string[]; target: string; hint?: string } }> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   const { data: channel, error } = await admin

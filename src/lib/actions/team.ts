@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient, createAuthAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { isAdminLevel } from "@/lib/permissions";
 import type { OrganizationMember, UserRole, UserProfile } from "@/lib/types/database";
 
 const inviteSchema = z.object({
@@ -91,7 +92,7 @@ export async function listOrgMemberNames(): Promise<
 export async function inviteTeamMember(input: InviteInput): Promise<{ userId: string; tempPassword: string }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin" && !session.profile.is_superadmin) {
+  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
     throw new Error("Solo los admins pueden invitar usuarios");
   }
   const validated = inviteSchema.parse(input);
@@ -153,7 +154,7 @@ export async function inviteTeamMember(input: InviteInput): Promise<{ userId: st
 export async function changeMemberRole(userId: string, newRole: UserRole) {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin" && !session.profile.is_superadmin) {
+  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
     throw new Error("Solo los admins pueden cambiar roles");
   }
   const admin = createAdminClient();
@@ -169,7 +170,7 @@ export async function changeMemberRole(userId: string, newRole: UserRole) {
 export async function deactivateMember(userId: string) {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin" && !session.profile.is_superadmin) {
+  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
     throw new Error("Solo los admins pueden desactivar usuarios");
   }
   if (userId === session.userId) {

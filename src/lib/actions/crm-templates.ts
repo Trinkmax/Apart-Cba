@@ -5,6 +5,7 @@ import { z } from "zod";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { createAdminClient } from "@/lib/supabase/server";
+import { isAdminLevel } from "@/lib/permissions";
 import { getProviderForChannel } from "@/lib/crm/providers/factory";
 import { extractVariables } from "@/lib/crm/render-vars";
 import type { CrmWhatsAppTemplate, CrmTemplateButton } from "@/lib/types/database";
@@ -43,7 +44,7 @@ const createSchema = z.object({
 export async function createTemplate(input: z.infer<typeof createSchema>): Promise<{ id: string }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const v = createSchema.parse(input);
   const admin = createAdminClient();
@@ -79,7 +80,7 @@ export async function createTemplate(input: z.infer<typeof createSchema>): Promi
 export async function submitTemplate(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   const { data: tpl } = await admin
@@ -119,7 +120,7 @@ export async function submitTemplate(id: string) {
 export async function refreshTemplateStatus(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
 
   const admin = createAdminClient();
   const { data: tpl } = await admin
@@ -148,7 +149,7 @@ export async function refreshTemplateStatus(id: string) {
 export async function deleteTemplate(id: string) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") throw new Error("Sin permisos");
+  if (!isAdminLevel(role)) throw new Error("Sin permisos");
   const admin = createAdminClient();
   await admin.from("crm_whatsapp_templates").delete().eq("id", id).eq("organization_id", organization.id);
   revalidatePath("/dashboard/crm/config");

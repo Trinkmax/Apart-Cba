@@ -1,10 +1,11 @@
 import { redirect } from "next/navigation";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
 import { OrganizationProfileForm } from "@/components/settings/organization-profile-form";
 
 export default async function GeneralConfigPage() {
   const { organization, role } = await getCurrentOrg();
-  if (role !== "admin") redirect("/dashboard");
+  if (!isAdminLevel(role)) redirect("/dashboard");
 
   return (
     <section className="space-y-5">

@@ -14,6 +14,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { inviteTeamMember, type InviteInput } from "@/lib/actions/team";
+import { uploadDni } from "@/lib/actions/team-dni";
+import { DniInvitePicker } from "@/components/team/dni-invite-picker";
 import { ROLE_META } from "@/lib/constants";
 
 export function InviteDialog({ children }: { children: React.ReactNode }) {
@@ -21,6 +23,7 @@ export function InviteDialog({ children }: { children: React.ReactNode }) {
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const [tempPassword, setTempPassword] = useState<string | null>(null);
+  const [uploadingDni, setUploadingDni] = useState(false);
 
   const [form, setForm] = useState<InviteInput>({
     email: "",
@@ -29,8 +32,16 @@ export function InviteDialog({ children }: { children: React.ReactNode }) {
     phone: "",
   });
 
+  const [dniFront, setDniFront] = useState<File | null>(null);
+  const [dniBack, setDniBack] = useState<File | null>(null);
+
   function set<K extends keyof InviteInput>(k: K, v: InviteInput[K]) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  function setDni(side: "front" | "back", file: File | null) {
+    if (side === "front") setDniFront(file);
+    else setDniBack(file);
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -38,6 +49,38 @@ export function InviteDialog({ children }: { children: React.ReactNode }) {
     startTransition(async () => {
       try {
         const r = await inviteTeamMember(form);
+
+        // El usuario ya existe: subimos cada lado del DNI adjuntado en
+        // paralelo, reutilizando el server action `uploadDni`.
+        const sides: { side: "front" | "back"; file: File }[] = [];
+        if (dniFront) sides.push({ side: "front", file: dniFront });
+        if (dniBack) sides.push({ side: "back", file: dniBack });
+
+        if (sides.length > 0) {
+          setUploadingDni(true);
+          const results = await Promise.all(
+            sides.map(async ({ side, file }) => {
+              const fd = new FormData();
+              fd.append("userId", r.userId);
+              fd.append("side", side);
+              fd.append("file", file);
+              const res = await uploadDni(fd);
+              return { side, ok: res.ok };
+            })
+          );
+          setUploadingDni(false);
+
+          const failed = results.filter((x) => !x.ok).map((x) => x.side);
+          if (failed.length > 0) {
+            const labels = failed
+              .map((s) => (s === "front" ? "frente" : "dorso"))
+              .join(" y ");
+            toast.warning("El DNI no se pudo subir", {
+              description: `No se pudo subir el ${labels} del DNI. Podés cargarlo después desde Equipo.`,
+            });
+          }
+        }
+
         if (r.tempPassword) {
           setTempPassword(r.tempPassword);
           toast.success("Usuario invitado con contraseña temporal");
@@ -47,6 +90,7 @@ export function InviteDialog({ children }: { children: React.ReactNode }) {
         }
         router.refresh();
       } catch (e) {
+        setUploadingDni(false);
         toast.error("Error", { description: (e as Error).message });
       }
     });
@@ -55,13 +99,16 @@ export function InviteDialog({ children }: { children: React.ReactNode }) {
   function reset() {
     setOpen(false);
     setTempPassword(null);
+    setUploadingDni(false);
     setForm({ email: "", full_name: "", role: "recepcion", phone: "" });
+    setDniFront(null);
+    setDniBack(null);
   }
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); else setOpen(true); }}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{tempPassword ? "Usuario creado" : "Invitar usuario"}</DialogTitle>
         </DialogHeader>
@@ -133,11 +180,19 @@ export function InviteDialog({ children }: { children: React.ReactNode }) {
                 </SelectContent>
               </Select>
             </div>
+
+            <DniInvitePicker
+              frontFile={dniFront}
+              backFile={dniBack}
+              onChange={setDni}
+              disabled={isPending}
+            />
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={reset}>Cancelar</Button>
               <Button type="submit" disabled={isPending}>
                 {isPending && <Loader2 className="animate-spin" />}
-                Invitar
+                {uploadingDni ? "Subiendo DNI…" : "Invitar"}
               </Button>
             </DialogFooter>
           </form>
