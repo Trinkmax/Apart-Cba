@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useTransition } from "react";
+import { useId, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -88,6 +88,7 @@ export function UnitsGrid({
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
   );
+  const dndId = useId();
 
   const filtered = useMemo(() => {
     return orderedUnits.filter((u) => {
@@ -193,6 +194,7 @@ export function UnitsGrid({
         </Card>
       ) : (
         <DndContext
+          id={dndId}
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragEnd={dragEnabled ? handleDragEnd : undefined}

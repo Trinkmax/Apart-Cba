@@ -184,7 +184,11 @@
       "Bash(sed -n '20,50p' src/lib/crm/workflows/types.ts)",
       "Bash(sed -n '1,20p' src/lib/crm/workflows/executor.ts)",
       "Bash(vercel ls *)",
-      "Bash(echo \"EXIT_TSC=$?\")"
+      "Bash(echo \"EXIT_TSC=$?\")",
+      "Bash(openssl rand *)",
+      "Bash(echo \"GATEWAY_SECRET=$\\(openssl rand -hex 32\\)\")",
+      "Bash(echo \"BAILEYS_STATE_ENC_KEY=$\\(openssl rand -hex 32\\)\")",
+      "Bash(lsof -ti:3001)"
     ]
   },
   "enableAllProjectMcpServers": true,

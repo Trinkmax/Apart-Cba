@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { Plus, Hotel } from "lucide-react";
 import { listUnitsEnriched } from "@/lib/actions/units";
-import { listOwners } from "@/lib/actions/owners";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
@@ -9,9 +8,8 @@ import { UnitFormDialog } from "@/components/units/unit-form-dialog";
 import { UnitsGrid } from "@/components/units/units-grid";
 
 export default async function UnidadesPage() {
-  const [units, owners, { role }] = await Promise.all([
+  const [units, { role }] = await Promise.all([
     listUnitsEnriched(),
-    listOwners(),
     getCurrentOrg(),
   ]);
   const canDelete = can(role, "units", "delete");
@@ -27,16 +25,16 @@ export default async function UnidadesPage() {
             {units.length} {units.length === 1 ? "unidad" : "unidades"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap shrink-0">
           <Link href="/dashboard/unidades/kanban" className="hidden sm:block">
             <Button variant="outline" className="gap-2">
               <Hotel size={16} /> Calendario
             </Button>
           </Link>
           {canCreateUnit && (
-            <UnitFormDialog owners={owners}>
+            <UnitFormDialog>
               <Button className="gap-2 shrink-0">
-                <Plus size={16} /> <span className="hidden sm:inline">Nueva unidad</span><span className="sm:hidden">Nueva</span>
+                <Plus size={16} /> Nueva unidad
               </Button>
             </UnitFormDialog>
           )}
@@ -49,7 +47,7 @@ export default async function UnidadesPage() {
         canViewMoney={canViewMoney}
         emptyCta={
           canCreateUnit ? (
-            <UnitFormDialog owners={owners}>
+            <UnitFormDialog>
               <Button className="gap-2">
                 <Plus size={16} /> Crear primera unidad
               </Button>
