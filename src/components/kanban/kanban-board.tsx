@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -60,6 +60,7 @@ export function KanbanBoard<T extends { id: string }, S extends string>({
   useStableSync(initialItems, getStatus, setItems);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const dndId = useId();
 
   const grouped = useMemo(() => {
     const map = new Map<S, T[]>();
@@ -116,7 +117,7 @@ export function KanbanBoard<T extends { id: string }, S extends string>({
   );
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+    <DndContext id={dndId} sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className={gridClass}>
         {columns.map((col) => {
           const list = grouped.get(col.key) ?? [];

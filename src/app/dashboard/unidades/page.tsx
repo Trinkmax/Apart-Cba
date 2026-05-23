@@ -34,7 +34,11 @@ export default async function UnidadesPage() {
           {canCreateUnit && (
             <UnitFormDialog>
               <Button className="gap-2 shrink-0">
-                <Plus size={16} /> Nueva unidad
+                <Plus size={16} />
+                <span>
+                  <span className="sm:hidden">Nueva</span>
+                  <span className="hidden sm:inline">Nueva unidad</span>
+                </span>
               </Button>
             </UnitFormDialog>
           )}

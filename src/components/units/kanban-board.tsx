@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback, useTransition } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -104,6 +104,7 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+  const dndId = useId();
 
   const groupedByStatus = useMemo(() => {
     const map = new Map<UnitStatus, UnitWithRelations[]>();
@@ -270,6 +271,7 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
       {/* Board */}
       <ScrollArea className="flex-1">
         <DndContext
+          id={dndId}
           sensors={sensors}
           collisionDetection={closestCorners}
           onDragStart={handleDragStart}

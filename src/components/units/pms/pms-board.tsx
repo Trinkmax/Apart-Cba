@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -335,6 +336,7 @@ export function PmsBoard({
   const reorderSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
   );
+  const dndId = useId();
   const orderChanged = useMemo(() => {
     if (!editMode) return false;
     if (draftOrder.length !== units.length) return false;
@@ -2119,6 +2121,7 @@ export function PmsBoard({
                   </span>
                 </div>
                 <DndContext
+                  id={dndId}
                   sensors={reorderSensors}
                   collisionDetection={closestCenter}
                   onDragEnd={handleReorderDragEnd}
