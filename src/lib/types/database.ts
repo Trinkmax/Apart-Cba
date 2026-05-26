@@ -619,6 +619,11 @@ export interface OwnerSettlement {
   /** Último usuario que modificó la liquidación. */
   last_edited_by: string | null;
   last_edited_at: string | null;
+  /**
+   * Array de unit_ids con el orden personalizado de bloques de unidad en el
+   * documento. [] = sin override → la UI ordena alfabéticamente por unit.code.
+   */
+  unit_order: string[];
   created_at: string;
   updated_at: string;
 }
@@ -872,6 +877,28 @@ export interface UnitWithRelations extends Unit {
 export interface BookingWithRelations extends Booking {
   unit?: Pick<Unit, "id" | "code" | "name"> | null;
   guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+}
+
+/**
+ * Resultado de la búsqueda global de reservas (input del topbar PMS).
+ * No restringe por fecha — busca en toda la tabla `bookings` de la org.
+ */
+export interface BookingSearchResult {
+  id: string;
+  check_in_date: string;
+  check_out_date: string;
+  status: BookingStatus;
+  source: BookingSource;
+  external_id: string | null;
+  unit: { id: string; code: string; name: string } | null;
+  guest: {
+    id: string;
+    full_name: string;
+    phone: string | null;
+    email: string | null;
+  } | null;
+  /** Pista para resaltar qué campo matcheó: "guest" | "unit" | "external". */
+  match_field: "guest" | "unit" | "external";
 }
 
 export interface BookingPaymentSchedule {

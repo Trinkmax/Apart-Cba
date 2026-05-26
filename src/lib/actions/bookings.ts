@@ -14,6 +14,7 @@ import {
 import type {
   Booking,
   BookingExtension,
+  BookingSearchResult,
   BookingWithRelations,
   BookingStatus,
 } from "@/lib/types/database";
@@ -341,6 +342,154 @@ export async function listBookingsInRange(
     .order("check_in_date");
   if (error) throw new Error(error.message);
   return (data as BookingWithRelations[]) ?? [];
+}
+
+/**
+ * Búsqueda global de reservas SIN restricción de fecha. Alimenta el
+ * autocomplete del PMS Grid (`Buscar huésped, unidad…`) — necesario porque el
+ * grid sólo carga una ventana de ~90 días en memoria y el filtro client-side
+ * no encuentra reservas fuera de ese rango.
+ *
+ * Busca en paralelo por:
+ *   - guest (full_name / email / phone / document_number) → aprovecha el
+ *     índice gin_trgm `idx_guests_search`.
+ *   - unit (code / name) → ilike sobre la tabla units.
+ *   - bookings.external_id → match directo de IDs de Airbnb / Booking.
+ *
+ * Devuelve top N ordenado por check_in_date DESC (próximas / recientes
+ * primero). Excluye canceladas y no_show.
+ */
+export async function searchBookingsGlobal(
+  query: string,
+  limit: number = 20,
+): Promise<BookingSearchResult[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "view")) return [];
+
+  const admin = createAdminClient();
+  // PostgREST escapa los `,` y `(` dentro de un `.or()`. Para `ilike`
+  // alcanzan los `%`. Sanitizamos `,()` por las dudas — un nombre con coma
+  // no es común y no querés que rompa el parser del filtro.
+  const safe = q.replace(/[,()*]/g, " ");
+  const like = `%${safe}%`;
+  const cap = Math.max(1, Math.min(50, limit));
+  const bookingSelect = `id, check_in_date, check_out_date, status, source, external_id,
+    unit:units(id, code, name),
+    guest:guests(id, full_name, phone, email)`;
+
+  // 1) Match por huésped → traemos guest_ids y después las reservas. Pasamos
+  //    por la tabla guests para usar el índice trigram (ilike directo sobre
+  //    joins anidados no usa el índice eficientemente en PostgREST).
+  const guestMatch = admin
+    .from("guests")
+    .select("id")
+    .eq("organization_id", organization.id)
+    .or(
+      `full_name.ilike.${like},email.ilike.${like},phone.ilike.${like},document_number.ilike.${like}`,
+    )
+    .limit(100);
+
+  // 2) Match por unidad → traemos unit_ids.
+  const unitMatch = admin
+    .from("units")
+    .select("id")
+    .eq("organization_id", organization.id)
+    .or(`code.ilike.${like},name.ilike.${like}`)
+    .limit(50);
+
+  // 3) Match por external_id (Airbnb / Booking confirmation codes).
+  const externalMatch = admin
+    .from("bookings")
+    .select(bookingSelect)
+    .eq("organization_id", organization.id)
+    .not("status", "in", "(cancelada,no_show)")
+    .ilike("external_id", like)
+    .order("check_in_date", { ascending: false })
+    .limit(cap);
+
+  const [guestRes, unitRes, externalRes] = await Promise.all([
+    guestMatch,
+    unitMatch,
+    externalMatch,
+  ]);
+
+  const guestIds = (guestRes.data ?? []).map((r) => r.id as string);
+  const unitIds = (unitRes.data ?? []).map((r) => r.id as string);
+
+  // 4) Reservas de los huéspedes y unidades matcheadas (en paralelo).
+  type RawRow = {
+    id: string;
+    check_in_date: string;
+    check_out_date: string;
+    status: BookingStatus;
+    source: BookingSearchResult["source"];
+    external_id: string | null;
+    unit: BookingSearchResult["unit"];
+    guest: BookingSearchResult["guest"];
+  };
+
+  const guestBookings =
+    guestIds.length > 0
+      ? admin
+          .from("bookings")
+          .select(bookingSelect)
+          .eq("organization_id", organization.id)
+          .not("status", "in", "(cancelada,no_show)")
+          .in("guest_id", guestIds)
+          .order("check_in_date", { ascending: false })
+          .limit(cap)
+      : Promise.resolve({ data: [] as RawRow[], error: null });
+  const unitBookings =
+    unitIds.length > 0
+      ? admin
+          .from("bookings")
+          .select(bookingSelect)
+          .eq("organization_id", organization.id)
+          .not("status", "in", "(cancelada,no_show)")
+          .in("unit_id", unitIds)
+          .order("check_in_date", { ascending: false })
+          .limit(cap)
+      : Promise.resolve({ data: [] as RawRow[], error: null });
+
+  const [guestBookingsRes, unitBookingsRes] = await Promise.all([
+    guestBookings,
+    unitBookings,
+  ]);
+
+  // Merge + dedupe. Priorizamos "external" > "guest" > "unit" para
+  // setear `match_field` — el bookings tagueado por external_id es lo más
+  // específico, y un huésped pesa más que la unidad para guiar al usuario.
+  const out = new Map<string, BookingSearchResult>();
+  const push = (
+    rows: unknown[] | null | undefined,
+    field: BookingSearchResult["match_field"],
+  ) => {
+    (rows as RawRow[] | null | undefined)?.forEach((r) => {
+      if (!out.has(r.id)) {
+        out.set(r.id, {
+          id: r.id,
+          check_in_date: r.check_in_date,
+          check_out_date: r.check_out_date,
+          status: r.status,
+          source: r.source,
+          external_id: r.external_id,
+          unit: r.unit,
+          guest: r.guest,
+          match_field: field,
+        });
+      }
+    });
+  };
+  push(externalRes.data as unknown as unknown[], "external");
+  push(guestBookingsRes.data as unknown as unknown[], "guest");
+  push(unitBookingsRes.data as unknown as unknown[], "unit");
+
+  return Array.from(out.values())
+    .sort((a, b) => b.check_in_date.localeCompare(a.check_in_date))
+    .slice(0, cap);
 }
 
 /**

@@ -13,7 +13,24 @@ import {
   Info,
   Clock,
   ArrowRight,
+  ArrowRightLeft,
+  GripVertical,
 } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -71,6 +88,10 @@ import {
   addSettlementLine,
   updateSettlementLine,
   deleteSettlementLine,
+  reorderSettlementLines,
+  reorderSettlementBookings,
+  reorderSettlementUnits,
+  moveSettlementBookingRow,
 } from "@/lib/actions/settlements";
 import type { StatementModel } from "@/lib/settlements/statement-model";
 import type { SettlementLine, SettlementAuditEntry } from "@/lib/types/database";
@@ -198,6 +219,8 @@ function RowEditor({
   paid,
   currentNet,
   row,
+  units,
+  currentUnitId,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -206,6 +229,10 @@ function RowEditor({
   paid: boolean;
   currentNet: number;
   row: StatementModel["units"][number]["rows"][number];
+  /** Todas las unidades del propietario — para el selector "Mover a otra unidad". */
+  units: Unit[];
+  /** Unidad actual de la reserva (la que se está editando). */
+  currentUnitId: string | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -224,6 +251,11 @@ function RowEditor({
   const [commission, setCommission] = useState(String(row.commission));
   const [expenses, setExpenses] = useState(String(row.expenses));
   const [impactCaja, setImpactCaja] = useState(true);
+  const [targetUnitId, setTargetUnitId] = useState<string>(
+    currentUnitId ?? "",
+  );
+  const unitChanged =
+    !!targetUnitId && !!currentUnitId && targetUnitId !== currentUnitId;
 
   const oldNet = round2(row.gross - row.commission - row.expenses);
   const newNet = round2(num(gross) - num(commission) - num(expenses));
@@ -252,6 +284,16 @@ function RowEditor({
     }
     start(async () => {
       try {
+        // Si la unidad cambió, mover primero — así si falla no aplicamos un
+        // update parcial sobre la unidad equivocada. El move no toca totales,
+        // así que el orden importa para el audit, no para la consistencia.
+        if (unitChanged) {
+          await moveSettlementBookingRow({
+            settlement_id: settlementId,
+            ref_id: row.ref_id!,
+            new_unit_id: targetUnitId,
+          });
+        }
         const res = await updateSettlementBookingRow({
           settlement_id: settlementId,
           ref_id: row.ref_id!,
@@ -393,6 +435,35 @@ function RowEditor({
             />
           </div>
 
+          {units.length > 1 && row.ref_id && (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <ArrowRightLeft size={12} className="text-muted-foreground" />
+                Unidad
+              </Label>
+              <Select
+                value={targetUnitId}
+                onValueChange={setTargetUnitId}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Elegí una unidad" />
+                </SelectTrigger>
+                <SelectContent>
+                  {units.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.code} · {u.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {unitChanged && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                  La reserva se moverá al bloque de la nueva unidad.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="rounded-lg border bg-muted/40 p-3 space-y-1.5 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Neto de esta fila</span>
@@ -482,6 +553,401 @@ function RowEditor({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ─────────────────────────── Sortables (DnD) ──────────────────────────
+ * Tres wrappers ligeros sobre @dnd-kit/sortable:
+ *   • SortableUnitBlock   → un bloque de unidad completo (Reservas)
+ *   • SortableBookingRow  → una fila de reserva dentro de la tabla
+ *   • SortableChargeRow   → una fila de "otros cargos"
+ *
+ * El handle (icono GripVertical) recibe `attributes` + `listeners` del hook;
+ * el resto de la fila NO los recibe → así el click de "editar" sigue
+ * funcionando sin colisionar con el drag (`activationConstraint: distance 8`).
+ * ──────────────────────────────────────────────────────────────────────── */
+
+type StatementUnit = StatementModel["units"][number];
+type StatementBookingRowT = StatementUnit["rows"][number];
+type StatementOtherRowT = StatementModel["otros"][number] & { key: string };
+
+function SortableUnitBlock({
+  unit,
+  unitDndId,
+  editable,
+  currency,
+  pending,
+  sensors,
+  reorderableBookings,
+  onAddBooking,
+  onRowClick,
+  onRowDelete,
+  onReorderRows,
+}: {
+  unit: StatementUnit;
+  unitDndId: string;
+  editable: boolean;
+  currency: string;
+  pending: boolean;
+  sensors: ReturnType<typeof useSensors>;
+  /** true → drag entre filas de esta unidad; false → solo lectura. */
+  reorderableBookings: boolean;
+  onAddBooking: () => void;
+  onRowClick: (b: StatementBookingRowT) => void;
+  onRowDelete: (b: StatementBookingRowT) => void;
+  onReorderRows: (e: DragEndEvent) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: unitDndId,
+    disabled: !editable,
+  });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    position: "relative",
+    zIndex: isDragging ? 30 : undefined,
+  };
+
+  const bookingDndIds = unit.rows
+    .filter((r) => r.ref_id)
+    .map((r) => r.ref_id as string);
+
+  return (
+    <div ref={setNodeRef} style={style} className="space-y-0">
+      <div className="flex items-center gap-2 mb-2">
+        {editable && (
+          <button
+            type="button"
+            aria-label="Reordenar unidad"
+            className="touch-none -ml-1 px-1 py-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical size={14} />
+          </button>
+        )}
+        <span className="h-4 w-1 rounded-full bg-primary" />
+        <h3 className="text-sm font-semibold flex-1 min-w-0 truncate">
+          {unit.code}{" "}
+          <span className="text-muted-foreground font-normal">
+            · {unit.name}
+          </span>
+        </h3>
+        {editable && unit.unit_id && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 gap-1 text-xs"
+            onClick={onAddBooking}
+          >
+            <Plus size={12} /> Agregar
+          </Button>
+        )}
+      </div>
+      <div className="rounded-lg border overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/50 hover:bg-muted/50">
+              {editable && reorderableBookings && (
+                <TableHead className="h-9 w-7" aria-label="Reordenar" />
+              )}
+              <TableHead className="h-9">Ingreso</TableHead>
+              <TableHead className="h-9">Egreso</TableHead>
+              <TableHead className="h-9">Huésped</TableHead>
+              <TableHead className="h-9 text-center">Noches</TableHead>
+              <TableHead className="h-9 text-right">Bruto</TableHead>
+              <TableHead className="h-9 text-right">Comisión</TableHead>
+              <TableHead className="h-9 text-right">Gastos</TableHead>
+              <TableHead className="h-9 text-right">Neto</TableHead>
+              {editable && (
+                <TableHead className="h-9 w-14" aria-label="Acciones" />
+              )}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={onReorderRows}
+            >
+              <SortableContext
+                items={bookingDndIds}
+                strategy={verticalListSortingStrategy}
+              >
+                {unit.rows.map((b) => (
+                  <SortableBookingRow
+                    key={b.ref_id ?? `unkn-${b.guest}-${b.check_in}`}
+                    b={b}
+                    editable={editable}
+                    currency={currency}
+                    pending={pending}
+                    canReorder={reorderableBookings && !!b.ref_id}
+                    onRowClick={onRowClick}
+                    onRowDelete={onRowDelete}
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+          </TableBody>
+          <TableFooter>
+            <TableRow className="bg-muted/40 font-semibold">
+              <TableCell
+                colSpan={editable && reorderableBookings ? 5 : 4}
+                className="text-right"
+              >
+                Subtotal {unit.code}
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {formatMoney(unit.subtotal.gross, currency)}
+              </TableCell>
+              <TableCell className="text-right">
+                <Money n={unit.subtotal.commission} c={currency} neg />
+              </TableCell>
+              <TableCell className="text-right">
+                <Money n={unit.subtotal.expenses} c={currency} neg />
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {formatMoney(unit.subtotal.net, currency)}
+              </TableCell>
+              {editable && <TableCell className="w-14" />}
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+function SortableBookingRow({
+  b,
+  editable,
+  currency,
+  pending,
+  canReorder,
+  onRowClick,
+  onRowDelete,
+}: {
+  b: StatementBookingRowT;
+  editable: boolean;
+  currency: string;
+  pending: boolean;
+  canReorder: boolean;
+  onRowClick: (b: StatementBookingRowT) => void;
+  onRowDelete: (b: StatementBookingRowT) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: b.ref_id ?? `unkn-${b.guest}-${b.check_in}`,
+    disabled: !canReorder,
+  });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    position: "relative",
+    zIndex: isDragging ? 20 : undefined,
+  };
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "text-sm group/row",
+        editable && b.ref_id && "cursor-pointer hover:bg-accent/40",
+      )}
+      onClick={
+        editable && b.ref_id ? () => onRowClick(b) : undefined
+      }
+    >
+      {editable && canReorder && (
+        <TableCell
+          className="w-7 p-0 align-middle"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            aria-label="Reordenar reserva"
+            className="flex items-center justify-center w-7 h-9 touch-none text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical size={13} />
+          </button>
+        </TableCell>
+      )}
+      {editable && !canReorder && (
+        <TableCell className="w-7 p-0" aria-hidden />
+      )}
+      <TableCell className="whitespace-nowrap">
+        {b.check_in ? formatDate(b.check_in) : "—"}
+      </TableCell>
+      <TableCell className="whitespace-nowrap">
+        {b.check_out ? formatDate(b.check_out) : "—"}
+      </TableCell>
+      <TableCell className="max-w-[180px] truncate">
+        {b.guest}
+        {b.mode === "mensual" && (
+          <span className="ml-1 text-[10px] text-muted-foreground">
+            mensual
+          </span>
+        )}
+      </TableCell>
+      <TableCell className="text-center tabular-nums">
+        {b.nights ?? "—"}
+      </TableCell>
+      <TableCell className="text-right tabular-nums font-medium">
+        {formatMoney(b.gross, currency)}
+      </TableCell>
+      <TableCell className="text-right">
+        <Money n={b.commission} c={currency} neg />
+      </TableCell>
+      <TableCell className="text-right">
+        <Money n={b.expenses} c={currency} neg />
+      </TableCell>
+      <TableCell className="text-right tabular-nums font-semibold">
+        {formatMoney(b.net, currency)}
+      </TableCell>
+      {editable && (
+        <TableCell className="w-14 p-0">
+          {b.ref_id && (
+            <div className="flex items-center justify-center gap-0.5 pr-1 opacity-100 sm:opacity-0 sm:group-hover/row:opacity-100 transition-opacity">
+              <Pencil
+                size={13}
+                className="hidden sm:block text-muted-foreground"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 text-muted-foreground hover:text-rose-600"
+                aria-label="Quitar reserva"
+                disabled={pending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRowDelete(b);
+                }}
+              >
+                <Trash2 size={13} />
+              </Button>
+            </div>
+          )}
+        </TableCell>
+      )}
+    </TableRow>
+  );
+}
+
+function SortableChargeRow({
+  o,
+  editable,
+  pending,
+  currency,
+  onEdit,
+  onDelete,
+}: {
+  o: StatementOtherRowT;
+  editable: boolean;
+  pending: boolean;
+  currency: string;
+  onEdit: (o: StatementOtherRowT) => void;
+  onDelete: (o: StatementOtherRowT) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: o.id, disabled: !editable });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    position: "relative",
+    zIndex: isDragging ? 20 : undefined,
+  };
+  const lm = SETTLEMENT_LINE_META[o.line_type];
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        "flex items-center gap-3 px-4 py-2.5 text-sm group/charge bg-card",
+        editable && "hover:bg-accent/30",
+      )}
+    >
+      {editable && (
+        <button
+          type="button"
+          aria-label="Reordenar cargo"
+          className="touch-none -ml-1 px-1 text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={13} />
+        </button>
+      )}
+      <span
+        className="size-1.5 rounded-full shrink-0"
+        style={{ backgroundColor: lm?.color ?? "#64748b" }}
+      />
+      <span className="flex-1 min-w-0 truncate">
+        {o.description}
+        {o.unitCode && (
+          <span className="ml-1.5 text-[11px] text-muted-foreground font-mono">
+            {o.unitCode}
+          </span>
+        )}
+      </span>
+      <span
+        className={cn(
+          "tabular-nums font-medium shrink-0",
+          o.sign === "+"
+            ? "text-emerald-600 dark:text-emerald-400"
+            : "text-rose-600 dark:text-rose-400",
+        )}
+      >
+        {o.sign === "+" ? "+" : "−"}
+        {formatMoney(o.amount, currency)}
+      </span>
+      {editable && (
+        <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/charge:opacity-100 transition-opacity">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            aria-label="Editar cargo"
+            onClick={() => onEdit(o)}
+          >
+            <Pencil size={13} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 text-muted-foreground hover:text-rose-600"
+            aria-label="Eliminar cargo"
+            disabled={pending}
+            onClick={() => onDelete(o)}
+          >
+            <Trash2 size={13} />
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -835,17 +1301,143 @@ export function EditableSettlementStatement({
     StatementModel["units"][number]["rows"][number] | null
   >(null);
   const [delRowImpact, setDelRowImpact] = useState(true);
+  /**
+   * Unidad pre-seleccionada para el modal de "Agregar reserva":
+   *   - null = botón global → el modal muestra el dropdown
+   *   - "<unit_id>" = botón "+" del header de esa unidad → dropdown bloqueado
+   */
+  const [addBookingUnitId, setAddBookingUnitId] = useState<string | null>(
+    null,
+  );
   const router = useRouter();
   const [pending, start] = useTransition();
 
   const lastEdit = audit[0] ?? null;
   const editable = status !== "anulada";
 
+  // ── Estado local espejo del modelo, para optimistic updates del DnD.
+  // Patrón "set state durante render" (igual que PmsBoard): sincroniza cuando
+  // llegan nuevos props (router.refresh tras una mutación), sin useEffect.
+  const [prevModelUnits, setPrevModelUnits] = useState(model.units);
+  const [localUnits, setLocalUnits] = useState(model.units);
+  if (prevModelUnits !== model.units) {
+    setPrevModelUnits(model.units);
+    setLocalUnits(model.units);
+  }
+  const [prevModelOtros, setPrevModelOtros] = useState(model.otros);
+  const [localOtros, setLocalOtrosState] = useState(model.otros);
+  if (prevModelOtros !== model.otros) {
+    setPrevModelOtros(model.otros);
+    setLocalOtrosState(model.otros);
+  }
   // El modelo de "otros" ya trae el id real de la settlement_line.
   const otros = useMemo(
-    () => model.otros.map((o, i) => ({ ...o, key: `${o.id}-${i}` })),
-    [model.otros],
+    () => localOtros.map((o, i) => ({ ...o, key: `${o.id}-${i}` })),
+    [localOtros],
   );
+
+  const unitsOrderableIds = useMemo(
+    () => localUnits.filter((u) => u.unit_id).map((u) => u.unit_id as string),
+    [localUnits],
+  );
+
+  // Sensor compartido para los 3 DnD contexts: necesitamos un drag intencional
+  // (>=8px) para no chocar con clicks de "editar fila" / "abrir editor".
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
+
+  // ── Handlers de reorden (optimistic + revertir si falla) ──────────────────
+  function handleReorderCharges(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ids = otros.map((o) => o.id);
+    const oldIndex = ids.indexOf(String(active.id));
+    const newIndex = ids.indexOf(String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(otros, oldIndex, newIndex).map(({ ...o }) => o);
+    const snapshot = localOtros;
+    setLocalOtrosState(next);
+    start(async () => {
+      try {
+        await reorderSettlementLines({
+          settlement_id: settlementId,
+          ordered_line_ids: next.map((o) => o.id),
+        });
+        router.refresh();
+      } catch (err) {
+        setLocalOtrosState(snapshot);
+        toast.error("No se pudo reordenar", {
+          description: (err as Error).message,
+        });
+      }
+    });
+  }
+
+  function handleReorderBookingsInUnit(unitId: string, e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const unit = localUnits.find((u) => u.unit_id === unitId);
+    if (!unit) return;
+    const rows = unit.rows.filter((r) => r.ref_id) as Array<
+      typeof unit.rows[number] & { ref_id: string }
+    >;
+    const ids = rows.map((r) => r.ref_id);
+    const oldIndex = ids.indexOf(String(active.id));
+    const newIndex = ids.indexOf(String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const nextRows = arrayMove(rows, oldIndex, newIndex);
+    const snapshot = localUnits;
+    setLocalUnits((prev) =>
+      prev.map((u) =>
+        u.unit_id === unitId ? { ...u, rows: nextRows } : u,
+      ),
+    );
+    start(async () => {
+      try {
+        await reorderSettlementBookings({
+          settlement_id: settlementId,
+          unit_id: unitId,
+          ordered_ref_ids: nextRows.map((r) => r.ref_id),
+        });
+        router.refresh();
+      } catch (err) {
+        setLocalUnits(snapshot);
+        toast.error("No se pudo reordenar", {
+          description: (err as Error).message,
+        });
+      }
+    });
+  }
+
+  function handleReorderUnits(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ids = localUnits.map((u) => u.unit_id ?? "__none__");
+    const oldIndex = ids.indexOf(String(active.id));
+    const newIndex = ids.indexOf(String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(localUnits, oldIndex, newIndex);
+    const snapshot = localUnits;
+    setLocalUnits(next);
+    const orderedUnitIds = next
+      .filter((u) => u.unit_id)
+      .map((u) => u.unit_id as string);
+    start(async () => {
+      try {
+        await reorderSettlementUnits({
+          settlement_id: settlementId,
+          ordered_unit_ids: orderedUnitIds,
+        });
+        router.refresh();
+      } catch (err) {
+        setLocalUnits(snapshot);
+        toast.error("No se pudo reordenar las unidades", {
+          description: (err as Error).message,
+        });
+      }
+    });
+  }
 
   function confirmRemoveCharge() {
     if (!deletingCharge) return;
@@ -1050,145 +1642,61 @@ export function EditableSettlementStatement({
               size="sm"
               variant="outline"
               className="h-7 gap-1.5"
-              onClick={() => setAddBooking(true)}
+              onClick={() => {
+                setAddBookingUnitId(null);
+                setAddBooking(true);
+              }}
             >
               <Plus size={13} /> Agregar reserva
             </Button>
           </div>
         )}
-        {model.units.length === 0 && (
+        {localUnits.length === 0 && (
           <p className="text-xs text-muted-foreground rounded-lg border border-dashed py-4 text-center">
             Sin reservas en este período. Usá “Agregar reserva” para cargar una
             a mano.
           </p>
         )}
 
-        {model.units.map((u) => (
-          <div key={u.code} className="space-y-0">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="h-4 w-1 rounded-full bg-primary" />
-              <h3 className="text-sm font-semibold">
-                {u.code}{" "}
-                <span className="text-muted-foreground font-normal">
-                  · {u.name}
-                </span>
-              </h3>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleReorderUnits}
+        >
+          <SortableContext
+            items={unitsOrderableIds}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-6">
+              {localUnits.map((u) => (
+                <SortableUnitBlock
+                  key={u.unit_id ?? `__none__-${u.code}`}
+                  unit={u}
+                  unitDndId={u.unit_id ?? "__none__"}
+                  editable={editable}
+                  currency={c}
+                  pending={pending}
+                  sensors={sensors}
+                  reorderableBookings={editable && !!u.unit_id}
+                  onAddBooking={() => {
+                    if (u.unit_id) {
+                      setAddBookingUnitId(u.unit_id);
+                      setAddBooking(true);
+                    }
+                  }}
+                  onRowClick={(b) => setEditingRow(b)}
+                  onRowDelete={(b) => {
+                    setDelRowImpact(true);
+                    setDeletingRow(b);
+                  }}
+                  onReorderRows={(e) => {
+                    if (u.unit_id) handleReorderBookingsInUnit(u.unit_id, e);
+                  }}
+                />
+              ))}
             </div>
-            <div className="rounded-lg border overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead className="h-9">Ingreso</TableHead>
-                    <TableHead className="h-9">Egreso</TableHead>
-                    <TableHead className="h-9">Huésped</TableHead>
-                    <TableHead className="h-9 text-center">Noches</TableHead>
-                    <TableHead className="h-9 text-right">Bruto</TableHead>
-                    <TableHead className="h-9 text-right">Comisión</TableHead>
-                    <TableHead className="h-9 text-right">Gastos</TableHead>
-                    <TableHead className="h-9 text-right">Neto</TableHead>
-                    {editable && (
-                      <TableHead className="h-9 w-14" aria-label="Acciones" />
-                    )}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {u.rows.map((b) => (
-                    <TableRow
-                      key={b.ref_id}
-                      className={cn(
-                        "text-sm group/row",
-                        editable &&
-                          b.ref_id &&
-                          "cursor-pointer hover:bg-accent/40",
-                      )}
-                      onClick={
-                        editable && b.ref_id
-                          ? () => setEditingRow(b)
-                          : undefined
-                      }
-                    >
-                      <TableCell className="whitespace-nowrap">
-                        {b.check_in ? formatDate(b.check_in) : "—"}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {b.check_out ? formatDate(b.check_out) : "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[180px] truncate">
-                        {b.guest}
-                        {b.mode === "mensual" && (
-                          <span className="ml-1 text-[10px] text-muted-foreground">
-                            mensual
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {b.nights ?? "—"}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums font-medium">
-                        {formatMoney(b.gross, c)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Money n={b.commission} c={c} neg />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Money n={b.expenses} c={c} neg />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums font-semibold">
-                        {formatMoney(b.net, c)}
-                      </TableCell>
-                      {editable && (
-                        <TableCell className="w-14 p-0">
-                          {b.ref_id && (
-                            <div className="flex items-center justify-center gap-0.5 pr-1 opacity-100 sm:opacity-0 sm:group-hover/row:opacity-100 transition-opacity">
-                              <Pencil
-                                size={13}
-                                className="hidden sm:block text-muted-foreground"
-                              />
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="size-7 text-muted-foreground hover:text-rose-600"
-                                aria-label="Quitar reserva"
-                                disabled={pending}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setDelRowImpact(true);
-                                  setDeletingRow(b);
-                                }}
-                              >
-                                <Trash2 size={13} />
-                              </Button>
-                            </div>
-                          )}
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))}
-                </TableBody>
-                <TableFooter>
-                  <TableRow className="bg-muted/40 font-semibold">
-                    <TableCell colSpan={4} className="text-right">
-                      Subtotal {u.code}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatMoney(u.subtotal.gross, c)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Money n={u.subtotal.commission} c={c} neg />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Money n={u.subtotal.expenses} c={c} neg />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {formatMoney(u.subtotal.net, c)}
-                    </TableCell>
-                    {editable && <TableCell className="w-14" />}
-                  </TableRow>
-                </TableFooter>
-              </Table>
-            </div>
-          </div>
-        ))}
+          </SortableContext>
+        </DndContext>
 
         {/* Otros cargos */}
         <div>
@@ -1214,85 +1722,46 @@ export function EditableSettlementStatement({
               o ajustes por común acuerdo.
             </p>
           ) : (
-            <div className="rounded-lg border divide-y">
-              {otros.map((o) => {
-                const lm = SETTLEMENT_LINE_META[o.line_type];
-                const id = o.id;
-                return (
-                  <div
-                    key={o.key}
-                    className={cn(
-                      "flex items-center gap-3 px-4 py-2.5 text-sm group/charge",
-                      editable && id && "hover:bg-accent/30",
-                    )}
-                  >
-                    <span
-                      className="size-1.5 rounded-full shrink-0"
-                      style={{ backgroundColor: lm?.color ?? "#64748b" }}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleReorderCharges}
+            >
+              <SortableContext
+                items={otros.map((o) => o.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="rounded-lg border divide-y overflow-hidden">
+                  {otros.map((o) => (
+                    <SortableChargeRow
+                      key={o.key}
+                      o={o}
+                      editable={editable}
+                      pending={pending}
+                      currency={c}
+                      onEdit={(row) =>
+                        setEditCharge({
+                          id: row.id,
+                          description: row.description,
+                          amount: row.amount,
+                          sign: row.sign,
+                          line_type: row.line_type,
+                          unitCode: row.unitCode,
+                        })
+                      }
+                      onDelete={(row) => {
+                        setDelImpact(true);
+                        setDeletingCharge({
+                          id: row.id,
+                          description: row.description,
+                          signed: (row.sign === "+" ? 1 : -1) * row.amount,
+                        });
+                      }}
                     />
-                    <span className="flex-1 min-w-0 truncate">
-                      {o.description}
-                      {o.unitCode && (
-                        <span className="ml-1.5 text-[11px] text-muted-foreground font-mono">
-                          {o.unitCode}
-                        </span>
-                      )}
-                    </span>
-                    <span
-                      className={cn(
-                        "tabular-nums font-medium shrink-0",
-                        o.sign === "+"
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : "text-rose-600 dark:text-rose-400",
-                      )}
-                    >
-                      {o.sign === "+" ? "+" : "−"}
-                      {formatMoney(o.amount, c)}
-                    </span>
-                    {editable && id && (
-                      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/charge:opacity-100 transition-opacity">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7"
-                          aria-label="Editar cargo"
-                          onClick={() =>
-                            setEditCharge({
-                              id,
-                              description: o.description,
-                              amount: o.amount,
-                              sign: o.sign,
-                              line_type: o.line_type,
-                              unitCode: o.unitCode,
-                            })
-                          }
-                        >
-                          <Pencil size={13} />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-7 text-muted-foreground hover:text-rose-600"
-                          aria-label="Eliminar cargo"
-                          disabled={pending}
-                          onClick={() => {
-                            setDelImpact(true);
-                            setDeletingCharge({
-                              id,
-                              description: o.description,
-                              signed:
-                                (o.sign === "+" ? 1 : -1) * o.amount,
-                            });
-                          }}
-                        >
-                          <Trash2 size={13} />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
 
@@ -1337,6 +1806,15 @@ export function EditableSettlementStatement({
           paid={paid}
           currentNet={model.totals.net}
           row={editingRow}
+          units={units}
+          currentUnitId={
+            // Buscamos en qué bloque de unidad vive la reserva editada.
+            // Usamos localUnits para reflejar reordenamientos sin esperar
+            // un router.refresh.
+            localUnits.find((u) =>
+              u.rows.some((r) => r.ref_id === editingRow.ref_id),
+            )?.unit_id ?? null
+          }
         />
       )}
       <ChargeDialog
@@ -1349,11 +1827,15 @@ export function EditableSettlementStatement({
       />
       <AddBookingRowDialog
         open={addBooking}
-        onOpenChange={setAddBooking}
+        onOpenChange={(o) => {
+          setAddBooking(o);
+          if (!o) setAddBookingUnitId(null);
+        }}
         settlementId={settlementId}
         currency={c}
         units={units}
         currentNet={model.totals.net}
+        lockedUnitId={addBookingUnitId ?? undefined}
       />
       {editCharge && (
         <ChargeDialog

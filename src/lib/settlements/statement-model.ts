@@ -22,6 +22,13 @@ export interface StatementLineInput {
   sign: "+" | "-";
   is_manual?: boolean | null;
   meta?: SettlementLineMeta | null;
+  /**
+   * Posición persistida para reordenamiento manual. Las 3 líneas de un mismo
+   * booking (ingreso + comisión + gastos) llevan offsets consecutivos sobre
+   * el mismo "base". Para ordenar bookings dentro de una unidad usamos el
+   * `min(display_order)` del grupo.
+   */
+  display_order?: number | null;
   unit?: { id: string; code: string; name: string } | null;
 }
 
@@ -44,6 +51,8 @@ export interface StatementInput {
     cbu?: string | null;
     alias_cbu?: string | null;
   } | null;
+  /** Override del orden de unidades del documento. [] → orden alfabético. */
+  unit_order?: string[] | null;
   lines: StatementLineInput[];
 }
 
@@ -69,6 +78,12 @@ export interface StatementUnitGroup {
   name: string;
   rows: StatementBookingRow[];
   subtotal: { gross: number; commission: number; expenses: number; net: number };
+}
+
+/** Cada fila de "Reservas" lleva el order del grupo para el drag-and-drop. */
+export interface StatementBookingRowWithOrder extends StatementBookingRow {
+  /** min(display_order) de las 3 líneas del grupo. Determina la posición. */
+  display_order: number;
 }
 
 export interface StatementOtherRow {
@@ -108,22 +123,31 @@ export function buildStatementModel(s: StatementInput): StatementModel {
   const bookingGroups = new Map<string, StatementLineInput[]>();
   const otros: StatementOtherRow[] = [];
 
+  const otrosWithOrder: Array<{ row: StatementOtherRow; order: number }> = [];
+
   for (const l of s.lines) {
     if (l.ref_type === "booking" && l.ref_id) {
       const arr = bookingGroups.get(l.ref_id) ?? [];
       arr.push(l);
       bookingGroups.set(l.ref_id, arr);
     } else {
-      otros.push({
-        id: l.id,
-        description: l.description,
-        line_type: l.line_type,
-        unitCode: l.unit?.code ?? null,
-        sign: l.sign,
-        amount: round2(Number(l.amount)),
+      otrosWithOrder.push({
+        row: {
+          id: l.id,
+          description: l.description,
+          line_type: l.line_type,
+          unitCode: l.unit?.code ?? null,
+          sign: l.sign,
+          amount: round2(Number(l.amount)),
+        },
+        order: Number(l.display_order ?? 0),
       });
     }
   }
+
+  // Orden persistente (display_order ASC). Empate → orden de inserción estable.
+  otrosWithOrder.sort((a, b) => a.order - b.order);
+  for (const o of otrosWithOrder) otros.push(o.row);
 
   const unitMap = new Map<string, StatementUnitGroup>();
 
@@ -165,7 +189,14 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       };
       unitMap.set(k, ug);
     }
-    ug.rows.push({
+    // min(display_order) del grupo determina la posición del booking dentro
+    // de su unidad. Si ningún line trae order, queda 0 y caemos a check_in.
+    const groupOrder = group.reduce<number | null>((acc, g) => {
+      const o = Number(g.display_order ?? Number.NaN);
+      if (!Number.isFinite(o)) return acc;
+      return acc == null || o < acc ? o : acc;
+    }, null);
+    (ug.rows as StatementBookingRowWithOrder[]).push({
       ref_id: refId,
       check_in: meta?.check_in ?? null,
       check_out: meta?.check_out ?? null,
@@ -178,14 +209,29 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       commission,
       expenses,
       net,
+      display_order: groupOrder ?? 0,
     });
   }
 
-  const units = Array.from(unitMap.values()).sort((a, b) =>
-    a.code.localeCompare(b.code),
-  );
+  const orderOverride = Array.isArray(s.unit_order) ? s.unit_order : [];
+  const orderIndex = new Map<string, number>();
+  orderOverride.forEach((uid, i) => orderIndex.set(uid, i));
+
+  const units = Array.from(unitMap.values()).sort((a, b) => {
+    const ai = a.unit_id ? orderIndex.get(a.unit_id) : undefined;
+    const bi = b.unit_id ? orderIndex.get(b.unit_id) : undefined;
+    // Las unidades fuera del override caen al final, ordenadas por code.
+    if (ai != null && bi != null) return ai - bi;
+    if (ai != null) return -1;
+    if (bi != null) return 1;
+    return a.code.localeCompare(b.code);
+  });
   for (const ug of units) {
-    ug.rows.sort((a, b) => (a.check_in ?? "").localeCompare(b.check_in ?? ""));
+    (ug.rows as StatementBookingRowWithOrder[]).sort((a, b) => {
+      if (a.display_order !== b.display_order)
+        return a.display_order - b.display_order;
+      return (a.check_in ?? "").localeCompare(b.check_in ?? "");
+    });
     ug.subtotal = ug.rows.reduce(
       (acc, r) => ({
         gross: round2(acc.gross + r.gross),

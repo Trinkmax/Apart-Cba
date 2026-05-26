@@ -105,12 +105,14 @@ import {
 } from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
+import { searchBookingsGlobal } from "@/lib/actions/bookings";
 import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/format";
 import type {
   BookingMode,
   BookingPaymentSchedule,
+  BookingSearchResult,
   BookingSource,
   BookingStatus,
   BookingWithRelations,
@@ -264,6 +266,18 @@ export function PmsBoard({
   const [windowDays, setWindowDays] = useState(days);
   const [zoom, setZoom] = useState<ZoomLevel>("confort");
   const [query, setQuery] = useState("");
+  // ── Búsqueda global (autocomplete con popover) ─────────────────────────────
+  // El filtro de `query` corre client-side sobre las reservas YA cargadas en
+  // memoria (la ventana de ~90 días que entrega `listBookingsInRange`). Eso
+  // significa que una reserva fuera de esa ventana NO aparece. Para no
+  // perderla, disparamos en paralelo una búsqueda server-side sin restricción
+  // de fechas — los hits se muestran en un popover al lado del input y, al
+  // clickear uno, saltamos la ventana visible a la fecha de la reserva.
+  const [globalResults, setGlobalResults] = useState<BookingSearchResult[]>(
+    [],
+  );
+  const [globalLoading, setGlobalLoading] = useState(false);
+  const [searchPopoverOpen, setSearchPopoverOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<Set<BookingStatus>>(
     () => new Set(["pendiente", "confirmada", "check_in", "check_out"])
   );
@@ -695,6 +709,57 @@ export function PmsBoard({
       );
     });
   }, [bookings, statusFilter, sourceFilter, modeFilter, query, overdueOnly, bookingsWithOverdue]);
+
+  // ── búsqueda global: debounced fetch al servidor mientras el usuario tipea
+  // Sólo dispara desde 2 chars; se cancela si la query cambia antes del
+  // timeout. Todos los setState se ejecutan dentro del callback async para
+  // cumplir `react-hooks/set-state-in-effect`.
+  useEffect(() => {
+    const q = query.trim();
+    let cancelled = false;
+    const handle = setTimeout(
+      async () => {
+        if (cancelled) return;
+        if (q.length < 2) {
+          setGlobalResults([]);
+          setGlobalLoading(false);
+          setSearchPopoverOpen(false);
+          return;
+        }
+        setSearchPopoverOpen(true);
+        setGlobalLoading(true);
+        try {
+          const rows = await searchBookingsGlobal(q, 20);
+          if (cancelled) return;
+          setGlobalResults(rows);
+        } catch (err) {
+          if (cancelled) return;
+          console.error("searchBookingsGlobal failed", err);
+          setGlobalResults([]);
+        } finally {
+          if (!cancelled) setGlobalLoading(false);
+        }
+      },
+      q.length < 2 ? 0 : 250,
+    );
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [query]);
+
+  /**
+   * Salta a la fecha del booking elegido en el autocomplete. Mueve la ventana
+   * visible para que el check-in caiga ~5 días después del inicio (deja algo
+   * de contexto previo). El popover del booking lo abre el usuario clickeando
+   * la barra — basta con dejarlo en pantalla.
+   */
+  const onPickSearchResult = useCallback((r: BookingSearchResult) => {
+    setWindowStart(isoAddDays(r.check_in_date, -5));
+    setSearchPopoverOpen(false);
+    // Mantenemos el query (por si el usuario quiere ver el resto de hits),
+    // pero ocultamos el popover. Si quiere descartar, tiene la X del input.
+  }, []);
 
   const bookingsByUnit = useMemo(() => {
     const m = new Map<string, BookingWithRelations[]>();
@@ -1598,25 +1663,144 @@ export function PmsBoard({
             </div>
 
             <div className="ml-auto flex items-center gap-1.5 flex-wrap">
-              {/* Search */}
-              <div className="relative">
-                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Buscar huésped, unidad…"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  className="pl-7 h-8 w-56 text-xs"
-                />
-                {query && (
-                  <button
-                    type="button"
-                    onClick={() => setQuery("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
-              </div>
+              {/* Search — autocomplete global (server-side) */}
+              <Popover
+                open={searchPopoverOpen && query.trim().length >= 2}
+                onOpenChange={(o) => {
+                  // Permitimos que Radix cierre el popover por click-outside;
+                  // sólo lo reabrimos cuando hay query y focus en el input.
+                  if (!o) setSearchPopoverOpen(false);
+                }}
+              >
+                <PopoverAnchor asChild>
+                  <div className="relative">
+                    <Search
+                      size={13}
+                      className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+                    />
+                    <Input
+                      placeholder="Buscar huésped, unidad…"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onFocus={() => {
+                        if (query.trim().length >= 2)
+                          setSearchPopoverOpen(true);
+                      }}
+                      className="pl-7 h-8 w-56 text-xs"
+                    />
+                    {query && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuery("");
+                          setGlobalResults([]);
+                          setSearchPopoverOpen(false);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                </PopoverAnchor>
+                <PopoverContent
+                  side="bottom"
+                  align="end"
+                  sideOffset={6}
+                  className="w-[360px] p-0"
+                  // No le robamos el foco al input → la lista se navega con
+                  // el mouse, pero el usuario puede seguir tipeando sin perder
+                  // el cursor.
+                  onOpenAutoFocus={(e) => e.preventDefault()}
+                >
+                  <div className="px-3 py-2 border-b text-[11px] text-muted-foreground flex items-center justify-between">
+                    <span>
+                      {globalLoading
+                        ? "Buscando…"
+                        : `Resultados (${globalResults.length})`}
+                    </span>
+                    <span className="text-[10px] opacity-70">
+                      Búsqueda global · todas las fechas
+                    </span>
+                  </div>
+                  <div className="max-h-[360px] overflow-y-auto">
+                    {globalLoading && globalResults.length === 0 ? (
+                      <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                        <Loader2 size={13} className="animate-spin" />
+                        Buscando reservas…
+                      </div>
+                    ) : globalResults.length === 0 ? (
+                      <div className="py-6 text-center text-xs text-muted-foreground">
+                        Sin resultados para “{query.trim()}”.
+                      </div>
+                    ) : (
+                      <ul className="py-1">
+                        {globalResults.map((r) => {
+                          const statusMeta = BOOKING_STATUS_META[r.status];
+                          const sourceMeta = BOOKING_SOURCE_META[r.source];
+                          return (
+                            <li key={r.id}>
+                              <button
+                                type="button"
+                                onClick={() => onPickSearchResult(r)}
+                                className="w-full text-left px-3 py-2 hover:bg-accent/50 flex items-center gap-3"
+                              >
+                                <span
+                                  className="size-2 rounded-full shrink-0"
+                                  style={{
+                                    backgroundColor: statusMeta?.color,
+                                  }}
+                                  aria-label={statusMeta?.label}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 text-xs">
+                                    <span className="font-medium truncate">
+                                      {r.guest?.full_name ?? "—"}
+                                    </span>
+                                    {r.unit && (
+                                      <span className="font-mono text-[10px] text-muted-foreground shrink-0">
+                                        · {r.unit.code}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground tabular-nums">
+                                    {format(
+                                      parseISO(r.check_in_date),
+                                      "d MMM yyyy",
+                                      { locale: es },
+                                    )}
+                                    {" → "}
+                                    {format(
+                                      parseISO(r.check_out_date),
+                                      "d MMM yyyy",
+                                      { locale: es },
+                                    )}
+                                    {sourceMeta && r.source !== "directo" && (
+                                      <span
+                                        className="ml-1.5 inline-block size-1.5 rounded-full align-middle"
+                                        style={{
+                                          backgroundColor:
+                                            sourceMeta.color,
+                                        }}
+                                        aria-label={sourceMeta.label}
+                                      />
+                                    )}
+                                    {r.external_id && (
+                                      <span className="ml-1 font-mono text-[9px] opacity-70">
+                                        {r.external_id}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
 
               {/* Mode filter — segmented control de 3 estados (Todos | Temp | Mens).
                   "Mens" cambia a la vista mensual, no es un filtro. */}

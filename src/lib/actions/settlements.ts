@@ -1617,6 +1617,397 @@ export async function addSettlementBookingRow(
   });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Reordenamiento y movimiento — no cambian totales ni neto, solo posiciones
+// (display_order / unit_order). No reconcilian Caja porque no afectan saldo.
+// Sí sellan last_edited_* + audit para que el cambio quede trazado.
+// ════════════════════════════════════════════════════════════════════════════
+
+async function loadEditableSettlementMinimal(
+  admin: Admin,
+  organizationId: string,
+  settlementId: string,
+): Promise<{ id: string; status: string; organization_id: string }> {
+  const { data: s } = await admin
+    .from("owner_settlements")
+    .select("id, status, organization_id")
+    .eq("id", settlementId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!s) throw new Error("Liquidación no encontrada");
+  if (!EDITABLE_STATUSES.includes(s.status as SettlementStatus)) {
+    throw new Error(
+      `La liquidación está ${s.status}: anulá o regenerá antes de editar`,
+    );
+  }
+  return s as { id: string; status: string; organization_id: string };
+}
+
+async function sealOrderEdit(
+  admin: Admin,
+  settlementId: string,
+  organizationId: string,
+  userId: string,
+  actorName: string,
+  action: SettlementAuditEntry["action"],
+  changes: Record<string, unknown>,
+) {
+  const now = new Date().toISOString();
+  await admin
+    .from("owner_settlements")
+    .update({ last_edited_by: userId, last_edited_at: now, updated_at: now })
+    .eq("id", settlementId);
+  await admin.from("settlement_audit").insert({
+    organization_id: organizationId,
+    settlement_id: settlementId,
+    action,
+    actor_user_id: userId,
+    actor_name: actorName,
+    changes,
+    side_effects: [],
+  });
+  revalidateSettlement(settlementId);
+}
+
+const reorderLinesSchema = z.object({
+  settlement_id: z.string().uuid(),
+  ordered_line_ids: z.array(z.string().uuid()).min(1).max(500),
+});
+
+/**
+ * Reordena los "Otros cargos" (líneas sueltas — ref_type != 'booking') de una
+ * liquidación. Recibe el array completo de line IDs en el orden deseado y
+ * reescribe `display_order` para reflejarlo. No toca líneas de booking ni
+ * cambia totales.
+ */
+export async function reorderSettlementLines(
+  input: z.input<typeof reorderLinesSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = reorderLinesSchema.parse(input);
+  const admin = createAdminClient();
+  const s = await loadEditableSettlementMinimal(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  // Verifica que TODAS las líneas pertenezcan a este settlement y NO sean
+  // de booking (los reorden de reservas usan otra action).
+  const { data: lines } = await admin
+    .from("settlement_lines")
+    .select("id, ref_type, display_order")
+    .eq("settlement_id", s.id)
+    .in("id", v.ordered_line_ids);
+  if (!lines || lines.length !== v.ordered_line_ids.length) {
+    throw new Error("Líneas no encontradas o no pertenecen a esta liquidación");
+  }
+  if (lines.some((l) => l.ref_type === "booking")) {
+    throw new Error(
+      "No se pueden reordenar líneas de reserva desde acá (usá reorderSettlementBookings)",
+    );
+  }
+
+  // Reservamos el bloque de display_order más alto para no chocar con valores
+  // existentes durante el update (no hay constraint UNIQUE pero igual evita
+  // estados intermedios visibles a otras lecturas).
+  const { data: maxRow } = await admin
+    .from("settlement_lines")
+    .select("display_order")
+    .eq("settlement_id", s.id)
+    .order("display_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const base = Number(maxRow?.display_order ?? 0) + 1000;
+
+  for (let i = 0; i < v.ordered_line_ids.length; i++) {
+    const { error } = await admin
+      .from("settlement_lines")
+      .update({ display_order: base + i })
+      .eq("id", v.ordered_line_ids[i])
+      .eq("settlement_id", s.id);
+    if (error) throw new Error(error.message);
+  }
+
+  await sealOrderEdit(
+    admin,
+    s.id,
+    organization.id,
+    session.userId,
+    actorNameOf(session),
+    "line_update",
+    { kind: "reorder_lines", count: v.ordered_line_ids.length },
+  );
+
+  return { ok: true as const };
+}
+
+const reorderBookingsSchema = z.object({
+  settlement_id: z.string().uuid(),
+  unit_id: z.string().uuid(),
+  ordered_ref_ids: z.array(z.string().uuid()).min(1).max(500),
+});
+
+/**
+ * Reordena las RESERVAS dentro de una unidad. Recibe los ref_id de los grupos
+ * (cada grupo = 3 líneas: ingreso + comisión + gastos) y reescribe el
+ * display_order de las 3 líneas de cada grupo, manteniendo el offset interno.
+ */
+export async function reorderSettlementBookings(
+  input: z.input<typeof reorderBookingsSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = reorderBookingsSchema.parse(input);
+  const admin = createAdminClient();
+  const s = await loadEditableSettlementMinimal(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  const { data: lines } = await admin
+    .from("settlement_lines")
+    .select("id, ref_id, line_type, display_order, unit_id")
+    .eq("settlement_id", s.id)
+    .eq("ref_type", "booking")
+    .in("ref_id", v.ordered_ref_ids);
+  if (!lines || lines.length === 0) {
+    throw new Error("Reservas no encontradas");
+  }
+
+  // Agrupar por ref_id manteniendo el offset interno (booking_revenue=0,
+  // commission=1, expenses_fraction/otros=2). Si la línea no es revenue ni
+  // commission, asignamos offset según orden actual relativo dentro del grupo.
+  const groups = new Map<
+    string,
+    Array<{ id: string; line_type: string; currentOrder: number }>
+  >();
+  for (const l of lines) {
+    if (!l.ref_id) continue;
+    const arr = groups.get(l.ref_id) ?? [];
+    arr.push({
+      id: l.id,
+      line_type: l.line_type,
+      currentOrder: Number(l.display_order ?? 0),
+    });
+    groups.set(l.ref_id, arr);
+  }
+  for (const ref of v.ordered_ref_ids) {
+    if (!groups.has(ref)) {
+      throw new Error("Una de las reservas no existe en la liquidación");
+    }
+  }
+
+  // Reserva un bloque alto para evitar choques durante el update.
+  const { data: maxRow } = await admin
+    .from("settlement_lines")
+    .select("display_order")
+    .eq("settlement_id", s.id)
+    .order("display_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const base = Number(maxRow?.display_order ?? 0) + 1000;
+
+  // Cada grupo ocupa 10 slots — sobra para los <=3 líneas y deja "huecos"
+  // por si se agregan más líneas al grupo a futuro.
+  const STEP = 10;
+  for (let i = 0; i < v.ordered_ref_ids.length; i++) {
+    const ref = v.ordered_ref_ids[i];
+    const grp = groups.get(ref)!;
+    // Conservamos el orden relativo actual entre las líneas del grupo —
+    // así revenue queda primero, comisión segundo, etc.
+    grp.sort((a, b) => a.currentOrder - b.currentOrder);
+    const slotBase = base + i * STEP;
+    for (let j = 0; j < grp.length; j++) {
+      const { error } = await admin
+        .from("settlement_lines")
+        .update({ display_order: slotBase + j })
+        .eq("id", grp[j].id);
+      if (error) throw new Error(error.message);
+    }
+  }
+
+  await sealOrderEdit(
+    admin,
+    s.id,
+    organization.id,
+    session.userId,
+    actorNameOf(session),
+    "row_update",
+    {
+      kind: "reorder_bookings",
+      unit_id: v.unit_id,
+      count: v.ordered_ref_ids.length,
+    },
+  );
+
+  return { ok: true as const };
+}
+
+const reorderUnitsSchema = z.object({
+  settlement_id: z.string().uuid(),
+  ordered_unit_ids: z.array(z.string().uuid()).min(1).max(200),
+});
+
+/**
+ * Persiste el orden personalizado de unidades del documento en
+ * `owner_settlements.unit_order` (jsonb). Las unidades fuera del array caen
+ * al final ordenadas alfabéticamente por code (ver buildStatementModel).
+ */
+export async function reorderSettlementUnits(
+  input: z.input<typeof reorderUnitsSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = reorderUnitsSchema.parse(input);
+  const admin = createAdminClient();
+  const s = await loadEditableSettlementMinimal(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  const now = new Date().toISOString();
+  const { error } = await admin
+    .from("owner_settlements")
+    .update({
+      unit_order: v.ordered_unit_ids,
+      last_edited_by: session.userId,
+      last_edited_at: now,
+      updated_at: now,
+    })
+    .eq("id", s.id);
+  if (error) throw new Error(error.message);
+
+  await admin.from("settlement_audit").insert({
+    organization_id: organization.id,
+    settlement_id: s.id,
+    action: "row_update",
+    actor_user_id: session.userId,
+    actor_name: actorNameOf(session),
+    changes: { kind: "reorder_units", count: v.ordered_unit_ids.length },
+    side_effects: [],
+  });
+  revalidateSettlement(s.id);
+
+  return { ok: true as const };
+}
+
+const moveBookingSchema = z.object({
+  settlement_id: z.string().uuid(),
+  ref_id: z.string().uuid(),
+  new_unit_id: z.string().uuid(),
+});
+
+/**
+ * Mueve una reserva (las 3 líneas con el mismo ref_id) a otra unidad del
+ * MISMO propietario. Valida que la unidad destino pertenezca a un owner
+ * de esta org. No cambia totales ni mueve Caja.
+ */
+export async function moveSettlementBookingRow(
+  input: z.input<typeof moveBookingSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = moveBookingSchema.parse(input);
+  const admin = createAdminClient();
+  const s = await loadEditableSettlementMinimal(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  // Verificamos que la unidad destino exista en la org y esté asignada al
+  // mismo propietario de la liquidación.
+  const { data: settlementRow } = await admin
+    .from("owner_settlements")
+    .select("owner_id")
+    .eq("id", s.id)
+    .maybeSingle();
+  if (!settlementRow) throw new Error("Liquidación no encontrada");
+
+  const { data: ownerLink } = await admin
+    .from("unit_owners")
+    .select("unit:units!inner(id, code, name, organization_id)")
+    .eq("owner_id", settlementRow.owner_id)
+    .eq("unit_id", v.new_unit_id)
+    .maybeSingle();
+  type LinkedUnit = {
+    id: string;
+    code: string;
+    name: string;
+    organization_id: string;
+  };
+  const destUnit = (ownerLink?.unit as unknown as LinkedUnit | null) ?? null;
+  if (!destUnit || destUnit.organization_id !== organization.id) {
+    throw new Error("La unidad destino no pertenece a este propietario");
+  }
+
+  // Capturamos la unidad origen para el audit (de la línea de revenue).
+  const { data: existing } = await admin
+    .from("settlement_lines")
+    .select("id, unit_id, line_type, unit:units(code, name)")
+    .eq("settlement_id", s.id)
+    .eq("ref_type", "booking")
+    .eq("ref_id", v.ref_id);
+  if (!existing || existing.length === 0) {
+    throw new Error("Reserva no encontrada en la liquidación");
+  }
+  const revenue =
+    existing.find((l) => l.line_type === "booking_revenue") ?? existing[0];
+  type FromUnit = { code: string; name: string };
+  const fromUnit =
+    (revenue.unit as unknown as FromUnit | null) ?? null;
+  const fromUnitId = revenue.unit_id;
+  if (fromUnitId === v.new_unit_id) {
+    return { ok: true as const, noop: true };
+  }
+
+  const { error } = await admin
+    .from("settlement_lines")
+    .update({
+      unit_id: v.new_unit_id,
+      updated_by: session.userId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("settlement_id", s.id)
+    .eq("ref_type", "booking")
+    .eq("ref_id", v.ref_id);
+  if (error) throw new Error(error.message);
+
+  await sealOrderEdit(
+    admin,
+    s.id,
+    organization.id,
+    session.userId,
+    actorNameOf(session),
+    "row_update",
+    {
+      kind: "move_booking_unit",
+      unit: {
+        from: fromUnit?.code ?? "—",
+        to: destUnit.code,
+      },
+    },
+  );
+
+  return { ok: true as const };
+}
+
 /** Historial de cambios de la liquidación (más recientes primero). */
 export async function listSettlementAudit(
   settlementId: string,

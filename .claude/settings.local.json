@@ -188,7 +188,11 @@
       "Bash(openssl rand *)",
       "Bash(echo \"GATEWAY_SECRET=$\\(openssl rand -hex 32\\)\")",
       "Bash(echo \"BAILEYS_STATE_ENC_KEY=$\\(openssl rand -hex 32\\)\")",
-      "Bash(lsof -ti:3001)"
+      "Bash(lsof -ti:3001)",
+      "Bash(grep -E \"\\\\.tsx?$\")",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"next-server.*3001\\\\|next dev -p 3001\")",
+      "Bash(kill 5088)"
     ]
   },
   "enableAllProjectMcpServers": true,

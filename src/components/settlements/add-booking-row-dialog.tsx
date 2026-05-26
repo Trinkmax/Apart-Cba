@@ -45,6 +45,7 @@ export function AddBookingRowDialog({
   currency,
   units,
   currentNet,
+  lockedUnitId,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -52,11 +53,25 @@ export function AddBookingRowDialog({
   currency: string;
   units: Unit[];
   currentNet: number;
+  /**
+   * Si está set, pre-selecciona esa unidad y oculta el dropdown. Lo usa el
+   * botón "+" que vive en el header de cada bloque de unidad para evitar el
+   * paso extra de elegirla cada vez.
+   */
+  lockedUnitId?: string;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
 
-  const [unitId, setUnitId] = useState("");
+  const [unitId, setUnitId] = useState(lockedUnitId ?? "");
+  // Si el modal se reabre con un lockedUnitId distinto (clic en otro "+"),
+  // sincronizamos durante el render — sin useEffect, evitando el lint
+  // `react-hooks/set-state-in-effect`.
+  const [prevLockedUnitId, setPrevLockedUnitId] = useState(lockedUnitId);
+  if (prevLockedUnitId !== lockedUnitId) {
+    setPrevLockedUnitId(lockedUnitId);
+    if (lockedUnitId) setUnitId(lockedUnitId);
+  }
   const [guest, setGuest] = useState("");
   const [checkIn, setCheckIn] = useState("");
   const [checkOut, setCheckOut] = useState("");
@@ -84,7 +99,7 @@ export function AddBookingRowDialog({
   }
 
   function close() {
-    setUnitId("");
+    setUnitId(lockedUnitId ?? "");
     setGuest("");
     setCheckIn("");
     setCheckOut("");
@@ -146,22 +161,42 @@ export function AddBookingRowDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Unidad</Label>
-              <Select value={unitId} onValueChange={setUnitId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Elegí una unidad" />
-                </SelectTrigger>
-                <SelectContent>
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.code} · {u.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          {lockedUnitId ? (
+            <div className="rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+              <span className="text-xs text-muted-foreground">Unidad: </span>
+              <span className="font-medium">
+                {(() => {
+                  const u = units.find((x) => x.id === lockedUnitId);
+                  return u ? `${u.code} · ${u.name}` : "—";
+                })()}
+              </span>
             </div>
+          ) : null}
+          <div
+            className={cn(
+              "grid gap-3",
+              lockedUnitId
+                ? "grid-cols-1"
+                : "grid-cols-1 sm:grid-cols-2",
+            )}
+          >
+            {!lockedUnitId && (
+              <div className="space-y-1.5">
+                <Label>Unidad</Label>
+                <Select value={unitId} onValueChange={setUnitId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Elegí una unidad" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {units.map((u) => (
+                      <SelectItem key={u.id} value={u.id}>
+                        {u.code} · {u.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>Huésped</Label>
               <Input value={guest} onChange={(e) => setGuest(e.target.value)} />

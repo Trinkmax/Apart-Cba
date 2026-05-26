@@ -79,6 +79,7 @@ export default async function SettlementDetailPage({
       cbu: settlement.owner.cbu,
       alias_cbu: settlement.owner.alias_cbu,
     },
+    unit_order: settlement.unit_order ?? [],
     lines: (settlement.lines ?? []).map((l) => ({
       id: l.id,
       line_type: l.line_type,
@@ -90,6 +91,7 @@ export default async function SettlementDetailPage({
       sign: l.sign,
       is_manual: l.is_manual,
       meta: l.meta,
+      display_order: l.display_order,
       unit: l.unit,
     })),
   };
