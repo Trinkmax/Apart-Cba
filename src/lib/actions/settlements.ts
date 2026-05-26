@@ -54,6 +54,8 @@ interface ComputedLine {
   description: string;
   amount: number;
   sign: "+" | "-";
+  /** Moneda nativa de la línea (preserva la moneda de la reserva original). */
+  currency: string;
   meta: SettlementLineMeta | null;
 }
 
@@ -93,18 +95,46 @@ function dayDiff(fromISO: string, toISO: string): number {
  *   • commission = Σ de líneas line_type='commission' (siempre '-')
  *   • deductions = Σ del resto de líneas con signo '-'
  *   • net     = Σ con signo (── + suma, ── − resta)
- * Con solo líneas auto da idéntico a la lógica anterior; un ajuste '+' sube
- * bruto y neto, un ajuste '-' sube gastos y baja neto.
+ *
+ * Multi-moneda: cada línea trae su `currency`. Si difiere de `baseCurrency`,
+ * el importe se convierte usando `exchangeRates[currency]`. Si no hay tasa
+ * definida para esa moneda, esa línea cuenta como 0 (la UI debe mostrar un
+ * aviso al usuario para que cargue el TC).
  */
+function convertToBase(
+  amount: number,
+  currency: string,
+  baseCurrency: string,
+  exchangeRates: Record<string, number>,
+): number {
+  if (currency === baseCurrency) return amount;
+  const rate = Number(exchangeRates?.[currency] ?? 0);
+  if (!Number.isFinite(rate) || rate <= 0) return 0;
+  return amount * rate;
+}
+
 function computeTotals(
-  lines: Array<{ amount: number; sign: "+" | "-"; line_type: SettlementLine["line_type"] }>,
+  lines: Array<{
+    amount: number;
+    sign: "+" | "-";
+    line_type: SettlementLine["line_type"];
+    currency?: string;
+  }>,
+  baseCurrency: string = BASE_CURRENCY,
+  exchangeRates: Record<string, number> = {},
 ) {
   let gross = 0;
   let commission = 0;
   let deductions = 0;
   let net = 0;
   for (const l of lines) {
-    const amt = Number(l.amount) || 0;
+    const raw = Number(l.amount) || 0;
+    const amt = convertToBase(
+      raw,
+      l.currency ?? baseCurrency,
+      baseCurrency,
+      exchangeRates,
+    );
     if (l.sign === "+") {
       gross += amt;
       net += amt;
@@ -138,9 +168,8 @@ async function buildSettlementLines(opts: {
   ownerId: string;
   year: number;
   month: number;
-  currency: string;
 }): Promise<{ lines: ComputedLine[]; ticketIds: string[] }> {
-  const { admin, ownerId, year, month, currency } = opts;
+  const { admin, ownerId, year, month } = opts;
 
   const { data: unitOwners } = await admin
     .from("unit_owners")
@@ -156,12 +185,13 @@ async function buildSettlementLines(opts: {
   const periodEnd = new Date(year, month, 0).toISOString().slice(0, 10);
   const daysInMonth = new Date(year, month, 0).getDate();
 
-  // Temporarias: cierran en el mes. Mensuales: se solapan (prorrateo por días).
+  // Multi-moneda: traemos las reservas SIN filtrar por moneda. Cada línea
+  // luego persiste su `currency` y los totales se computan convirtiendo a la
+  // moneda base via `owner_settlements.exchange_rates`.
   const { data: bookings } = await admin
     .from("bookings")
     .select("*, guest:guests(full_name)")
     .in("unit_id", unitIds)
-    .eq("currency", currency)
     .in("status", SETTLEMENT_BOOKING_STATUSES as unknown as string[])
     .lte("check_in_date", periodEnd)
     .gte("check_out_date", periodStart);
@@ -191,6 +221,7 @@ async function buildSettlementLines(opts: {
       (b.guest as unknown as { full_name?: string } | null)?.full_name ?? null;
     const source = (b.source as string | null) ?? null;
     const mode = (b.mode as "temporario" | "mensual" | undefined) ?? "temporario";
+    const bookingCurrency = (b.currency as string | null) ?? BASE_CURRENCY;
 
     if (mode === "mensual") {
       // ── Mensual: prorratear renta + expensas por días ocupados del mes ──
@@ -217,6 +248,7 @@ async function buildSettlementLines(opts: {
         description: `Renta mensual ${overlapStart} → ${overlapEnd} (${occupiedDays}/${daysInMonth} días) — ${unitCode}`,
         amount: proratedRent,
         sign: "+",
+        currency: bookingCurrency,
         meta: {
           guest_name: guestName,
           nights: occupiedDays,
@@ -237,6 +269,7 @@ async function buildSettlementLines(opts: {
         description: `Comisión ${commissionPct}% (mensual prorrateada)`,
         amount: commission,
         sign: "-",
+        currency: bookingCurrency,
         meta: null,
       });
       if (proratedExpenses > 0) {
@@ -248,6 +281,7 @@ async function buildSettlementLines(opts: {
           description: `Expensas prorrateadas (${occupiedDays}/${daysInMonth} días)`,
           amount: proratedExpenses,
           sign: "-",
+          currency: bookingCurrency,
           meta: null,
         });
       }
@@ -268,6 +302,7 @@ async function buildSettlementLines(opts: {
       description: `Reserva ${b.check_in_date} → ${b.check_out_date} (${unitCode})`,
       amount: grossOwner,
       sign: "+",
+      currency: bookingCurrency,
       meta: {
         guest_name: guestName,
         nights,
@@ -286,6 +321,7 @@ async function buildSettlementLines(opts: {
       description: `Comisión ${commissionPct}%`,
       amount: commission,
       sign: "-",
+      currency: bookingCurrency,
       meta: null,
     });
 
@@ -298,6 +334,7 @@ async function buildSettlementLines(opts: {
         description: "Fee de limpieza",
         amount: round2(Number(b.cleaning_fee) * ownerShare),
         sign: "-",
+        currency: bookingCurrency,
         meta: null,
       });
     }
@@ -305,7 +342,7 @@ async function buildSettlementLines(opts: {
 
   for (const t of tickets ?? []) {
     const cost = Number(t.actual_cost ?? 0);
-    if (cost > 0 && t.cost_currency === currency) {
+    if (cost > 0) {
       lines.push({
         line_type: "maintenance_charge",
         ref_type: "ticket",
@@ -314,6 +351,7 @@ async function buildSettlementLines(opts: {
         description: `Mantenimiento: ${t.title}`,
         amount: round2(cost),
         sign: "-",
+        currency: (t.cost_currency as string | null) ?? BASE_CURRENCY,
         meta: null,
       });
     }
@@ -349,21 +387,37 @@ async function persistSettlement(opts: {
     ticketIds,
   } = opts;
 
-  const { data: existing } = await admin
+  // Buscamos TODAS las liquidaciones del owner para el período (mono y multi
+  // moneda). Una será el "principal" (la que casa con `currency`, default ARS);
+  // el resto son "hermanas" históricas que vamos a anular y mergear.
+  const { data: candidates } = await admin
     .from("owner_settlements")
     .select("*")
     .eq("organization_id", organizationId)
     .eq("owner_id", ownerId)
     .eq("period_year", year)
-    .eq("period_month", month)
-    .eq("currency", currency)
-    .maybeSingle();
+    .eq("period_month", month);
+
+  const existing =
+    (candidates ?? []).find((s) => s.currency === currency) ?? null;
+  const siblings = (candidates ?? []).filter(
+    (s) => s.id !== existing?.id && s.status !== "anulada",
+  );
 
   if (existing && existing.status !== "borrador") {
     throw new Error(`Esta liquidación ya está ${existing.status}; no se puede regenerar`);
   }
+  for (const sib of siblings) {
+    if (sib.status === "pagada" || sib.paid_movement_id) {
+      throw new Error(
+        `La liquidación de ${sib.currency} ${year}-${String(month).padStart(2, "0")} ya está pagada. Anulala desde su detalle antes de regenerar para unificar.`,
+      );
+    }
+  }
 
-  // Preservar ajustes manuales
+  // Preservar ajustes manuales del settlement principal Y de las hermanas.
+  // Las hermanas se anulan al final (status='anulada') y sus líneas manuales
+  // se "trasladan" al principal manteniendo su currency original.
   let manualLines: SettlementLine[] = [];
   if (existing) {
     const { data: ml } = await admin
@@ -379,13 +433,28 @@ async function persistSettlement(opts: {
       .eq("is_manual", false);
   }
 
+  const siblingManualLines: SettlementLine[] = [];
+  if (siblings.length > 0) {
+    const { data: sml } = await admin
+      .from("settlement_lines")
+      .select("*")
+      .in(
+        "settlement_id",
+        siblings.map((s) => s.id),
+      )
+      .eq("is_manual", true);
+    if (sml && sml.length > 0) {
+      siblingManualLines.push(...(sml as SettlementLine[]));
+    }
+  }
+
   // Reservas cuya fila fue editada a mano: updateSettlementBookingRow marca sus
   // líneas con is_manual=true, así que ya quedaron preservadas arriba. NO volver
   // a insertar la línea automática de esas reservas — duplicaría ingreso y
   // comisión para el mismo ref_id, y entonces el editor mostraría la suma de
   // ambas líneas mientras la edición solo toca una ("se guarda pero no cambia").
   const editedBookingRefIds = new Set(
-    manualLines
+    [...manualLines, ...siblingManualLines]
       .filter((l) => l.ref_type === "booking" && l.ref_id != null)
       .map((l) => l.ref_id as string),
   );
@@ -398,14 +467,36 @@ async function persistSettlement(opts: {
       ),
   );
 
-  const totals = computeTotals([
-    ...autoLinesToInsert.map((l) => ({ amount: l.amount, sign: l.sign, line_type: l.line_type })),
-    ...manualLines.map((l) => ({
-      amount: Number(l.amount),
-      sign: l.sign,
-      line_type: l.line_type,
-    })),
-  ]);
+  // Tasas de cambio existentes del settlement principal (las del usuario). Las
+  // preservamos al regenerar — el cliente las edita aparte vía
+  // setSettlementExchangeRate.
+  const exchangeRates: Record<string, number> =
+    (existing?.exchange_rates as Record<string, number> | null) ?? {};
+
+  const totals = computeTotals(
+    [
+      ...autoLinesToInsert.map((l) => ({
+        amount: l.amount,
+        sign: l.sign,
+        line_type: l.line_type,
+        currency: l.currency,
+      })),
+      ...manualLines.map((l) => ({
+        amount: Number(l.amount),
+        sign: l.sign,
+        line_type: l.line_type,
+        currency: l.currency ?? currency,
+      })),
+      ...siblingManualLines.map((l) => ({
+        amount: Number(l.amount),
+        sign: l.sign,
+        line_type: l.line_type,
+        currency: l.currency ?? currency,
+      })),
+    ],
+    currency,
+    exchangeRates,
+  );
 
   const payload = {
     organization_id: organizationId,
@@ -448,6 +539,7 @@ async function persistSettlement(opts: {
         description: l.description,
         amount: l.amount,
         sign: l.sign,
+        currency: l.currency,
         is_manual: false,
         meta: l.meta,
         display_order: idx,
@@ -456,12 +548,54 @@ async function persistSettlement(opts: {
     if (error) throw new Error(error.message);
   }
 
-  // Reordenar los ajustes manuales después de las líneas auto
+  // Reordenar los ajustes manuales del principal después de las líneas auto
   for (let i = 0; i < manualLines.length; i++) {
     await admin
       .from("settlement_lines")
       .update({ display_order: autoLinesToInsert.length + i })
       .eq("id", manualLines[i].id);
+  }
+
+  // Mergear hermanas: mover sus líneas manuales al settlement principal y
+  // anularlas. Preservamos los display_order ordenados después de las nuestras.
+  if (siblingManualLines.length > 0) {
+    const baseOffset = autoLinesToInsert.length + manualLines.length;
+    for (let i = 0; i < siblingManualLines.length; i++) {
+      const { error } = await admin
+        .from("settlement_lines")
+        .update({
+          settlement_id: settlementId,
+          display_order: baseOffset + i,
+        })
+        .eq("id", siblingManualLines[i].id);
+      if (error) throw new Error(error.message);
+    }
+  }
+  if (siblings.length > 0) {
+    // Las líneas auto que quedaban en las hermanas se borran; sólo los
+    // manuales se mergean (los auto se acaban de re-generar para el principal
+    // tomando reservas de TODAS las monedas).
+    await admin
+      .from("settlement_lines")
+      .delete()
+      .in(
+        "settlement_id",
+        siblings.map((s) => s.id),
+      )
+      .eq("is_manual", false);
+    await admin
+      .from("owner_settlements")
+      .update({
+        status: "anulada",
+        notes: `Mergeada al regenerar en ${currency}`,
+        last_edited_by: userId,
+        last_edited_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .in(
+        "id",
+        siblings.map((s) => s.id),
+      );
   }
 
   if (ticketIds.length > 0) {
@@ -496,79 +630,23 @@ async function generateOne(opts: {
   currency: string;
   userId: string;
 }): Promise<{ settlement: OwnerSettlement; lineCount: number }> {
-  const { admin, ownerId, year, month, currency } = opts;
+  const { admin, ownerId, year, month } = opts;
   const { lines: autoLines, ticketIds } = await buildSettlementLines({
     admin,
     ownerId,
     year,
     month,
-    currency,
   });
   return persistSettlement({ ...opts, autoLines, ticketIds });
 }
 
-/** Unidades asignadas a un propietario (ids). */
-async function ownerUnitIds(admin: Admin, ownerId: string): Promise<string[]> {
-  const { data } = await admin
-    .from("unit_owners")
-    .select("unit_id")
-    .eq("owner_id", ownerId);
-  return (data ?? []).map((r) => r.unit_id as string);
-}
-
-/**
- * Monedas con actividad para un owner en el período: monedas de reservas
- * liquidables + monedas de tickets a cargo del propietario + monedas de
- * liquidaciones ya existentes (para no dejarlas huérfanas al regenerar).
- * Siempre incluye la moneda base (se sigue generando como hasta hoy).
- */
-async function ownerCurrenciesForPeriod(opts: {
-  admin: Admin;
-  organizationId: string;
-  ownerId: string;
-  unitIds: string[];
-  year: number;
-  month: number;
-}): Promise<string[]> {
-  const { admin, organizationId, ownerId, unitIds, year, month } = opts;
-  const periodStart = new Date(year, month - 1, 1).toISOString().slice(0, 10);
-  const periodEnd = new Date(year, month, 0).toISOString().slice(0, 10);
-
-  const set = new Set<string>([BASE_CURRENCY]);
-
-  if (unitIds.length > 0) {
-    const { data: bk } = await admin
-      .from("bookings")
-      .select("currency")
-      .in("unit_id", unitIds)
-      .in("status", SETTLEMENT_BOOKING_STATUSES as unknown as string[])
-      .lte("check_in_date", periodEnd)
-      .gte("check_out_date", periodStart);
-    for (const b of bk ?? []) if (b.currency) set.add(b.currency as string);
-
-    const { data: tk } = await admin
-      .from("maintenance_tickets")
-      .select("cost_currency")
-      .in("unit_id", unitIds)
-      .eq("billable_to", "owner")
-      .eq("related_owner_id", ownerId)
-      .is("charged_to_owner_at", null)
-      .not("actual_cost", "is", null);
-    for (const t of tk ?? [])
-      if (t.cost_currency) set.add(t.cost_currency as string);
-  }
-
-  const { data: ex } = await admin
-    .from("owner_settlements")
-    .select("currency")
-    .eq("organization_id", organizationId)
-    .eq("owner_id", ownerId)
-    .eq("period_year", year)
-    .eq("period_month", month);
-  for (const s of ex ?? []) if (s.currency) set.add(s.currency as string);
-
-  return Array.from(set);
-}
+// Helpers removidos en migración 027 (settlements multi-moneda):
+//   • ownerUnitIds — el caller ya no necesitaba el listado de unidades para
+//     "saltear" propietarios sin units; ahora persistSettlement lanza
+//     NoUnitsError vía buildSettlementLines y el caller reporta el error.
+//   • ownerCurrenciesForPeriod — el modelo viejo creaba un settlement por
+//     moneda. Ahora hay un único settlement por owner+período que absorbe
+//     todas las monedas en sus líneas.
 
 /**
  * Genera (o regenera) la liquidación de un owner para un período mes/año.
@@ -631,61 +709,11 @@ export async function generateSettlement(
     return { ok: false, reason: "unknown", message: msg };
   }
 
-  // Asegurar también las liquidaciones del owner en las OTRAS monedas con
-  // actividad en el período. Best-effort: una moneda cerrada o sin cambios no
-  // bloquea la regeneración pedida.
-  try {
-    const unitIds = await ownerUnitIds(admin, ownerId);
-    if (unitIds.length > 0) {
-      const currencies = await ownerCurrenciesForPeriod({
-        admin,
-        organizationId: organization.id,
-        ownerId,
-        unitIds,
-        year,
-        month,
-      });
-      for (const cur of currencies) {
-        if (cur === currency) continue;
-        try {
-          const { lines: autoLines, ticketIds } = await buildSettlementLines({
-            admin,
-            ownerId,
-            year,
-            month,
-            currency: cur,
-          });
-          if (autoLines.length === 0 && cur !== BASE_CURRENCY) {
-            const { data: ex } = await admin
-              .from("owner_settlements")
-              .select("id")
-              .eq("organization_id", organization.id)
-              .eq("owner_id", ownerId)
-              .eq("period_year", year)
-              .eq("period_month", month)
-              .eq("currency", cur)
-              .maybeSingle();
-            if (!ex) continue;
-          }
-          await persistSettlement({
-            admin,
-            organizationId: organization.id,
-            ownerId,
-            year,
-            month,
-            currency: cur,
-            userId: session.userId,
-            autoLines,
-            ticketIds,
-          });
-        } catch {
-          /* moneda cerrada / sin cambios: no bloquea la principal */
-        }
-      }
-    }
-  } catch {
-    /* detección de monedas falló: la liquidación pedida igual se generó */
-  }
+  // Multi-moneda: ya no creamos liquidaciones "hermanas" por moneda. La
+  // liquidación principal absorbe TODAS las reservas (cada línea persiste su
+  // currency) y el usuario ingresa el TC en el detalle (`exchange_rates`).
+  // `persistSettlement` además anula y mergea hermanas en borrador que
+  // hubieran quedado del modelo viejo (compat backward).
 
   const { data: linesData } = await admin
     .from("settlement_lines")
@@ -725,85 +753,47 @@ export async function generateSettlementsForPeriod(
 
   const results: PeriodGenerationResult[] = [];
   for (const o of owners ?? []) {
-    const unitIds = await ownerUnitIds(admin, o.id);
-    if (unitIds.length === 0) {
+    try {
+      const { lines: autoLines, ticketIds } = await buildSettlementLines({
+        admin,
+        ownerId: o.id,
+        year,
+        month,
+      });
+
+      const r = await persistSettlement({
+        admin,
+        organizationId: organization.id,
+        ownerId: o.id,
+        year,
+        month,
+        currency: BASE_CURRENCY,
+        userId: session.userId,
+        autoLines,
+        ticketIds,
+      });
+      results.push({
+        owner_id: o.id,
+        owner_name: o.full_name,
+        ok: true,
+        net: Number(r.settlement.net_payable),
+        currency: BASE_CURRENCY,
+        lines: r.lineCount,
+      });
+    } catch (e) {
+      const msg = (e as Error).message;
       results.push({
         owner_id: o.id,
         owner_name: o.full_name,
         ok: false,
-        skipped: "Sin unidades asignadas",
+        currency: BASE_CURRENCY,
+        skipped:
+          msg === "NO_UNITS"
+            ? "Sin unidades asignadas"
+            : /ya está/.test(msg)
+              ? "Ya cerrada (no se regenera)"
+              : msg,
       });
-      continue;
-    }
-
-    const currencies = await ownerCurrenciesForPeriod({
-      admin,
-      organizationId: organization.id,
-      ownerId: o.id,
-      unitIds,
-      year,
-      month,
-    });
-
-    for (const cur of currencies) {
-      try {
-        const { lines: autoLines, ticketIds } = await buildSettlementLines({
-          admin,
-          ownerId: o.id,
-          year,
-          month,
-          currency: cur,
-        });
-
-        // No crear liquidaciones vacías en monedas != base si no existían
-        // (ej. una reserva en USD que recién cierra el mes que viene).
-        if (autoLines.length === 0 && cur !== BASE_CURRENCY) {
-          const { data: ex } = await admin
-            .from("owner_settlements")
-            .select("id")
-            .eq("organization_id", organization.id)
-            .eq("owner_id", o.id)
-            .eq("period_year", year)
-            .eq("period_month", month)
-            .eq("currency", cur)
-            .maybeSingle();
-          if (!ex) continue;
-        }
-
-        const r = await persistSettlement({
-          admin,
-          organizationId: organization.id,
-          ownerId: o.id,
-          year,
-          month,
-          currency: cur,
-          userId: session.userId,
-          autoLines,
-          ticketIds,
-        });
-        results.push({
-          owner_id: o.id,
-          owner_name: o.full_name,
-          ok: true,
-          net: Number(r.settlement.net_payable),
-          currency: cur,
-          lines: r.lineCount,
-        });
-      } catch (e) {
-        const msg = (e as Error).message;
-        results.push({
-          owner_id: o.id,
-          owner_name: o.full_name,
-          ok: false,
-          currency: cur,
-          skipped:
-            msg === "NO_UNITS"
-              ? "Sin unidades asignadas"
-              : /ya está/.test(msg)
-                ? "Ya cerrada (no se regenera)"
-                : msg,
-        });
-      }
     }
   }
 
@@ -834,16 +824,32 @@ type EditableSettlement = {
 };
 
 async function recomputeSettlementTotals(admin: Admin, settlementId: string) {
-  const { data: lines } = await admin
-    .from("settlement_lines")
-    .select("amount, sign, line_type")
-    .eq("settlement_id", settlementId);
+  // Multi-moneda: leemos también `currency` de cada línea + `currency`
+  // (base) y `exchange_rates` del settlement padre, así un cambio de TC
+  // recalcula correctamente sin que tengamos que rehidratar nada más.
+  const [{ data: lines }, { data: parent }] = await Promise.all([
+    admin
+      .from("settlement_lines")
+      .select("amount, sign, line_type, currency")
+      .eq("settlement_id", settlementId),
+    admin
+      .from("owner_settlements")
+      .select("currency, exchange_rates")
+      .eq("id", settlementId)
+      .maybeSingle(),
+  ]);
+  const baseCurrency = (parent?.currency as string | null) ?? BASE_CURRENCY;
+  const exchangeRates =
+    (parent?.exchange_rates as Record<string, number> | null) ?? {};
   const totals = computeTotals(
     (lines ?? []).map((l) => ({
       amount: Number(l.amount),
       sign: l.sign as "+" | "-",
       line_type: l.line_type as SettlementLine["line_type"],
+      currency: (l.currency as string | null) ?? baseCurrency,
     })),
+    baseCurrency,
+    exchangeRates,
   );
   await admin.from("owner_settlements").update(totals).eq("id", settlementId);
   return totals;
@@ -1018,6 +1024,11 @@ const lineInputSchema = z.object({
   unit_id: z.string().uuid().optional().nullable(),
   amount: z.coerce.number().positive("El importe debe ser mayor a 0"),
   sign: z.enum(["+", "-"]),
+  /**
+   * Moneda del cargo. Default 'ARS' (la base). Útil cuando el propietario
+   * recibe un gasto en USD que querés reflejar sin convertir en el documento.
+   */
+  currency: z.string().min(3).max(8).optional(),
   /** false = solo visual (no postea ajuste en Caja). Default true. */
   impact_caja: z.boolean().optional(),
 });
@@ -1054,6 +1065,7 @@ export async function addSettlementLine(input: z.input<typeof lineInputSchema>) 
     description: v.description,
     amount: v.amount,
     sign: v.sign,
+    currency: v.currency ?? before.currency,
     is_manual: true,
     meta: null,
     display_order: nextOrder,
@@ -1401,6 +1413,7 @@ export async function updateSettlementBookingRow(
       description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}`,
       amount: round2(v.commission),
       sign: "-",
+      currency: revenue.currency,
       meta: null,
       display_order: (revenue.display_order ?? 0) + 1,
       created_by: session.userId,
@@ -1438,6 +1451,7 @@ export async function updateSettlementBookingRow(
         description: "Gastos",
         amount: round2(v.expenses),
         sign: "-",
+        currency: revenue.currency,
         meta: null,
         display_order: (revenue.display_order ?? 0) + 2,
         created_by: session.userId,
@@ -1506,6 +1520,8 @@ const addBookingRowSchema = z.object({
   gross: z.coerce.number().min(0, "El bruto no puede ser negativo"),
   commission: z.coerce.number().min(0),
   expenses: z.coerce.number().min(0),
+  /** Moneda de la reserva cargada a mano. Default = base del settlement. */
+  currency: z.string().min(3).max(8).optional(),
 });
 
 /**
@@ -1563,6 +1579,7 @@ export async function addSettlementBookingRow(
       ? `${v.check_in} → ${v.check_out}`
       : `${v.nights} noches`;
 
+  const lineCurrency = v.currency ?? before.currency;
   const stamp = {
     is_manual: true,
     created_by: session.userId,
@@ -1580,6 +1597,7 @@ export async function addSettlementBookingRow(
       description: `Reserva ${rangeLabel} (${unit.code})`,
       amount: round2(v.gross),
       sign: "+",
+      currency: lineCurrency,
       meta: {
         guest_name: guestName,
         nights: v.nights,
@@ -1603,6 +1621,7 @@ export async function addSettlementBookingRow(
       description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}`,
       amount: round2(v.commission),
       sign: "-",
+      currency: lineCurrency,
       meta: null,
       display_order: baseOrder + 1,
       ...stamp,
@@ -1618,6 +1637,7 @@ export async function addSettlementBookingRow(
       description: "Gastos",
       amount: round2(v.expenses),
       sign: "-",
+      currency: lineCurrency,
       meta: null,
       display_order: baseOrder + 2,
       ...stamp,
@@ -2035,6 +2055,77 @@ export async function moveSettlementBookingRow(
   return { ok: true as const };
 }
 
+const exchangeRateSchema = z.object({
+  settlement_id: z.string().uuid(),
+  currency: z.string().min(3).max(8),
+  /** 0 = borrar la tasa (líneas en esa moneda dejan de sumar al total). */
+  rate: z.coerce.number().min(0).max(1_000_000),
+});
+
+/**
+ * Setea (o borra) la tasa de cambio de una moneda contra la moneda base de la
+ * liquidación. Persiste en `owner_settlements.exchange_rates` (jsonb) y
+ * dispara un recálculo de totales. Si la liquidación está pagada, postea el
+ * asiento de ajuste por la diferencia de neto.
+ */
+export async function setSettlementExchangeRate(
+  input: z.input<typeof exchangeRateSchema>,
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = exchangeRateSchema.parse(input);
+  const admin = createAdminClient();
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  if (v.currency === before.currency) {
+    throw new Error("La moneda base no necesita tipo de cambio");
+  }
+
+  const { data: parent } = await admin
+    .from("owner_settlements")
+    .select("exchange_rates")
+    .eq("id", v.settlement_id)
+    .maybeSingle();
+  const prevRates =
+    (parent?.exchange_rates as Record<string, number> | null) ?? {};
+  const previous = Number(prevRates[v.currency] ?? 0);
+
+  const nextRates: Record<string, number> = { ...prevRates };
+  if (v.rate <= 0) {
+    delete nextRates[v.currency];
+  } else {
+    nextRates[v.currency] = round2(v.rate);
+  }
+
+  const { error } = await admin
+    .from("owner_settlements")
+    .update({ exchange_rates: nextRates })
+    .eq("id", v.settlement_id);
+  if (error) throw new Error(error.message);
+
+  return reconcileAfterEdit({
+    admin,
+    before,
+    userId: session.userId,
+    actorName: actorNameOf(session),
+    action: "line_update",
+    changes: {
+      kind: "exchange_rate",
+      currency: v.currency,
+      rate: { from: previous, to: v.rate },
+    },
+    reason: `actualizó TC ${v.currency} a ${v.rate}`,
+    impactCaja: true,
+  });
+}
+
 /** Historial de cambios de la liquidación (más recientes primero). */
 export async function listSettlementAudit(
   settlementId: string,
@@ -2074,6 +2165,12 @@ export async function listSettlements(filters?: {
   ownerId?: string;
   year?: number;
   month?: number;
+  /**
+   * Por defecto ocultamos las liquidaciones anuladas — desde la migración 027
+   * las "hermanas" mono-moneda viejas se anulan al regenerar el documento
+   * unificado y aparecerían como duplicadas en el listado principal.
+   */
+  includeAnuladas?: boolean;
 }) {
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "view")) {
@@ -2087,6 +2184,7 @@ export async function listSettlements(filters?: {
   if (filters?.ownerId) q = q.eq("owner_id", filters.ownerId);
   if (filters?.year) q = q.eq("period_year", filters.year);
   if (filters?.month) q = q.eq("period_month", filters.month);
+  if (!filters?.includeAnuladas) q = q.neq("status", "anulada");
   const { data, error } = await q
     .order("period_year", { ascending: false })
     .order("period_month", { ascending: false });
@@ -2158,6 +2256,10 @@ export async function listSettlementSiblings(
     .maybeSingle();
   if (!base) return [];
 
+  // Excluimos las anuladas — desde la migración 027 las hermanas mono-moneda
+  // se anulan al regenerar el documento unificado, y mostrarlas confunde
+  // (parecería que hay "dos liquidaciones del mismo período" cuando en
+  // realidad la principal absorbió las líneas de la otra).
   const { data } = await admin
     .from("owner_settlements")
     .select("id, currency, status, net_payable")
@@ -2166,6 +2268,7 @@ export async function listSettlementSiblings(
     .eq("period_year", base.period_year)
     .eq("period_month", base.period_month)
     .neq("id", id)
+    .neq("status", "anulada")
     .order("currency");
 
   return (data ?? []).map((s) => ({

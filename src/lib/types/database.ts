@@ -624,6 +624,13 @@ export interface OwnerSettlement {
    * documento. [] = sin override → la UI ordena alfabéticamente por unit.code.
    */
   unit_order: string[];
+  /**
+   * Tasas de cambio contra la moneda base (`currency`). Formato:
+   *   `{ "USD": 1300, "EUR": 1450 }`
+   * Editable por el usuario en el detalle. Líneas en una moneda sin tasa se
+   * tratan como `0` al sumar el total — la UI debe avisar.
+   */
+  exchange_rates: Record<string, number>;
   created_at: string;
   updated_at: string;
 }
@@ -685,6 +692,12 @@ export interface SettlementLine {
   description: string;
   amount: number;
   sign: "+" | "-";
+  /**
+   * Moneda de la línea. Si difiere de la moneda base de
+   * `owner_settlements.currency`, se convierte vía `exchange_rates` al calcular
+   * totales. Default 'ARS' (consistente con la BD).
+   */
+  currency: string;
   /** true = ajuste manual; se preserva al regenerar. */
   is_manual: boolean;
   /** Snapshot para la planilla (ver SettlementLineMeta). */

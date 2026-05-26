@@ -9,6 +9,13 @@ import { formatPeriod, settlementNumber, SETTLEMENT_STATUS_META } from "./labels
  *
  * Lo consumen el Excel, el PDF y la pantalla — una sola fuente de verdad de
  * la estructura del documento.
+ *
+ * Multi-moneda (migración 027): cada `StatementLineInput` lleva su `currency`
+ * (nativa). Los subtotales por unidad y los totales del documento se calculan
+ * en la moneda base (`StatementInput.currency`, default ARS) usando
+ * `exchange_rates` para convertir las líneas que no estén en base. Las filas
+ * individuales conservan su moneda original para mostrarlas en su denominación
+ * y agregar al lado el equivalente en base.
  */
 
 export interface StatementLineInput {
@@ -20,6 +27,8 @@ export interface StatementLineInput {
   description: string;
   amount: number;
   sign: "+" | "-";
+  /** Moneda nativa de la línea (default = base si la BD trae null/legacy). */
+  currency?: string | null;
   is_manual?: boolean | null;
   meta?: SettlementLineMeta | null;
   /**
@@ -37,6 +46,7 @@ export interface StatementInput {
   period_year: number;
   period_month: number;
   status: string;
+  /** Moneda BASE del documento (ARS por default). */
   currency: string;
   gross_revenue: number;
   commission_amount: number;
@@ -53,6 +63,11 @@ export interface StatementInput {
   } | null;
   /** Override del orden de unidades del documento. [] → orden alfabético. */
   unit_order?: string[] | null;
+  /**
+   * Tasas de cambio contra la moneda base. Formato: `{ "USD": 1300, ... }`.
+   * Las líneas en monedas sin tasa cuentan como 0 al sumar el total.
+   */
+  exchange_rates?: Record<string, number> | null;
   lines: StatementLineInput[];
 }
 
@@ -64,12 +79,24 @@ export interface StatementBookingRow {
   nights: number | null;
   source: string | null;
   mode: "temporario" | "mensual" | null;
+  /** Moneda nativa del grupo (de la línea de revenue). */
+  currency: string;
+  /** Importes en moneda NATIVA. */
   gross: number;
   commissionPct: number | null;
   commission: number;
   /** limpieza + expensas + otros descuentos del mismo grupo */
   expenses: number;
   net: number;
+  /**
+   * Mismo `net` pero convertido a moneda base (`StatementInput.currency`).
+   * Si la línea ya está en base, es igual al `net`. Si falta TC, es 0.
+   */
+  netInBase: number;
+  /** true si la moneda nativa difiere de la base. UI muestra "≈ ARS X" aparte. */
+  needsConversion: boolean;
+  /** true si la moneda nativa NO es base Y NO hay TC cargado. UI: warning. */
+  missingRate: boolean;
 }
 
 export interface StatementUnitGroup {
@@ -77,7 +104,10 @@ export interface StatementUnitGroup {
   code: string;
   name: string;
   rows: StatementBookingRow[];
+  /** Subtotales convertidos a moneda base. */
   subtotal: { gross: number; commission: number; expenses: number; net: number };
+  /** Monedas distintas presentes en las reservas de esta unidad. */
+  currencies: string[];
 }
 
 /** Cada fila de "Reservas" lleva el order del grupo para el drag-and-drop. */
@@ -93,12 +123,20 @@ export interface StatementOtherRow {
   line_type: SettlementLine["line_type"];
   unitCode: string | null;
   sign: "+" | "-";
+  /** Moneda nativa del cargo. */
+  currency: string;
+  /** Importe en moneda NATIVA. */
   amount: number;
+  /** Mismo importe convertido a base. 0 si falta TC. */
+  amountInBase: number;
+  needsConversion: boolean;
+  missingRate: boolean;
 }
 
 export interface StatementModel {
   number: string;
   periodLabel: string;
+  /** Moneda base del documento (en la que se totaliza). */
   currency: string;
   status: string;
   statusLabel: string;
@@ -111,7 +149,14 @@ export interface StatementModel {
   };
   units: StatementUnitGroup[];
   otros: StatementOtherRow[];
+  /** Totales SIEMPRE en moneda base (ARS) — equivalentes a los persistidos. */
   totals: { gross: number; commission: number; deductions: number; net: number };
+  /** Tasas de cambio activas del documento. */
+  exchangeRates: Record<string, number>;
+  /** Monedas distintas detectadas en las líneas (sin la base). */
+  foreignCurrencies: string[];
+  /** Monedas que aparecen en líneas pero NO tienen TC cargado. */
+  missingRates: string[];
   generated_at: string | null;
   sent_at: string | null;
   paid_at: string | null;
@@ -119,7 +164,26 @@ export interface StatementModel {
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+function convert(
+  amount: number,
+  fromCurrency: string,
+  baseCurrency: string,
+  rates: Record<string, number>,
+): { value: number; needs: boolean; missing: boolean } {
+  if (fromCurrency === baseCurrency) {
+    return { value: amount, needs: false, missing: false };
+  }
+  const rate = Number(rates?.[fromCurrency] ?? 0);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    return { value: 0, needs: true, missing: true };
+  }
+  return { value: round2(amount * rate), needs: true, missing: false };
+}
+
 export function buildStatementModel(s: StatementInput): StatementModel {
+  const baseCurrency = s.currency;
+  const exchangeRates: Record<string, number> = s.exchange_rates ?? {};
+
   const bookingGroups = new Map<string, StatementLineInput[]>();
   const otros: StatementOtherRow[] = [];
 
@@ -131,6 +195,9 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       arr.push(l);
       bookingGroups.set(l.ref_id, arr);
     } else {
+      const lineCurrency = l.currency ?? baseCurrency;
+      const amountNative = round2(Number(l.amount));
+      const conv = convert(amountNative, lineCurrency, baseCurrency, exchangeRates);
       otrosWithOrder.push({
         row: {
           id: l.id,
@@ -138,7 +205,11 @@ export function buildStatementModel(s: StatementInput): StatementModel {
           line_type: l.line_type,
           unitCode: l.unit?.code ?? null,
           sign: l.sign,
-          amount: round2(Number(l.amount)),
+          currency: lineCurrency,
+          amount: amountNative,
+          amountInBase: conv.value,
+          needsConversion: conv.needs,
+          missingRate: conv.missing,
         },
         order: Number(l.display_order ?? 0),
       });
@@ -150,6 +221,8 @@ export function buildStatementModel(s: StatementInput): StatementModel {
   for (const o of otrosWithOrder) otros.push(o.row);
 
   const unitMap = new Map<string, StatementUnitGroup>();
+  const foreignCurrenciesSet = new Set<string>();
+  const missingRatesSet = new Set<string>();
 
   for (const [refId, group] of bookingGroups) {
     const revenue =
@@ -160,6 +233,11 @@ export function buildStatementModel(s: StatementInput): StatementModel {
             g.line_type === "monthly_rent_fraction"),
       ) ?? group.find((g) => g.sign === "+");
     const meta = revenue?.meta ?? null;
+    // Tomamos la moneda del revenue como representativa del grupo. En la
+    // práctica todas las líneas del grupo viven en la misma moneda (la del
+    // booking), pero por seguridad caemos a la primera con currency definido.
+    const rowCurrency =
+      revenue?.currency ?? group.find((g) => g.currency)?.currency ?? baseCurrency;
 
     const gross = round2(
       group.filter((g) => g.sign === "+").reduce((acc, g) => acc + Number(g.amount), 0),
@@ -175,6 +253,9 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         .reduce((acc, g) => acc + Number(g.amount), 0),
     );
     const net = round2(gross - commission - expenses);
+    const netConv = convert(net, rowCurrency, baseCurrency, exchangeRates);
+    if (rowCurrency !== baseCurrency) foreignCurrenciesSet.add(rowCurrency);
+    if (netConv.missing) missingRatesSet.add(rowCurrency);
 
     const u = revenue?.unit ?? group[0]?.unit ?? null;
     const k = (revenue ?? group[0]).unit_id ?? "__none__";
@@ -186,6 +267,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         name: u?.name ?? "Sin unidad",
         rows: [],
         subtotal: { gross: 0, commission: 0, expenses: 0, net: 0 },
+        currencies: [],
       };
       unitMap.set(k, ug);
     }
@@ -204,13 +286,23 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       nights: meta?.nights ?? null,
       source: meta?.source ?? null,
       mode: meta?.mode ?? null,
+      currency: rowCurrency,
       gross,
       commissionPct: meta?.commission_pct ?? null,
       commission,
       expenses,
       net,
+      netInBase: netConv.value,
+      needsConversion: netConv.needs,
+      missingRate: netConv.missing,
       display_order: groupOrder ?? 0,
     });
+  }
+
+  // Marcamos también las monedas de "otros cargos" para el aviso global.
+  for (const o of otros) {
+    if (o.currency !== baseCurrency) foreignCurrenciesSet.add(o.currency);
+    if (o.missingRate) missingRatesSet.add(o.currency);
   }
 
   const orderOverride = Array.isArray(s.unit_order) ? s.unit_order : [];
@@ -220,7 +312,6 @@ export function buildStatementModel(s: StatementInput): StatementModel {
   const units = Array.from(unitMap.values()).sort((a, b) => {
     const ai = a.unit_id ? orderIndex.get(a.unit_id) : undefined;
     const bi = b.unit_id ? orderIndex.get(b.unit_id) : undefined;
-    // Las unidades fuera del override caen al final, ordenadas por code.
     if (ai != null && bi != null) return ai - bi;
     if (ai != null) return -1;
     if (bi != null) return 1;
@@ -232,18 +323,80 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         return a.display_order - b.display_order;
       return (a.check_in ?? "").localeCompare(b.check_in ?? "");
     });
+    const currencySet = new Set<string>();
     ug.subtotal = ug.rows.reduce(
-      (acc, r) => ({
-        gross: round2(acc.gross + r.gross),
-        commission: round2(acc.commission + r.commission),
-        expenses: round2(acc.expenses + r.expenses),
-        net: round2(acc.net + r.net),
-      }),
+      (acc, r) => {
+        currencySet.add(r.currency);
+        // Convertimos cada componente del subtotal a base. Si la moneda es la
+        // base, las funciones convert() devuelven los mismos valores.
+        const grossConv = convert(r.gross, r.currency, baseCurrency, exchangeRates);
+        const commConv = convert(
+          r.commission,
+          r.currency,
+          baseCurrency,
+          exchangeRates,
+        );
+        const expConv = convert(
+          r.expenses,
+          r.currency,
+          baseCurrency,
+          exchangeRates,
+        );
+        return {
+          gross: round2(acc.gross + grossConv.value),
+          commission: round2(acc.commission + commConv.value),
+          expenses: round2(acc.expenses + expConv.value),
+          net: round2(acc.net + r.netInBase),
+        };
+      },
       { gross: 0, commission: 0, expenses: 0, net: 0 },
     );
+    ug.currencies = Array.from(currencySet).sort();
   }
 
-  const meta =
+  // Totales del documento: sumamos en base. La regla es la misma que en el
+  // backend (`computeTotals` con conversion), así que matchean los valores
+  // persistidos en `owner_settlements.{gross_revenue,commission_amount,...}`.
+  // Pero recalculamos en cliente para reflejar instantáneamente cambios de TC
+  // antes de persistir (la UI puede previsualizar).
+  const totals = (() => {
+    let gross = 0;
+    let commission = 0;
+    let deductions = 0;
+    let net = 0;
+    const pushLine = (
+      amount: number,
+      currency: string,
+      sign: "+" | "-",
+      lineType: SettlementLine["line_type"],
+    ) => {
+      const c = convert(amount, currency, baseCurrency, exchangeRates).value;
+      if (sign === "+") {
+        gross += c;
+        net += c;
+      } else {
+        net -= c;
+        if (lineType === "commission") commission += c;
+        else deductions += c;
+      }
+    };
+    for (const l of s.lines) {
+      pushLine(
+        Number(l.amount),
+        l.currency ?? baseCurrency,
+        l.sign,
+        l.line_type,
+      );
+    }
+    return {
+      gross: round2(gross),
+      commission: round2(commission),
+      deductions: round2(deductions),
+      net: round2(net),
+    };
+  })();
+
+  const statusMeta =
     SETTLEMENT_STATUS_META[s.status as keyof typeof SETTLEMENT_STATUS_META] ?? {
       label: s.status,
       color: "#64748b",
@@ -252,10 +405,10 @@ export function buildStatementModel(s: StatementInput): StatementModel {
   return {
     number: settlementNumber(s.id, s.period_year, s.period_month),
     periodLabel: formatPeriod(s.period_year, s.period_month),
-    currency: s.currency,
+    currency: baseCurrency,
     status: s.status,
-    statusLabel: meta.label,
-    statusColor: meta.color,
+    statusLabel: statusMeta.label,
+    statusColor: statusMeta.color,
     owner: {
       full_name: s.owner?.full_name ?? "—",
       bank_name: s.owner?.bank_name ?? null,
@@ -264,12 +417,10 @@ export function buildStatementModel(s: StatementInput): StatementModel {
     },
     units,
     otros,
-    totals: {
-      gross: round2(Number(s.gross_revenue)),
-      commission: round2(Number(s.commission_amount)),
-      deductions: round2(Number(s.deductions_amount)),
-      net: round2(Number(s.net_payable)),
-    },
+    totals,
+    exchangeRates,
+    foreignCurrencies: Array.from(foreignCurrenciesSet).sort(),
+    missingRates: Array.from(missingRatesSet).sort(),
     generated_at: s.generated_at ?? null,
     sent_at: s.sent_at ?? null,
     paid_at: s.paid_at ?? null,

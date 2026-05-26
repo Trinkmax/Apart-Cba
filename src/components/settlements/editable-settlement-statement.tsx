@@ -92,6 +92,7 @@ import {
   reorderSettlementBookings,
   reorderSettlementUnits,
   moveSettlementBookingRow,
+  setSettlementExchangeRate,
 } from "@/lib/actions/settlements";
 import type { StatementModel } from "@/lib/settlements/statement-model";
 import type { SettlementLine, SettlementAuditEntry } from "@/lib/types/database";
@@ -556,6 +557,150 @@ function RowEditor({
   );
 }
 
+/* ─────────────────────── Tipos de cambio (TC USD/EUR/…) ──────────────────
+ * Aparece arriba de la planilla cuando el documento tiene líneas en otra
+ * moneda distinta a la base. El usuario carga el TC y la liquidación
+ * recalcula totales — si está pagada, postea el asiento de ajuste por la
+ * diferencia automáticamente (vía reconcileAfterEdit). Cada input se
+ * confirma con blur o Enter; no hay botón "Aplicar" por moneda para evitar
+ * fricción.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+function ExchangeRateBar({
+  settlementId,
+  baseCurrency,
+  foreignCurrencies,
+  exchangeRates,
+  missingRates,
+  editable,
+}: {
+  settlementId: string;
+  baseCurrency: string;
+  foreignCurrencies: string[];
+  exchangeRates: Record<string, number>;
+  missingRates: string[];
+  editable: boolean;
+}) {
+  if (foreignCurrencies.length === 0) return null;
+  const hasMissing = missingRates.length > 0;
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-3 sm:p-4 space-y-2",
+        hasMissing
+          ? "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900"
+          : "bg-muted/40",
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="h-4 w-1 rounded-full bg-primary" />
+          <h3 className="text-sm font-semibold">Tipos de cambio</h3>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          1 unidad de la moneda extranjera = X {baseCurrency}.
+        </p>
+      </div>
+      {hasMissing && (
+        <p className="text-[11px] text-amber-700 dark:text-amber-300">
+          Cargá el TC de {missingRates.join(", ")} para que las reservas en esa
+          moneda se sumen al total en {baseCurrency}.
+        </p>
+      )}
+      <div className="flex flex-wrap gap-3">
+        {foreignCurrencies.map((cur) => (
+          <ExchangeRateInput
+            key={cur}
+            settlementId={settlementId}
+            baseCurrency={baseCurrency}
+            currency={cur}
+            currentRate={Number(exchangeRates[cur] ?? 0)}
+            editable={editable}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ExchangeRateInput({
+  settlementId,
+  baseCurrency,
+  currency,
+  currentRate,
+  editable,
+}: {
+  settlementId: string;
+  baseCurrency: string;
+  currency: string;
+  currentRate: number;
+  editable: boolean;
+}) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  // Edit-in-place: el value local sincroniza con el prop cuando router.refresh
+  // trae un valor nuevo (otra pestaña, otra acción, etc.).
+  const [draft, setDraft] = useState<string>(
+    currentRate > 0 ? String(currentRate) : "",
+  );
+  const [prevPropRate, setPrevPropRate] = useState(currentRate);
+  if (prevPropRate !== currentRate) {
+    setPrevPropRate(currentRate);
+    setDraft(currentRate > 0 ? String(currentRate) : "");
+  }
+
+  function commit() {
+    const next = num(draft);
+    if (Math.abs(next - currentRate) < 0.001) return; // sin cambios
+    start(async () => {
+      try {
+        await setSettlementExchangeRate({
+          settlement_id: settlementId,
+          currency,
+          rate: next,
+        });
+        toast.success(`TC ${currency} actualizado`);
+        router.refresh();
+      } catch (e) {
+        toast.error("No se pudo actualizar el TC", {
+          description: (e as Error).message,
+        });
+        setDraft(currentRate > 0 ? String(currentRate) : "");
+      }
+    });
+  }
+
+  return (
+    <div className="flex items-center gap-2 min-w-[220px]">
+      <span className="font-mono text-xs font-semibold w-10">{currency}</span>
+      <span className="text-xs text-muted-foreground">→</span>
+      <div className="relative flex-1">
+        <Input
+          type="number"
+          step="0.01"
+          inputMode="decimal"
+          value={draft}
+          placeholder="0,00"
+          disabled={!editable || pending}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          className="h-8 pr-12 text-sm"
+        />
+        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+          {baseCurrency}
+        </span>
+      </div>
+      {pending && <Loader2 size={12} className="animate-spin" />}
+    </div>
+  );
+}
+
 /* ─────────────────────────── Sortables (DnD) ──────────────────────────
  * Tres wrappers ligeros sobre @dnd-kit/sortable:
  *   • SortableUnitBlock   → un bloque de unidad completo (Reservas)
@@ -810,16 +955,35 @@ function SortableBookingRow({
         {b.nights ?? "—"}
       </TableCell>
       <TableCell className="text-right tabular-nums font-medium">
-        {formatMoney(b.gross, currency)}
+        {formatMoney(b.gross, b.currency)}
       </TableCell>
       <TableCell className="text-right">
-        <Money n={b.commission} c={currency} neg />
+        <Money n={b.commission} c={b.currency} neg />
       </TableCell>
       <TableCell className="text-right">
-        <Money n={b.expenses} c={currency} neg />
+        <Money n={b.expenses} c={b.currency} neg />
       </TableCell>
       <TableCell className="text-right tabular-nums font-semibold">
-        {formatMoney(b.net, currency)}
+        <div>{formatMoney(b.net, b.currency)}</div>
+        {b.needsConversion && (
+          <div
+            className={cn(
+              "text-[10px] font-normal mt-0.5",
+              b.missingRate
+                ? "text-rose-600 dark:text-rose-400"
+                : "text-muted-foreground",
+            )}
+            title={
+              b.missingRate
+                ? `Falta cargar el TC ${b.currency} para sumar al total`
+                : `Convertido a ${currency}`
+            }
+          >
+            {b.missingRate
+              ? `falta TC ${b.currency}`
+              : `≈ ${formatMoney(b.netInBase, currency)}`}
+          </div>
+        )}
       </TableCell>
       {editable && (
         <TableCell className="w-14 p-0">
@@ -913,17 +1077,38 @@ function SortableChargeRow({
           </span>
         )}
       </span>
-      <span
-        className={cn(
-          "tabular-nums font-medium shrink-0",
-          o.sign === "+"
-            ? "text-emerald-600 dark:text-emerald-400"
-            : "text-rose-600 dark:text-rose-400",
+      <div className="flex flex-col items-end shrink-0">
+        <span
+          className={cn(
+            "tabular-nums font-medium",
+            o.sign === "+"
+              ? "text-emerald-600 dark:text-emerald-400"
+              : "text-rose-600 dark:text-rose-400",
+          )}
+        >
+          {o.sign === "+" ? "+" : "−"}
+          {formatMoney(o.amount, o.currency)}
+        </span>
+        {o.needsConversion && (
+          <span
+            className={cn(
+              "text-[10px] mt-0.5",
+              o.missingRate
+                ? "text-rose-600 dark:text-rose-400"
+                : "text-muted-foreground",
+            )}
+            title={
+              o.missingRate
+                ? `Falta cargar el TC ${o.currency}`
+                : `Convertido a ${currency}`
+            }
+          >
+            {o.missingRate
+              ? `falta TC ${o.currency}`
+              : `≈ ${o.sign === "+" ? "+" : "−"}${formatMoney(o.amountInBase, currency)}`}
+          </span>
         )}
-      >
-        {o.sign === "+" ? "+" : "−"}
-        {formatMoney(o.amount, currency)}
-      </span>
+      </div>
       {editable && (
         <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover/charge:opacity-100 transition-opacity">
           <Button
@@ -1632,6 +1817,15 @@ export function EditableSettlementStatement({
 
       {/* Planilla */}
       <div className="p-4 sm:p-6 space-y-6">
+        <ExchangeRateBar
+          settlementId={settlementId}
+          baseCurrency={c}
+          foreignCurrencies={model.foreignCurrencies}
+          exchangeRates={model.exchangeRates}
+          missingRates={model.missingRates}
+          editable={editable}
+        />
+
         {editable && (
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
