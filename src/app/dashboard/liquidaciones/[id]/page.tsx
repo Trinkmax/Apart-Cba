@@ -1,10 +1,11 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Coins } from "lucide-react";
+import { Archive, ArrowLeft, Coins } from "lucide-react";
 import {
   getSettlement,
   listSettlementAudit,
   listSettlementSiblings,
+  listSettlementMergedSiblings,
   listOwnerUnits,
 } from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
@@ -47,13 +48,15 @@ export default async function SettlementDetailPage({
   )) as unknown as SettlementDetail | null;
   if (!settlement) notFound();
 
-  const [branding, accounts, audit, siblings, ownerUnits] = await Promise.all([
-    getOrganizationBranding(),
-    listAccounts(),
-    listSettlementAudit(id),
-    listSettlementSiblings(id),
-    listOwnerUnits(settlement.owner_id),
-  ]);
+  const [branding, accounts, audit, siblings, mergedSiblings, ownerUnits] =
+    await Promise.all([
+      getOrganizationBranding(),
+      listAccounts(),
+      listSettlementAudit(id),
+      listSettlementSiblings(id),
+      listSettlementMergedSiblings(id),
+      listOwnerUnits(settlement.owner_id),
+    ]);
 
   const canCreate = can(role, "settlements", "create");
   const canUpdate = can(role, "settlements", "update");
@@ -130,6 +133,44 @@ export default async function SettlementDetailPage({
         canCreate={canCreate}
         canUpdate={canUpdate}
       />
+
+      {mergedSiblings.length > 0 && (
+        <div className="rounded-lg border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 px-4 py-3">
+          <div className="text-xs text-emerald-900 dark:text-emerald-200 mb-2 flex items-center gap-1.5">
+            <Archive size={14} className="shrink-0" />
+            <span>
+              Esta liquidación <strong>absorbió</strong>{" "}
+              {mergedSiblings.length === 1
+                ? "una liquidación"
+                : `${mergedSiblings.length} liquidaciones`}{" "}
+              previa
+              {mergedSiblings.length === 1 ? "" : "s"} al regenerar
+              {". "}
+              Sus reservas están integradas acá (con conversión por TC si
+              corresponde). Las originales quedaron archivadas para auditoría:
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {mergedSiblings.map((sib) => (
+              <Link
+                key={sib.id}
+                href={`/dashboard/liquidaciones/${sib.id}`}
+                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 dark:border-emerald-900 bg-card px-3 py-1.5 text-sm hover:bg-accent/40 transition-colors"
+              >
+                <span className="font-mono text-xs text-muted-foreground">
+                  {sib.currency}
+                </span>
+                <span className="font-semibold tabular-nums">
+                  {formatMoney(sib.net_payable, sib.currency)}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  archivada
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {siblings.length > 0 && (
         <div className="rounded-lg border bg-muted/40 px-4 py-3">

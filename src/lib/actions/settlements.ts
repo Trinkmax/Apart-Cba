@@ -2280,6 +2280,106 @@ export async function listSettlementSiblings(
 }
 
 /**
+ * Liquidaciones del mismo período/owner que fueron ANULADAS al absorberlas en
+ * este documento (notes='Mergeada al regenerar en ...'). Sirve para mostrar
+ * un banner "Esta liquidación absorbió X documento(s) archivado(s)" con link
+ * al detalle read-only — así el usuario confirma visualmente que el merge
+ * pasó OK y no perdió nada.
+ */
+export async function listSettlementMergedSiblings(
+  settlementId: string,
+): Promise<
+  Array<{
+    id: string;
+    currency: string;
+    net_payable: number;
+    generated_at: string | null;
+    notes: string | null;
+  }>
+> {
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) return [];
+  const id = z.string().uuid().parse(settlementId);
+  const admin = createAdminClient();
+
+  const { data: base } = await admin
+    .from("owner_settlements")
+    .select("owner_id, period_year, period_month")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!base) return [];
+
+  const { data } = await admin
+    .from("owner_settlements")
+    .select("id, currency, net_payable, generated_at, notes")
+    .eq("organization_id", organization.id)
+    .eq("owner_id", base.owner_id)
+    .eq("period_year", base.period_year)
+    .eq("period_month", base.period_month)
+    .neq("id", id)
+    .eq("status", "anulada")
+    .order("currency");
+
+  return (data ?? []).map((s) => ({
+    id: s.id as string,
+    currency: s.currency as string,
+    net_payable: Number(s.net_payable),
+    generated_at: s.generated_at as string | null,
+    notes: s.notes as string | null,
+  }));
+}
+
+/**
+ * Pre-flight para el botón "Regenerar" en el detalle: detecta si la
+ * regeneración va a ANULAR hermanas mono-moneda en otros currencies. La UI
+ * muestra un AlertDialog con la lista antes de proceder, así el usuario no
+ * cree que se perdieron al ver el listado.
+ */
+export async function previewRegenerateMergeImpact(
+  settlementId: string,
+): Promise<
+  Array<{
+    id: string;
+    currency: string;
+    status: string;
+    net_payable: number;
+  }>
+> {
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "create")) return [];
+  const id = z.string().uuid().parse(settlementId);
+  const admin = createAdminClient();
+
+  const { data: base } = await admin
+    .from("owner_settlements")
+    .select("owner_id, period_year, period_month")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!base) return [];
+
+  // Hermanas activas (no anuladas) — son las que se mergerían al regenerar.
+  const { data } = await admin
+    .from("owner_settlements")
+    .select("id, currency, status, net_payable")
+    .eq("organization_id", organization.id)
+    .eq("owner_id", base.owner_id)
+    .eq("period_year", base.period_year)
+    .eq("period_month", base.period_month)
+    .neq("id", id)
+    .neq("status", "anulada")
+    .order("currency");
+
+  return (data ?? []).map((s) => ({
+    id: s.id as string,
+    currency: s.currency as string,
+    status: s.status as string,
+    net_payable: Number(s.net_payable),
+  }));
+}
+
+/**
  * Lectura PÚBLICA por token aleatorio — para /liquidacion/[token].
  * No usa sesión/cookie de org: el token (uuid, 122 bits) ES el secreto.
  * Expone solo campos de presentación del propietario y branding de la org.
