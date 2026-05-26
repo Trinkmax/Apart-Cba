@@ -573,17 +573,35 @@ async function ownerCurrenciesForPeriod(opts: {
 /**
  * Genera (o regenera) la liquidación de un owner para un período mes/año.
  * Si está revisada/enviada/pagada, error. Preserva ajustes manuales.
+ *
+ * **Importante (Next.js prod):** errores esperados se devuelven como
+ * `{ ok: false, reason, message }` en lugar de `throw`, porque Next.js
+ * sanitiza el mensaje de cualquier excepción lanzada por un Server Action
+ * en builds de producción (el cliente recibiría "An error occurred in the
+ * Server Components render…" sin la causa real). Errores realmente
+ * inesperados (DB, permisos) sí pueden seguir lanzándose.
  */
 export async function generateSettlement(
   ownerId: string,
   year: number,
   month: number,
   currency: string = "ARS",
-): Promise<{ settlement: OwnerSettlement; lines: SettlementLine[] }> {
+): Promise<
+  | { ok: true; settlement: OwnerSettlement; lines: SettlementLine[] }
+  | {
+      ok: false;
+      reason: "no_units" | "already_closed" | "forbidden" | "unknown";
+      message: string;
+    }
+> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "create")) {
-    throw new Error("No tenés permisos para generar liquidaciones");
+    return {
+      ok: false,
+      reason: "forbidden",
+      message: "No tenés permisos para generar liquidaciones",
+    };
   }
   const admin = createAdminClient();
 
@@ -599,10 +617,18 @@ export async function generateSettlement(
       userId: session.userId,
     });
   } catch (e) {
-    if ((e as Error).message === "NO_UNITS") {
-      throw new Error("El propietario no tiene unidades asignadas");
+    const msg = (e as Error).message;
+    if (msg === "NO_UNITS") {
+      return {
+        ok: false,
+        reason: "no_units",
+        message: "El propietario no tiene unidades asignadas",
+      };
     }
-    throw e;
+    if (/ya está/.test(msg)) {
+      return { ok: false, reason: "already_closed", message: msg };
+    }
+    return { ok: false, reason: "unknown", message: msg };
   }
 
   // Asegurar también las liquidaciones del owner en las OTRAS monedas con
@@ -669,6 +695,7 @@ export async function generateSettlement(
 
   revalidateSettlement(res.settlement.id);
   return {
+    ok: true,
     settlement: res.settlement,
     lines: (linesData as SettlementLine[]) ?? [],
   };

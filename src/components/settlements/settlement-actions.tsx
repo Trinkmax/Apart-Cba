@@ -71,12 +71,16 @@ export function SettlementActions({
   function regenerate() {
     start(async () => {
       try {
-        await generateSettlement(
+        const result = await generateSettlement(
           settlement.owner_id,
           settlement.period_year,
           settlement.period_month,
           settlement.currency,
         );
+        if (!result.ok) {
+          toast.error("No se pudo regenerar", { description: result.message });
+          return;
+        }
         toast.success("Liquidación regenerada", {
           description: "Los ajustes manuales se conservaron.",
         });
