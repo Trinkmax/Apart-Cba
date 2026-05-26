@@ -556,33 +556,38 @@ async function persistSettlement(opts: {
       .eq("id", manualLines[i].id);
   }
 
-  // Mergear hermanas: mover sus líneas manuales al settlement principal y
-  // anularlas. Preservamos los display_order ordenados después de las nuestras.
+  // Mergear hermanas: COPIAR (INSERT) las líneas manuales al settlement
+  // principal y anular el documento original. Mantenemos las líneas en la
+  // hermana intactas — queda como snapshot histórico read-only del documento
+  // previo (auditoría). El filtro de `siblings` excluye anuladas, así que la
+  // próxima regeneración no las re-procesa.
   if (siblingManualLines.length > 0) {
     const baseOffset = autoLinesToInsert.length + manualLines.length;
-    for (let i = 0; i < siblingManualLines.length; i++) {
-      const { error } = await admin
-        .from("settlement_lines")
-        .update({
-          settlement_id: settlementId,
-          display_order: baseOffset + i,
-        })
-        .eq("id", siblingManualLines[i].id);
-      if (error) throw new Error(error.message);
-    }
+    const now = new Date().toISOString();
+    const copies = siblingManualLines.map((l, i) => ({
+      settlement_id: settlementId,
+      line_type: l.line_type,
+      ref_type: l.ref_type,
+      ref_id: l.ref_id,
+      unit_id: l.unit_id,
+      description: l.description,
+      amount: Number(l.amount),
+      sign: l.sign,
+      currency: l.currency ?? currency,
+      is_manual: true,
+      meta: l.meta,
+      display_order: baseOffset + i,
+      created_by: l.created_by ?? userId,
+      updated_by: userId,
+      updated_at: now,
+    }));
+    const { error } = await admin.from("settlement_lines").insert(copies);
+    if (error) throw new Error(error.message);
   }
   if (siblings.length > 0) {
-    // Las líneas auto que quedaban en las hermanas se borran; sólo los
-    // manuales se mergean (los auto se acaban de re-generar para el principal
-    // tomando reservas de TODAS las monedas).
-    await admin
-      .from("settlement_lines")
-      .delete()
-      .in(
-        "settlement_id",
-        siblings.map((s) => s.id),
-      )
-      .eq("is_manual", false);
+    // Sólo cambiamos status — NO tocamos líneas. La hermana anulada conserva
+    // su detalle completo (totals persistidos + líneas originales) para que
+    // el detalle siga mostrando el documento tal como estaba al cierre.
     await admin
       .from("owner_settlements")
       .update({
