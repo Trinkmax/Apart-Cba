@@ -195,7 +195,19 @@
       "Bash(kill 5088)",
       "mcp__supabase-apartcba__get_logs",
       "Bash(grep -v \"exit code\\\\|background\\\\|^$\")",
-      "Bash(xargs -r kill)"
+      "Bash(xargs -r kill)",
+      "mcp__supabase-apartcba__list_tables",
+      "Bash(sed -n '25,35p' /mnt/c/Users/Agust/Apart-Cba/src/lib/types/database.ts)",
+      "Bash(sed -n '695,760p' /mnt/c/Users/Agust/Apart-Cba/src/lib/types/database.ts)",
+      "WebSearch",
+      "WebFetch(domain:resend.com)",
+      "Skill(superpowers:brainstorming)",
+      "Bash(sed -i 's/\\\\r$//' src/components/settlements/generate-settlement-dialog.tsx)",
+      "Bash(echo \"sed exit: $?\")",
+      "Bash(grep -rnE \"moveBooking[\\\\s\\({,;]\" /mnt/c/Users/Agust/Apart-Cba/src/)",
+      "Bash(grep -nE \"\\\\.ilike\\\\\\(.*\\\\$\\\\{|or\\\\\\(.*ilike|filter\\\\.search\" /mnt/c/Users/Agust/Apart-Cba/src/lib/actions/guests.ts /mnt/c/Users/Agust/Apart-Cba/src/lib/actions/cash.ts)",
+      "mcp__supabase-apartcba__list_extensions",
+      "Bash(find *)"
     ]
   },
   "enableAllProjectMcpServers": true,
