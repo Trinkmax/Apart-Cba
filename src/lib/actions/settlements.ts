@@ -1103,6 +1103,12 @@ const lineUpdateSchema = z.object({
   sign: z.enum(["+", "-"]).optional(),
   line_type: z.enum(LINE_TYPES).optional(),
   unit_id: z.string().uuid().nullable().optional(),
+  /**
+   * Moneda de la línea. Necesario para corregir líneas heredadas de
+   * liquidaciones mono-moneda viejas (pre-027) donde el monto en pesos quedó
+   * marcado como USD y al aplicar TC se multiplica al pedo.
+   */
+  currency: z.string().min(3).max(8).optional(),
   /** false = solo visual (no postea ajuste en Caja). Default true. */
   impact_caja: z.boolean().optional(),
 });
@@ -1122,7 +1128,7 @@ export async function updateSettlementLine(
 
   const { data: line } = await admin
     .from("settlement_lines")
-    .select("id, settlement_id, description, amount, sign, line_type")
+    .select("id, settlement_id, description, amount, sign, line_type, currency")
     .eq("id", v.id)
     .maybeSingle();
   if (!line) throw new Error("Línea no encontrada");
@@ -1142,6 +1148,7 @@ export async function updateSettlementLine(
   if (v.sign !== undefined) patch.sign = v.sign;
   if (v.line_type !== undefined) patch.line_type = v.line_type;
   if (v.unit_id !== undefined) patch.unit_id = v.unit_id;
+  if (v.currency !== undefined) patch.currency = v.currency;
 
   const { error } = await admin
     .from("settlement_lines")
@@ -1158,6 +1165,9 @@ export async function updateSettlementLine(
   }
   if (v.description !== undefined && line.description !== v.description) {
     changes.description = { from: line.description, to: v.description };
+  }
+  if (v.currency !== undefined && line.currency !== v.currency) {
+    changes.currency = { from: line.currency, to: v.currency };
   }
 
   return reconcileAfterEdit({
@@ -1284,6 +1294,12 @@ const bookingRowSchema = z.object({
   guest_name: z.string().max(160).optional().nullable(),
   check_in: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   check_out: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  /**
+   * Moneda del grupo. Se aplica a las 3 líneas (ingreso + comisión + gastos)
+   * para mantener consistencia: una reserva vive en una sola moneda.
+   * Si no se manda, las líneas conservan su currency actual.
+   */
+  currency: z.string().min(3).max(8).optional(),
   /** false = solo visual (no postea ajuste en Caja). Default true. */
   impact_caja: z.boolean().optional(),
 });
@@ -1381,7 +1397,17 @@ export async function updateSettlementBookingRow(
   };
 
   const now = new Date().toISOString();
-  const stamp = { is_manual: true, updated_by: session.userId, updated_at: now };
+  // El grupo siempre vive en una sola moneda — si el usuario la cambió, la
+  // aplicamos a todas las líneas que toquemos abajo. Si no, conservamos la
+  // que ya tenía la línea de ingreso (que define la moneda del grupo).
+  const groupCurrency = v.currency ?? revenue.currency;
+  const stamp = {
+    is_manual: true,
+    updated_by: session.userId,
+    updated_at: now,
+  };
+  const stampCurrency =
+    v.currency !== undefined ? { currency: groupCurrency } : {};
 
   // 1) Línea de ingreso
   {
@@ -1389,6 +1415,7 @@ export async function updateSettlementBookingRow(
       .from("settlement_lines")
       .update({
         ...stamp,
+        ...stampCurrency,
         amount: round2(v.gross),
         description: newDescription,
         meta: newMeta,
@@ -1403,6 +1430,7 @@ export async function updateSettlementBookingRow(
       .from("settlement_lines")
       .update({
         ...stamp,
+        ...stampCurrency,
         amount: round2(v.commission),
         description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}${isMensual ? " (mensual prorrateada)" : ""}`,
       })
@@ -1418,7 +1446,7 @@ export async function updateSettlementBookingRow(
       description: `Comisión${commissionPct != null ? ` ${commissionPct}%` : ""}`,
       amount: round2(v.commission),
       sign: "-",
-      currency: revenue.currency,
+      currency: groupCurrency,
       meta: null,
       display_order: (revenue.display_order ?? 0) + 1,
       created_by: session.userId,
@@ -1436,6 +1464,7 @@ export async function updateSettlementBookingRow(
         .from("settlement_lines")
         .update({
           ...stamp,
+          ...stampCurrency,
           line_type: "expenses_fraction",
           amount: round2(v.expenses),
           description: "Gastos",
@@ -1456,7 +1485,7 @@ export async function updateSettlementBookingRow(
         description: "Gastos",
         amount: round2(v.expenses),
         sign: "-",
-        currency: revenue.currency,
+        currency: groupCurrency,
         meta: null,
         display_order: (revenue.display_order ?? 0) + 2,
         created_by: session.userId,
@@ -1486,6 +1515,9 @@ export async function updateSettlementBookingRow(
     if (error) throw new Error(error.message);
   }
 
+  const currencyChanged =
+    v.currency !== undefined && v.currency !== revenue.currency;
+
   return reconcileAfterEdit({
     admin,
     before,
@@ -1498,6 +1530,9 @@ export async function updateSettlementBookingRow(
       bruto: { from: oldGross, to: round2(v.gross) },
       comision: { from: oldCommission, to: round2(v.commission) },
       gastos: { from: oldExpenses, to: round2(v.expenses) },
+      ...(currencyChanged
+        ? { moneda: { from: revenue.currency, to: groupCurrency } }
+        : {}),
     },
     reason:
       oldNights != null && oldNights !== v.nights
