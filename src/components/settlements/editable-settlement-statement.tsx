@@ -101,6 +101,14 @@ import { AddBookingRowDialog } from "./add-booking-row-dialog";
 type LineType = SettlementLine["line_type"];
 type Unit = { id: string; code: string; name: string };
 
+/**
+ * Monedas disponibles para asignar a una línea / reserva manual. Las que
+ * difieran de la base del documento sumarán al total convirtiendo por el TC
+ * que carga el usuario; mantenelo alineado con `period-batch-panel.tsx` y
+ * `add-booking-row-dialog.tsx`.
+ */
+const LINE_CURRENCIES = ["ARS", "USD", "EUR", "USDT"] as const;
+
 const ACTION_LABEL: Record<SettlementAuditEntry["action"], string> = {
   line_add: "Cargo agregado",
   row_add: "Reserva agregada",
@@ -251,12 +259,15 @@ function RowEditor({
   );
   const [commission, setCommission] = useState(String(row.commission));
   const [expenses, setExpenses] = useState(String(row.expenses));
+  const [rowCurrency, setRowCurrency] = useState<string>(row.currency);
   const [impactCaja, setImpactCaja] = useState(true);
   const [targetUnitId, setTargetUnitId] = useState<string>(
     currentUnitId ?? "",
   );
   const unitChanged =
     !!targetUnitId && !!currentUnitId && targetUnitId !== currentUnitId;
+  const currencyChanged = rowCurrency !== row.currency;
+  const isForeign = rowCurrency !== currency;
 
   const oldNet = round2(row.gross - row.commission - row.expenses);
   const newNet = round2(num(gross) - num(commission) - num(expenses));
@@ -305,6 +316,7 @@ function RowEditor({
           guest_name: guest.trim() || null,
           check_in: checkIn || null,
           check_out: checkOut || null,
+          currency: currencyChanged ? rowCurrency : undefined,
           impact_caja: impactCaja,
         });
         toast.success("Reserva actualizada", {
@@ -436,6 +448,40 @@ function RowEditor({
             />
           </div>
 
+          <div className="space-y-1.5">
+            <Label className="flex items-center gap-1.5">
+              Moneda
+              {isForeign && (
+                <span className="text-[10px] text-muted-foreground font-normal">
+                  · se convierte a {currency} con el TC del documento
+                </span>
+              )}
+            </Label>
+            <Select value={rowCurrency} onValueChange={setRowCurrency}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LINE_CURRENCIES.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                    {c === currency && (
+                      <span className="ml-1 text-[10px] text-muted-foreground">
+                        base
+                      </span>
+                    )}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {currencyChanged && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                Aplicamos {rowCurrency} a las 3 líneas de la reserva (ingreso,
+                comisión y gastos).
+              </p>
+            )}
+          </div>
+
           {units.length > 1 && row.ref_id && (
             <div className="space-y-1.5">
               <Label className="flex items-center gap-1.5">
@@ -469,28 +515,40 @@ function RowEditor({
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Neto de esta fila</span>
               <span className="font-semibold tabular-nums">
-                {formatMoney(newNet, currency)}
+                {formatMoney(newNet, rowCurrency)}
               </span>
             </div>
+            {isForeign && (
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                <span>Suma al neto del documento en {currency}</span>
+                <span className="tabular-nums">
+                  cuando carguemos el TC {rowCurrency}
+                </span>
+              </div>
+            )}
             <div className="flex items-center justify-between text-xs">
               <span className="text-muted-foreground">Neto liquidación</span>
               <span className="tabular-nums flex items-center gap-1.5">
                 <span className="text-muted-foreground">
                   {formatMoney(currentNet, currency)}
                 </span>
-                <ArrowRight size={11} className="text-muted-foreground" />
-                <span
-                  className={cn(
-                    "font-medium",
-                    delta > 0
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : delta < 0
-                        ? "text-rose-600 dark:text-rose-400"
-                        : "",
-                  )}
-                >
-                  {formatMoney(projected, currency)}
-                </span>
+                {!isForeign && !currencyChanged && (
+                  <>
+                    <ArrowRight size={11} className="text-muted-foreground" />
+                    <span
+                      className={cn(
+                        "font-medium",
+                        delta > 0
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : delta < 0
+                            ? "text-rose-600 dark:text-rose-400"
+                            : "",
+                      )}
+                    >
+                      {formatMoney(projected, currency)}
+                    </span>
+                  </>
+                )}
               </span>
             </div>
           </div>
@@ -1168,6 +1226,7 @@ function ChargeDialog({
     sign: "+" | "-";
     line_type: LineType;
     unitCode: string | null;
+    currency: string;
   };
 }) {
   const router = useRouter();
@@ -1181,7 +1240,15 @@ function ChargeDialog({
     initial ? String(initial.amount) : "",
   );
   const [unitId, setUnitId] = useState("none");
+  // Default = moneda de la línea existente cuando es edición; si es alta,
+  // base del documento.
+  const [chargeCurrency, setChargeCurrency] = useState<string>(
+    initial?.currency ?? currency,
+  );
   const [impactCaja, setImpactCaja] = useState(true);
+  const isForeignCharge = chargeCurrency !== currency;
+  const chargeCurrencyChanged =
+    !!initial && chargeCurrency !== initial.currency;
 
   function submit() {
     if (description.trim().length < 2 || !(num(amount) > 0)) {
@@ -1195,6 +1262,7 @@ function ChargeDialog({
           description: description.trim(),
           amount: round2(num(amount)),
           sign,
+          currency: chargeCurrency,
           impact_caja: impactCaja,
         };
         const res = initial
@@ -1287,29 +1355,63 @@ function ChargeDialog({
                 onChange={(e) => setAmount(e.target.value)}
               />
             </div>
-            {!initial && (
-              <div className="space-y-1.5">
-                <Label>Unidad (opcional)</Label>
-                <Select value={unitId} onValueChange={setUnitId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="—" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">— Sin unidad</SelectItem>
-                    {units.map((u) => (
-                      <SelectItem key={u.id} value={u.id}>
-                        {u.code} · {u.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            <div className="space-y-1.5">
+              <Label>Moneda</Label>
+              <Select
+                value={chargeCurrency}
+                onValueChange={setChargeCurrency}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LINE_CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                      {c === currency && (
+                        <span className="ml-1 text-[10px] text-muted-foreground">
+                          base
+                        </span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+          {isForeignCharge && (
+            <p className="text-[11px] text-muted-foreground">
+              Se convierte a {currency} con el TC del documento. Si todavía no
+              está cargado, esta línea no suma al total hasta que lo ingreses.
+            </p>
+          )}
+          {chargeCurrencyChanged && initial && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-300">
+              Cambiás la moneda de la línea: {initial.currency} → {chargeCurrency}.
+            </p>
+          )}
+          {!initial && (
+            <div className="space-y-1.5">
+              <Label>Unidad (opcional)</Label>
+              <Select value={unitId} onValueChange={setUnitId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="—" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— Sin unidad</SelectItem>
+                  {units.map((u) => (
+                    <SelectItem key={u.id} value={u.id}>
+                      {u.code} · {u.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <CajaImpactToggle
             value={impactCaja}
             onChange={setImpactCaja}
-            currency={currency}
+            currency={chargeCurrency}
             paid={paid}
             delta={round2(
               (sign === "+" ? 1 : -1) * num(amount) -
@@ -1472,6 +1574,7 @@ export function EditableSettlementStatement({
         sign: "+" | "-";
         line_type: LineType;
         unitCode: string | null;
+        currency: string;
       }
     | null
   >(null);
@@ -1941,6 +2044,7 @@ export function EditableSettlementStatement({
                           sign: row.sign,
                           line_type: row.line_type,
                           unitCode: row.unitCode,
+                          currency: row.currency,
                         })
                       }
                       onDelete={(row) => {

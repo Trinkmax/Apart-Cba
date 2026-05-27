@@ -134,43 +134,87 @@ export default async function SettlementDetailPage({
         canUpdate={canUpdate}
       />
 
-      {mergedSiblings.length > 0 && (
-        <div className="rounded-lg border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 px-4 py-3">
-          <div className="text-xs text-emerald-900 dark:text-emerald-200 mb-2 flex items-center gap-1.5">
-            <Archive size={14} className="shrink-0" />
-            <span>
-              Esta liquidación <strong>absorbió</strong>{" "}
-              {mergedSiblings.length === 1
-                ? "una liquidación"
-                : `${mergedSiblings.length} liquidaciones`}{" "}
-              previa
-              {mergedSiblings.length === 1 ? "" : "s"} al regenerar
-              {". "}
-              Sus reservas están integradas acá (con conversión por TC si
-              corresponde). Las originales quedaron archivadas para auditoría:
-            </span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {mergedSiblings.map((sib) => (
-              <Link
-                key={sib.id}
-                href={`/dashboard/liquidaciones/${sib.id}`}
-                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 dark:border-emerald-900 bg-card px-3 py-1.5 text-sm hover:bg-accent/40 transition-colors"
+      {mergedSiblings.length > 0 &&
+        (() => {
+          // Si los siblings absorbidos vienen de monedas distintas a la base,
+          // sus líneas (is_manual=true) heredan la currency original — y si
+          // esos importes en realidad eran ARS tipeados en una liquidación
+          // pre-027 USD, al aplicar TC se multiplican al pedo (ver fix de
+          // mayo 2026 sobre LIQ Rodrigo Fernández). Avisamos al usuario para
+          // que revise línea por línea y, si hace falta, cambie la moneda
+          // desde el editor de reserva / cargo.
+          const foreignMerged = mergedSiblings.filter(
+            (s) => s.currency !== settlement.currency,
+          );
+          const hasForeignLines = model.foreignCurrencies.length > 0;
+          const showWarning = foreignMerged.length > 0 && hasForeignLines;
+          return (
+            <div
+              className={
+                showWarning
+                  ? "rounded-lg border bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900 px-4 py-3"
+                  : "rounded-lg border bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 px-4 py-3"
+              }
+            >
+              <div
+                className={
+                  showWarning
+                    ? "text-xs text-amber-900 dark:text-amber-200 mb-2 flex items-start gap-1.5"
+                    : "text-xs text-emerald-900 dark:text-emerald-200 mb-2 flex items-center gap-1.5"
+                }
               >
-                <span className="font-mono text-xs text-muted-foreground">
-                  {sib.currency}
+                <Archive size={14} className="shrink-0 mt-px" />
+                <span>
+                  Esta liquidación <strong>absorbió</strong>{" "}
+                  {mergedSiblings.length === 1
+                    ? "una liquidación"
+                    : `${mergedSiblings.length} liquidaciones`}{" "}
+                  previa
+                  {mergedSiblings.length === 1 ? "" : "s"} al regenerar
+                  {". "}
+                  Sus reservas están integradas acá (con conversión por TC si
+                  corresponde). Las originales quedaron archivadas para
+                  auditoría:
                 </span>
-                <span className="font-semibold tabular-nums">
-                  {formatMoney(sib.net_payable, sib.currency)}
-                </span>
-                <span className="text-[10px] text-muted-foreground">
-                  archivada
-                </span>
-              </Link>
-            ))}
-          </div>
-        </div>
-      )}
+              </div>
+              {showWarning && (
+                <p className="text-[11px] text-amber-800 dark:text-amber-200 mb-2 ml-5">
+                  <strong>Revisá línea por línea:</strong> los importes
+                  heredados llegaron marcados en {foreignMerged
+                    .map((s) => s.currency)
+                    .join(", ")}{" "}
+                  y al sumar al total se multiplican por el TC del documento.
+                  Si en realidad esos pagos estaban en {settlement.currency},
+                  editá cada reserva/cargo y cambiá la moneda a{" "}
+                  {settlement.currency} para que no se conviertan dos veces.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {mergedSiblings.map((sib) => (
+                  <Link
+                    key={sib.id}
+                    href={`/dashboard/liquidaciones/${sib.id}`}
+                    className={
+                      showWarning
+                        ? "inline-flex items-center gap-2 rounded-md border border-amber-200 dark:border-amber-900 bg-card px-3 py-1.5 text-sm hover:bg-accent/40 transition-colors"
+                        : "inline-flex items-center gap-2 rounded-md border border-emerald-200 dark:border-emerald-900 bg-card px-3 py-1.5 text-sm hover:bg-accent/40 transition-colors"
+                    }
+                  >
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {sib.currency}
+                    </span>
+                    <span className="font-semibold tabular-nums">
+                      {formatMoney(sib.net_payable, sib.currency)}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      archivada
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
       {siblings.length > 0 && (
         <div className="rounded-lg border bg-muted/40 px-4 py-3">

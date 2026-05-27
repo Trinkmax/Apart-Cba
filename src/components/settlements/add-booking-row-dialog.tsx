@@ -28,6 +28,9 @@ import { addSettlementBookingRow } from "@/lib/actions/settlements";
 
 type Unit = { id: string; code: string; name: string };
 
+/** Misma lista que `editable-settlement-statement.tsx` y `period-batch-panel.tsx`. */
+const LINE_CURRENCIES = ["ARS", "USD", "EUR", "USDT"] as const;
+
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (s: string) => {
   const n = Number(String(s).replace(",", "."));
@@ -80,9 +83,13 @@ export function AddBookingRowDialog({
   const [pct, setPct] = useState("20");
   const [commission, setCommission] = useState("");
   const [expenses, setExpenses] = useState("");
+  // Default = moneda base del documento. Si el usuario carga una reserva
+  // pagada en USD/EUR, la cambia acá y se persiste por línea.
+  const [rowCurrency, setRowCurrency] = useState<string>(currency);
 
   const rowNet = round2(num(gross) - num(commission) - num(expenses));
   const projected = round2(currentNet + rowNet);
+  const isForeign = rowCurrency !== currency;
 
   function onGross(v: string) {
     setGross(v);
@@ -108,6 +115,7 @@ export function AddBookingRowDialog({
     setPct("20");
     setCommission("");
     setExpenses("");
+    setRowCurrency(currency);
     onOpenChange(false);
   }
 
@@ -132,6 +140,7 @@ export function AddBookingRowDialog({
           gross: round2(num(gross)),
           commission: round2(num(commission)),
           expenses: round2(num(expenses)),
+          currency: rowCurrency,
         });
         toast.success("Reserva agregada");
         close();
@@ -261,15 +270,44 @@ export function AddBookingRowDialog({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Gastos (limpieza / expensas)</Label>
-            <Input
-              type="number"
-              step="0.01"
-              value={expenses}
-              onChange={(e) => setExpenses(e.target.value)}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Gastos (limpieza / expensas)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={expenses}
+                onChange={(e) => setExpenses(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Moneda</Label>
+              <Select value={rowCurrency} onValueChange={setRowCurrency}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LINE_CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                      {c === currency && (
+                        <span className="ml-1 text-[10px] text-muted-foreground">
+                          base
+                        </span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+          {isForeign && (
+            <p className="text-[11px] text-muted-foreground">
+              Se convierte a {currency} con el TC del documento. Si todavía no
+              está cargado, esta reserva no suma al total hasta que lo
+              ingreses.
+            </p>
+          )}
 
           <div className="rounded-lg border bg-muted/40 p-3 space-y-1.5 text-sm">
             <div className="flex items-center justify-between">
@@ -277,7 +315,7 @@ export function AddBookingRowDialog({
                 Neto de esta reserva
               </span>
               <span className="font-semibold tabular-nums">
-                {formatMoney(rowNet, currency)}
+                {formatMoney(rowNet, rowCurrency)}
               </span>
             </div>
             <div className="flex items-center justify-between text-xs">
@@ -286,19 +324,23 @@ export function AddBookingRowDialog({
                 <span className="text-muted-foreground">
                   {formatMoney(currentNet, currency)}
                 </span>
-                <ArrowRight size={11} className="text-muted-foreground" />
-                <span
-                  className={cn(
-                    "font-medium",
-                    rowNet > 0
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : rowNet < 0
-                        ? "text-rose-600 dark:text-rose-400"
-                        : "",
-                  )}
-                >
-                  {formatMoney(projected, currency)}
-                </span>
+                {!isForeign && (
+                  <>
+                    <ArrowRight size={11} className="text-muted-foreground" />
+                    <span
+                      className={cn(
+                        "font-medium",
+                        rowNet > 0
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : rowNet < 0
+                            ? "text-rose-600 dark:text-rose-400"
+                            : "",
+                      )}
+                    >
+                      {formatMoney(projected, currency)}
+                    </span>
+                  </>
+                )}
               </span>
             </div>
           </div>
