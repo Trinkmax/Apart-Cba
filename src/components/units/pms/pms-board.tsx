@@ -3373,7 +3373,13 @@ function BookingBar({
           )}
         </div>
       </PopoverAnchor>
-      <PopoverContent side="bottom" align="start" className="p-0 w-auto" sideOffset={6}>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        className="p-0 w-auto max-h-[var(--radix-popover-content-available-height)] overflow-y-auto overscroll-contain"
+        sideOffset={6}
+        collisionPadding={12}
+      >
         <PmsBookingPopoverContent
           booking={booking}
           unitCode={unitCode}
