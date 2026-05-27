@@ -8,6 +8,8 @@ import type {
   BookingSource,
   BookingMode,
   UnitDefaultMode,
+  UnitTipCategory,
+  UnitTipReactionType,
 } from "./types/database";
 
 // ─── Join de unidad para tickets / limpieza ─────────────────────────────────
@@ -178,6 +180,100 @@ export const CLEANING_STATUS_META: Record<CleaningStatus, { label: string; color
   cancelada: { label: "Cancelada", color: "#ef4444" },
 };
 
+// Categorías para "Consejos del depto". Cada categoría se asocia a un emoji
+// (mostrado en chips/cards) y a un color base para el tinte de fondo/borde.
+// El icono lucide se referencia por nombre para evitar acoplar este archivo
+// a la dependencia de iconos (el consumidor mappea name → componente).
+export const UNIT_TIP_CATEGORY_META: Record<
+  UnitTipCategory,
+  { label: string; emoji: string; iconName: string; color: string; bgClass: string; ringClass: string; textClass: string }
+> = {
+  general: {
+    label: "General",
+    emoji: "💡",
+    iconName: "Lightbulb",
+    color: "#eab308",
+    bgClass: "bg-yellow-500/10",
+    ringClass: "ring-yellow-500/30",
+    textClass: "text-yellow-700 dark:text-yellow-400",
+  },
+  cocina: {
+    label: "Cocina",
+    emoji: "🍳",
+    iconName: "ChefHat",
+    color: "#f97316",
+    bgClass: "bg-orange-500/10",
+    ringClass: "ring-orange-500/30",
+    textClass: "text-orange-700 dark:text-orange-400",
+  },
+  bano: {
+    label: "Baño",
+    emoji: "🚿",
+    iconName: "ShowerHead",
+    color: "#06b6d4",
+    bgClass: "bg-cyan-500/10",
+    ringClass: "ring-cyan-500/30",
+    textClass: "text-cyan-700 dark:text-cyan-400",
+  },
+  dormitorio: {
+    label: "Dormitorio",
+    emoji: "🛏️",
+    iconName: "Bed",
+    color: "#a855f7",
+    bgClass: "bg-purple-500/10",
+    ringClass: "ring-purple-500/30",
+    textClass: "text-purple-700 dark:text-purple-400",
+  },
+  acceso: {
+    label: "Acceso",
+    emoji: "🔑",
+    iconName: "KeyRound",
+    color: "#64748b",
+    bgClass: "bg-slate-500/10",
+    ringClass: "ring-slate-500/30",
+    textClass: "text-slate-700 dark:text-slate-300",
+  },
+  electrodomesticos: {
+    label: "Electro",
+    emoji: "⚡",
+    iconName: "Zap",
+    color: "#3b82f6",
+    bgClass: "bg-blue-500/10",
+    ringClass: "ring-blue-500/30",
+    textClass: "text-blue-700 dark:text-blue-400",
+  },
+  importante: {
+    label: "Importante",
+    emoji: "⚠️",
+    iconName: "AlertTriangle",
+    color: "#ef4444",
+    bgClass: "bg-rose-500/10",
+    ringClass: "ring-rose-500/30",
+    textClass: "text-rose-700 dark:text-rose-400",
+  },
+};
+
+export const UNIT_TIP_CATEGORIES: UnitTipCategory[] = [
+  "general",
+  "cocina",
+  "bano",
+  "dormitorio",
+  "acceso",
+  "electrodomesticos",
+  "importante",
+];
+
+export const UNIT_TIP_REACTION_META: Record<
+  UnitTipReactionType,
+  { label: string; emoji: string; color: string }
+> = {
+  helpful: { label: "Me sirvió", emoji: "👍", color: "#10b981" },
+  important: { label: "Importante", emoji: "⚠️", color: "#f59e0b" },
+  love: { label: "Buenísimo", emoji: "❤️", color: "#ef4444" },
+};
+
+export const UNIT_TIP_REACTION_TYPES: UnitTipReactionType[] = ["helpful", "important", "love"];
+
 // Estados del parte diario. El cromático va de slate (work in progress) a
 // emerald (cerrado y enviado), pasando por amber (pendiente de revisar).
 export const DAILY_REPORT_STATUS_META: Record<
@@ -294,12 +390,14 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
     cleaning: ["view"],
     parte_diario: ["view"],
     date_marks: ["view"],
+    unit_tips: ["view", "create"],
   },
   limpieza: {
     units: ["view"],
     cleaning: ["view", "update"],
     parte_diario: ["view"],
     date_marks: ["view"],
+    unit_tips: ["view", "create", "update", "delete"],
   },
   owner_view: {
     units: ["view"],

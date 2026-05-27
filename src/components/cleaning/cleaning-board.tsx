@@ -8,7 +8,7 @@ import { CLEANING_STATUS_META } from "@/lib/constants";
 import { formatDateTime } from "@/lib/format";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
-import type { CleaningStatus, CleaningTask, UnitRef } from "@/lib/types/database";
+import type { CleaningStatus, CleaningTask, UnitRef, UserRole } from "@/lib/types/database";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { useRealtimeRows } from "@/hooks/use-realtime-rows";
 import { CleaningDetailDialog } from "./cleaning-detail-dialog";
@@ -28,9 +28,17 @@ interface Props {
   organizationId: string;
   initialTasks: CT[];
   units: UnitRef[];
+  currentUserId: string;
+  currentUserRole: UserRole;
 }
 
-export function CleaningBoard({ organizationId, initialTasks, units }: Props) {
+export function CleaningBoard({
+  organizationId,
+  initialTasks,
+  units,
+  currentUserId,
+  currentUserRole,
+}: Props) {
   const [tasks, setTasks] = useState<CT[]>(initialTasks);
   const [openId, setOpenId] = useState<string | null>(null);
 
@@ -107,6 +115,8 @@ export function CleaningBoard({ organizationId, initialTasks, units }: Props) {
         task={open}
         open={!!open}
         onOpenChange={(o) => !o && setOpenId(null)}
+        currentUserId={currentUserId}
+        currentUserRole={currentUserRole}
         onUpdated={(updated) =>
           setTasks((cur) =>
             cur.map((t) => (t.id === updated.id ? { ...t, ...updated, unit: t.unit } : t))

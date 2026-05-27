@@ -195,7 +195,8 @@
       "Bash(kill 5088)",
       "mcp__supabase-apartcba__get_logs",
       "Bash(grep -v \"exit code\\\\|background\\\\|^$\")",
-      "Bash(xargs -r kill)"
+      "Bash(xargs -r kill)",
+      "mcp__supabase-apartcba__list_tables"
     ]
   },
   "enableAllProjectMcpServers": true,

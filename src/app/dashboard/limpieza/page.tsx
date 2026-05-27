@@ -2,6 +2,7 @@ import { Plus, Sparkles } from "lucide-react";
 import { listCleaningTasks } from "@/lib/actions/cleaning";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { requireSession } from "@/lib/actions/auth";
 import { Button } from "@/components/ui/button";
 import { CleaningBoard } from "@/components/cleaning/cleaning-board";
 import { CleaningFormDialog } from "@/components/cleaning/cleaning-form-dialog";
@@ -23,7 +24,8 @@ export default async function LimpiezaPage({
   const { historial } = await searchParams;
   const showArchived = historial === "1";
 
-  const [{ organization }, tasks, units] = await Promise.all([
+  const [session, { organization, role }, tasks, units] = await Promise.all([
+    requireSession(),
     getCurrentOrg(),
     listCleaningTasks({ showArchived }) as Promise<CT[]>,
     listUnitsEnriched(),
@@ -100,7 +102,13 @@ export default async function LimpiezaPage({
           emptyHint="Todavía no hay tareas de limpieza archivadas."
         />
       ) : (
-        <CleaningBoard organizationId={organization.id} initialTasks={tasks} units={unitsLite} />
+        <CleaningBoard
+          organizationId={organization.id}
+          initialTasks={tasks}
+          units={unitsLite}
+          currentUserId={session.userId}
+          currentUserRole={role}
+        />
       )}
     </div>
   );

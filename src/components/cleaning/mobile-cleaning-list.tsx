@@ -11,16 +11,25 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { UnitAccessInfo } from "@/components/units/unit-access-info";
+import { UnitTipsInline } from "@/components/unit-tips/unit-tips-inline";
 import { changeCleaningStatus, updateCleaningChecklist } from "@/lib/actions/cleaning";
 import { CLEANING_STATUS_META } from "@/lib/constants";
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { CleaningTask, UnitRef } from "@/lib/types/database";
+import type { CleaningTask, UnitRef, UserRole } from "@/lib/types/database";
 
 type CT = CleaningTask & { unit: UnitRef };
 type ChecklistItem = { item: string; done: boolean; note?: string };
 
-export function MobileCleaningList({ tasks }: { tasks: CT[] }) {
+export function MobileCleaningList({
+  tasks,
+  currentUserId,
+  currentUserRole,
+}: {
+  tasks: CT[];
+  currentUserId: string;
+  currentUserRole: UserRole;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [expanded, setExpanded] = useState<string | null>(tasks[0]?.id ?? null);
@@ -130,6 +139,13 @@ export function MobileCleaningList({ tasks }: { tasks: CT[] }) {
                     ))}
                   </div>
                 )}
+
+                <UnitTipsInline
+                  unit={t.unit}
+                  currentUserId={currentUserId}
+                  currentUserRole={currentUserRole}
+                  defaultOpen={t.status === "pendiente" || (total > 0 && done >= Math.ceil(total / 2))}
+                />
 
                 <div className="flex gap-2 pt-2">
                   {t.status === "pendiente" && (

@@ -542,6 +542,42 @@ export interface CleaningTask {
   updated_at: string;
 }
 
+// ─── Consejos del depto (mini-feed colaborativo) ───────────────────────────
+export type UnitTipCategory =
+  | "general"
+  | "cocina"
+  | "bano"
+  | "dormitorio"
+  | "acceso"
+  | "electrodomesticos"
+  | "importante";
+
+export type UnitTipReactionType = "helpful" | "important" | "love";
+
+export interface UnitTip {
+  id: string;
+  organization_id: string;
+  unit_id: string;
+  author_id: string;
+  content: string;
+  category: UnitTipCategory;
+  photo_url: string | null;
+  pinned_at: string | null;
+  pinned_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface UnitTipReaction {
+  id: string;
+  tip_id: string;
+  organization_id: string;
+  user_id: string;
+  reaction: UnitTipReactionType;
+  created_at: string;
+}
+
 export interface CashAccount {
   id: string;
   organization_id: string;

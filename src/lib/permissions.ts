@@ -22,7 +22,8 @@ export type Resource =
   | "crm_rapidos"
   | "crm_config"
   | "parte_diario"
-  | "date_marks";
+  | "date_marks"
+  | "unit_tips";
 
 export function can(role: UserRole, resource: Resource, action: Action = "view"): boolean {
   const perms = DEFAULT_ROLE_PERMISSIONS[role];

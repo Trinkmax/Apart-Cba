@@ -37,11 +37,13 @@ import {
 import { cn } from "@/lib/utils";
 import { EventTimeline } from "@/components/shared/event-timeline";
 import { UnitAccessInfo } from "@/components/units/unit-access-info";
+import { UnitTipsInline } from "@/components/unit-tips/unit-tips-inline";
 import type {
   CleaningEvent,
   CleaningStatus,
   CleaningTask,
   UnitRef,
+  UserRole,
 } from "@/lib/types/database";
 
 type CT = CleaningTask & { unit: UnitRef };
@@ -64,9 +66,20 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   onUpdated?: (task: CT) => void;
   onDeleted?: (id: string) => void;
+  /** Necesarios para mostrar el feed de Consejos del depto embebido. */
+  currentUserId?: string;
+  currentUserRole?: UserRole;
 }
 
-export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDeleted }: Props) {
+export function CleaningDetailDialog({
+  task,
+  open,
+  onOpenChange,
+  onUpdated,
+  onDeleted,
+  currentUserId,
+  currentUserRole,
+}: Props) {
   const [isPending, startTransition] = useTransition();
   // Inicialización derivada del prop `task` con el patrón "previous value" —
   // re-sincroniza cuando llega una task distinta sin recurrir a useEffect+setState.
@@ -308,6 +321,15 @@ export function CleaningDetailDialog({ task, open, onOpenChange, onUpdated, onDe
               />
             </div>
           </div>
+
+          {currentUserId && currentUserRole && (
+            <UnitTipsInline
+              unit={task.unit}
+              currentUserId={currentUserId}
+              currentUserRole={currentUserRole}
+              variant="card"
+            />
+          )}
 
           <EventTimeline
             events={events}
