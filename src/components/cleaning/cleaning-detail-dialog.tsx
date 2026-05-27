@@ -178,7 +178,7 @@ export function CleaningDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[92vh] overflow-y-auto p-0 gap-0">
+      <DialogContent className="max-w-xl max-h-[92vh] overflow-y-auto overflow-x-hidden p-0 gap-0">
         <div className="h-1.5 w-full" style={{ backgroundColor: meta.color }} aria-hidden />
         <DialogHeader className="px-6 pt-5 pb-3">
           <div className="flex items-start gap-3">

@@ -74,18 +74,18 @@ export function UnitTipsInline({
             variant === "card" && "px-4"
           )}
         >
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
             <span className="size-7 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
               <Lightbulb size={14} />
             </span>
-            <div className="text-left">
-              <div className="text-xs font-semibold leading-tight">
+            <div className="text-left min-w-0 flex-1">
+              <div className="text-xs font-semibold leading-tight truncate">
                 Consejos del depto
                 {tips !== null && (
                   <span className="ml-1 text-amber-700 dark:text-amber-400">({count})</span>
                 )}
               </div>
-              <div className="text-[10px] text-muted-foreground leading-tight">
+              <div className="text-[10px] text-muted-foreground leading-tight truncate">
                 {open ? "Pasale tu experiencia al equipo" : "Trucos y avisos que dejaron otras"}
               </div>
             </div>
