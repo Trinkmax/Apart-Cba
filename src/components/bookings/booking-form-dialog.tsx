@@ -32,6 +32,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { GuestFormDialog } from "@/components/guests/guest-form-dialog";
 import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/bookings";
 import { searchGuests } from "@/lib/actions/guests";
@@ -570,39 +571,33 @@ export function BookingFormDialog({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5 sm:col-span-2">
               <Label>Unidad *</Label>
-              <Select value={form.unit_id} onValueChange={onSelectUnit} required>
-                <SelectTrigger><SelectValue placeholder="Elegí la unidad" /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {units.map((u) => {
-                    const dm: UnitDefaultMode = (u.default_mode ?? "temporario") as UnitDefaultMode;
-                    const dmLabel =
-                      dm === "mixto" ? "Mx" : dm === "mensual" ? "M" : "T";
-                    const dmTone =
-                      dm === "mixto"
-                        ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
-                        : dm === "mensual"
-                          ? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200"
-                          : "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-200";
-                    return (
-                      <SelectItem key={u.id} value={u.id}>
-                        <span className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "inline-flex items-center justify-center size-4 rounded-sm text-[9px] font-bold",
-                              dmTone
-                            )}
-                            title={`Vocación: ${dm}`}
-                          >
-                            {dmLabel}
-                          </span>
-                          <span className="font-mono text-xs">{u.code}</span>
-                          <span className="truncate">{u.name}</span>
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
+              <UnitCombobox
+                units={units}
+                value={form.unit_id}
+                onChange={(id) => id && onSelectUnit(id)}
+                placeholder="Elegí la unidad"
+                renderPrefix={(u) => {
+                  const dm: UnitDefaultMode = (u.default_mode ?? "temporario") as UnitDefaultMode;
+                  const dmLabel = dm === "mixto" ? "Mx" : dm === "mensual" ? "M" : "T";
+                  const dmTone =
+                    dm === "mixto"
+                      ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                      : dm === "mensual"
+                        ? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200"
+                        : "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-200";
+                  return (
+                    <span
+                      className={cn(
+                        "inline-flex items-center justify-center size-4 rounded-sm text-[9px] font-bold shrink-0",
+                        dmTone
+                      )}
+                      title={`Vocación: ${dm}`}
+                    >
+                      {dmLabel}
+                    </span>
+                  );
+                }}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Estado</Label>

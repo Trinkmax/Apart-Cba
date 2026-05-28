@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import {
   changeTicketStatus,
   deleteTicket,
@@ -335,19 +336,11 @@ export function TicketDetailDialog({
           {/* Unidad */}
           <Field label="Unidad" icon={<Building2 size={13} />}>
             {isEditing ? (
-              <Select value={form.unit_id} onValueChange={(v) => set("unit_id", v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      <span className="font-mono text-xs mr-2">{u.code}</span>
-                      {u.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <UnitCombobox
+                units={units}
+                value={form.unit_id}
+                onChange={(id) => set("unit_id", id ?? "")}
+              />
             ) : (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-sm">

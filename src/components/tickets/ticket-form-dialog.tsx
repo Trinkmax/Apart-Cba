@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { createTicket, updateTicket, type TicketInput } from "@/lib/actions/tickets";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import type { MaintenanceTicket, Unit, Owner } from "@/lib/types/database";
@@ -84,16 +85,12 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-1.5">
             <Label>Unidad *</Label>
-            <Select value={form.unit_id} onValueChange={(v) => set("unit_id", v)} required>
-              <SelectTrigger><SelectValue placeholder="Elegir..." /></SelectTrigger>
-              <SelectContent className="max-h-72">
-                {units.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    <span className="font-mono text-xs mr-2">{u.code}</span>{u.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <UnitCombobox
+              units={units}
+              value={form.unit_id}
+              onChange={(id) => set("unit_id", id ?? "")}
+              placeholder="Elegir..."
+            />
             {form.unit_id && occupancyByUnit && (
               <OccupancyPanel occupancy={occupancyByUnit[form.unit_id] ?? null} />
             )}

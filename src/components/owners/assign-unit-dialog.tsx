@@ -16,13 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { linkUnitToOwner } from "@/lib/actions/owners";
 
 /**
@@ -93,18 +87,12 @@ export function AssignUnitDialog({
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label>Unidad</Label>
-            <Select value={unitId} onValueChange={setUnitId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Seleccionar…" />
-              </SelectTrigger>
-              <SelectContent>
-                {units.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    {u.code} · {u.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <UnitCombobox
+              units={units}
+              value={unitId}
+              onChange={(id) => setUnitId(id ?? "")}
+              placeholder="Seleccionar…"
+            />
           </div>
           <div className="space-y-1.5">
             <Label>% de propiedad</Label>

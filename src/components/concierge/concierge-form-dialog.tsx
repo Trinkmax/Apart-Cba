@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { createConciergeRequest, type ConciergeInput } from "@/lib/actions/concierge";
 import { cn } from "@/lib/utils";
 import type { Unit } from "@/lib/types/database";
@@ -185,16 +186,14 @@ export function ConciergeFormDialog({
           </div>
           <div className="space-y-1.5">
             <Label>Unidad (opcional)</Label>
-            <Select value={form.unit_id ?? ""} onValueChange={(v) => set("unit_id", v || null)}>
-              <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
-              <SelectContent>
-                {units.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    <span className="font-mono mr-2 text-xs">{u.code}</span>{u.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <UnitCombobox
+              units={units}
+              value={form.unit_id ?? ""}
+              onChange={(id) => set("unit_id", id)}
+              placeholder="—"
+              allowEmpty
+              emptyLabel="—"
+            />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">

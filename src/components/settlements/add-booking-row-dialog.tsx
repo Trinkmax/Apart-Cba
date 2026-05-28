@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { addSettlementBookingRow } from "@/lib/actions/settlements";
@@ -192,18 +193,12 @@ export function AddBookingRowDialog({
             {!lockedUnitId && (
               <div className="space-y-1.5">
                 <Label>Unidad</Label>
-                <Select value={unitId} onValueChange={setUnitId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Elegí una unidad" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {units.map((u) => (
-                      <SelectItem key={u.id} value={u.id}>
-                        {u.code} · {u.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <UnitCombobox
+                  units={units}
+                  value={unitId}
+                  onChange={(id) => setUnitId(id ?? "")}
+                  placeholder="Elegí una unidad"
+                />
               </div>
             )}
             <div className="space-y-1.5">
