@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
@@ -209,7 +210,7 @@ export async function listUnitExportFeeds(): Promise<UnitExportRow[]> {
     .order("code");
   if (error) throw new Error(error.message);
 
-  const base = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+  const base = await resolveAppBaseUrl();
   return (data ?? []).map((u) => ({
     id: u.id,
     code: u.code,
@@ -217,6 +218,16 @@ export async function listUnitExportFeeds(): Promise<UnitExportRow[]> {
     ical_export_token: u.ical_export_token,
     export_url: `${base}/api/ical/${u.id}.ics?token=${u.ical_export_token}`,
   }));
+}
+
+async function resolveAppBaseUrl(): Promise<string> {
+  const envBase = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/$/, "");
+  if (envBase) return envBase;
+  const h = await headers();
+  const host = h.get("x-forwarded-host") ?? h.get("host");
+  const proto = h.get("x-forwarded-proto") ?? "https";
+  if (!host) return "";
+  return `${proto}://${host}`;
 }
 
 export async function rotateExportToken(unitId: string): Promise<string> {
