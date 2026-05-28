@@ -448,6 +448,16 @@ export function BookingFormDialog({
   const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
 
   function doSubmit(skipSplit: boolean) {
+    // En modo mensual la DB exige monthly_rent (constraint
+    // bookings_monthly_requires_rent). Avisamos en español ANTES de pegarle
+    // al server — sino en producción Next.js enmascara el error.
+    if (form.mode === "mensual" && !parseMoneyInput(form.monthly_rent)) {
+      toast.error("Falta la Renta mensual", {
+        description:
+          "En modo mensual tenés que cargar la Renta mensual para poder guardar la reserva.",
+      });
+      return;
+    }
     const addPayment = isEdit ? parseMoneyInput(form.add_payment) ?? 0 : 0;
     const paidAmount = isEdit
       ? previousPaid + addPayment
@@ -737,7 +747,9 @@ export function BookingFormDialog({
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="space-y-1.5">
-                  <Label htmlFor="monthly_rent">Renta mensual</Label>
+                  <Label htmlFor="monthly_rent">
+                    Renta mensual <span className="text-red-500">*</span>
+                  </Label>
                   <Input
                     id="monthly_rent"
                     type="text"
@@ -747,7 +759,9 @@ export function BookingFormDialog({
                       if (parseMoneyInput(e.target.value) === 0) set("monthly_rent", "");
                     }}
                     onChange={(e) => set("monthly_rent", e.target.value)}
-                    placeholder="Opcional — definí después"
+                    placeholder="Requerido en mensual"
+                    required
+                    aria-required="true"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -957,8 +971,35 @@ export function BookingFormDialog({
                         }
                       }}
                       onChange={(e) => {
+                        const v = e.target.value;
                         setTotalTouched(true);
-                        set("total_amount", e.target.value);
+                        setForm((f) => {
+                          // Auto-derivar Renta mensual desde el Total si el
+                          // usuario todavía no cargó renta — evita el bug de
+                          // submit en mensual sin renta cuando el flujo
+                          // natural fue cargar Total directo.
+                          const totalParsed = parseMoneyInput(v);
+                          const currentRent = parseMoneyInput(f.monthly_rent);
+                          const nightsCount = nightsBetween(
+                            f.check_in_date,
+                            f.check_out_date,
+                          );
+                          if (
+                            totalParsed !== null &&
+                            totalParsed > 0 &&
+                            nightsCount > 0 &&
+                            !currentRent
+                          ) {
+                            const computedRent =
+                              Math.round((totalParsed * 30) / nightsCount * 100) / 100;
+                            return {
+                              ...f,
+                              total_amount: v,
+                              monthly_rent: formatMoneyValue(computedRent),
+                            };
+                          }
+                          return { ...f, total_amount: v };
+                        });
                       }}
                       placeholder={(() => {
                         const rent = parseMoneyInput(form.monthly_rent);

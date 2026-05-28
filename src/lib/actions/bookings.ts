@@ -652,6 +652,20 @@ export async function createBooking(
   const { account_id: accountId, skip_split: skipSplit, ...rest } = input;
   const validated = bookingSchema.parse(rest);
 
+  // En modo mensual, el constraint `bookings_monthly_requires_rent` exige
+  // monthly_rent NOT NULL. Lo chequeamos acá para devolver un error claro en
+  // español — sin esta defensa, en producción Next.js enmascara el mensaje
+  // de Postgres como "Server Components render error" y el usuario no sabe
+  // qué arreglar.
+  if (
+    validated.mode === "mensual" &&
+    (validated.monthly_rent === null || validated.monthly_rent === undefined)
+  ) {
+    throw new Error(
+      "En modo mensual tenés que cargar la Renta mensual antes de guardar la reserva.",
+    );
+  }
+
   // Buscar comisión default de la unit si no fue dada
   if (validated.commission_pct === null || validated.commission_pct === undefined) {
     const admin = createAdminClient();
@@ -879,6 +893,17 @@ export async function updateBooking(
   }
   const { account_id: accountId, ...rest } = input;
   const validated = bookingSchema.parse(rest);
+
+  // Mismo guard que createBooking — ver explicación allá.
+  if (
+    validated.mode === "mensual" &&
+    (validated.monthly_rent === null || validated.monthly_rent === undefined)
+  ) {
+    throw new Error(
+      "En modo mensual tenés que cargar la Renta mensual antes de guardar la reserva.",
+    );
+  }
+
   const commission_amount =
     validated.commission_pct !== null && validated.commission_pct !== undefined
       ? validated.total_amount * (validated.commission_pct / 100)
