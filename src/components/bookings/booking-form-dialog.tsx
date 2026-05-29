@@ -394,16 +394,22 @@ export function BookingFormDialog({
       : 0;
 
   // En mensual el total siempre lo tipea el usuario. En temporario el form es
-  // bidireccional: si el último editado fue "total" usamos lo tipeado, sino
-  // derivamos del precio × noches (flujo clásico).
+  // bidireccional (Precio/noche ⇄ Total), pero el Total es siempre la fuente de
+  // verdad del importe — ver nota abajo en `totalNum`.
   const pricePerNightNum = parseMoneyInput(form.price_per_night) ?? 0;
   const totalAmountParsed = parseMoneyInput(form.total_amount);
+  // El campo "Total" es la fuente de verdad del importe de la reserva. En
+  // temporario lo mantienen en sync el onChange de Precio/noche y el efecto de
+  // fechas (total = precio × noches); en edición arranca con el total guardado.
+  // NO recalculamos `round(precio × noches)` cuando ya hay un total cargado:
+  // ese ida-y-vuelta precio↔total perdía centavos —`round(total / noches) ×
+  // noches ≠ total`— y dejaba "deuda de centavos" al saldar (y reescribía el
+  // total guardado al editar). Sólo derivamos del precio si el Total está vacío
+  // (creación temprana, antes de que el efecto/onChange lo completen).
   const totalNum =
     form.mode === "mensual"
       ? totalAmountParsed ?? 0
-      : lastTouched === "total" && totalAmountParsed !== null
-        ? totalAmountParsed
-        : Math.round(pricePerNightNum * nights * 100) / 100;
+      : totalAmountParsed ?? Math.round(pricePerNightNum * nights * 100) / 100;
   // Comisión ya no se ingresa en este form — se decide en liquidaciones.
   // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
   // para no perder data en edición; el server decide el fallback definitivo.
