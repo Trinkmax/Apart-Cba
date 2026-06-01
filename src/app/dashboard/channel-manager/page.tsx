@@ -40,6 +40,7 @@ export default async function ChannelManagerPage() {
           <IcalFeedDialog
             units={units}
             connectedFeeds={feeds.map((f) => ({ unitId: f.unit_id, source: f.source }))}
+            exportUrlByUnit={Object.fromEntries(exportFeeds.map((f) => [f.id, f.export_url]))}
           />
         </div>
       </div>

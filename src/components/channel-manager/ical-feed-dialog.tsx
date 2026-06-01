@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { Loader2, Plus, Copy, Check, ArrowLeftRight } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -22,9 +22,11 @@ interface Props {
   units: Pick<Unit, "id" | "code" | "name">[];
   /** Feeds ya conectados — para ocultar unidades ya vinculadas a esa plataforma. */
   connectedFeeds?: { unitId: string; source: string }[];
+  /** unitId → link .ics de export, para la sincronización bidireccional. */
+  exportUrlByUnit?: Record<string, string>;
 }
 
-export function IcalFeedDialog({ units, connectedFeeds = [] }: Props) {
+export function IcalFeedDialog({ units, connectedFeeds = [], exportUrlByUnit = {} }: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -60,6 +62,20 @@ export function IcalFeedDialog({ units, connectedFeeds = [] }: Props) {
   );
 
   const sourceLabel = BOOKING_SOURCE_META[form.source].label;
+
+  // Link .ics de la unidad elegida — para pegar en Airbnb (Paso 2, sync bidireccional).
+  const [copiedExport, setCopiedExport] = useState(false);
+  const selectedExportUrl = form.unit_id ? exportUrlByUnit[form.unit_id] : undefined;
+
+  function copyExport() {
+    if (!selectedExportUrl) return;
+    navigator.clipboard.writeText(selectedExportUrl);
+    setCopiedExport(true);
+    toast.success("Link copiado", {
+      description: "Pegalo en Airbnb → Paso 2 («Enlace a otro sitio web»)",
+    });
+    setTimeout(() => setCopiedExport(false), 2000);
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -152,6 +168,45 @@ export function IcalFeedDialog({ units, connectedFeeds = [] }: Props) {
                 placeholder="Cuenta principal, secundaria…"
               />
             </div>
+
+            {selectedExportUrl && (
+              <div className="rounded-lg border border-dashed bg-muted/40 p-3 space-y-2">
+                <div className="flex items-start gap-2">
+                  <ArrowLeftRight className="size-4 shrink-0 text-primary mt-0.5" />
+                  <p className="text-xs leading-relaxed">
+                    <span className="font-medium">Sync bidireccional:</span>{" "}
+                    <span className="text-muted-foreground">
+                      copiá este link y pegalo en Airbnb →{" "}
+                      <b className="font-medium text-foreground/80">Paso 2</b>{" "}
+                      («Enlace a otro sitio web»).
+                    </span>
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    readOnly
+                    value={selectedExportUrl}
+                    onFocus={(e) => e.currentTarget.select()}
+                    className="font-mono text-[11px] h-8"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={copyExport}
+                    className="gap-1.5 shrink-0 h-8"
+                  >
+                    {copiedExport ? (
+                      <Check size={12} className="text-emerald-500" />
+                    ) : (
+                      <Copy size={12} />
+                    )}
+                    Copiar
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
               <Button type="submit" disabled={isPending}>
