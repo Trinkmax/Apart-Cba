@@ -5,7 +5,7 @@ import { searchListings, type SearchFilters } from "@/lib/actions/marketplace";
 import { listWishlistUnitIds } from "@/lib/actions/wishlists";
 
 export const metadata = {
-  title: "Buscar alojamientos · rentOS",
+  title: "Buscar alojamientos · ApartCBA",
 };
 
 type SearchParamsPromise = Promise<Record<string, string | string[] | undefined>>;

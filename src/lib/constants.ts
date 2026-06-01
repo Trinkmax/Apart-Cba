@@ -407,7 +407,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, Record<string, string[]>
   },
 };
 
-export const APP_NAME = "rentOS";
+export const APP_NAME = "ApartCBA";
 export const APP_TAGLINE = "Operá y reservá alojamientos en un solo lugar";
 
 // Coordenadas default para clima/contexto (Córdoba Capital).

@@ -175,7 +175,7 @@ export function CheckoutForm({
             />
             <span className="text-sm text-neutral-700 leading-relaxed">
               Acepto las reglas y la política de cancelación ({listing.cancellation_policy}). Entiendo
-              que esta reserva sigue los términos y la política de privacidad de rentOS.
+              que esta reserva sigue los términos y la política de privacidad de ApartCBA.
             </span>
           </label>
         </section>

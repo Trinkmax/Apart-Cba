@@ -149,7 +149,7 @@ export function GuestSignUpForm() {
       // Auto-login
       const signed = await signInGuest({ email, password });
       if (signed.ok) {
-        toast.success("¡Bienvenido a rentOS!");
+        toast.success("¡Bienvenido a ApartCBA!");
         router.push(redirectTo);
         router.refresh();
       } else {

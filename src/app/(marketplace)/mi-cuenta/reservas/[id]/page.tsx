@@ -7,7 +7,7 @@ import { requireGuestSession } from "@/lib/actions/guest-auth";
 import { formatCurrency } from "@/lib/marketplace/pricing";
 
 export const metadata = {
-  title: "Detalle de reserva · rentOS",
+  title: "Detalle de reserva · ApartCBA",
 };
 
 type Params = Promise<{ id: string }>;
@@ -182,7 +182,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
               </div>
             </div>
             <p className="mt-3 text-xs text-neutral-500">
-              Coordiná el pago con tu anfitrión directamente — rentOS no procesa pagos por ahora.
+              Coordiná el pago con tu anfitrión directamente — ApartCBA no procesa pagos por ahora.
             </p>
           </div>
 
@@ -194,7 +194,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
               </div>
               <div>
                 <div className="font-medium text-neutral-900">{org.name}</div>
-                <div className="text-xs text-neutral-500">Anfitrión rentOS</div>
+                <div className="text-xs text-neutral-500">Anfitrión ApartCBA</div>
               </div>
             </div>
             <div className="space-y-2 text-sm">

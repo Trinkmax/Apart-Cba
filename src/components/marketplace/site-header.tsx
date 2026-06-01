@@ -65,14 +65,14 @@ export function SiteHeader({ session }: Props) {
       <div className="max-w-[1400px] mx-auto px-4 md:px-8 h-20 grid grid-cols-[auto_1fr_auto] md:grid-cols-[1fr_auto_1fr] items-center gap-4 md:gap-8">
         <Link
           href="/"
-          aria-label="rentOS — Inicio"
+          aria-label="ApartCBA — Inicio"
           className="flex items-center transition-opacity hover:opacity-80 justify-self-start"
         >
           <span className="md:hidden">
-            <Logo size="sm" variant={hero ? "light" : "dark"} />
+            <Logo size="sm" variant={hero ? "light" : "dark"} brand="apart" />
           </span>
           <span className="hidden md:flex">
-            <Logo size="lg" variant={hero ? "light" : "dark"} />
+            <Logo size="lg" variant={hero ? "light" : "dark"} brand="apart" />
           </span>
         </Link>
 

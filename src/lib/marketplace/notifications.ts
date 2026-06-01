@@ -106,7 +106,7 @@ export async function notifyGuestBookingConfirmed(params: {
   const where = unit.neighborhood || unit.address || "";
   const total = `${booking.currency} ${Number(booking.total_amount).toLocaleString("es-AR")}`;
 
-  const subject = `¡Tu reserva está confirmada en rentOS! — ${title}`;
+  const subject = `¡Tu reserva está confirmada en ApartCBA! — ${title}`;
   const body = `Hola ${params.guestName},
 
 ¡Listo! Tu reserva está confirmada.
@@ -120,9 +120,9 @@ export async function notifyGuestBookingConfirmed(params: {
 Podés ver el detalle y contactar al anfitrión en cualquier momento:
 ${APP_URL}/mi-cuenta/reservas/${booking.id}
 
-Gracias por reservar con rentOS — esperamos que tengas una gran estadía.
+Gracias por reservar con ApartCBA — esperamos que tengas una gran estadía.
 
-— Equipo rentOS`;
+— Equipo ApartCBA`;
 
   await sendGuestMail({
     organizationId: booking.organization_id,
@@ -172,7 +172,7 @@ export async function notifyGuestRequestApproved(params: {
 Tu reserva está confirmada. Podés ver el detalle acá:
 ${APP_URL}/mi-cuenta/reservas/${booking.id}
 
-— Equipo rentOS`;
+— Equipo ApartCBA`;
 
   await sendGuestMail({
     organizationId: booking.organization_id,
@@ -226,7 +226,7 @@ Motivo: ${params.reason}
 ¡No te preocupes! Tenemos muchas otras propiedades increíbles esperándote:
 ${APP_URL}/buscar
 
-— Equipo rentOS`;
+— Equipo ApartCBA`;
 
   await sendGuestMail({
     organizationId: req.organization_id,

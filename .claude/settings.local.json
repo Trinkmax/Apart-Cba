@@ -207,7 +207,16 @@
       "Bash(grep -rnE \"moveBooking[\\\\s\\({,;]\" /mnt/c/Users/Agust/Apart-Cba/src/)",
       "Bash(grep -nE \"\\\\.ilike\\\\\\(.*\\\\$\\\\{|or\\\\\\(.*ilike|filter\\\\.search\" /mnt/c/Users/Agust/Apart-Cba/src/lib/actions/guests.ts /mnt/c/Users/Agust/Apart-Cba/src/lib/actions/cash.ts)",
       "mcp__supabase-apartcba__list_extensions",
-      "Bash(find *)"
+      "Bash(find *)",
+      "Bash(vercel --version)",
+      "Bash(npm --version)",
+      "Bash(vercel domains *)",
+      "Bash(vercel alias *)",
+      "Bash(dig +short MX apartcba.com)",
+      "Bash(nslookup -type=mx apartcba.com)",
+      "Bash(dig +short TXT apartcba.com)",
+      "Bash(cd *)",
+      "Bash(vercel inspect *)"
     ]
   },
   "enableAllProjectMcpServers": true,

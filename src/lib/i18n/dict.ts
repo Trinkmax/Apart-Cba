@@ -112,7 +112,7 @@ const ES_AR = {
   "how.eyebrow": "Cómo funciona",
   "how.title.part1": "Tres pasos.",
   "how.title.part2": "Cero vueltas.",
-  "how.subtitle": "Construimos rentOS para que reservar se sienta como mandar un mensaje, no como llenar un formulario.",
+  "how.subtitle": "Construimos ApartCBA para que reservar se sienta como mandar un mensaje, no como llenar un formulario.",
   "how.step1.title": "Buscás como te gusta",
   "how.step1.body": "Filtros por barrio, fecha y vibe. La búsqueda recuerda lo que importa, no lo que sobra.",
   "how.step2.title": "Reservás sin intermediarios",
@@ -121,7 +121,7 @@ const ES_AR = {
   "how.step3.body": "WhatsApp directo. Coordinás llegada, pedís un consejo, contás cuántos huéspedes son.",
 
   // ── Trust ──────────────────────────────────────────────────────────────
-  "trust.eyebrow": "Por qué rentOS",
+  "trust.eyebrow": "Por qué ApartCBA",
   "trust.title.part1": "Lo simple,",
   "trust.title.part2": "bien hecho.",
   "trust.pillar1.title": "Verificación humana",
@@ -237,7 +237,7 @@ const EN_US: Dict = {
   "how.eyebrow": "How it works",
   "how.title.part1": "Three steps.",
   "how.title.part2": "Zero hassle.",
-  "how.subtitle": "We built rentOS so booking feels like sending a message, not filling out a form.",
+  "how.subtitle": "We built ApartCBA so booking feels like sending a message, not filling out a form.",
   "how.step1.title": "Search your way",
   "how.step1.body": "Filters by neighborhood, date and vibe. Search remembers what matters, drops what doesn't.",
   "how.step2.title": "Book without middlemen",
@@ -245,7 +245,7 @@ const EN_US: Dict = {
   "how.step3.title": "Chat with your host",
   "how.step3.body": "WhatsApp, direct. Coordinate arrival, ask for tips, share how many you'll be.",
 
-  "trust.eyebrow": "Why rentOS",
+  "trust.eyebrow": "Why ApartCBA",
   "trust.title.part1": "Simple things,",
   "trust.title.part2": "done well.",
   "trust.pillar1.title": "Human verification",
@@ -357,7 +357,7 @@ const PT_BR: Dict = {
   "how.eyebrow": "Como funciona",
   "how.title.part1": "Três passos.",
   "how.title.part2": "Zero burocracia.",
-  "how.subtitle": "Construímos a rentOS para que reservar pareça mandar uma mensagem, não preencher um formulário.",
+  "how.subtitle": "Construímos a ApartCBA para que reservar pareça mandar uma mensagem, não preencher um formulário.",
   "how.step1.title": "Você busca do seu jeito",
   "how.step1.body": "Filtros por bairro, data e vibe. A busca lembra o que importa, ignora o resto.",
   "how.step2.title": "Reserva sem intermediários",
@@ -365,7 +365,7 @@ const PT_BR: Dict = {
   "how.step3.title": "Conversa com o anfitrião",
   "how.step3.body": "WhatsApp direto. Combina a chegada, pede uma dica, conta quantos vão.",
 
-  "trust.eyebrow": "Por que rentOS",
+  "trust.eyebrow": "Por que ApartCBA",
   "trust.title.part1": "O simples,",
   "trust.title.part2": "bem feito.",
   "trust.pillar1.title": "Verificação humana",
