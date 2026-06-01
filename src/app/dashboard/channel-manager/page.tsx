@@ -10,6 +10,7 @@ import { SyncAllButton } from "@/components/channel-manager/sync-all-button";
 import { ExportFeedsList } from "@/components/channel-manager/export-feeds-list";
 import { OtaListingsList } from "@/components/channel-manager/ota-listings-list";
 import { OtaListingDialog } from "@/components/channel-manager/ota-listing-dialog";
+import { OtaListingBulkDialog } from "@/components/channel-manager/ota-listing-bulk-dialog";
 
 export default async function ChannelManagerPage() {
   const [feeds, units, exportFeeds, otaListingsRes] = await Promise.all([
@@ -115,7 +116,10 @@ export default async function ChannelManagerPage() {
               <div className="text-sm space-y-1">
                 <div className="flex items-center justify-between gap-3 flex-wrap">
                   <p className="font-medium">Mapeo determinístico de listings</p>
-                  <OtaListingDialog units={units} />
+                  <div className="flex items-center gap-2">
+                    <OtaListingBulkDialog units={units} existing={otaListings} />
+                    <OtaListingDialog units={units} />
+                  </div>
                 </div>
                 <p className="text-muted-foreground text-xs">
                   Asociá cada unidad con su listing en Airbnb, Booking u otra OTA. Cuando llega

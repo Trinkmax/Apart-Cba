@@ -207,7 +207,16 @@
       "Bash(grep -rnE \"moveBooking[\\\\s\\({,;]\" /mnt/c/Users/Agust/Apart-Cba/src/)",
       "Bash(grep -nE \"\\\\.ilike\\\\\\(.*\\\\$\\\\{|or\\\\\\(.*ilike|filter\\\\.search\" /mnt/c/Users/Agust/Apart-Cba/src/lib/actions/guests.ts /mnt/c/Users/Agust/Apart-Cba/src/lib/actions/cash.ts)",
       "mcp__supabase-apartcba__list_extensions",
-      "Bash(find *)"
+      "Bash(find *)",
+      "Bash(grep -qE \"^\\(✔|✓|Lint|warning|error|Warning|Error|All|Done|Linting|\\\\$\\)\" /tmp/claude-1000/-mnt-c-Users-Agust-Apart-Cba/d118ec9b-4e5b-4f73-a1d2-9ea943104d2f/tasks/b58qtcpi0.output)",
+      "Bash(grep -nA1 -iE \"RESEND|INBOUND|APP_URL|CRON_SECRET|PG_CRON|EMAIL_FROM|EMAIL_DOMAIN\" .env.example)",
+      "Bash(dig +short MX apartcba.com)",
+      "Bash(host -t MX apartcba.com)",
+      "Bash(nslookup -type=MX apartcba.com)",
+      "Bash(dig +short MX ota.apartcba.com)",
+      "Bash(host -t MX ota.apartcba.com)",
+      "Bash(sed -i '34s@.*@    .replace\\(/[\\\\\\\\u0300-\\\\\\\\u036f]/g, \"\"\\)@' src/lib/channel-manager/bulk-listings.ts)",
+      "Bash(sed -n '34p' src/lib/channel-manager/bulk-listings.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,
