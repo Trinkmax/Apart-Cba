@@ -79,6 +79,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { formatMoney, formatDate, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SETTLEMENT_LINE_META } from "@/lib/settlements/labels";
@@ -488,21 +489,12 @@ function RowEditor({
                 <ArrowRightLeft size={12} className="text-muted-foreground" />
                 Unidad
               </Label>
-              <Select
+              <UnitCombobox
+                units={units}
                 value={targetUnitId}
-                onValueChange={setTargetUnitId}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Elegí una unidad" />
-                </SelectTrigger>
-                <SelectContent>
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.code} · {u.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                onChange={(id) => setTargetUnitId(id ?? "")}
+                placeholder="Elegí una unidad"
+              />
               {unitChanged && (
                 <p className="text-[11px] text-amber-700 dark:text-amber-300">
                   La reserva se moverá al bloque de la nueva unidad.
@@ -1393,19 +1385,14 @@ function ChargeDialog({
           {!initial && (
             <div className="space-y-1.5">
               <Label>Unidad (opcional)</Label>
-              <Select value={unitId} onValueChange={setUnitId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="—" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">— Sin unidad</SelectItem>
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      {u.code} · {u.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <UnitCombobox
+                units={units}
+                value={unitId === "none" ? "" : unitId}
+                onChange={(id) => setUnitId(id ?? "none")}
+                placeholder="—"
+                allowEmpty
+                emptyLabel="— Sin unidad"
+              />
             </div>
           )}
           <CajaImpactToggle

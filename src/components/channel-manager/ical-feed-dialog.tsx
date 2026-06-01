@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { createIcalFeed, type IcalFeedInput } from "@/lib/actions/ical";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import type { Unit } from "@/lib/types/database";
@@ -83,16 +84,12 @@ export function IcalFeedDialog({ units }: Props) {
           <form onSubmit={handleSubmit} className="space-y-4 mt-2">
             <div className="space-y-1.5">
               <Label>Unidad</Label>
-              <Select value={form.unit_id} onValueChange={(v) => set("unit_id", v)} required>
-                <SelectTrigger><SelectValue placeholder="Elegí la unidad" /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {units.map((u) => (
-                    <SelectItem key={u.id} value={u.id}>
-                      <span className="font-mono text-xs mr-2">{u.code}</span>{u.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <UnitCombobox
+                units={units}
+                value={form.unit_id}
+                onChange={(id) => set("unit_id", id ?? "")}
+                placeholder="Elegí la unidad"
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Plataforma</Label>

@@ -37,6 +37,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import {
   changeConciergeStatus,
   deleteConciergeRequest,
@@ -496,25 +497,17 @@ export function ConciergeDetailDialog({
             <Label className="text-[11px] uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
               <Building2 size={12} /> Unidad
             </Label>
-            <Select
+            <UnitCombobox
+              units={units}
               value={form.unit_id ?? ""}
-              onValueChange={(v) => {
-                set("unit_id", v || null);
+              onChange={(id) => {
+                set("unit_id", id);
                 setTimeout(saveDetails, 0);
               }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="—" />
-              </SelectTrigger>
-              <SelectContent className="max-h-72">
-                {units.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    <span className="font-mono mr-2 text-xs">{u.code}</span>
-                    {u.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder="—"
+              allowEmpty
+              emptyLabel="—"
+            />
           </div>
 
           {/* Cost & charge */}

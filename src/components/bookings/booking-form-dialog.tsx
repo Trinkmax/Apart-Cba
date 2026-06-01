@@ -32,6 +32,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { GuestFormDialog } from "@/components/guests/guest-form-dialog";
 import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/bookings";
 import { searchGuests } from "@/lib/actions/guests";
@@ -393,16 +394,22 @@ export function BookingFormDialog({
       : 0;
 
   // En mensual el total siempre lo tipea el usuario. En temporario el form es
-  // bidireccional: si el último editado fue "total" usamos lo tipeado, sino
-  // derivamos del precio × noches (flujo clásico).
+  // bidireccional (Precio/noche ⇄ Total), pero el Total es siempre la fuente de
+  // verdad del importe — ver nota abajo en `totalNum`.
   const pricePerNightNum = parseMoneyInput(form.price_per_night) ?? 0;
   const totalAmountParsed = parseMoneyInput(form.total_amount);
+  // El campo "Total" es la fuente de verdad del importe de la reserva. En
+  // temporario lo mantienen en sync el onChange de Precio/noche y el efecto de
+  // fechas (total = precio × noches); en edición arranca con el total guardado.
+  // NO recalculamos `round(precio × noches)` cuando ya hay un total cargado:
+  // ese ida-y-vuelta precio↔total perdía centavos —`round(total / noches) ×
+  // noches ≠ total`— y dejaba "deuda de centavos" al saldar (y reescribía el
+  // total guardado al editar). Sólo derivamos del precio si el Total está vacío
+  // (creación temprana, antes de que el efecto/onChange lo completen).
   const totalNum =
     form.mode === "mensual"
       ? totalAmountParsed ?? 0
-      : lastTouched === "total" && totalAmountParsed !== null
-        ? totalAmountParsed
-        : Math.round(pricePerNightNum * nights * 100) / 100;
+      : totalAmountParsed ?? Math.round(pricePerNightNum * nights * 100) / 100;
   // Comisión ya no se ingresa en este form — se decide en liquidaciones.
   // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
   // para no perder data en edición; el server decide el fallback definitivo.
@@ -570,39 +577,33 @@ export function BookingFormDialog({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="space-y-1.5 sm:col-span-2">
               <Label>Unidad *</Label>
-              <Select value={form.unit_id} onValueChange={onSelectUnit} required>
-                <SelectTrigger><SelectValue placeholder="Elegí la unidad" /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {units.map((u) => {
-                    const dm: UnitDefaultMode = (u.default_mode ?? "temporario") as UnitDefaultMode;
-                    const dmLabel =
-                      dm === "mixto" ? "Mx" : dm === "mensual" ? "M" : "T";
-                    const dmTone =
-                      dm === "mixto"
-                        ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
-                        : dm === "mensual"
-                          ? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200"
-                          : "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-200";
-                    return (
-                      <SelectItem key={u.id} value={u.id}>
-                        <span className="flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "inline-flex items-center justify-center size-4 rounded-sm text-[9px] font-bold",
-                              dmTone
-                            )}
-                            title={`Vocación: ${dm}`}
-                          >
-                            {dmLabel}
-                          </span>
-                          <span className="font-mono text-xs">{u.code}</span>
-                          <span className="truncate">{u.name}</span>
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
+              <UnitCombobox
+                units={units}
+                value={form.unit_id}
+                onChange={(id) => id && onSelectUnit(id)}
+                placeholder="Elegí la unidad"
+                renderPrefix={(u) => {
+                  const dm: UnitDefaultMode = (u.default_mode ?? "temporario") as UnitDefaultMode;
+                  const dmLabel = dm === "mixto" ? "Mx" : dm === "mensual" ? "M" : "T";
+                  const dmTone =
+                    dm === "mixto"
+                      ? "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                      : dm === "mensual"
+                        ? "bg-violet-100 text-violet-700 dark:bg-violet-900/60 dark:text-violet-200"
+                        : "bg-sky-100 text-sky-700 dark:bg-sky-900/60 dark:text-sky-200";
+                  return (
+                    <span
+                      className={cn(
+                        "inline-flex items-center justify-center size-4 rounded-sm text-[9px] font-bold shrink-0",
+                        dmTone
+                      )}
+                      title={`Vocación: ${dm}`}
+                    >
+                      {dmLabel}
+                    </span>
+                  );
+                }}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>Estado</Label>
