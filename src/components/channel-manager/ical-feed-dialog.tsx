@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -20,9 +20,11 @@ import type { Unit } from "@/lib/types/database";
 
 interface Props {
   units: Pick<Unit, "id" | "code" | "name">[];
+  /** Feeds ya conectados — para ocultar unidades ya vinculadas a esa plataforma. */
+  connectedFeeds?: { unitId: string; source: string }[];
 }
 
-export function IcalFeedDialog({ units }: Props) {
+export function IcalFeedDialog({ units, connectedFeeds = [] }: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -38,6 +40,26 @@ export function IcalFeedDialog({ units }: Props) {
   function set<K extends keyof IcalFeedInput>(k: K, v: IcalFeedInput[K]) {
     setForm((f) => ({ ...f, [k]: v }));
   }
+
+  // Al cambiar de plataforma reseteamos la unidad: la lista disponible cambia.
+  function changeSource(v: IcalFeedInput["source"]) {
+    setForm((f) => ({ ...f, source: v, unit_id: "" }));
+  }
+
+  // Ocultamos las unidades que ya tienen un feed de ESTA plataforma, así la
+  // lista se va achicando a medida que conectás y no las repetís.
+  const connectedForSource = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of connectedFeeds) if (c.source === form.source) ids.add(c.unitId);
+    return ids;
+  }, [connectedFeeds, form.source]);
+
+  const availableUnits = useMemo(
+    () => units.filter((u) => !connectedForSource.has(u.id)),
+    [units, connectedForSource],
+  );
+
+  const sourceLabel = BOOKING_SOURCE_META[form.source].label;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -85,15 +107,24 @@ export function IcalFeedDialog({ units }: Props) {
             <div className="space-y-1.5">
               <Label>Unidad</Label>
               <UnitCombobox
-                units={units}
+                units={availableUnits}
                 value={form.unit_id}
                 onChange={(id) => set("unit_id", id ?? "")}
                 placeholder="Elegí la unidad"
               />
+              {availableUnits.length === 0 ? (
+                <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                  ✓ Todas las unidades ya están conectadas a {sourceLabel}.
+                </p>
+              ) : connectedForSource.size > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {availableUnits.length} sin conectar · {connectedForSource.size} ya en {sourceLabel}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-1.5">
               <Label>Plataforma</Label>
-              <Select value={form.source} onValueChange={(v) => set("source", v as IcalFeedInput["source"])}>
+              <Select value={form.source} onValueChange={(v) => changeSource(v as IcalFeedInput["source"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(["airbnb", "booking", "expedia", "vrbo", "otro"] as const).map((s) => (

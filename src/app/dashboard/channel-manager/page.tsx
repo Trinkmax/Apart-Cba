@@ -37,7 +37,10 @@ export default async function ChannelManagerPage() {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <SyncAllButton />
-          <IcalFeedDialog units={units} />
+          <IcalFeedDialog
+            units={units}
+            connectedFeeds={feeds.map((f) => ({ unitId: f.unit_id, source: f.source }))}
+          />
         </div>
       </div>
 
