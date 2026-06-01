@@ -77,6 +77,21 @@ export function IcalFeedDialog({ units, connectedFeeds = [], exportUrlByUnit = {
     setTimeout(() => setCopiedExport(false), 2000);
   }
 
+  // Nombre sugerido para el calendario en Airbnb (Paso 2).
+  const [copiedName, setCopiedName] = useState(false);
+  const selectedUnit = form.unit_id ? units.find((u) => u.id === form.unit_id) : undefined;
+  const suggestedName = selectedUnit ? `rentOS · ${selectedUnit.code}` : "";
+
+  function copyName() {
+    if (!suggestedName) return;
+    navigator.clipboard.writeText(suggestedName);
+    setCopiedName(true);
+    toast.success("Nombre copiado", {
+      description: "Pegalo en Airbnb → «Nombre del calendario»",
+    });
+    setTimeout(() => setCopiedName(false), 2000);
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     startTransition(async () => {
@@ -170,39 +185,72 @@ export function IcalFeedDialog({ units, connectedFeeds = [], exportUrlByUnit = {
             </div>
 
             {selectedExportUrl && (
-              <div className="rounded-lg border border-dashed bg-muted/40 p-3 space-y-2">
+              <div className="rounded-lg border border-dashed bg-muted/40 p-3 space-y-2.5">
                 <div className="flex items-start gap-2">
                   <ArrowLeftRight className="size-4 shrink-0 text-primary mt-0.5" />
                   <p className="text-xs leading-relaxed">
                     <span className="font-medium">Sync bidireccional:</span>{" "}
                     <span className="text-muted-foreground">
-                      copiá este link y pegalo en Airbnb →{" "}
-                      <b className="font-medium text-foreground/80">Paso 2</b>{" "}
-                      («Enlace a otro sitio web»).
+                      pegá estos dos en Airbnb →{" "}
+                      <b className="font-medium text-foreground/80">Paso 2</b>.
                     </span>
                   </p>
                 </div>
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    readOnly
-                    value={selectedExportUrl}
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="font-mono text-[11px] h-8"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={copyExport}
-                    className="gap-1.5 shrink-0 h-8"
-                  >
-                    {copiedExport ? (
-                      <Check size={12} className="text-emerald-500" />
-                    ) : (
-                      <Copy size={12} />
-                    )}
-                    Copiar
-                  </Button>
+
+                <div className="space-y-1">
+                  <p className="text-[11px] font-medium text-muted-foreground">
+                    Enlace a otro sitio web
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      readOnly
+                      value={selectedExportUrl}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="font-mono text-[11px] h-8"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={copyExport}
+                      className="gap-1.5 shrink-0 h-8"
+                    >
+                      {copiedExport ? (
+                        <Check size={12} className="text-emerald-500" />
+                      ) : (
+                        <Copy size={12} />
+                      )}
+                      Copiar
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <p className="text-[11px] font-medium text-muted-foreground">
+                    Nombre del calendario
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      readOnly
+                      value={suggestedName}
+                      onFocus={(e) => e.currentTarget.select()}
+                      className="text-xs h-8"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={copyName}
+                      className="gap-1.5 shrink-0 h-8"
+                    >
+                      {copiedName ? (
+                        <Check size={12} className="text-emerald-500" />
+                      ) : (
+                        <Copy size={12} />
+                      )}
+                      Copiar
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
