@@ -5,7 +5,7 @@ import { requireGuestSession } from "@/lib/actions/guest-auth";
 import { listWishlistDetails } from "@/lib/actions/wishlists";
 
 export const metadata = {
-  title: "Favoritos · rentOS",
+  title: "Favoritos · ApartCBA",
 };
 
 export default async function FavoritosPage() {

@@ -22,7 +22,7 @@ export function SiteFooter() {
             </ul>
           </div>
           <div>
-            <h4 className="font-semibold text-sm text-neutral-900 mb-3">rentOS</h4>
+            <h4 className="font-semibold text-sm text-neutral-900 mb-3">ApartCBA</h4>
             <ul className="space-y-2 text-sm text-neutral-600">
               <li><Link href="/" className="hover:underline">Descubrir</Link></li>
               <li><Link href="/buscar" className="hover:underline">Explorar destinos</Link></li>
@@ -39,7 +39,7 @@ export function SiteFooter() {
           </div>
         </div>
         <div className="mt-10 pt-6 border-t border-neutral-200 flex flex-col md:flex-row justify-between gap-3 text-xs text-neutral-500">
-          <div>© {new Date().getFullYear()} rentOS — Reservá tu próximo lugar</div>
+          <div>© {new Date().getFullYear()} ApartCBA — Reservá tu próximo lugar</div>
           <div>Hecho en Argentina · Pesos argentinos (ARS)</div>
         </div>
       </div>

@@ -7,7 +7,7 @@ import { checkUnitAvailability } from "@/lib/marketplace/availability";
 import type { MarketplaceListingDetail, UnitPhoto, UnitPricingRule } from "@/lib/types/database";
 
 export const metadata = {
-  title: "Confirmar reserva · rentOS",
+  title: "Confirmar reserva · ApartCBA",
 };
 
 type Params = Promise<{ unitId: string }>;

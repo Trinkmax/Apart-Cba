@@ -5,7 +5,7 @@ import { GuestSignInForm } from "@/components/marketplace/auth-forms";
 import { getGuestSession } from "@/lib/actions/guest-auth";
 
 export const metadata = {
-  title: "Ingresar · rentOS",
+  title: "Ingresar · ApartCBA",
 };
 
 export default async function IngresarPage() {
@@ -17,10 +17,10 @@ export default async function IngresarPage() {
       <div className="text-center mb-8">
         <Link
           href="/"
-          aria-label="rentOS — Inicio"
+          aria-label="ApartCBA — Inicio"
           className="inline-flex items-center justify-center transition-opacity hover:opacity-80"
         >
-          <Logo size="lg" showWordmark={false} variant="dark" />
+          <Logo size="lg" showWordmark={false} variant="dark" brand="apart" />
         </Link>
         <h2 className="text-2xl font-semibold mt-6 text-neutral-900 tracking-[-0.01em]">Bienvenido de vuelta</h2>
         <p className="text-sm text-neutral-500 mt-2">

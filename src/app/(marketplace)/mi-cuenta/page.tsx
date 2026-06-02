@@ -7,7 +7,7 @@ import { formatCurrency } from "@/lib/marketplace/pricing";
 import { TimeUntil } from "@/components/marketplace/time-until";
 
 export const metadata = {
-  title: "Mi cuenta · rentOS",
+  title: "Mi cuenta · ApartCBA",
 };
 
 type BookingRow = {

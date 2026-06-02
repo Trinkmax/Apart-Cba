@@ -2,7 +2,7 @@ import { requireGuestSession } from "@/lib/actions/guest-auth";
 import { GuestProfileForm } from "@/components/marketplace/profile-form";
 
 export const metadata = {
-  title: "Mi perfil · rentOS",
+  title: "Mi perfil · ApartCBA",
 };
 
 export default async function PerfilPage() {

@@ -9,14 +9,14 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "rentOS — Reservá tu próximo lugar",
+  title: "ApartCBA — Reservá tu próximo lugar",
   description:
     "Marketplace de alojamientos temporales en Argentina. Descubrí, compará y reservá departamentos, lofts y casas en segundos.",
-  applicationName: "rentOS",
+  applicationName: "ApartCBA",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
-    title: "rentOS",
+    title: "ApartCBA",
     statusBarStyle: "default",
   },
   icons: {

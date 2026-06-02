@@ -19,12 +19,12 @@ type SearchParams = Promise<Record<string, string | undefined>>;
 export async function generateMetadata({ params }: { params: Params }) {
   const { slug } = await params;
   const listing = await getListingBySlug(slug);
-  if (!listing) return { title: "Alojamiento no encontrado · rentOS" };
+  if (!listing) return { title: "Alojamiento no encontrado · ApartCBA" };
   return {
-    title: `${listing.marketplace_title} · rentOS`,
+    title: `${listing.marketplace_title} · ApartCBA`,
     description:
       listing.marketplace_description?.slice(0, 200) ??
-      `Reservá ${listing.marketplace_title} en rentOS.`,
+      `Reservá ${listing.marketplace_title} en ApartCBA.`,
     openGraph: listing.cover_url ? { images: [{ url: listing.cover_url }] } : undefined,
   };
 }
