@@ -1,0 +1,24 @@
+# Normaliza todos los archivos de texto a LF, tanto en el repo como al hacer checkout.
+# El proyecto se trabaja en WSL/Linux y se deploya en Vercel (Linux); LF es la
+# convención. Esto evita el ruido de CRLF al editar desde Windows (/mnt/c).
+* text=auto eol=lf
+
+# Binarios — nunca normalizar.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.eot    binary
+*.mp4    binary
+*.webm   binary
+*.zip    binary
+
+# Texto que conviene fijar explícito en LF.
+*.svg    text eol=lf
