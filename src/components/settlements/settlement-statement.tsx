@@ -62,12 +62,10 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
       </div>
 
       {/* Datos */}
-      <dl className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border">
+      <dl className="grid grid-cols-2 gap-px bg-border">
         {[
           ["Propietario", model.owner.full_name],
           ["Período", model.periodLabel],
-          ["Moneda", model.currency],
-          ["Generada", formatDate(model.generated_at, "dd/MM/yyyy HH:mm")],
         ].map(([k, v]) => (
           <div key={k} className="bg-card px-4 py-3">
             <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
