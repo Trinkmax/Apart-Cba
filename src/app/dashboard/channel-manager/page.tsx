@@ -10,6 +10,7 @@ import { SyncAllButton } from "@/components/channel-manager/sync-all-button";
 import { ExportFeedsList } from "@/components/channel-manager/export-feeds-list";
 import { OtaListingsList } from "@/components/channel-manager/ota-listings-list";
 import { OtaListingDialog } from "@/components/channel-manager/ota-listing-dialog";
+import { OtaListingBulkDialog } from "@/components/channel-manager/ota-listing-bulk-dialog";
 import { SyncGuide } from "@/components/channel-manager/sync-guide";
 
 export default async function ChannelManagerPage() {
@@ -87,7 +88,15 @@ export default async function ChannelManagerPage() {
         </TabsContent>
 
         <TabsContent value="mapping" className="space-y-4">
-          <SyncGuide variant="mapping" action={<OtaListingDialog units={units} />}>
+          <SyncGuide
+            variant="mapping"
+            action={
+              <div className="flex items-center gap-2">
+                <OtaListingBulkDialog units={units} existing={otaListings} />
+                <OtaListingDialog units={units} />
+              </div>
+            }
+          >
             <p className="text-xs leading-relaxed text-muted-foreground">
               Cuando llega una reserva por email, el sistema usa este mapeo para
               identificar la unidad correcta sin depender del matching por nombre.

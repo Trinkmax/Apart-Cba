@@ -23,6 +23,21 @@ const updateSchema = createSchema.partial().extend({
   active: z.boolean().optional(),
 });
 
+const bulkRowSchema = z.object({
+  unit_id: z.string().uuid(),
+  external_listing_id: z.string().trim().min(1).max(200),
+  external_listing_url: z.string().url().optional().nullable(),
+  label: z.string().trim().max(120).optional().nullable(),
+});
+
+const bulkCreateSchema = z.object({
+  provider: providerEnum,
+  rows: z
+    .array(bulkRowSchema)
+    .min(1, "No hay filas para importar")
+    .max(500, "Demasiadas filas (máx. 500)"),
+});
+
 function zodErrorMessage(err: z.ZodError): string {
   const first = err.issues[0];
   if (!first) return "Datos inválidos";
@@ -164,6 +179,95 @@ export async function updateOtaListing(
 export type DeleteOtaListingResult =
   | { ok: true }
   | { ok: false; error: string };
+
+export type BulkCreateOtaListingsResult =
+  | { ok: true; inserted: number; skipped: number }
+  | { ok: false; error: string };
+
+/**
+ * Carga masiva de mapeos OTA desde el importador del Channel Manager.
+ * Valida que cada unidad pertenezca a la org, deduplica por (provider,
+ * external_listing_id) dentro del lote, e ignora los que ya existen
+ * (ON CONFLICT DO NOTHING). Devuelve cuántos se crearon y cuántos se omitieron.
+ */
+export async function bulkCreateOtaListings(
+  input: z.infer<typeof bulkCreateSchema>,
+): Promise<BulkCreateOtaListingsResult> {
+  try {
+    await requireSession();
+    const parsed = bulkCreateSchema.safeParse(input);
+    if (!parsed.success) return { ok: false, error: zodErrorMessage(parsed.error) };
+
+    const { organization } = await getCurrentOrg();
+    const admin = createAdminClient();
+    const { provider, rows } = parsed.data;
+
+    // Solo unidades que existen en la org actual.
+    const unitIds = [...new Set(rows.map((r) => r.unit_id))];
+    const { data: orgUnits, error: unitsErr } = await admin
+      .from("units")
+      .select("id")
+      .eq("organization_id", organization.id)
+      .in("id", unitIds);
+    if (unitsErr) {
+      logActionError("bulkCreateOtaListings:units", unitsErr);
+      return { ok: false, error: unitsErr.message };
+    }
+    const validUnits = new Set((orgUnits ?? []).map((u) => u.id));
+
+    // Filtrar a unidades válidas y deduplicar por external_listing_id en el lote.
+    const seen = new Set<string>();
+    const toInsert = [] as {
+      organization_id: string;
+      unit_id: string;
+      provider: typeof provider;
+      external_listing_id: string;
+      external_listing_url: string | null;
+      label: string | null;
+      active: boolean;
+    }[];
+    for (const r of rows) {
+      if (!validUnits.has(r.unit_id)) continue;
+      const externalId = r.external_listing_id.trim();
+      if (seen.has(externalId)) continue;
+      seen.add(externalId);
+      toInsert.push({
+        organization_id: organization.id,
+        unit_id: r.unit_id,
+        provider,
+        external_listing_id: externalId,
+        external_listing_url: r.external_listing_url ?? null,
+        label: r.label ?? null,
+        active: true,
+      });
+    }
+
+    if (toInsert.length === 0) {
+      return { ok: false, error: "Ninguna fila válida para importar (revisá unidad e ID)." };
+    }
+
+    const { data, error } = await admin
+      .from("ota_listings")
+      .upsert(toInsert, {
+        onConflict: "organization_id,provider,external_listing_id",
+        ignoreDuplicates: true,
+      })
+      .select("id");
+
+    if (error) {
+      logActionError("bulkCreateOtaListings:upsert", error);
+      return { ok: false, error: error.message };
+    }
+
+    const inserted = data?.length ?? 0;
+    const skipped = rows.length - inserted;
+    revalidatePath("/dashboard/channel-manager");
+    return { ok: true, inserted, skipped };
+  } catch (e) {
+    logActionError("bulkCreateOtaListings:catch", e);
+    return { ok: false, error: (e as Error).message ?? "Error desconocido" };
+  }
+}
 
 export async function deleteOtaListing(id: string): Promise<DeleteOtaListingResult> {
   try {

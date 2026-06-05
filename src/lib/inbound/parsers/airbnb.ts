@@ -47,7 +47,9 @@ export const airbnbParser: InboundEmailParser = {
       .match(/(?:listing|propiedad|alojamiento)[:\s]+([^\n·|]{2,80})/i)?.[1]
       ?.trim();
     // Listing ID determinístico — URL airbnb.com/rooms/<id> en el cuerpo.
-    const externalListingId = body.match(/airbnb\.[a-z.]+\/rooms\/(\d{4,14})/i)?.[1];
+    // Los listings modernos de Airbnb usan IDs largos (18-19 dígitos), así que no
+    // acotamos el máximo: \d{4,} captura el id completo y evita truncarlo.
+    const externalListingId = body.match(/airbnb\.[a-z.]+\/rooms\/(\d{4,})/i)?.[1];
 
     return {
       type: "new_booking",
