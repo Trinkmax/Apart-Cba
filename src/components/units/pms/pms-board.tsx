@@ -105,7 +105,9 @@ import {
 } from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
-import { searchBookingsGlobal } from "@/lib/actions/bookings";
+import { searchBookingsGlobal, listBookingsInRange } from "@/lib/actions/bookings";
+import { listScheduleInRange } from "@/lib/actions/payment-schedule";
+import { listDateMarksInRange } from "@/lib/actions/date-marks";
 import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/format";
@@ -177,6 +179,47 @@ function timeToDayFraction(time: string | null | undefined, fallback = 0): numbe
   const m = Math.min(59, Math.max(0, isNaN(mm) ? 0 : mm));
   return (h + m / 60) / 24;
 }
+
+// Fusiona dos listas de filas por `id` (incoming pisa a prev). Usado por el
+// lazy-load para ACUMULAR tramos nuevos de bookings/cuotas/marcas sin duplicar
+// (additivo: nunca desaloja).
+function mergeById<T extends { id: string }>(prev: T[], incoming: T[]): T[] {
+  if (incoming.length === 0) return prev;
+  const m = new Map<string, T>(prev.map((x) => [x.id, x]));
+  for (const x of incoming) m.set(x.id, x);
+  return Array.from(m.values());
+}
+
+// Fusiona `incoming` (verdad del server para la VENTANA INICIAL) sobre `prev`,
+// y ADEMÁS desaloja las filas de `prev` que caen dentro de esa ventana y ya no
+// vienen en `incoming` (fueron borradas/canceladas en el server). Preserva las
+// filas lazy-cargadas FUERA de la ventana inicial y las protegidas por `keep`
+// (mutaciones optimistas en curso). Restaura la semántica de "purga" que el
+// REPLACE original daba gratis, sin tirar los datos lazy.
+function mergeWindowed<T extends { id: string }>(
+  prev: T[],
+  incoming: T[],
+  inWindow: (row: T) => boolean,
+  keep?: (id: string) => boolean,
+): T[] {
+  const incomingIds = new Set(incoming.map((x) => x.id));
+  const m = new Map<string, T>();
+  for (const x of prev) {
+    if ((keep?.(x.id) ?? false) || !inWindow(x) || incomingIds.has(x.id)) {
+      m.set(x.id, x);
+    }
+    // resto: dentro de la ventana, ausente del server, no protegida -> desalojar
+  }
+  for (const x of incoming) {
+    if (keep?.(x.id) && m.has(x.id)) continue; // mantener la versión optimista
+    m.set(x.id, x);
+  }
+  return Array.from(m.values());
+}
+
+// Días de margen que se traen más allá del borde visible al lazy-cargar, para
+// que la navegación se sienta fluida y no dispare un fetch en cada desplazamiento.
+const PREFETCH_DAYS = 30;
 
 // ─── Tipos de drag ──────────────────────────────────────────────────────────
 type DragMode = "move" | "resize-left" | "resize-right";
@@ -264,6 +307,21 @@ export function PmsBoard({
   const [bookings, setBookings] = useState(initialBookings);
   const [windowStart, setWindowStart] = useState(startISO);
   const [windowDays, setWindowDays] = useState(days);
+  // ── Lazy-load horizontal: rango [loadedFrom, loadedTo) que realmente se trajo
+  // de la base (half-open). La navegación (flechas / scroll / buscador / selector
+  // de días) sólo mueve `windowStart`/`windowDays` sobre los datos ya cargados en
+  // memoria; cuando la ventana visible se sale de este rango, un efecto trae el
+  // tramo faltante y lo fusiona. Sin esto, navegar a fechas anteriores a la
+  // ventana inicial (~hoy−14) mostraba columnas vacías aunque las reservas
+  // existieran en la base.
+  const [loadedFrom, setLoadedFrom] = useState(startISO);
+  const [loadedTo, setLoadedTo] = useState(() => isoAddDays(startISO, days));
+  const [loadingWindow, setLoadingWindow] = useState(false);
+  const loadSeqRef = useRef(0);
+  // Fin (exclusivo) de la ventana INICIAL que trajo el server component. Estable
+  // por montaje (deriva de los props `startISO`/`days`). Lo usan los prop-sync
+  // para purgar dentro de esta ventana sin tocar lo lazy-cargado afuera.
+  const initialWindowEnd = isoAddDays(startISO, days);
   const [zoom, setZoom] = useState<ZoomLevel>("confort");
   const [query, setQuery] = useState("");
   // ── Búsqueda global (autocomplete con popover) ─────────────────────────────
@@ -293,7 +351,31 @@ export function PmsBoard({
   const [schedule, setSchedule] = useState(initialSchedule);
   if (prevInitialSchedule !== initialSchedule) {
     setPrevInitialSchedule(initialSchedule);
-    setSchedule(initialSchedule);
+    // Merge acotado a la ventana inicial: preservamos las cuotas lazy-cargadas de
+    // otras fechas, pero purgamos dentro de la ventana las que el server ya no
+    // devuelve (cuota borrada/repactada). `booking_payment_schedule` no tiene
+    // canal realtime, así que el refresh es la única vía de purga.
+    setSchedule((prev) =>
+      mergeWindowed(
+        prev,
+        initialSchedule,
+        (s) => s.due_date >= startISO && s.due_date < initialWindowEnd,
+      ),
+    );
+  }
+  // Date marks (feriados / eventos por fecha) — también lazy-cargables, mismo
+  // patrón que schedule (tampoco tienen realtime).
+  const [prevInitialDateMarks, setPrevInitialDateMarks] = useState(initialDateMarks);
+  const [dateMarks, setDateMarks] = useState(initialDateMarks);
+  if (prevInitialDateMarks !== initialDateMarks) {
+    setPrevInitialDateMarks(initialDateMarks);
+    setDateMarks((prev) =>
+      mergeWindowed(
+        prev,
+        initialDateMarks,
+        (d) => d.date >= startISO && d.date < initialWindowEnd,
+      ),
+    );
   }
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
@@ -546,14 +628,20 @@ export function PmsBoard({
   // de propagar esos cambios cuando el server confirme.
   if (prevInitialBookings !== initialBookings) {
     setPrevInitialBookings(initialBookings);
-    setBookings((prev) => {
-      const pending = pendingMutateIds.current;
-      if (pending.size === 0) return initialBookings;
-      const prevById = new Map(prev.map((b) => [b.id, b]));
-      return initialBookings.map((b) =>
-        pending.has(b.id) && prevById.has(b.id) ? prevById.get(b.id)! : b
-      );
-    });
+    // Merge acotado a la ventana inicial: `initialBookings` es sólo la ventana
+    // del server component. Preservamos (a) las reservas lazy-cargadas fuera de
+    // esa ventana y (b) las que están en mutación optimista (drag) en curso; pero
+    // DESALOJAMOS las que caen dentro de la ventana y ya no vienen del server
+    // (borradas / canceladas / movidas fuera), restaurando la purga que el
+    // replace original daba gratis.
+    setBookings((prev) =>
+      mergeWindowed(
+        prev,
+        initialBookings,
+        (b) => b.check_in_date < initialWindowEnd && b.check_out_date > startISO,
+        (id) => pendingMutateIds.current.has(id),
+      ),
+    );
   }
 
   // ── zen mode (pantalla completa animada, oculta sidebar + topbar)
@@ -667,9 +755,9 @@ export function PmsBoard({
   // ── date marks indexadas por fecha YYYY-MM-DD (lookup O(1) en DayChip)
   const dateMarksByISO = useMemo(() => {
     const m = new Map<string, OrgDateMark>();
-    initialDateMarks.forEach((dm) => m.set(dm.date, dm));
+    dateMarks.forEach((dm) => m.set(dm.date, dm));
     return m;
-  }, [initialDateMarks]);
+  }, [dateMarks]);
 
   // ── schedule indexado por booking_id (para badges flotantes)
   const scheduleByBooking = useMemo(() => {
@@ -924,6 +1012,14 @@ export function PmsBoard({
           const full = await fetchWithRelations(id);
           if (!full) return;
 
+          // Una reserva que pasó a cancelada/no_show se DESALOJA: alineamos el
+          // estado con `listBookingsInRange` (que nunca las devuelve), para que
+          // el merge de prop-sync no conserve una copia vieja "activa".
+          if (full.status === "cancelada" || full.status === "no_show") {
+            setBookings((prev) => prev.filter((x) => x.id !== id));
+            return;
+          }
+
           setBookings((prev) => {
             const idx = prev.findIndex((x) => x.id === id);
             if (idx === -1) return [...prev, full];
@@ -938,6 +1034,68 @@ export function PmsBoard({
       supabase.removeChannel(channel);
     };
   }, [organizationId]);
+
+  // ── Lazy-load de la ventana visible ────────────────────────────────────────
+  // Cuando la navegación mueve la ventana visible fuera del rango ya traído de la
+  // base, pedimos el tramo faltante (con un margen de prefetch) y lo fusionamos.
+  // Así se ven reservas de cualquier fecha — incluyendo meses pasados — sin
+  // recargar la página. `loadSeqRef` descarta respuestas viejas si el usuario
+  // sigue navegando mientras una request está en vuelo.
+  useEffect(() => {
+    const visibleFrom = windowStart;
+    const visibleTo = isoAddDays(windowStart, windowDays); // half-open
+    if (visibleFrom >= loadedFrom && visibleTo <= loadedTo) return;
+    const targetFrom =
+      visibleFrom < loadedFrom ? isoAddDays(visibleFrom, -PREFETCH_DAYS) : loadedFrom;
+    const targetTo =
+      visibleTo > loadedTo ? isoAddDays(visibleTo, PREFETCH_DAYS) : loadedTo;
+    const seq = ++loadSeqRef.current;
+    let cancelled = false;
+    (async () => {
+      // setState diferido dentro del callback async (no en el cuerpo del efecto)
+      // para cumplir la regla react-hooks/set-state-in-effect del repo.
+      setLoadingWindow(true);
+      try {
+        const lastInclusive = isoAddDays(targetTo, -1);
+        const [bs, sch, dm] = await Promise.all([
+          listBookingsInRange(targetFrom, targetTo),
+          listScheduleInRange(targetFrom, lastInclusive).catch(
+            () => [] as BookingPaymentSchedule[]
+          ),
+          listDateMarksInRange(targetFrom, lastInclusive).catch(
+            () => [] as OrgDateMark[]
+          ),
+        ]);
+        if (cancelled || seq !== loadSeqRef.current) return;
+        setBookings((prev) => {
+          const pending = pendingMutateIds.current;
+          const m = new Map(prev.map((b) => [b.id, b]));
+          for (const b of bs) {
+            if (pending.has(b.id) && m.has(b.id)) continue;
+            m.set(b.id, b);
+          }
+          return Array.from(m.values());
+        });
+        setSchedule((prev) => mergeById(prev, sch));
+        setDateMarks((prev) => mergeById(prev, dm));
+        setLoadedFrom((f) => (targetFrom < f ? targetFrom : f));
+        setLoadedTo((t) => (targetTo > t ? targetTo : t));
+      } catch (err) {
+        // Best-effort: la grilla sigue mostrando lo que ya tenga cargado.
+        console.error("PMS lazy-load window failed", err);
+      } finally {
+        // Sólo guardamos por `seq` (no por `cancelled`): si este fetch fue
+        // cancelado y la re-corrida del efecto NO arrancó otro (la ventana ya
+        // estaba dentro del rango cargado), `seq` sigue siendo el vigente y acá
+        // apagamos el spinner. Si arrancó un reemplazo, su `seq` es mayor y este
+        // finally no lo pisa.
+        if (seq === loadSeqRef.current) setLoadingWindow(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [windowStart, windowDays, loadedFrom, loadedTo]);
 
   // ── scroll-to-today al montar
   useLayoutEffect(() => {
@@ -1594,10 +1752,15 @@ export function PmsBoard({
             <Button size="icon" variant="ghost" className="size-9 shrink-0 tap" onClick={() => shiftDays(7)} aria-label="Semana siguiente">
               <ChevronRight size={17} />
             </Button>
-            <div className="text-[10px] font-medium text-foreground/80 tabular-nums truncate min-w-0 flex-1 text-center px-1">
-              {format(parseISO(windowStart), "d MMM", { locale: es })}
-              {" — "}
-              {format(addDays(parseISO(windowStart), windowDays - 1), "d MMM", { locale: es })}
+            <div className="text-[10px] font-medium text-foreground/80 tabular-nums truncate min-w-0 flex-1 text-center px-1 flex items-center justify-center gap-1">
+              {loadingWindow && (
+                <Loader2 size={10} className="animate-spin text-primary shrink-0" />
+              )}
+              <span className="truncate">
+                {format(parseISO(windowStart), "d MMM", { locale: es })}
+                {" — "}
+                {format(addDays(parseISO(windowStart), windowDays - 1), "d MMM", { locale: es })}
+              </span>
             </div>
             <div className="relative shrink-0">
               <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -1656,10 +1819,19 @@ export function PmsBoard({
 
             <div className="h-6 w-px bg-border mx-1" />
 
-            <div className="text-xs font-medium text-foreground/80 tabular-nums min-w-[180px]">
-              {format(parseISO(windowStart), "d MMM", { locale: es })}
-              {" — "}
-              {format(addDays(parseISO(windowStart), windowDays - 1), "d MMM yyyy", { locale: es })}
+            <div className="text-xs font-medium text-foreground/80 tabular-nums min-w-[180px] flex items-center gap-1.5">
+              <span>
+                {format(parseISO(windowStart), "d MMM", { locale: es })}
+                {" — "}
+                {format(addDays(parseISO(windowStart), windowDays - 1), "d MMM yyyy", { locale: es })}
+              </span>
+              {loadingWindow && (
+                <Loader2
+                  size={12}
+                  className="animate-spin text-primary shrink-0"
+                  aria-label="Cargando reservas"
+                />
+              )}
             </div>
 
             <div className="ml-auto flex items-center gap-1.5 flex-wrap">
