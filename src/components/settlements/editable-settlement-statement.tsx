@@ -1859,7 +1859,7 @@ export function EditableSettlementStatement({
         />
         <div className="bg-primary/5 px-4 py-4">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Neto a transferir
+            Neto por pagar
           </div>
           <div
             className={cn(

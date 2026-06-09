@@ -297,7 +297,7 @@ export async function buildSettlementDoc(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(brand[0], brand[1], brand[2]);
-  doc.text("NETO A TRANSFERIR", boxX + 4, y + 33);
+  doc.text("NETO POR PAGAR", boxX + 4, y + 33);
   doc.text(money(model.totals.net, model.currency), boxX + 82, y + 33, {
     align: "right",
   });

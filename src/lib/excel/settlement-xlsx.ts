@@ -260,7 +260,7 @@ export function buildSettlementWorkbook(
   totalLine("Bruto", model.totals.gross);
   totalLine("− Comisión", -model.totals.commission);
   totalLine("− Gastos", -model.totals.deductions);
-  totalLine("NETO A TRANSFERIR", model.totals.net, true);
+  totalLine("NETO POR PAGAR", model.totals.net, true);
   r++;
 
   // ── Datos bancarios ──

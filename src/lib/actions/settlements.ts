@@ -2683,7 +2683,7 @@ export async function registerSettlementPayment(
   const amount = v.amount ?? Number(settlement.net_payable);
   if (!(amount > 0)) {
     throw new Error(
-      "El neto a transferir no es positivo: no se puede registrar el pago",
+      "El neto por pagar no es positivo: no se puede registrar el pago",
     );
   }
   const occurredAt = v.paid_at ?? new Date().toISOString();
@@ -2852,7 +2852,7 @@ export async function sendSettlementToOwner(settlementId: string) {
   <div style="border:1px solid #e2e8f0;border-top:0;border-radius:0 0 14px 14px;padding:26px">
     <p style="margin:0 0 14px">Hola ${firstName}, te compartimos tu liquidación correspondiente a <strong>${periodLabel}</strong>.</p>
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;margin:18px 0">
-      <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.1em">Neto a transferir</div>
+      <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.1em">Neto por pagar</div>
       <div style="font-size:28px;font-weight:800;color:${brand};margin-top:6px">${net}</div>
     </div>
     <div style="text-align:center;margin:24px 0">
@@ -2866,7 +2866,7 @@ export async function sendSettlementToOwner(settlementId: string) {
   const text = [
     `Liquidación ${periodLabel} — ${branding.name}`,
     ``,
-    `Neto a transferir: ${net}`,
+    `Neto por pagar: ${net}`,
     `Ver online: ${link}`,
     ``,
     `Adjuntamos el detalle en Excel y PDF.`,
