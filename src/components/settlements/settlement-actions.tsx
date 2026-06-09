@@ -96,7 +96,6 @@ export function SettlementActions({
           settlement.owner_id,
           settlement.period_year,
           settlement.period_month,
-          settlement.currency,
         );
         if (!result.ok) {
           toast.error("No se pudo regenerar", { description: result.message });

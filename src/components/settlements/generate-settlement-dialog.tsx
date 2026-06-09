@@ -53,12 +53,6 @@ export function GenerateSettlementDialog({
   const [ownerId, setOwnerId] = useState("");
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
-  // Moneda BASE del documento. Las reservas se incluyen en su moneda nativa
-  // (cada línea persiste su `currency`); el tipo de cambio para convertirlas
-  // al total se carga después en el detalle (panel "Tipos de cambio").
-  // Si elegís una base distinta de una liquidación ya existente del mismo
-  // propietario/período, persistSettlement la anula y mergea como historial.
-  const [currency, setCurrency] = useState("ARS");
 
   const selectedOwner = owners.find((o) => o.id === ownerId);
   const selectedOwnerUnitCount = selectedOwner?.unit_owners?.length ?? 0;
@@ -79,7 +73,7 @@ export function GenerateSettlementDialog({
     }
     startTransition(async () => {
       try {
-        const result = await generateSettlement(ownerId, year, month, currency);
+        const result = await generateSettlement(ownerId, year, month);
         if (!result.ok) {
           toast.error("No se pudo generar la liquidación", {
             description: result.message,
@@ -87,7 +81,7 @@ export function GenerateSettlementDialog({
           return;
         }
         toast.success("Liquidación generada", {
-          description: `${result.lines.length} líneas · neto: ${result.settlement.net_payable.toFixed(2)} ${currency}`,
+          description: `${result.lines.length} líneas · neto: ${result.settlement.net_payable.toFixed(2)} ARS`,
         });
         setOpen(false);
         router.push(`/dashboard/liquidaciones/${result.settlement.id}`);
@@ -187,27 +181,13 @@ export function GenerateSettlementDialog({
               </Select>
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label>Moneda base</Label>
-            <Select value={currency} onValueChange={setCurrency}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="ARS">ARS</SelectItem>
-                <SelectItem value="USD">USD</SelectItem>
-                <SelectItem value="EUR">EUR</SelectItem>
-                <SelectItem value="USDT">USDT</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
           <div className="rounded-lg bg-muted/40 border px-3 py-2.5 text-[11px] text-muted-foreground">
             <p>
               La liquidación se genera en{" "}
-              <span className="font-semibold text-foreground">{currency}</span>{" "}
-              (moneda base) y suma reservas de TODAS las monedas. Si hay
-              reservas en otra moneda, vas a poder cargar el tipo de cambio en
-              el detalle para convertirlas al total.
+              <span className="font-semibold text-foreground">ARS</span>. Si hay
+              reservas o cargos en USD (u otra moneda), se incluyen y podés
+              cargar el tipo de cambio del día en el detalle para convertirlos
+              al total.
             </p>
           </div>
         </div>

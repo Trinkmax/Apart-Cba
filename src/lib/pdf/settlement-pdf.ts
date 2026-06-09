@@ -1,5 +1,5 @@
 import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
+import autoTable, { type CellHookData } from "jspdf-autotable";
 import { formatMoney, formatDate } from "@/lib/format";
 import {
   drawOrgBrandHeader,
@@ -62,6 +62,32 @@ function sectionBar(doc: jsPDF, y: number, text: string, brand: RGB): number {
   return y + 11;
 }
 
+/** amber-700 / amber-100 — para avisos de TC faltante (no computa al neto). */
+const AMBER: RGB = [180, 83, 9];
+
+/**
+ * Franja de advertencia (ámbar). La usamos cuando hay líneas en una moneda
+ * distinta a la base SIN tipo de cambio cargado: esas líneas suman 0 al neto,
+ * así que el documento DEBE avisarlo (la pantalla web ya lo hace; el PDF no lo
+ * hacía y por eso un cargo podía "desaparecer" sin dejar rastro).
+ */
+function warningStrip(doc: jsPDF, y: number, text: string): number {
+  const w = PAGE_W - MARGIN_X * 2;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  const lines = doc.splitTextToSize(pdfSafe(text), w - 8) as string[];
+  const h = 5 + lines.length * 3.9;
+  doc.setFillColor(254, 243, 199); // amber-100
+  doc.rect(MARGIN_X, y, w, h, "F");
+  doc.setFillColor(AMBER[0], AMBER[1], AMBER[2]);
+  doc.rect(MARGIN_X, y, 1.4, h, "F");
+  doc.setTextColor(AMBER[0], AMBER[1], AMBER[2]);
+  doc.text(lines, MARGIN_X + 5, y + 4.3);
+  doc.setTextColor(INK[0], INK[1], INK[2]);
+  doc.setFont("helvetica", "normal");
+  return y + h + 4;
+}
+
 export async function buildSettlementDoc(
   model: StatementModel,
   org: OrgBranding,
@@ -120,6 +146,18 @@ export async function buildSettlementDoc(
   field("Estado", model.statusLabel, MARGIN_X + 96 + 6, y);
   y += 14;
 
+  // Aviso global: cargos/reservas en moneda sin TC → no suman al neto.
+  if (model.missingRates.length > 0) {
+    y = ensureSpace(doc, y, 16);
+    y = warningStrip(
+      doc,
+      y,
+      `Atención: hay importes en ${model.missingRates.join(
+        ", ",
+      )} sin tipo de cambio cargado. NO están sumados al neto. Cargá el TC en la liquidación para incluirlos.`,
+    );
+  }
+
   const tableCols = [
     { header: "Ingreso", dataKey: "ci" },
     { header: "Egreso", dataKey: "co" },
@@ -148,6 +186,16 @@ export async function buildSettlementDoc(
         b.expenses ? pdfNeg(money(b.expenses, model.currency)) : EMPTY,
         money(b.net, model.currency),
       ]),
+      // Reserva en moneda sin TC → no suma al neto: la marcamos en ámbar y
+      // reemplazamos el neto por "sin TC" (no engañar con un importe que no cuenta).
+      didParseCell: (data: CellHookData) => {
+        if (data.section !== "body") return;
+        const b = u.rows[data.row.index];
+        if (b?.missingRate) {
+          data.cell.styles.textColor = AMBER;
+          if (data.column.index === 7) data.cell.text = [`sin TC ${b.currency}`];
+        }
+      },
       foot: [
         [
           { content: pdfSafe(`Subtotal ${u.code}`), colSpan: 4, styles: { halign: "right", fontStyle: "bold" } },
@@ -197,8 +245,19 @@ export async function buildSettlementDoc(
         pdfSafe(
           o.unitCode ? `${o.description}  (${o.unitCode})` : o.description,
         ),
-        `${o.sign === "+" ? "+" : "-"}${money(o.amount, model.currency)}`,
+        o.missingRate
+          ? `${o.sign === "+" ? "+" : "-"}${money(o.amount, o.currency)} · sin TC`
+          : o.needsConversion
+            ? `${o.sign === "+" ? "+" : "-"}${money(o.amount, o.currency)}  (≈ ${money(o.amountInBase, model.currency)})`
+            : `${o.sign === "+" ? "+" : "-"}${money(o.amount, model.currency)}`,
       ]),
+      // Cargo en moneda sin TC → no computa al neto: lo mostramos en ámbar y en
+      // su moneda nativa con "· sin TC" (antes mostraba "+$X" como si sumara).
+      didParseCell: (data: CellHookData) => {
+        if (data.section === "body" && model.otros[data.row.index]?.missingRate) {
+          data.cell.styles.textColor = AMBER;
+        }
+      },
       theme: "striped",
       headStyles: { fillColor: brand, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5 },
       bodyStyles: { fontSize: 7.5 },
@@ -246,6 +305,18 @@ export async function buildSettlementDoc(
     align: "right",
   });
   doc.setTextColor(INK[0], INK[1], INK[2]);
+  if (model.missingRates.length > 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(6.5);
+    doc.setTextColor(AMBER[0], AMBER[1], AMBER[2]);
+    doc.text(
+      pdfSafe(`* No incluye importes en ${model.missingRates.join(", ")} (falta TC).`),
+      boxX + 82,
+      y + 44,
+      { align: "right" },
+    );
+    doc.setTextColor(INK[0], INK[1], INK[2]);
+  }
 
   // ── Datos bancarios (izquierda, alineado con el box de totales) ──
   const bankParts = [

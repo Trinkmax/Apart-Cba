@@ -668,7 +668,6 @@ export async function generateSettlement(
   ownerId: string,
   year: number,
   month: number,
-  currency: string = "ARS",
 ): Promise<
   | { ok: true; settlement: OwnerSettlement; lines: SettlementLine[] }
   | {
@@ -696,7 +695,10 @@ export async function generateSettlement(
       ownerId,
       year,
       month,
-      currency,
+      // Las liquidaciones SIEMPRE se generan en ARS (moneda base). Las reservas
+      // o cargos en otra moneda se incluyen en su moneda nativa y se convierten
+      // al total cargando el TC del día en el detalle ("Tipos de cambio").
+      currency: BASE_CURRENCY,
       userId: session.userId,
     });
   } catch (e) {
