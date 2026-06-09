@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { CircleCheck, Loader2, MessageCircle, Phone, UserCheck } from "lucide-react";
+import { CircleCheck, Loader2, MessageCircle, Pencil, Phone, UserCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -92,7 +92,10 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
               placeholder="Elegir..."
             />
             {form.unit_id && occupancyByUnit && (
-              <OccupancyPanel occupancy={occupancyByUnit[form.unit_id] ?? null} />
+              <OccupancyPanel
+                key={form.unit_id}
+                occupancy={occupancyByUnit[form.unit_id] ?? null}
+              />
             )}
           </div>
 
@@ -198,6 +201,10 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
 }
 
 function OccupancyPanel({ occupancy }: { occupancy: CurrentOccupancy | null }) {
+  const original = occupancy?.guest_phone?.trim() ?? "";
+  const [phone, setPhone] = useState(original);
+  const [editing, setEditing] = useState(false);
+
   if (!occupancy) {
     return (
       <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs dark:border-emerald-900/50 dark:bg-emerald-950/30">
@@ -212,10 +219,11 @@ function OccupancyPanel({ occupancy }: { occupancy: CurrentOccupancy | null }) {
   const label = isMonthly ? "Inquilino" : "Huésped";
   const statusLabel = occupancy.status === "check_in" ? "Ocupado" : "Reservado";
 
-  const phone = occupancy.guest_phone?.trim() ?? "";
-  const phoneDigits = phone.replace(/\D/g, "");
+  const trimmed = phone.trim();
+  const phoneDigits = trimmed.replace(/\D/g, "");
   const waHref = phoneDigits ? `https://wa.me/${phoneDigits}` : null;
-  const telHref = phone ? `tel:${phone}` : null;
+  const telHref = trimmed ? `tel:${trimmed}` : null;
+  const edited = trimmed !== original;
 
   return (
     <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
@@ -226,49 +234,93 @@ function OccupancyPanel({ occupancy }: { occupancy: CurrentOccupancy | null }) {
           · {label} hasta {formatShortDate(occupancy.check_out_date)}
         </span>
       </div>
-      <div className="mt-2 flex items-center justify-between gap-2 pl-6">
-        <div className="min-w-0">
-          <div className="font-medium text-foreground truncate">
-            {occupancy.guest_name ?? "Sin nombre"}
-          </div>
-          {phone ? (
-            <div className="text-muted-foreground tabular-nums">{phone}</div>
-          ) : (
-            <div className="italic text-muted-foreground">Sin teléfono cargado</div>
-          )}
+
+      <div className="mt-2 pl-6">
+        <div className="font-medium text-foreground truncate">
+          {occupancy.guest_name ?? "Sin nombre"}
         </div>
-        {phone && (
-          <div className="flex items-center gap-1 shrink-0">
-            {telHref && (
-              <Button
-                asChild
-                size="sm"
-                variant="outline"
-                className="h-7 gap-1 px-2 text-[11px]"
-                title="Llamar"
+
+        {editing ? (
+          <div className="mt-1.5 flex items-center gap-2">
+            <Input
+              type="tel"
+              autoFocus
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+54 9 351 555-1234"
+              className="h-7 text-xs"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => setEditing(false)}
+            >
+              Listo
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              {trimmed ? (
+                <span className="truncate tabular-nums text-muted-foreground">{trimmed}</span>
+              ) : (
+                <span className="italic text-muted-foreground">Sin teléfono cargado</span>
+              )}
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-700 hover:underline dark:text-amber-300"
               >
-                <a href={telHref}>
-                  <Phone size={12} /> Llamar
-                </a>
-              </Button>
-            )}
-            {waHref && (
-              <Button
-                asChild
-                size="sm"
-                className="h-7 gap-1 bg-[#25D366] px-2 text-[11px] text-white hover:bg-[#1fb955]"
-                title="Coordinar por WhatsApp"
-              >
-                <a href={waHref} target="_blank" rel="noopener noreferrer">
-                  <MessageCircle size={12} /> WhatsApp
-                </a>
-              </Button>
+                <Pencil size={11} /> {trimmed ? "Editar" : "Agregar"}
+              </button>
+              {edited && (
+                <button
+                  type="button"
+                  onClick={() => setPhone(original)}
+                  className="shrink-0 text-[11px] text-muted-foreground hover:underline"
+                >
+                  Restablecer
+                </button>
+              )}
+            </div>
+            {trimmed && (
+              <div className="flex items-center gap-1 shrink-0">
+                {telHref && (
+                  <Button
+                    asChild
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1 px-2 text-[11px]"
+                    title="Llamar"
+                  >
+                    <a href={telHref}>
+                      <Phone size={12} /> Llamar
+                    </a>
+                  </Button>
+                )}
+                {waHref && (
+                  <Button
+                    asChild
+                    size="sm"
+                    className="h-7 gap-1 bg-[#25D366] px-2 text-[11px] text-white hover:bg-[#1fb955]"
+                    title="Coordinar por WhatsApp"
+                  >
+                    <a href={waHref} target="_blank" rel="noopener noreferrer">
+                      <MessageCircle size={12} /> WhatsApp
+                    </a>
+                  </Button>
+                )}
+              </div>
             )}
           </div>
         )}
       </div>
+
       <p className="mt-2 pl-6 text-[11px] leading-snug text-amber-800/70 dark:text-amber-300/70">
         Coordiná día y horario del arreglo directamente con {isMonthly ? "el inquilino" : "el huésped"}.
+        {edited ? " Estás usando un número distinto al cargado en la reserva." : ""}
       </p>
     </div>
   );
