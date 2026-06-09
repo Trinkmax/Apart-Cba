@@ -484,6 +484,13 @@ export function PmsBoard({
   const [openUnitId, setOpenUnitId] = useState<string | null>(null);
   const [editBooking, setEditBooking] = useState<BookingWithRelations | null>(null);
 
+  // Si había un popover abierto (reserva/unidad/marca/búsqueda) cuando arrancó
+  // el gesto, el click en celda vacía sólo debe cerrarlo — NO abrir el quick-add.
+  // Se captura en pointerdown porque con mouse Radix descarta el popover en el
+  // pointerdown del documento, antes de que dispare nuestro click; con touch lo
+  // difiere al click del documento. En ambos casos nuestro handler corre antes.
+  const popoverWasOpenRef = useRef(false);
+
   // ── quick-add dialog state
   const [quickAdd, setQuickAdd] = useState<{
     unitId: string;
@@ -2648,7 +2655,17 @@ export function PmsBoard({
                           `${idx * CELL + CELL / 2}px`
                         );
                       }}
+                      onPointerDown={() => {
+                        popoverWasOpenRef.current = !!document.querySelector(
+                          '[data-slot="popover-content"][data-state="open"]'
+                        );
+                      }}
                       onClick={(e) => {
+                        // e.detail === 0 → activación por teclado (sin pointerdown previo)
+                        if (e.detail > 0 && popoverWasOpenRef.current) {
+                          popoverWasOpenRef.current = false;
+                          return; // el click-afuera ya cerró el popover; no crear reserva
+                        }
                         const rect = e.currentTarget.getBoundingClientRect();
                         const x = e.clientX - rect.left;
                         const idx = Math.floor(x / CELL);
