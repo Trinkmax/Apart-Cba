@@ -104,7 +104,7 @@ export function buildSettlementWorkbook(
     alignment: { vertical: "middle", horizontal: "left", indent: 1 },
     height: 30,
   });
-  mergeRow(`LIQUIDACIÓN A PROPIETARIO · ${model.periodLabel} · ${model.currency}`, {
+  mergeRow(`LIQUIDACIÓN A PROPIETARIO · ${model.periodLabel}`, {
     font: { bold: true, size: 11, color: { argb: INK } },
     height: 20,
   });
@@ -279,7 +279,7 @@ export function buildSettlementWorkbook(
   }
   r++;
   mergeRow(
-    `${model.number}  ·  Generada ${formatDate(model.generated_at, "dd/MM/yyyy")}  ·  Documento informativo emitido digitalmente${branding.legal_name ? " por " + branding.legal_name : ""}.`,
+    `${model.number}  ·  Documento informativo emitido digitalmente${branding.legal_name ? " por " + branding.legal_name : ""}.`,
     { font: { size: 8, italic: true, color: { argb: MUTED } }, height: 16 },
   );
 

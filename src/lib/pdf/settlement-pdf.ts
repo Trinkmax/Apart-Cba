@@ -136,14 +136,11 @@ export async function buildSettlementDoc(
 
   field("Propietario", model.owner.full_name, MARGIN_X, y);
   field("Período", model.periodLabel, MARGIN_X + 96, y);
-  field("Moneda", model.currency, MARGIN_X + 96 + 34, y);
-  y += 13;
-  field("Generada", formatDate(model.generated_at, "dd/MM/yyyy HH:mm"), MARGIN_X, y);
   // Estado con punto de color
   const sc = resolveBrandColor({ primary_color: model.statusColor });
   doc.setFillColor(sc[0], sc[1], sc[2]);
-  doc.circle(MARGIN_X + 96 + 1.5, y - 1, 1.5, "F");
-  field("Estado", model.statusLabel, MARGIN_X + 96 + 6, y);
+  doc.circle(MARGIN_X + 96 + 34 + 1.5, y - 1, 1.5, "F");
+  field("Estado", model.statusLabel, MARGIN_X + 96 + 34 + 6, y);
   y += 14;
 
   // Aviso global: cargos/reservas en moneda sin TC → no suman al neto.
