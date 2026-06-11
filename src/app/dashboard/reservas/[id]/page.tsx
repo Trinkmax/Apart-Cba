@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, MapPin, User, Phone, Mail, Edit } from "lucide-react";
 import { getBooking, listBookings } from "@/lib/actions/bookings";
-import { listUnitsEnriched } from "@/lib/actions/units";
+import { listUnitsForBookingForm } from "@/lib/actions/units";
 import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
@@ -32,20 +32,22 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   const canEditBooking = can(role, "bookings", "update");
   const [booking, units, accounts, movements] = await Promise.all([
     getBooking(id),
-    listUnitsEnriched(),
+    listUnitsForBookingForm(),
     canViewMoney ? listAccounts() : Promise.resolve([]),
     canViewMoney ? listMovementsForBooking(id) : Promise.resolve([]),
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
-  const unitBookings = await listBookings({ unitId: b.unit_id });
+  const [unitBookings, latestAuditByMovement] = await Promise.all([
+    listBookings({ unitId: b.unit_id }),
+    canViewMoney
+      ? listLatestAuditByAccount(
+          "",
+          movements.map((m) => m.id)
+        )
+      : Promise.resolve({}),
+  ]);
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
-  const latestAuditByMovement = canViewMoney
-    ? await listLatestAuditByAccount(
-        "",
-        movements.map((m) => m.id)
-      )
-    : {};
   const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);

@@ -7,7 +7,7 @@ import {
   listAccounts,
   listLatestAuditByAccount,
 } from "@/lib/actions/cash";
-import { listUnitsEnriched } from "@/lib/actions/units";
+import { listUnitRefs } from "@/lib/actions/units";
 import { AccountDetailHeader } from "@/components/cash/account-detail-header";
 import { AccountMovementsFilterBar } from "@/components/cash/account-movements-filter-bar";
 import { AccountMovementsTable } from "@/components/cash/account-movements-table";
@@ -51,7 +51,7 @@ export default async function AccountDetailPage({
       pageSize: 50,
     }),
     listAccounts(),
-    listUnitsEnriched(),
+    listUnitRefs(),
   ]);
 
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));

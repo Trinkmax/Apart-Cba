@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Filter, SlidersHorizontal, X } from "lucide-react";
+import { Filter, Loader2, SlidersHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type ActiveFilter = {
@@ -20,15 +20,24 @@ export function SearchFiltersBar({
   const router = useRouter();
   const params = useSearchParams();
   const [open, setOpen] = useState(false);
+  // Navegar dentro de una transition mantiene la grilla actual visible
+  // (con indicador sutil) en vez de flashear el loading.tsx completo.
+  const [isPending, startTransition] = useTransition();
+
+  function navigate(url: string) {
+    startTransition(() => {
+      router.push(url);
+    });
+  }
 
   function clearFilter(key: string) {
     const next = new URLSearchParams(params);
     next.delete(key);
-    router.push(`/buscar?${next.toString()}`);
+    navigate(`/buscar?${next.toString()}`);
   }
 
   function clearAll() {
-    router.push("/buscar");
+    navigate("/buscar");
   }
 
   const sort = params.get("orden") ?? "recommended";
@@ -36,20 +45,33 @@ export function SearchFiltersBar({
     const next = new URLSearchParams(params);
     if (v === "recommended") next.delete("orden");
     else next.set("orden", v);
-    router.push(`/buscar?${next.toString()}`);
+    navigate(`/buscar?${next.toString()}`);
   }
 
   return (
     <div className="border-b border-neutral-200 bg-white sticky top-20 z-30">
       <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-1 overflow-x-auto">
-          <div className="text-sm font-medium text-neutral-900 whitespace-nowrap">
+          <div
+            className={cn(
+              "flex items-center gap-1.5 text-sm font-medium text-neutral-900 whitespace-nowrap transition-opacity",
+              isPending && "opacity-60"
+            )}
+          >
+            {isPending ? (
+              <Loader2 size={14} className="animate-spin text-neutral-500" />
+            ) : null}
             {totalResults} {totalResults === 1 ? "lugar" : "lugares"}
           </div>
           {activeFilters.length > 0 ? (
             <>
               <div className="h-4 w-px bg-neutral-200 mx-1" />
-              <div className="flex items-center gap-1.5 overflow-x-auto">
+              <div
+                className={cn(
+                  "flex items-center gap-1.5 overflow-x-auto transition-opacity",
+                  isPending && "opacity-60 pointer-events-none"
+                )}
+              >
                 {activeFilters.map((f) => (
                   <button
                     key={f.key}
@@ -74,8 +96,9 @@ export function SearchFiltersBar({
         <div className="flex items-center gap-2 shrink-0">
           <select
             value={sort}
+            disabled={isPending}
             onChange={(e) => changeSort(e.target.value)}
-            className="hidden md:block text-sm border border-neutral-300 rounded-full px-3 py-1.5 bg-white hover:border-neutral-700 focus:outline-none"
+            className="hidden md:block text-sm border border-neutral-300 rounded-full px-3 py-1.5 bg-white hover:border-neutral-700 focus:outline-none disabled:opacity-60"
           >
             <option value="recommended">Recomendado</option>
             <option value="price_asc">Precio: menor a mayor</option>
@@ -96,13 +119,18 @@ export function SearchFiltersBar({
         </div>
       </div>
 
-      {open ? <FilterPanel onClose={() => setOpen(false)} /> : null}
+      {open ? <FilterPanel onClose={() => setOpen(false)} onNavigate={navigate} /> : null}
     </div>
   );
 }
 
-function FilterPanel({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
+function FilterPanel({
+  onClose,
+  onNavigate,
+}: {
+  onClose: () => void;
+  onNavigate: (url: string) => void;
+}) {
   const params = useSearchParams();
 
   const [bedrooms, setBedrooms] = useState<number | null>(
@@ -127,7 +155,7 @@ function FilterPanel({ onClose }: { onClose: () => void }) {
     else next.delete("precio_max");
     if (instant) next.set("instant", "1");
     else next.delete("instant");
-    router.push(`/buscar?${next.toString()}`);
+    onNavigate(`/buscar?${next.toString()}`);
     onClose();
   }
 

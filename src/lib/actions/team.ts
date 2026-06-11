@@ -36,16 +36,25 @@ export async function listTeamMembers(): Promise<(OrganizationMember & { profile
     .select("*")
     .in("user_id", userIds);
 
-  // Get emails from auth.users via admin
+  // Get emails from auth.users via admin (1 listUsers paginado en vez de N getUserById)
   const authAdmin = createAuthAdminClient();
   const emailsByUser = new Map<string, string>();
-  for (const m of members) {
-    try {
-      const { data } = await authAdmin.auth.admin.getUserById(m.user_id);
-      if (data?.user?.email) emailsByUser.set(m.user_id, data.user.email);
-    } catch {
-      // ignore
+  try {
+    const perPage = 1000;
+    let page = 1;
+    // Seguir pidiendo páginas hasta que una vuelva con menos de perPage usuarios
+    for (;;) {
+      const { data, error } = await authAdmin.auth.admin.listUsers({ page, perPage });
+      if (error) break;
+      const users = data?.users ?? [];
+      for (const u of users) {
+        if (u.email) emailsByUser.set(u.id, u.email);
+      }
+      if (users.length < perPage) break;
+      page += 1;
     }
+  } catch {
+    // ignore
   }
 
   return members.map((m) => ({

@@ -1,11 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import * as Icons from "lucide-react";
 import { Search, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { resolveNodeIcon } from "./nodes/crm-node-view";
 import { listNodesByCategory } from "@/lib/crm/workflows/registry";
 import { cn } from "@/lib/utils";
 import type { NodeCategory } from "@/lib/crm/workflows/types";
@@ -88,7 +88,7 @@ export function NodePaletteModal({ onClose, onSelect }: Props) {
                     </h3>
                     <div className="space-y-1">
                       {items.map((def) => {
-                        const Icon = (Icons[def.icon as keyof typeof Icons] as React.ComponentType<{ size?: number; className?: string }>) ?? Icons.Square;
+                        const Icon = resolveNodeIcon(def.icon);
                         return (
                           <button
                             key={def.type}

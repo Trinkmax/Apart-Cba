@@ -126,6 +126,68 @@ export async function listUnitsEnriched(): Promise<UnitWithRelations[]> {
   }));
 }
 
+// No confundir con `UnitRef` de database.ts (datos de acceso para personal de
+// campo): esto es solo lo necesario para selects y matching.
+export type UnitOption = Pick<Unit, "id" | "code" | "name" | "marketplace_title">;
+
+/**
+ * Lista liviana de unidades activas para selects y matching (caja, inventario,
+ * channel manager): 1 query de 4 columnas, sin los lookups de owner/booking/
+ * ticket de listUnitsEnriched. `marketplace_title` viaja porque el importador
+ * masivo de listings OTA lo usa para el fuzzy match.
+ */
+export async function listUnitRefs(): Promise<UnitOption[]> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("units")
+    .select("id, code, name, marketplace_title")
+    .eq("organization_id", organization.id)
+    .eq("active", true)
+    .order("code");
+  if (error) throw new Error(error.message);
+  return (data as UnitOption[]) ?? [];
+}
+
+// Campos que el form de reserva (booking-form-dialog) realmente consume:
+// pricing + modo por defecto. Estructuralmente compatible con su
+// `UnitForBookingForm` local.
+export type UnitForBookingForm = Pick<
+  Unit,
+  | "id"
+  | "code"
+  | "name"
+  | "default_commission_pct"
+  | "base_price"
+  | "base_price_currency"
+  | "cleaning_fee"
+  | "default_mode"
+>;
+
+/**
+ * Unidades activas con los campos que necesita el form de reserva (crear/editar)
+ * en 1 query. Reemplaza a `listUnitsEnriched` (4 queries + lookups de owner/
+ * booking/ticket) en /dashboard/reservas y reservas/[id], que sólo lo usaban
+ * para alimentar el form (y un map id/code/name).
+ */
+export async function listUnitsForBookingForm(): Promise<UnitForBookingForm[]> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("units")
+    .select(
+      "id, code, name, default_commission_pct, base_price, base_price_currency, cleaning_fee, default_mode",
+    )
+    .eq("organization_id", organization.id)
+    .eq("active", true)
+    .order("position")
+    .order("code");
+  if (error) throw new Error(error.message);
+  return (data as UnitForBookingForm[]) ?? [];
+}
+
 export async function getUnit(id: string) {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();

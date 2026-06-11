@@ -8,7 +8,7 @@ import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { RevenueChart } from "@/components/dashboard/revenue-chart";
+import RevenueChart from "@/components/dashboard/revenue-chart-lazy";
 import { DashboardGreeting } from "@/components/dashboard/dashboard-greeting";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney } from "@/lib/format";

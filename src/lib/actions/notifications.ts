@@ -227,7 +227,8 @@ export async function generatePaymentReminders(
       .gte("due_date", todayISO)
       .lte("due_date", horizonISO);
 
-    let upcomingCreated = 0;
+    // Acumular las filas de notificaciones "próximo cobro" para UN upsert batch.
+    const upcomingRows: Array<Record<string, unknown>> = [];
     for (const s of schedules ?? []) {
       const dueDate = new Date(s.due_date + "T12:00:00");
       // contar días hábiles hasta due_date
@@ -251,7 +252,7 @@ export async function generatePaymentReminders(
         month: "short",
       });
 
-      const { error: insErr } = await admin.from("notifications").insert({
+      upcomingRows.push({
         organization_id: org.id,
         type: "payment_due",
         severity: businessDays <= 1 ? "critical" : "warning",
@@ -263,7 +264,33 @@ export async function generatePaymentReminders(
         due_at: new Date(s.due_date + "T12:00:00").toISOString(),
         dedup_key: dedup,
       });
-      if (!insErr) upcomingCreated += 1;
+    }
+
+    // Idempotencia: el índice único de dedup_key es PARCIAL (WHERE dedup_key IS
+    // NOT NULL), y Postgres no puede inferir un índice parcial como árbitro de
+    // ON CONFLICT sin el predicado (que el cliente no emite). Así que filtramos
+    // los dedup_key ya existentes con un SELECT batch y hacemos un INSERT plano
+    // de los nuevos. Sólo cuentan los realmente insertados, igual que antes.
+    let upcomingCreated = 0;
+    if (upcomingRows.length > 0) {
+      const keys = upcomingRows.map((r) => r.dedup_key as string);
+      const { data: dupes } = await admin
+        .from("notifications")
+        .select("dedup_key")
+        .eq("organization_id", org.id)
+        .in("dedup_key", keys);
+      const existing = new Set((dupes ?? []).map((d) => d.dedup_key as string));
+      const fresh = upcomingRows.filter((r) => !existing.has(r.dedup_key as string));
+      if (fresh.length > 0) {
+        const { data: insUpcoming, error: insErr } = await admin
+          .from("notifications")
+          .insert(fresh)
+          .select("id");
+        if (insErr) {
+          console.warn("[generatePaymentReminders] insert upcoming falló", insErr.message);
+        }
+        upcomingCreated = insUpcoming?.length ?? 0;
+      }
     }
 
     // 3. Notificaciones para overdue (1 sola por cuota, dedup por id)
@@ -275,7 +302,8 @@ export async function generatePaymentReminders(
       .eq("organization_id", org.id)
       .eq("status", "overdue");
 
-    let overdueCreated = 0;
+    // Acumular las filas de notificaciones "vencida" para UN upsert batch.
+    const overdueRows: Array<Record<string, unknown>> = [];
     for (const s of overdueSchedules ?? []) {
       const dedup = `payment_overdue:${s.id}`;
       const guest = ((s.booking as { guest?: { full_name?: string } } | null)
@@ -284,7 +312,7 @@ export async function generatePaymentReminders(
         ?.code;
       const remaining =
         Number(s.expected_amount) - Number(s.paid_amount ?? 0);
-      const { error: insErr } = await admin.from("notifications").insert({
+      overdueRows.push({
         organization_id: org.id,
         type: "payment_overdue",
         severity: "critical",
@@ -296,7 +324,28 @@ export async function generatePaymentReminders(
         due_at: new Date(s.due_date + "T12:00:00").toISOString(),
         dedup_key: dedup,
       });
-      if (!insErr) overdueCreated += 1;
+    }
+
+    let overdueCreated = 0;
+    if (overdueRows.length > 0) {
+      const keys = overdueRows.map((r) => r.dedup_key as string);
+      const { data: dupes } = await admin
+        .from("notifications")
+        .select("dedup_key")
+        .eq("organization_id", org.id)
+        .in("dedup_key", keys);
+      const existing = new Set((dupes ?? []).map((d) => d.dedup_key as string));
+      const fresh = overdueRows.filter((r) => !existing.has(r.dedup_key as string));
+      if (fresh.length > 0) {
+        const { data: insOverdue, error: insErr } = await admin
+          .from("notifications")
+          .insert(fresh)
+          .select("id");
+        if (insErr) {
+          console.warn("[generatePaymentReminders] insert overdue falló", insErr.message);
+        }
+        overdueCreated = insOverdue?.length ?? 0;
+      }
     }
 
     results.push({

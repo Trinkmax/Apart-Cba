@@ -11,11 +11,9 @@ export default async function MobileLimpiezaPage() {
   const session = await getSession();
   if (!session) return null;
   const { role } = await getCurrentOrg();
-  const all = (await listCleaningTasks()) as CT[];
-  const mine = all.filter(
-    (c) =>
-      c.assigned_to === session.userId &&
-      ["pendiente", "en_progreso", "completada"].includes(c.status)
+  const assigned = (await listCleaningTasks({ assignedTo: session.userId })) as CT[];
+  const mine = assigned.filter((c) =>
+    ["pendiente", "en_progreso", "completada"].includes(c.status)
   );
 
   return (

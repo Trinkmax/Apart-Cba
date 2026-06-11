@@ -255,7 +255,6 @@ export function TipCard({
                 alt={`Foto del consejo de ${authorName}`}
                 fill
                 sizes="(max-width: 640px) 100vw, 600px"
-                unoptimized
                 loading="lazy"
                 className="object-cover"
               />

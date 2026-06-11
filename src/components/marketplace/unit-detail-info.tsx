@@ -1,16 +1,92 @@
-import * as Icons from "lucide-react";
-import { Star, Users, Bed, Bath, Maximize2, MapPin, ShieldCheck, CalendarCheck, Zap } from "lucide-react";
+import {
+  Accessibility,
+  AirVent,
+  Armchair,
+  ArrowUpDown,
+  Baby,
+  Bath,
+  Bed,
+  Building,
+  CalendarCheck,
+  Camera,
+  Car,
+  Check,
+  ChefHat,
+  Coffee,
+  Droplets,
+  Flame,
+  Home,
+  Laptop,
+  Lock,
+  MapPin,
+  Maximize2,
+  Mountain,
+  PawPrint,
+  PlayCircle,
+  Shield,
+  ShieldCheck,
+  Shirt,
+  Siren,
+  Smile,
+  Sparkles,
+  Star,
+  TreePalm,
+  Trees,
+  Tv,
+  Users,
+  WashingMachine,
+  Waves,
+  Wifi,
+  Wind,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
 import type {
   MarketplaceAmenity,
   MarketplaceListingDetail,
   Review,
 } from "@/lib/types/database";
 
-type LucideIcon = (props: { size?: number; className?: string }) => React.JSX.Element;
+// Mapa explícito de íconos del catálogo: marketplace_amenities.icon guarda el
+// nombre lucide en PascalCase (seed en migración 016). `import * as Icons`
+// impide el tree-shaking de lucide-react, así que registramos solo los usados.
+const AMENITY_ICON_MAP: Record<string, LucideIcon> = {
+  Accessibility,
+  AirVent,
+  Armchair,
+  ArrowUpDown,
+  Baby,
+  Bath,
+  Bed,
+  Building,
+  Camera,
+  Car,
+  ChefHat,
+  Coffee,
+  Droplets,
+  Flame,
+  Home,
+  Laptop,
+  Lock,
+  Mountain,
+  PawPrint,
+  PlayCircle,
+  Shield,
+  Shirt,
+  Siren,
+  Smile,
+  Sparkles,
+  TreePalm,
+  Trees,
+  Tv,
+  WashingMachine,
+  Waves,
+  Wifi,
+  Wind,
+};
 
 function getIcon(name: string): LucideIcon {
-  const map = Icons as unknown as Record<string, LucideIcon | undefined>;
-  return map[name] ?? (Icons.Check as unknown as LucideIcon);
+  return AMENITY_ICON_MAP[name] ?? Check;
 }
 
 type Props = {

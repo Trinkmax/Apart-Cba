@@ -171,47 +171,34 @@ export async function listAccounts(): Promise<CashAccount[]> {
 }
 
 export async function getAccountBalance(accountId: string): Promise<number> {
-  const { organization } = await getCurrentOrg();
-  const admin = createAdminClient();
-  const [{ data: acc }, { data: mvs }] = await Promise.all([
-    admin.from("cash_accounts").select("opening_balance").eq("id", accountId).eq("organization_id", organization.id).maybeSingle(),
-    admin.from("cash_movements").select("direction, amount").eq("account_id", accountId).eq("organization_id", organization.id),
-  ]);
-  if (!acc) return 0;
-  const delta = (mvs ?? []).reduce(
-    (acc, m) => acc + (m.direction === "in" ? Number(m.amount) : -Number(m.amount)),
-    0
-  );
-  return Number(acc.opening_balance) + delta;
+  // Mismo RPC que getAccountBalances (son ~5 cuentas por org): conserva la
+  // semántica anterior — cuenta inexistente o de otra org devuelve 0.
+  const balances = await getAccountBalances();
+  return balances[accountId] ?? 0;
 }
 
+// Shape del RPC apartcba.get_account_balances (el client no está tipado).
+type AccountBalanceRow = { account_id: string; balance: number };
+
 /**
- * Devuelve todos los balances de las cuentas de la org en 2 queries totales,
- * evitando el N+1 que tenía /dashboard/caja al llamar getAccountBalance por
- * cada cuenta. El resultado es un map { account_id → balance }; las cuentas
- * sin movimientos quedan con su opening_balance.
+ * Devuelve todos los balances de las cuentas de la org calculados en Postgres
+ * por el RPC `get_account_balances` (opening_balance + sum(in − out) por
+ * cuenta; las cuentas sin movimientos conservan su opening_balance). Sumar en
+ * JS exigía traer cash_movements completo y se truncaba en silencio al superar
+ * el cap de 1.000 filas de PostgREST. El resultado es un map
+ * { account_id → balance }.
  */
 export async function getAccountBalances(): Promise<Record<string, number>> {
   await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
-  const [{ data: accounts }, { data: movements }] = await Promise.all([
-    admin
-      .from("cash_accounts")
-      .select("id, opening_balance")
-      .eq("organization_id", organization.id),
-    admin
-      .from("cash_movements")
-      .select("account_id, direction, amount")
-      .eq("organization_id", organization.id),
-  ]);
+  const { data, error } = await admin.rpc("get_account_balances", {
+    p_org_id: organization.id,
+  });
+  if (error) throw new Error(error.message);
   const map: Record<string, number> = {};
-  for (const a of accounts ?? []) {
-    map[a.id] = Number(a.opening_balance ?? 0);
-  }
-  for (const m of movements ?? []) {
-    const delta = m.direction === "in" ? Number(m.amount) : -Number(m.amount);
-    map[m.account_id] = (map[m.account_id] ?? 0) + delta;
+  for (const r of (data ?? []) as AccountBalanceRow[]) {
+    map[r.account_id] = Number(r.balance);
   }
   return map;
 }
@@ -451,15 +438,17 @@ export async function getAccount(
   await requireSession();
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
-  const { data: account, error } = await admin
-    .from("cash_accounts")
-    .select("*")
-    .eq("id", accountId)
-    .eq("organization_id", organization.id)
-    .maybeSingle();
+  const [{ data: account, error }, balance] = await Promise.all([
+    admin
+      .from("cash_accounts")
+      .select("*")
+      .eq("id", accountId)
+      .eq("organization_id", organization.id)
+      .maybeSingle(),
+    getAccountBalance(accountId),
+  ]);
   if (error) throw new Error(error.message);
   if (!account) return null;
-  const balance = await getAccountBalance(accountId);
   return { account: account as CashAccount, balance };
 }
 
@@ -478,7 +467,7 @@ export async function getAccountStats(
   const fromISO = range?.from ?? thirtyDaysAgo.toISOString();
   const toISO = range?.to ?? now.toISOString();
 
-  const [{ data: acc }, ytd, mtd, daily] = await Promise.all([
+  const [{ data: acc }, ytd, mtd, daily, balance] = await Promise.all([
     admin
       .from("cash_accounts")
       .select("opening_balance")
@@ -505,9 +494,10 @@ export async function getAccountStats(
       .gte("occurred_at", fromISO)
       .lte("occurred_at", toISO)
       .order("occurred_at", { ascending: true }),
+    // Saldo total desde el RPC, en paralelo con las lecturas de stats.
+    getAccountBalance(accountId),
   ]);
 
-  const balance = await getAccountBalance(accountId);
   const opening = Number(acc?.opening_balance ?? 0);
 
   const sum = (rows: Array<{ direction: string; amount: number }> | null, dir: "in" | "out") =>

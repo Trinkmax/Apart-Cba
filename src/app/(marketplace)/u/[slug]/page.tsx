@@ -7,9 +7,9 @@ import { UnitBookingWidget } from "@/components/marketplace/unit-booking-widget"
 import { UnitLocationMap } from "@/components/marketplace/unit-location-map";
 import {
   getListingBlockedDates,
-  getListingBySlug,
   getReviewsForUnit,
 } from "@/lib/actions/marketplace";
+import { getListingBySlug } from "@/lib/marketplace/listing-reads";
 import { listMarketplaceAmenitiesCatalog } from "@/lib/actions/listings";
 import { getGuestSession } from "@/lib/actions/guest-auth";
 

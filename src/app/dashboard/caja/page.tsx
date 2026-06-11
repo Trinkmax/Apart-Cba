@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { Plus, Wallet, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { listAccounts, listMovements, getAccountBalances } from "@/lib/actions/cash";
-import { listUnitsEnriched } from "@/lib/actions/units";
+import { listUnitRefs } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
@@ -20,7 +20,7 @@ export default async function CajaPage() {
   const [accounts, movements, units, balancesMap] = await Promise.all([
     listAccounts(),
     listMovements({ limit: 100 }),
-    listUnitsEnriched(),
+    listUnitRefs(),
     getAccountBalances(),
   ]);
   const balances = accounts.map((a) => balancesMap[a.id] ?? 0);

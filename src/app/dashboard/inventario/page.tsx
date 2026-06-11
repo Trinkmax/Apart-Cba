@@ -4,13 +4,13 @@ import {
   listInventoryMovements,
   listUnitAmenities,
 } from "@/lib/actions/amenities";
-import { listUnitsEnriched } from "@/lib/actions/units";
+import { listUnitRefs } from "@/lib/actions/units";
 import { InventoryWorkspace } from "@/components/amenities/inventory-workspace";
 
 export default async function InventarioPage() {
   const [amenities, units, unitAmenities, movements] = await Promise.all([
     listAmenities(),
-    listUnitsEnriched(),
+    listUnitRefs(),
     listUnitAmenities(),
     listInventoryMovements({ limit: 100 }),
   ]);

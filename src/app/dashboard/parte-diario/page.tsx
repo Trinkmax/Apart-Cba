@@ -50,8 +50,8 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
 
   const sp = await searchParams;
   const requestedDate = sp.date ?? undefined;
-  const payload = await getParteDiario(requestedDate);
-  const [recipients, maintenanceAssignables, tareasAssignables] = await Promise.all([
+  const [payload, recipients, maintenanceAssignables, tareasAssignables] = await Promise.all([
+    getParteDiario(requestedDate),
     listParteDiarioRecipients().catch(() => []),
     listAssignableForMaintenance().catch(() => []),
     listAssignableForTareas().catch(() => []),

@@ -1,7 +1,7 @@
 import { Cable, Download, Upload, AlertTriangle, Link as LinkIcon } from "lucide-react";
 import { listIcalFeedsWithHealth, listUnitExportFeeds } from "@/lib/actions/ical";
 import { listOtaListings } from "@/lib/actions/ota-listings";
-import { listUnitsEnriched } from "@/lib/actions/units";
+import { listUnitRefs } from "@/lib/actions/units";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { IcalFeedDialog } from "@/components/channel-manager/ical-feed-dialog";
@@ -16,7 +16,7 @@ import { SyncGuide } from "@/components/channel-manager/sync-guide";
 export default async function ChannelManagerPage() {
   const [feeds, units, exportFeeds, otaListingsRes] = await Promise.all([
     listIcalFeedsWithHealth(),
-    listUnitsEnriched(),
+    listUnitRefs(),
     listUnitExportFeeds(),
     listOtaListings(),
   ]);

@@ -216,7 +216,19 @@
       "Bash(nslookup -type=mx apartcba.com)",
       "Bash(dig +short TXT apartcba.com)",
       "Bash(cd *)",
-      "Bash(vercel inspect *)"
+      "Bash(vercel inspect *)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(echo \"TSC exit=$?  \\(líneas: $\\(wc -l < /tmp/tsc.log\\)\\)\")",
+      "Bash(echo \"LINT exit=$?  \\(líneas: $\\(wc -l < /tmp/lint.log\\)\\)\")",
+      "Bash(grep -iA0 \"\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(npm -v)",
+      "Bash(timeout 5 npm ping)",
+      "Bash(npm ping *)",
+      "Bash(npm ci *)",
+      "Bash(echo \"=== eslint exit: $? ===\")",
+      "Bash(./node_modules/.bin/eslint src/lib/pdf/settlement-pdf.ts)",
+      "Bash(echo \"=== EXIT: $? ===\")"
     ]
   },
   "enableAllProjectMcpServers": true,

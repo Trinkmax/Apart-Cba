@@ -30,16 +30,15 @@ export async function HomeHero() {
                  min-h-[680px] md:min-h-[860px]"
     >
       {/* Background image with Ken Burns. Lives in its own absolute layer so
-          the cinematic motion doesn't drag the content with it. quality={92}
-          keeps the photo crisp on mobile Safari where srcset can pick a small
-          variant; the bandwidth bump is acceptable for a single hero asset. */}
+          the cinematic motion doesn't drag the content with it. Default
+          quality (75) is enough: the Ken Burns motion plus three gradient
+          layers on top hide any compression, and this is the mobile LCP. */}
       <div className="absolute inset-0 overflow-hidden">
         <Image
           src="/cordoba/ciudad.webp"
           alt=""
           fill
           priority
-          quality={92}
           sizes="100vw"
           className="object-cover animate-ken-burns"
         />

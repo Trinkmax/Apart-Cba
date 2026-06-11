@@ -40,8 +40,7 @@ export function TipPhotoLightbox({
             src={url}
             alt={alt}
             fill
-            sizes="100vw"
-            unoptimized
+            sizes="(max-width: 640px) 100vw, 768px"
             className="object-contain"
             priority
           />

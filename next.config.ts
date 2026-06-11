@@ -39,6 +39,8 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       { protocol: "https", hostname: "*.supabase.co" },
       { protocol: "https", hostname: "*.supabase.in" },
+      // Mapbox Static Images API (mapa estático en /u/[slug]).
+      { protocol: "https", hostname: "api.mapbox.com" },
     ],
   },
   async headers() {

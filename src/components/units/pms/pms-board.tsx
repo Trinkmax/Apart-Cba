@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  cloneElement,
   useCallback,
   useEffect,
   useId,
@@ -44,6 +45,7 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { toast } from "sonner";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -124,11 +126,11 @@ import type {
   UnitWithRelations,
 } from "@/lib/types/database";
 import { CuotaBadge } from "@/components/payment-schedule/cuota-badge";
-import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
-import {
-  MoveConfirmDialog,
-  type MoveOperation,
-  type PendingMove,
+// Los tipos del move-confirm se siguen importando estáticamente (se borran en
+// compilación, costo 0). El componente en sí se carga con dynamic más abajo.
+import type {
+  MoveOperation,
+  PendingMove,
 } from "@/components/bookings/move-confirm-dialog";
 import {
   BOOKING_BAR_STYLE,
@@ -147,6 +149,19 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
 import { DateMarkPopover } from "./date-mark-popover";
+
+// Dialogs pesados (~1.4k y ~580 líneas) cargados bajo demanda: el chunk no se
+// descarga hasta la primera interacción que abre el dialog (click en "Nueva"/
+// FAB/editar reserva, o confirmación de un drag). ssr:false porque sólo viven
+// tras interacción del usuario y no hay nada que renderizar en el server.
+const BookingFormDialog = dynamic(
+  () => import("@/components/bookings/booking-form-dialog").then((m) => m.BookingFormDialog),
+  { ssr: false }
+);
+const MoveConfirmDialog = dynamic(
+  () => import("@/components/bookings/move-confirm-dialog").then((m) => m.MoveConfirmDialog),
+  { ssr: false }
+);
 
 interface PmsBoardProps {
   initialUnits: UnitWithRelations[];
@@ -379,6 +394,11 @@ export function PmsBoard({
   }
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+  // Latch one-way: se vuelve true la primera vez que se abre el MoveConfirmDialog
+  // (dynamic) y ya no vuelve a false. Difiere la descarga del chunk hasta el
+  // primer drag-confirm, pero mantiene el dialog montado durante su animación de
+  // salida cuando `pendingMove` vuelve a null.
+  const [moveDialogMounted, setMoveDialogMounted] = useState(false);
 
   // ── Filtros de búsqueda de unidades ────────────────────────────────────────
   // Pensado para ayudar a encontrar deptos: disponibilidad por fechas, cap.,
@@ -1570,6 +1590,7 @@ export function PmsBoard({
     // desde "donde quedó el dedo" hasta el target snap final.
     unlockGridScroll(false);
 
+    setMoveDialogMounted(true);
     setPendingMove({
       booking,
       operation,
@@ -1653,6 +1674,7 @@ export function PmsBoard({
     );
     pendingMutateIds.current.add(booking.id);
 
+    setMoveDialogMounted(true);
     setPendingMove({
       booking,
       operation: field === "check_in_date" ? "resize-left" : "resize-right",
@@ -2381,7 +2403,7 @@ export function PmsBoard({
 
               {/* Nueva reserva */}
               {canEditBookings && (
-                <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
+                <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings}>
                   <Button
                     size="sm"
                     className="h-8 gap-1.5 text-xs"
@@ -2389,7 +2411,7 @@ export function PmsBoard({
                   >
                     <Plus size={13} /> Nueva
                   </Button>
-                </BookingFormDialog>
+                </LazyNewBookingTrigger>
               )}
             </div>
           </div>
@@ -2884,7 +2906,7 @@ export function PmsBoard({
             Lo escondemos en editMode (reorden) y mientras el usuario arrastra,
             para no tapar el target ni competir con el DragChip. */}
         {canEditBookings && !editMode && !drag && (
-          <BookingFormDialog units={units} accounts={accounts} existingBookings={bookings}>
+          <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings}>
             <button
               type="button"
               aria-label="Nueva reserva"
@@ -2899,15 +2921,20 @@ export function PmsBoard({
             >
               <Plus size={24} strokeWidth={2.5} />
             </button>
-          </BookingFormDialog>
+          </LazyNewBookingTrigger>
         )}
 
-        {/* Modal de confirmación obligatoria para mover/extender */}
-        <MoveConfirmDialog
-          pending={pendingMove}
-          onConfirmed={handleConfirmMove}
-          onCancel={handleCancelMove}
-        />
+        {/* Modal de confirmación obligatoria para mover/extender.
+            Montado bajo demanda vía latch: el chunk dynamic no se descarga hasta
+            el primer drag-confirm; una vez montado queda montado para no cortar
+            la animación de salida cuando `pendingMove` vuelve a null. */}
+        {moveDialogMounted && (
+          <MoveConfirmDialog
+            pending={pendingMove}
+            onConfirmed={handleConfirmMove}
+            onCancel={handleCancelMove}
+          />
+        )}
       </div>
     </TooltipProvider>
   );
@@ -3701,6 +3728,48 @@ function QuickAddBridge({
       open
       onOpenChange={(o) => { if (!o) onClose(); }}
     />
+  );
+}
+
+// Disparador "Nueva reserva" con carga diferida. El botón (children) se
+// renderiza siempre — es estático y barato. El BookingFormDialog (dynamic)
+// recién se monta tras el primer click vía el latch `mountedOnce`, así su
+// chunk no se descarga hasta que el usuario realmente quiere crear una reserva.
+// Se controla con `open`/`onOpenChange` (sin children dentro del dialog) para
+// no forzar el montaje del dialog por usar DialogTrigger.
+function LazyNewBookingTrigger({
+  units,
+  accounts,
+  existingBookings,
+  children,
+}: {
+  units: UnitWithRelations[];
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
+  existingBookings: BookingWithRelations[];
+  children: React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [mountedOnce, setMountedOnce] = useState(false);
+  const trigger = cloneElement(children, {
+    onClick: (e: React.MouseEvent) => {
+      children.props.onClick?.(e);
+      setMountedOnce(true);
+      setOpen(true);
+    },
+  });
+  return (
+    <>
+      {trigger}
+      {mountedOnce && (
+        <BookingFormDialog
+          units={units}
+          accounts={accounts}
+          existingBookings={existingBookings}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      )}
+    </>
   );
 }
 

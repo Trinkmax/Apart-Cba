@@ -7,7 +7,7 @@ import { redirect } from "next/navigation";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Resend } from "resend";
-import { requireSession } from "./auth";
+import { requireSession, getSessionContext } from "./auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { isAdminLevel } from "@/lib/permissions";
 import { BOOKING_STATUS_META } from "@/lib/constants";
@@ -28,25 +28,18 @@ const currentOrgLoader = cache(async (): Promise<{
   organization: Organization;
   role: UserRole;
 }> => {
-  const session = await requireSession();
-  if (session.memberships.length === 0 && !session.profile.is_superadmin) {
+  // La org activa ya viene resuelta en el contexto de sesión (RPC único):
+  // cookie apartcba_org válida → esa org; si no → primera membresía activa.
+  const ctx = await getSessionContext();
+  if (!ctx) redirect("/login");
+  if (ctx.memberships.length === 0 && !ctx.profile.is_superadmin) {
     redirect("/sin-acceso");
   }
 
-  const cookieStore = await cookies();
-  const cookieOrgId = cookieStore.get(ORG_COOKIE)?.value;
-
-  if (cookieOrgId) {
-    const m = session.memberships.find((mem) => mem.organization_id === cookieOrgId);
-    if (m) return { organization: m.organization, role: m.role };
-  }
-
-  if (session.memberships.length > 0) {
-    return {
-      organization: session.memberships[0].organization,
-      role: session.memberships[0].role,
-    };
-  }
+  const m = ctx.memberships.find(
+    (mem) => mem.organization_id === ctx.currentOrgId
+  );
+  if (m) return { organization: m.organization, role: m.role };
 
   redirect("/superadmin");
 });

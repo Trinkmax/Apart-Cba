@@ -1,10 +1,73 @@
 "use client";
 
+import { createElement } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import * as Icons from "lucide-react";
-import { Trash2, Plus } from "lucide-react";
+import {
+  Bell,
+  Building2,
+  Clock,
+  FileText,
+  GitBranch,
+  Globe,
+  Hourglass,
+  Image,
+  Link,
+  List,
+  ListTodo,
+  MessageCircleOff,
+  MessageSquare,
+  MessageSquareText,
+  PlayCircle,
+  Plus,
+  RotateCw,
+  Sparkles,
+  Square,
+  StickyNote,
+  Tag,
+  Tags,
+  Trash2,
+  UserCheck,
+  Variable,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { listNodes } from "@/lib/crm/workflows/registry";
+
+// Mapa explícito de íconos: los node-defs (nodes/builtin, nodes/apartcba) guardan
+// el nombre lucide en PascalCase como string. `import * as Icons` impide el
+// tree-shaking de lucide-react, así que registramos solo los que se usan.
+const NODE_ICONS: Record<string, LucideIcon> = {
+  Bell,
+  Building2,
+  Clock,
+  FileText,
+  GitBranch,
+  Globe,
+  Hourglass,
+  Image,
+  Link,
+  List,
+  ListTodo,
+  MessageCircleOff,
+  MessageSquare,
+  MessageSquareText,
+  PlayCircle,
+  RotateCw,
+  Sparkles,
+  Square,
+  StickyNote,
+  Tag,
+  Tags,
+  UserCheck,
+  Variable,
+  Wrench,
+};
+
+export function resolveNodeIcon(name: string | undefined): LucideIcon {
+  if (!name) return Square;
+  return NODE_ICONS[name] ?? Square;
+}
 
 const ACCENT_BORDERS: Record<string, string> = {
   green: "border-emerald-500/60 shadow-emerald-500/10",
@@ -35,7 +98,6 @@ export function CrmNodeView({ id, data, selected, onAddAfter, onDelete }: CrmNod
   const nodeData = data as { nodeType: string; config?: Record<string, unknown> };
   const def = ALL_NODES.find((n) => n.type === nodeData.nodeType);
 
-  const Icon = def ? (Icons[def.icon as keyof typeof Icons] as React.ComponentType<{ size?: number; className?: string }>) ?? Icons.Square : Icons.Square;
   const accentColor = def?.accentColor ?? "zinc";
   const isTrigger = def?.isTrigger ?? false;
   const outputs = def?.outputs ?? [{ id: "next" }];
@@ -57,7 +119,7 @@ export function CrmNodeView({ id, data, selected, onAddAfter, onDelete }: CrmNod
 
       {/* Header */}
       <div className={cn("flex items-center gap-2 px-2.5 py-1.5 rounded-t-lg", ACCENT_HEADERS[accentColor])}>
-        <Icon size={14} />
+        {createElement(resolveNodeIcon(def?.icon), { size: 14 })}
         <span className="text-xs font-semibold flex-1">{def?.label ?? nodeData.nodeType}</span>
         {onDelete && !isTrigger && (
           <button

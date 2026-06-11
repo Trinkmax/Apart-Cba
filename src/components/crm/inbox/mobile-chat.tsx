@@ -26,12 +26,23 @@ export function MobileChat({ conversationId, initial }: Props) {
   const [isPending, startTransition] = useTransition();
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  useInboxRealtime((event) => {
-    if (event.kind === "message_insert" && (event.row as { conversation_id?: string }).conversation_id === conversationId) {
-      // Refresh fresh conversation
-      getConversationDetail(conversationId).then((d) => {
-        if (d) setMessages(d.messages);
-      });
+  // Filtro server-side por conversación: solo llegan mensajes de este chat.
+  useInboxRealtime({ conversationId }, (event) => {
+    if (event.kind === "message_insert") {
+      // Append incremental de la fila entrante (idempotente por id) en vez de
+      // re-fetchear todo el detalle (select * limit 500 + 3 queries) por mensaje.
+      const row = event.row as unknown as CrmMessage;
+      if (!row?.id) return;
+      setMessages((prev) =>
+        prev.some((m) => m.id === row.id) ? prev : [...prev, row]
+      );
+    } else if (event.kind === "message_update") {
+      // Status del mensaje (enviado→entregado→leído): merge en su lugar.
+      const row = event.row as unknown as CrmMessage;
+      if (!row?.id) return;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === row.id ? { ...m, ...row } : m))
+      );
     }
   });
 

@@ -51,12 +51,12 @@ function isUnviewable(a: TicketAttachment): boolean {
 
 /** Endpoint de transformación de Supabase: imgproxy puede transcodear HEIC→JPEG
  *  on the fly. Si el add-on no está habilitado devuelve error → cae al onError. */
-function transformUrl(fileUrl: string): string {
+function transformUrl(fileUrl: string, width = 1400, quality = 80): string {
   const out = fileUrl.replace(
     "/storage/v1/object/public/",
     "/storage/v1/render/image/public/"
   );
-  return out === fileUrl ? fileUrl : `${out}?width=1400&quality=80`;
+  return out === fileUrl ? fileUrl : `${out}?width=${width}&quality=${quality}`;
 }
 
 export function TicketPhotosSection({
@@ -347,10 +347,9 @@ function AttachmentTile({
   onDelete?: () => void;
   deleting: boolean;
 }) {
-  const unviewable = isUnviewable(a);
-  const [src, setSrc] = useState(
-    unviewable ? transformUrl(a.file_url) : a.file_url
-  );
+  // Tile de ~110px: render de 400px alcanza de sobra y pesa una fracción del
+  // original. Si el render falla (add-on deshabilitado), onError cae al crudo.
+  const [src, setSrc] = useState(() => transformUrl(a.file_url, 400, 75));
   const [broken, setBroken] = useState(false);
 
   return (

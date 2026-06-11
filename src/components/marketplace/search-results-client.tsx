@@ -1,11 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+import dynamic from "next/dynamic";
 import { Map as MapIcon, List } from "lucide-react";
 import { ListingCard } from "./listing-card";
-import { ListingsMap } from "./listings-map";
 import { cn } from "@/lib/utils";
 import type { MarketplaceListingSummary } from "@/lib/types/database";
+
+const DESKTOP_MQ = "(min-width: 768px)";
+
+// Suscripción a matchMedia vía la API canónica de React (sin setState-en-effect
+// ni hydration mismatch): el snapshot del server es false → el HTML inicial
+// renderiza el placeholder; tras la hidratación el cliente re-lee el snapshot
+// real y, si es desktop, monta el mapa.
+function useIsDesktop(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia(DESKTOP_MQ);
+      mq.addEventListener("change", onChange);
+      return () => mq.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(DESKTOP_MQ).matches,
+    () => false,
+  );
+}
+
+// mapbox-gl pesa ~470 KB gz (~1,7 MB de parse) + WebGL: lo cargamos on-demand
+// en vez de incluirlo en el bundle inicial de /buscar.
+const ListingsMap = dynamic(
+  () => import("./listings-map").then((m) => m.ListingsMap),
+  {
+    ssr: false,
+    loading: () => <div className="h-full w-full bg-muted" />,
+  }
+);
 
 type Props = {
   listings: MarketplaceListingSummary[];
@@ -15,6 +43,13 @@ type Props = {
 export function SearchResultsClient({ listings, favoritedIds }: Props) {
   const [hovered, setHovered] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "map">("list");
+  // En mobile el mapa NO se monta hasta que el usuario toca "Ver mapa" (antes
+  // quedaba montado en un div display:none → descarga + WebGL al pedo). En
+  // desktop se monta solo (el mapa es parte del layout). `userOpenedMap` es el
+  // latch del toggle mobile.
+  const isDesktop = useIsDesktop();
+  const [userOpenedMap, setUserOpenedMap] = useState(false);
+  const mapMounted = isDesktop || userOpenedMap;
   const favSet = new Set(favoritedIds);
 
   if (listings.length === 0) {
@@ -59,16 +94,24 @@ export function SearchResultsClient({ listings, favoritedIds }: Props) {
           mobileView === "list" && "hidden md:block"
         )}
       >
-        <ListingsMap
-          listings={listings}
-          hoveredId={hovered}
-          onMarkerHover={setHovered}
-        />
+        {mapMounted ? (
+          <ListingsMap
+            listings={listings}
+            hoveredId={hovered}
+            onMarkerHover={setHovered}
+          />
+        ) : (
+          <div className="h-full w-full bg-muted" />
+        )}
       </div>
 
       {/* Mobile floating toggle */}
       <button
-        onClick={() => setMobileView(mobileView === "list" ? "map" : "list")}
+        onClick={() => {
+          const next = mobileView === "list" ? "map" : "list";
+          if (next === "map") setUserOpenedMap(true);
+          setMobileView(next);
+        }}
         className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 inline-flex items-center gap-2 rounded-full bg-neutral-900 text-white px-5 py-2.5 shadow-2xl text-sm font-medium"
       >
         {mobileView === "list" ? (

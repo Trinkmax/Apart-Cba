@@ -548,12 +548,17 @@ async function persistSettlement(opts: {
     if (error) throw new Error(error.message);
   }
 
-  // Reordenar los ajustes manuales del principal después de las líneas auto
-  for (let i = 0; i < manualLines.length; i++) {
-    await admin
-      .from("settlement_lines")
-      .update({ display_order: autoLinesToInsert.length + i })
-      .eq("id", manualLines[i].id);
+  // Reordenar los ajustes manuales del principal después de las líneas auto.
+  // Updates independientes (distinto id c/u) → en paralelo, no en serie.
+  if (manualLines.length > 0) {
+    await Promise.all(
+      manualLines.map((ml, i) =>
+        admin
+          .from("settlement_lines")
+          .update({ display_order: autoLinesToInsert.length + i })
+          .eq("id", ml.id),
+      ),
+    );
   }
 
   // Mergear hermanas: COPIAR (INSERT) las líneas manuales al settlement
@@ -758,8 +763,15 @@ export async function generateSettlementsForPeriod(
     .eq("active", true)
     .order("full_name");
 
-  const results: PeriodGenerationResult[] = [];
-  for (const o of owners ?? []) {
+  // Cada owner es independiente: sus settlements/líneas son disjuntos por
+  // owner_id y los tickets se filtran por related_owner_id (un ticket pertenece
+  // a un solo owner), así que NO hay race de doble cobro. Procesamos en tandas
+  // acotadas para cortar el wall-clock serial (era O(owners) × ~10 queries en
+  // serie) sin saturar el pooler con orgs de muchos propietarios.
+  const processOwner = async (o: {
+    id: string;
+    full_name: string;
+  }): Promise<PeriodGenerationResult> => {
     try {
       const { lines: autoLines, ticketIds } = await buildSettlementLines({
         admin,
@@ -767,7 +779,6 @@ export async function generateSettlementsForPeriod(
         year,
         month,
       });
-
       const r = await persistSettlement({
         admin,
         organizationId: organization.id,
@@ -779,17 +790,17 @@ export async function generateSettlementsForPeriod(
         autoLines,
         ticketIds,
       });
-      results.push({
+      return {
         owner_id: o.id,
         owner_name: o.full_name,
         ok: true,
         net: Number(r.settlement.net_payable),
         currency: BASE_CURRENCY,
         lines: r.lineCount,
-      });
+      };
     } catch (e) {
       const msg = (e as Error).message;
-      results.push({
+      return {
         owner_id: o.id,
         owner_name: o.full_name,
         ok: false,
@@ -800,8 +811,16 @@ export async function generateSettlementsForPeriod(
             : /ya está/.test(msg)
               ? "Ya cerrada (no se regenera)"
               : msg,
-      });
+      };
     }
+  };
+
+  const CONCURRENCY = 8;
+  const ownerList = owners ?? [];
+  const results: PeriodGenerationResult[] = [];
+  for (let i = 0; i < ownerList.length; i += CONCURRENCY) {
+    const chunk = ownerList.slice(i, i + CONCURRENCY);
+    results.push(...(await Promise.all(chunk.map(processOwner))));
   }
 
   revalidateSettlement();

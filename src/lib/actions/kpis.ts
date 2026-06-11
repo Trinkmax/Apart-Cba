@@ -67,9 +67,10 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
     { data: units },
     { data: bookings30 },
     { data: bookingsAll },
-    { data: tickets },
-    { data: cleanings },
-    { data: concierges },
+    { count: openTicketsCount },
+    { count: urgentTicketsCount },
+    { count: cleaningPendingCount },
+    { count: conciergePendingCount },
   ] = await Promise.all([
     admin.from("units").select("id, status").eq("organization_id", organization.id).eq("active", true),
     admin
@@ -88,16 +89,25 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .lte("check_out_date", in30Str),
     admin
       .from("maintenance_tickets")
-      .select("id, status, priority")
-      .eq("organization_id", organization.id),
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization.id)
+      .not("status", "in", "(resuelto,cerrado)"),
+    admin
+      .from("maintenance_tickets")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization.id)
+      .eq("priority", "urgente")
+      .not("status", "in", "(resuelto,cerrado)"),
     admin
       .from("cleaning_tasks")
-      .select("id, status")
-      .eq("organization_id", organization.id),
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization.id)
+      .in("status", ["pendiente", "en_progreso"]),
     admin
       .from("concierge_requests")
-      .select("id, status")
-      .eq("organization_id", organization.id),
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization.id)
+      .in("status", ["pendiente", "en_progreso"]),
   ]);
 
   const totals = {
@@ -150,10 +160,10 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
     dailySeries.push({ date: k, amount: arsTotal, currency: "ARS" });
   }
 
-  const openTickets = tickets?.filter((t) => !["resuelto", "cerrado"].includes(t.status)).length ?? 0;
-  const urgentTickets = tickets?.filter((t) => t.priority === "urgente" && !["resuelto", "cerrado"].includes(t.status)).length ?? 0;
-  const cleaningPending = cleanings?.filter((c) => ["pendiente", "en_progreso"].includes(c.status)).length ?? 0;
-  const conciergePending = concierges?.filter((c) => ["pendiente", "en_progreso"].includes(c.status)).length ?? 0;
+  const openTickets = openTicketsCount ?? 0;
+  const urgentTickets = urgentTicketsCount ?? 0;
+  const cleaningPending = cleaningPendingCount ?? 0;
+  const conciergePending = conciergePendingCount ?? 0;
 
   const upcoming = (bookings30 ?? []).slice(0, 5).map((b) => ({
     id: b.id,

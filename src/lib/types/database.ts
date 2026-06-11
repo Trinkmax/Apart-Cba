@@ -929,6 +929,27 @@ export interface BookingWithRelations extends Booking {
 }
 
 /**
+ * Fila liviana para la lista paginada de /dashboard/reservas: solo las columnas
+ * que la lista pinta. Evita serializar el row completo de `bookings` en el
+ * payload RSC. La produce `listBookingsPaged`.
+ */
+export type BookingListRow = Pick<
+  Booking,
+  | "id"
+  | "status"
+  | "source"
+  | "check_in_date"
+  | "check_out_date"
+  | "guests_count"
+  | "currency"
+  | "total_amount"
+  | "paid_amount"
+> & {
+  unit: { id: string; code: string; name: string } | null;
+  guest: { id: string; full_name: string } | null;
+};
+
+/**
  * Resultado de la búsqueda global de reservas (input del topbar PMS).
  * No restringe por fecha — busca en toda la tabla `bookings` de la org.
  */

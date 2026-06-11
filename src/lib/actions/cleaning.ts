@@ -158,46 +158,75 @@ export async function ensureCleaningTasksForCheckouts(
     (existing ?? []).map((r) => (r as { unit_id: string }).unit_id),
   );
 
+  // Acumular las filas de cleaning_tasks a insertar (saltando las que ya existen
+  // para esa fecha → idempotencia) y hacer UN insert batch.
+  const checklist = DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
+  const taskRows: Array<{
+    organization_id: string;
+    unit_id: string;
+    booking_out_id: string;
+    scheduled_for: string;
+    status: "pendiente";
+    checklist: { item: string; done: boolean }[];
+  }> = [];
+  for (const [unitId, bookingId] of bookingsByUnit.entries()) {
+    if (existingUnitIds.has(unitId)) continue;
+    taskRows.push({
+      organization_id: organizationId,
+      unit_id: unitId,
+      booking_out_id: bookingId,
+      scheduled_for: date,
+      status: "pendiente",
+      checklist,
+    });
+  }
+
   const created: Array<{
     cleaning_task_id: string;
     unit_id: string;
     booking_out_id: string;
   }> = [];
 
-  for (const [unitId, bookingId] of bookingsByUnit.entries()) {
-    if (existingUnitIds.has(unitId)) continue;
-    const checklist = DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
-    const { data: ins, error } = await admin
-      .from("cleaning_tasks")
-      .insert({
-        organization_id: organizationId,
-        unit_id: unitId,
-        booking_out_id: bookingId,
-        scheduled_for: date,
-        status: "pendiente",
-        checklist,
-      })
-      .select("id")
-      .single();
-    if (error || !ins) {
-      console.warn(
-        "[cleaning/ensureCleaningTasksForCheckouts] insert falló",
-        error?.message,
-      );
-      continue;
-    }
-    await admin.from("cleaning_events").insert({
-      cleaning_task_id: (ins as { id: string }).id,
-      organization_id: organizationId,
-      actor_id: actorId,
-      event_type: "created",
-      to_status: "pendiente",
-      metadata: { source: "checkout_tomorrow_auto", booking_out_id: bookingId },
-    });
+  if (taskRows.length === 0) return created;
+
+  const { data: insTasks, error: tasksErr } = await admin
+    .from("cleaning_tasks")
+    .insert(taskRows)
+    .select("id, unit_id, booking_out_id");
+  if (tasksErr || !insTasks) {
+    console.warn(
+      "[cleaning/ensureCleaningTasksForCheckouts] insert falló",
+      tasksErr?.message,
+    );
+    return created;
+  }
+
+  // Aparear cada task creada con su booking_out_id (único por unidad en este loop)
+  // y construir el array de cleaning_events para UN insert batch.
+  const eventRows = (insTasks as Array<{
+    id: string;
+    unit_id: string;
+    booking_out_id: string;
+  }>).map((t) => ({
+    cleaning_task_id: t.id,
+    organization_id: organizationId,
+    actor_id: actorId,
+    event_type: "created" as const,
+    to_status: "pendiente" as const,
+    metadata: { source: "checkout_tomorrow_auto", booking_out_id: t.booking_out_id },
+  }));
+
+  await admin.from("cleaning_events").insert(eventRows);
+
+  for (const t of insTasks as Array<{
+    id: string;
+    unit_id: string;
+    booking_out_id: string;
+  }>) {
     created.push({
-      cleaning_task_id: (ins as { id: string }).id,
-      unit_id: unitId,
-      booking_out_id: bookingId,
+      cleaning_task_id: t.id,
+      unit_id: t.unit_id,
+      booking_out_id: t.booking_out_id,
     });
   }
 

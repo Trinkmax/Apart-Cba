@@ -91,49 +91,54 @@ export async function getConversationDetail(conversationId: string): Promise<{
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
 
-  const { data: conv, error } = await admin
-    .from("crm_conversations")
-    .select(`
-      *,
-      contact:crm_contacts(*),
-      channel:crm_channels(id,provider,display_name),
-      conversation_tags:crm_conversation_tags(tag:crm_tags(*))
-    `)
-    .eq("id", conversationId)
-    .eq("organization_id", organization.id)
-    .single();
+  const [
+    { data: conv, error },
+    { data: messages },
+  ] = await Promise.all([
+    admin
+      .from("crm_conversations")
+      .select(`
+        *,
+        contact:crm_contacts(*),
+        channel:crm_channels(id,provider,display_name),
+        conversation_tags:crm_conversation_tags(tag:crm_tags(*))
+      `)
+      .eq("id", conversationId)
+      .eq("organization_id", organization.id)
+      .single(),
+    admin
+      .from("crm_messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: true })
+      .limit(500),
+  ]);
 
   if (error || !conv) return null;
-
-  const { data: messages } = await admin
-    .from("crm_messages")
-    .select("*")
-    .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true })
-    .limit(500);
 
   const contactRaw = conv.contact as CrmContact;
   let contact: CrmContactWithLinks = { ...contactRaw };
 
   if (contactRaw.guest_id) {
-    const { data: guest } = await admin
-      .from("guests")
-      .select("id,full_name,email,phone,document_number,total_bookings")
-      .eq("id", contactRaw.guest_id)
-      .single();
-
-    const { data: booking } = await admin
-      .from("bookings")
-      .select(`
-        id, unit_id, check_in_date, check_out_date, status, total_amount, paid_amount,
-        unit:units(id,code,name)
-      `)
-      .eq("guest_id", contactRaw.guest_id)
-      .eq("organization_id", organization.id)
-      .in("status", ["confirmada", "check_in"])
-      .order("check_in_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    const [{ data: guest }, { data: booking }] = await Promise.all([
+      admin
+        .from("guests")
+        .select("id,full_name,email,phone,document_number,total_bookings")
+        .eq("id", contactRaw.guest_id)
+        .single(),
+      admin
+        .from("bookings")
+        .select(`
+          id, unit_id, check_in_date, check_out_date, status, total_amount, paid_amount,
+          unit:units(id,code,name)
+        `)
+        .eq("guest_id", contactRaw.guest_id)
+        .eq("organization_id", organization.id)
+        .in("status", ["confirmada", "check_in"])
+        .order("check_in_date", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
     if (guest) {
       contact = {
@@ -159,9 +164,13 @@ export async function getConversationDetail(conversationId: string): Promise<{
     tags: (conv.conversation_tags as { tag: CrmTag }[]).map((ct) => ct.tag),
   } as CrmConversationListItem;
 
-  // Reset unread count
+  // Reset unread count (fire-and-forget: no bloquea el return del hot path)
   if (conv.unread_count > 0) {
-    await admin.from("crm_conversations").update({ unread_count: 0 }).eq("id", conversationId);
+    void admin
+      .from("crm_conversations")
+      .update({ unread_count: 0 })
+      .eq("id", conversationId)
+      .then(() => {});
   }
 
   return { conversation, messages: (messages ?? []) as CrmMessage[], contact };

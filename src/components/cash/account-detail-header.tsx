@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/format";
-import { RunningBalanceSparkline } from "./running-balance-sparkline";
+import RunningBalanceSparkline from "./running-balance-sparkline-lazy";
 import { MovementFormDialog } from "./movement-form-dialog";
 import { TransferFormDialog } from "./transfer-form-dialog";
 import { ExportMovementsDialog } from "./export-movements-dialog";

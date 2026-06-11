@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Inbox as InboxIcon, ArchiveX, Filter, X, Archive, MessageCircleOff, Tag as TagIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -23,11 +23,12 @@ interface Props {
   initialConversations: CrmConversationListItem[];
   tags: CrmTag[];
   channels: CrmChannel[];
+  organizationId: string;
 }
 
 type StatusFilter = "all" | "open" | "closed" | "assigned_to_me";
 
-export function InboxClient({ initialConversations, tags, channels }: Props) {
+export function InboxClient({ initialConversations, tags, channels, organizationId }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialId = searchParams.get("c");
@@ -43,27 +44,53 @@ export function InboxClient({ initialConversations, tags, channels }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
 
-  // Realtime suscripción a cambios
-  useInboxRealtime((event) => {
+  // Refresh throttleado: un INSERT por conversación no debe disparar un
+  // re-render SSR completo del inbox (un broadcast de 100 destinatarios
+  // encolaría 100 refreshes). El upsert local cubre el caso común y el
+  // refresh queda como fallback de consistencia, máx 1 cada 5 s.
+  const lastRefreshRef = useRef(0);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const throttledRefresh = () => {
+    const REFRESH_MS = 5000;
+    const now = Date.now();
+    const elapsed = now - lastRefreshRef.current;
+    if (elapsed >= REFRESH_MS) {
+      lastRefreshRef.current = now;
+      startTransition(() => router.refresh());
+    } else if (!refreshTimerRef.current) {
+      refreshTimerRef.current = setTimeout(() => {
+        refreshTimerRef.current = null;
+        lastRefreshRef.current = Date.now();
+        startTransition(() => router.refresh());
+      }, REFRESH_MS - elapsed);
+    }
+  };
+
+  // Realtime: solo eventos de esta org (filtro server-side en la suscripción).
+  useInboxRealtime({ organizationId }, (event) => {
     if (event.kind === "conv_change") {
-      // Refresh conversation in place
+      // Upsert local de la conversación afectada (sube y reordena por fecha).
       const row = event.row as unknown as Partial<CrmConversationListItem>;
       const rowId = row.id as string | undefined;
       if (!rowId) return;
       setConversations((prev) => {
         const idx = prev.findIndex((c) => c.id === rowId);
-        if (idx === -1) return prev;
+        if (idx === -1) {
+          // Conversación nueva: traer el detalle completo vía refresh.
+          throttledRefresh();
+          return prev;
+        }
         const updated = [...prev];
-        const existing = updated[idx];
-        updated[idx] = { ...existing, ...row } as CrmConversationListItem;
+        updated[idx] = { ...updated[idx], ...row } as CrmConversationListItem;
         return updated.sort((a, b) =>
           (b.last_message_at ?? "").localeCompare(a.last_message_at ?? "")
         );
       });
     }
     if (event.kind === "message_insert") {
-      // Re-fetch via router refresh para sincronizar todo
-      startTransition(() => router.refresh());
+      // El INSERT del mensaje no trae el shape de la lista; refrescamos
+      // throttleado para actualizar preview/unread sin avalancha de renders.
+      throttledRefresh();
     }
   });
 

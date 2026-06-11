@@ -1,10 +1,6 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/actions/auth";
+import { getSessionContext } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
-import {
-  getUnreadCount,
-  listNotifications,
-} from "@/lib/actions/notifications";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/app-sidebar";
 import { TopBar } from "@/components/dashboard/top-bar";
@@ -13,7 +9,9 @@ import { BookingStatusColorsProvider } from "@/lib/booking-status-colors";
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const session = await getSession();
+  // Un solo round trip: sesión + org activa + notificaciones vienen juntas
+  // del RPC get_session_context (cacheado por request).
+  const session = await getSessionContext();
   if (!session) redirect("/login");
 
   if (session.memberships.length === 0 && !session.profile.is_superadmin) {
@@ -21,12 +19,7 @@ export default async function DashboardLayout({
   }
 
   const { organization, role } = await getCurrentOrg();
-
-  // Notificaciones: si fallan no rompemos el dashboard. La campana queda vacía.
-  const [notifications, unreadCount] = await Promise.all([
-    listNotifications("active", 30).catch(() => []),
-    getUnreadCount().catch(() => 0),
-  ]);
+  const { notifications, unreadCount } = session;
 
   return (
     <BookingStatusColorsProvider override={organization.booking_status_colors}>

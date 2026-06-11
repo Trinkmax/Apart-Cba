@@ -14,6 +14,7 @@ import {
 import type {
   Booking,
   BookingExtension,
+  BookingListRow,
   BookingSearchResult,
   BookingWithRelations,
   BookingStatus,
@@ -319,6 +320,159 @@ export async function listBookings(filters?: {
   const { data, error } = await q.order("check_in_date", { ascending: false });
   if (error) throw new Error(error.message);
   return (data as BookingWithRelations[]) ?? [];
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Lista paginada de /dashboard/reservas
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Versión paginada + buscable de la lista de reservas. La usa SOLO
+ * /dashboard/reservas — `listBookings` queda intacta para los callers que
+ * necesitan el historial completo (ej. reservas/[id] lista todo el historial
+ * de la unidad con `listBookings({ unitId })`).
+ *
+ * Decisiones:
+ *   • Ventana por defecto: check-ins desde hace `windowDays` (90) + todo el
+ *     futuro. Acota el payload de la lista (que crecía sin tope) y evita el
+ *     acantilado del cap de 1.000 filas de PostgREST. Solo afecta a ESTA
+ *     función — `listBookings` (que usa reservas/[id]) no tiene ventana. Al
+ *     buscar (`q`), la ventana se desactiva para encontrar reservas viejas en
+ *     todo el historial. `fromDate`/`windowDays: 0` la sobreescriben.
+ *   • `q` busca server-side con el mismo patrón que searchBookingsGlobal:
+ *     primero guest_ids / unit_ids por ilike (índice trigram en guests),
+ *     después bookings por esos ids + external_id. Así sigue encontrando
+ *     huéspedes viejos aunque la page ventanee la lista por fecha.
+ *   • `total` = count del filtro actual (alimenta el paginador).
+ *   • `totalAll` = count histórico real SIN ventana ni filtros (header
+ *     "{N} reservas registradas").
+ */
+export async function listBookingsPaged(params?: {
+  page?: number; // 0-based, igual que listAccountMovements en cash.ts
+  pageSize?: number;
+  q?: string;
+  status?: BookingStatus;
+  fromDate?: string; // check_in_date >= fromDate (override explícito de la ventana)
+  windowDays?: number; // default 90; 0 = sin ventana
+}): Promise<{
+  rows: BookingListRow[];
+  total: number;
+  totalAll: number;
+  page: number;
+  pageSize: number;
+}> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  const page = Math.max(0, params?.page ?? 0);
+  const pageSize = Math.min(100, Math.max(1, params?.pageSize ?? 50));
+  if (!can(role, "bookings", "view")) {
+    return { rows: [], total: 0, totalAll: 0, page, pageSize };
+  }
+  const admin = createAdminClient();
+
+  // Ventana por defecto resuelta acá (server action → Date.now() es puro por
+  // request, sin las restricciones de pureza del render). Al buscar no se
+  // aplica para no perder reservas viejas.
+  const qActive = (params?.q?.trim().length ?? 0) > 0;
+  const windowDays = params?.windowDays ?? 90;
+  const fromDate =
+    params?.fromDate ??
+    (qActive || windowDays <= 0
+      ? undefined
+      : new Date(Date.now() - windowDays * 86_400_000).toISOString().slice(0, 10));
+
+  // Resolver la búsqueda ANTES de armar la query principal. Sanitizamos
+  // `,()*` para no romper el parser de `.or()` de PostgREST (ver
+  // searchBookingsGlobal).
+  const qText = params?.q?.trim() ?? "";
+  let searchOr: string | null = null;
+  if (qText.length > 0) {
+    const like = `%${qText.replace(/[,()*]/g, " ")}%`;
+    const [guestRes, unitRes] = await Promise.all([
+      admin
+        .from("guests")
+        .select("id")
+        .eq("organization_id", organization.id)
+        .or(
+          `full_name.ilike.${like},email.ilike.${like},phone.ilike.${like},document_number.ilike.${like}`
+        )
+        .limit(100),
+      admin
+        .from("units")
+        .select("id")
+        .eq("organization_id", organization.id)
+        .or(`code.ilike.${like},name.ilike.${like}`)
+        .limit(50),
+    ]);
+    const parts = [`external_id.ilike.${like}`];
+    const guestIds = (guestRes.data ?? []).map((r) => r.id as string);
+    const unitIds = (unitRes.data ?? []).map((r) => r.id as string);
+    if (guestIds.length > 0) parts.push(`guest_id.in.(${guestIds.join(",")})`);
+    if (unitIds.length > 0) parts.push(`unit_id.in.(${unitIds.join(",")})`);
+    searchOr = parts.join(",");
+  }
+
+  let listQ = admin
+    .from("bookings")
+    .select(
+      `id, status, source, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount,
+      unit:units(id, code, name), guest:guests(id, full_name)`,
+      { count: "exact" }
+    )
+    .eq("organization_id", organization.id);
+  if (params?.status) listQ = listQ.eq("status", params.status);
+  if (fromDate) listQ = listQ.gte("check_in_date", fromDate);
+  if (searchOr) listQ = listQ.or(searchOr);
+
+  const fromRow = page * pageSize;
+  const [listRes, countRes] = await Promise.all([
+    listQ
+      .order("check_in_date", { ascending: false })
+      .range(fromRow, fromRow + pageSize - 1),
+    admin
+      .from("bookings")
+      .select("*", { count: "exact", head: true })
+      .eq("organization_id", organization.id),
+  ]);
+  if (listRes.error) throw new Error(listRes.error.message);
+
+  return {
+    rows: (listRes.data as unknown as BookingListRow[]) ?? [],
+    total: listRes.count ?? 0,
+    totalAll: countRes.count ?? 0,
+    page,
+    pageSize,
+  };
+}
+
+/**
+ * Dataset liviano para el pre-check de solape del form de reserva: reservas
+ * vigentes o futuras (check_out >= hoy), excluyendo canceladas/no_show. El
+ * form necesita TODAS las futuras (hay check-ins a años vista), no la página
+ * visible de la lista. La garantía dura contra double-booking sigue siendo
+ * el constraint `bookings_no_overlap` en la DB.
+ */
+export async function listBookingsForOverlapCheck(): Promise<
+  Pick<Booking, "id" | "unit_id" | "status" | "check_in_date" | "check_out_date">[]
+> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await admin
+    .from("bookings")
+    .select("id, unit_id, status, check_in_date, check_out_date")
+    .eq("organization_id", organization.id)
+    .gte("check_out_date", today)
+    .not("status", "in", "(cancelada,no_show)")
+    .order("check_in_date");
+  if (error) throw new Error(error.message);
+  return (
+    (data as Pick<
+      Booking,
+      "id" | "unit_id" | "status" | "check_in_date" | "check_out_date"
+    >[]) ?? []
+  );
 }
 
 /**
@@ -1519,13 +1673,43 @@ export async function extendBooking(input: {
 // Vista mensual (PR4): bookings agrupados por mes para inquilinos largos
 // ════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Proyección liviana de booking para la grilla mensual: SOLO las columnas que
+ * la action y `pms-monthly-board` leen (la vista trae una ventana de 7 meses,
+ * así que evitar `select("*")` sobre la tabla ancha de bookings importa). El
+ * tipo angosto hace que tsc verifique que el cliente no lea un campo fuera del
+ * select — si alguien agrega un acceso nuevo, falla en compilación y se suma
+ * la columna acá y en el `.select()`.
+ */
+export type MonthlyViewBooking = Pick<
+  Booking,
+  | "id"
+  | "organization_id"
+  | "unit_id"
+  | "guest_id"
+  | "source"
+  | "status"
+  | "mode"
+  | "check_in_date"
+  | "check_out_date"
+  | "guests_count"
+  | "currency"
+  | "total_amount"
+  | "paid_amount"
+  | "monthly_rent"
+  | "monthly_expenses"
+> & {
+  unit?: { id: string; code: string; name: string } | null;
+  guest?: { id: string; full_name: string; phone: string | null; email: string | null } | null;
+};
+
 export interface MonthlyViewCell {
   unit_id: string;
   unit_code: string;
   unit_name: string;
   year: number;
   month: number;
-  bookings: BookingWithRelations[];
+  bookings: MonthlyViewBooking[];
   /** Total cobrado (suma de paid_amount prorrateado al mes ocupado) */
   total_collected: number;
   /** Total esperado (renta + expensas prorrateado al mes ocupado) */
@@ -1559,7 +1743,7 @@ export async function listBookingsMonthlyView(
     admin
       .from("bookings")
       .select(
-        `*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`
+        `id, organization_id, unit_id, guest_id, source, status, mode, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount, monthly_rent, monthly_expenses, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`
       )
       .eq("organization_id", organization.id)
       .not("status", "in", "(cancelada,no_show)")
@@ -1572,7 +1756,7 @@ export async function listBookingsMonthlyView(
   if (bookingsRes.error) throw new Error(bookingsRes.error.message);
 
   const units = unitsRes.data ?? [];
-  const bookings = (bookingsRes.data ?? []) as BookingWithRelations[];
+  const bookings = (bookingsRes.data ?? []) as unknown as MonthlyViewBooking[];
 
   const cells: MonthlyViewCell[] = [];
 
