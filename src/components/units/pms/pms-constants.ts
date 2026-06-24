@@ -86,6 +86,19 @@ export const BOOKING_BAR_STYLE: Record<
   },
 };
 
+// Estilo de barra para bloqueos OTA (booking.is_block === true). Gris neutro,
+// punteado: deja claro que NO es una reserva, sino una fecha bloqueada en el
+// canal (Airbnb "Not available", etc.). Coincide con UNIT_OVERLAY_STYLE.bloqueado.
+export const BLOCK_BAR_STYLE = {
+  label: "Bloqueado",
+  gradient:
+    "from-slate-300/70 via-slate-200/80 to-slate-300/70 dark:from-slate-600/30 dark:via-slate-600/20 dark:to-slate-600/30",
+  border: "border-slate-500/50 border-dashed",
+  ring: "hover:ring-slate-400/40",
+  text: "text-slate-800 dark:text-slate-100",
+  hex: "#64748b",
+} as const;
+
 export const SOURCE_ACCENT: Record<BookingSource, string> = {
   directo: "#0f766e",
   airbnb: "#FF5A5F",

@@ -93,18 +93,21 @@ export async function GET(req: Request) {
       .from("bookings")
       .select("id,organization_id,unit_id,guest_id,status,check_in_date")
       .eq("check_in_date", today)
+      .eq("is_block", false)
       .in("status", ["confirmada", "check_in"]);
 
     const { data: checkoutsToday } = await admin
       .from("bookings")
       .select("id,organization_id,unit_id,guest_id,status,check_out_date")
       .eq("check_out_date", today)
+      .eq("is_block", false)
       .in("status", ["check_in", "check_out"]);
 
     const { data: checkinsTomorrow } = await admin
       .from("bookings")
       .select("id,organization_id,unit_id,guest_id,status,check_in_date")
       .eq("check_in_date", tomorrow)
+      .eq("is_block", false)
       .eq("status", "confirmada");
 
     const { data: checkoutsTomorrow } = await admin
@@ -113,6 +116,7 @@ export async function GET(req: Request) {
         "id,organization_id,unit_id,guest_id,status,check_out_date,check_out_time, unit:units(code,name), guest:guests(full_name)"
       )
       .eq("check_out_date", tomorrow)
+      .eq("is_block", false)
       .in("status", ["confirmada", "check_in"]);
 
     let crmEventsPublished = 0;

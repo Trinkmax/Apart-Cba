@@ -595,7 +595,7 @@ function MonthCell({
         </Tooltip>
       </div>
       <div className="text-[11px] font-semibold truncate">
-        {dominant.guest?.full_name ?? "Sin huésped"}
+        {dominant.is_block ? "Bloqueado" : (dominant.guest?.full_name ?? "Sin huésped")}
       </div>
       <div className="text-[10px] tabular-nums font-mono">
         {formatCurrency(cell.total_expected, currency)}

@@ -193,6 +193,7 @@ async function buildSettlementLines(opts: {
     .select("*, guest:guests(full_name)")
     .in("unit_id", unitIds)
     .in("status", SETTLEMENT_BOOKING_STATUSES as unknown as string[])
+    .eq("is_block", false) // los bloqueos OTA no se liquidan
     .lte("check_in_date", periodEnd)
     .gte("check_out_date", periodStart);
 

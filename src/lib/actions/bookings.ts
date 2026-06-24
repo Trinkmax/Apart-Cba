@@ -419,7 +419,8 @@ export async function listBookingsPaged(params?: {
       unit:units(id, code, name), guest:guests(id, full_name)`,
       { count: "exact" }
     )
-    .eq("organization_id", organization.id);
+    .eq("organization_id", organization.id)
+    .eq("is_block", false); // los bloqueos OTA no son reservas
   if (params?.status) listQ = listQ.eq("status", params.status);
   if (fromDate) listQ = listQ.gte("check_in_date", fromDate);
   if (searchOr) listQ = listQ.or(searchOr);
@@ -432,7 +433,8 @@ export async function listBookingsPaged(params?: {
     admin
       .from("bookings")
       .select("*", { count: "exact", head: true })
-      .eq("organization_id", organization.id),
+      .eq("organization_id", organization.id)
+      .eq("is_block", false),
   ]);
   if (listRes.error) throw new Error(listRes.error.message);
 
@@ -1689,6 +1691,7 @@ export type MonthlyViewBooking = Pick<
   | "guest_id"
   | "source"
   | "status"
+  | "is_block"
   | "mode"
   | "check_in_date"
   | "check_out_date"
@@ -1743,7 +1746,7 @@ export async function listBookingsMonthlyView(
     admin
       .from("bookings")
       .select(
-        `id, organization_id, unit_id, guest_id, source, status, mode, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount, monthly_rent, monthly_expenses, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`
+        `id, organization_id, unit_id, guest_id, source, status, is_block, mode, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount, monthly_rent, monthly_expenses, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`
       )
       .eq("organization_id", organization.id)
       .not("status", "in", "(cancelada,no_show)")

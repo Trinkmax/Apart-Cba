@@ -262,6 +262,7 @@ async function buildSnapshot(
         )
         .eq("organization_id", orgId)
         .eq("check_out_date", reportDate)
+        .eq("is_block", false) // los bloqueos OTA no son check-outs reales
         .in("status", ["confirmada", "check_in", "check_out"]),
       admin
         .from("bookings")
@@ -273,6 +274,7 @@ async function buildSnapshot(
         )
         .eq("organization_id", orgId)
         .eq("check_in_date", reportDate)
+        .eq("is_block", false) // los bloqueos OTA no son check-ins reales
         .in("status", ["confirmada", "check_in"]),
       admin
         .from("cleaning_tasks")

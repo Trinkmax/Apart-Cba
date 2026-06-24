@@ -377,6 +377,14 @@ export interface Booking {
   external_id: string | null;
   external_url: string | null;
   status: BookingStatus;
+  /**
+   * `true` = bloqueo de disponibilidad importado de un OTA (p.ej. "Airbnb (Not
+   * available)"), NO una reserva real. Mantiene status='confirmada' para seguir
+   * cubierto por `bookings_no_overlap`, pero se excluye de listas de reservas,
+   * reportes, liquidaciones, ocupación y de la auto-creación de limpieza/eventos
+   * CRM. Lo escribe únicamente el sync de iCal (src/lib/ical/sync.ts).
+   */
+  is_block: boolean;
   mode: BookingMode;
   check_in_date: string;
   check_in_time: string;

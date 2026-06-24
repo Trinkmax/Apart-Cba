@@ -248,7 +248,7 @@ export function PmsBookingPopoverContent({
             </AvatarFallback>
           </Avatar>
           <div className="min-w-0 flex-1">
-            <div className="font-semibold truncate">{booking.guest?.full_name ?? "Sin huésped"}</div>
+            <div className="font-semibold truncate">{booking.is_block ? "Bloqueado (no es una reserva)" : (booking.guest?.full_name ?? "Sin huésped")}</div>
             <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
               {booking.guest?.phone && (
                 <a href={`tel:${booking.guest.phone}`} className="flex items-center gap-1 hover:text-foreground">

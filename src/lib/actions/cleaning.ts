@@ -141,6 +141,7 @@ export async function ensureCleaningTasksForCheckouts(
     .select("id, unit_id")
     .eq("organization_id", organizationId)
     .eq("check_out_date", date)
+    .eq("is_block", false) // los bloqueos OTA no generan limpieza
     .in("status", ["confirmada", "check_in", "check_out"]);
 
   const bookingsByUnit = new Map<string, string>();

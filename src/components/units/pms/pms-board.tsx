@@ -134,6 +134,7 @@ import type {
 } from "@/components/bookings/move-confirm-dialog";
 import {
   BOOKING_BAR_STYLE,
+  BLOCK_BAR_STYLE,
   BOOKING_MODE_OVERLAY,
   SIDEBAR_WIDTH,
   SIDEBAR_WIDTH_MOBILE,
@@ -3324,6 +3325,10 @@ function BookingBar({
   canEditBookings,
   canViewMoney,
 }: BookingBarProps) {
+  // Un bloqueo OTA (is_block) no es una reserva: se pinta gris "Bloqueado" y no
+  // se puede arrastrar/redimensionar/editar (lo gestiona el sync de iCal).
+  const isBlock = booking.is_block;
+  const canEditThis = canEditBookings && !isBlock;
   // cálculo de offsets — incluye fracción del día según hora real de check-in / check-out
   // (14:00 → +0.583 del día; 10:00 → +0.416 del día). Esto hace que la barra "pise"
   // visualmente el día de salida hasta la hora real de check-out, y deja espacio
@@ -3347,17 +3352,17 @@ function BookingBar({
   const leftOverflow = ciOffset < 0;
   const rightOverflow = coOffset > windowDays;
 
-  const style = BOOKING_BAR_STYLE[booking.status];
+  const style = isBlock ? BLOCK_BAR_STYLE : BOOKING_BAR_STYLE[booking.status];
   // Si la org override-eó el color de este status, ignoramos el gradient/border
   // de Tailwind y derivamos los inline-styles del hex configurado. Mantiene
-  // resto del look (ring, text) inalterado.
-  const customGradientStyle = customStatusHex
+  // resto del look (ring, text) inalterado. (No aplica a bloqueos.)
+  const customGradientStyle = !isBlock && customStatusHex
     ? {
         backgroundImage: `linear-gradient(to right, ${customStatusHex}, ${customStatusHex}CC)`,
         borderColor: `${customStatusHex}99`,
       }
     : null;
-  const sourceColor = SOURCE_ACCENT[booking.source];
+  const sourceColor = isBlock ? BLOCK_BAR_STYLE.hex : SOURCE_ACCENT[booking.source];
   const bookingMode: BookingMode = booking.mode ?? "temporario";
   const modeOverlay = BOOKING_MODE_OVERLAY[bookingMode];
 
@@ -3408,21 +3413,25 @@ function BookingBar({
             ...(customGradientStyle ?? {}),
           }}
           role="button"
-          aria-label={`Reserva de ${booking.guest?.full_name ?? "huésped"} — ${booking.check_in_date} a ${booking.check_out_date}`}
+          aria-label={
+            isBlock
+              ? `Bloqueado (no es una reserva) — ${booking.check_in_date} a ${booking.check_out_date}`
+              : `Reserva de ${booking.guest?.full_name ?? "huésped"} — ${booking.check_in_date} a ${booking.check_out_date}`
+          }
           onPointerDown={(e) => {
-            if (!canEditBookings) return; // solo lectura: el click sigue abriendo el popover
+            if (!canEditThis) return; // solo lectura (o bloqueo): el click sigue abriendo el popover
             // si el click es en un handle, lo maneja el handle
             const t = e.target as HTMLElement;
             if (t.closest("[data-resize]")) return;
             onPointerDown(e, booking, "move");
           }}
-          onPointerMove={canEditBookings ? onPointerMove : undefined}
-          onPointerUp={canEditBookings ? (e) => onPointerUp(e, booking) : undefined}
-          onPointerCancel={canEditBookings ? onPointerCancel : undefined}
-          onLostPointerCapture={canEditBookings ? onPointerCancel : undefined}
+          onPointerMove={canEditThis ? onPointerMove : undefined}
+          onPointerUp={canEditThis ? (e) => onPointerUp(e, booking) : undefined}
+          onPointerCancel={canEditThis ? onPointerCancel : undefined}
+          onLostPointerCapture={canEditThis ? onPointerCancel : undefined}
         >
           {/* Resize handle izquierdo */}
-          {canEditBookings && !leftOverflow && booking.status !== "cancelada" && (
+          {canEditThis && !leftOverflow && booking.status !== "cancelada" && (
             <div
               data-resize="left"
               className="w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
@@ -3486,7 +3495,7 @@ function BookingBar({
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <span className="truncate">{booking.guest?.full_name ?? "Sin huésped"}</span>
+                <span className="truncate">{isBlock ? "Bloqueado" : (booking.guest?.full_name ?? "Sin huésped")}</span>
                 {booking.internal_notes && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -3541,7 +3550,7 @@ function BookingBar({
           </div>
 
           {/* Resize handle derecho */}
-          {canEditBookings && !rightOverflow && booking.status !== "cancelada" && (
+          {canEditThis && !rightOverflow && booking.status !== "cancelada" && (
             <div
               data-resize="right"
               className="w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
@@ -3602,7 +3611,7 @@ function BookingBar({
           unitName={unitName}
           accounts={accounts}
           onEdit={onEdit}
-          canEditBooking={canEditBookings}
+          canEditBooking={canEditThis}
           canViewMoney={canViewMoney}
           onStatusChanged={() => onOpenChange(false)}
           onRequestDateChange={(field, iso) => {

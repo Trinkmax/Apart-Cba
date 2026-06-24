@@ -86,6 +86,7 @@ export async function listUnitsEnriched(): Promise<UnitWithRelations[]> {
       .gte("check_in_date", todayStr)
       .lte("check_in_date", horizonStr)
       .in("status", ["confirmada", "check_in"])
+      .eq("is_block", false) // un bloqueo OTA no es la "próxima reserva" de la unidad
       .order("check_in_date"),
     admin
       .from("maintenance_tickets")

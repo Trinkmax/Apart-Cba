@@ -127,6 +127,11 @@ export async function syncSingleFeed(
         source: feed.source as BookingSource,
         external_id: uid,
         status: "confirmada",
+        // Un bloqueo (Airbnb "Not available", etc.) entra como fila is_block:
+        // sigue ocupando la fecha (bookings_no_overlap lo cubre porque mantiene
+        // status='confirmada') pero NO es una reserva — se excluye de listas,
+        // reportes, liquidaciones, ocupación y limpieza, y se pinta gris en el grid.
+        is_block: isBlock,
         check_in_date: checkInDate,
         check_in_time: "14:00",
         check_out_date: checkOutDate,
@@ -140,8 +145,17 @@ export async function syncSingleFeed(
       if (!insertError) {
         imported++;
       } else if (insertError.message.includes("bookings_no_overlap")) {
-        conflicts++;
-        await notifyConflict(admin, feed, uid, checkInDate, checkOutDate, "reserva nueva");
+        // Un bloqueo que choca con algo ya reservado/bloqueado no es un conflicto
+        // accionable: la fecha ya está protegida de cualquier modo. Los OTA
+        // re-emiten estos bloqueos con UID nuevo cuando su rango rota, así que
+        // alertar acá genera ruido crítico falso (cientos por mes). Solo alertamos
+        // cuando lo que choca es una RESERVA real entrante.
+        if (isBlock) {
+          skipped++;
+        } else {
+          conflicts++;
+          await notifyConflict(admin, feed, uid, checkInDate, checkOutDate, "reserva nueva");
+        }
       } else {
         console.error("[ical/sync] insert falló", uid, insertError.message);
         skipped++;

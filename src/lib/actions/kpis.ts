@@ -80,13 +80,15 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .gte("check_in_date", todayStr)
       .lte("check_in_date", in30Str)
       .in("status", ["confirmada", "check_in"])
+      .eq("is_block", false) // los bloqueos OTA no cuentan como ocupación/reservas
       .order("check_in_date"),
     admin
       .from("bookings")
       .select(bookingFields)
       .eq("organization_id", organization.id)
       .gte("check_out_date", back30Str)
-      .lte("check_out_date", in30Str),
+      .lte("check_out_date", in30Str)
+      .eq("is_block", false), // los bloqueos OTA no cuentan como reservas/check-outs
     admin
       .from("maintenance_tickets")
       .select("id", { count: "exact", head: true })
