@@ -310,6 +310,7 @@ export async function setListingPublished(
           .from("unit_photos")
           .select("id")
           .eq("unit_id", unitId)
+          .eq("media_type", "image")
           .limit(1),
       ]);
 

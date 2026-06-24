@@ -63,6 +63,7 @@ export default async function CheckoutPage({
       .from("unit_photos")
       .select("*")
       .eq("unit_id", unitId)
+      .eq("media_type", "image")
       .order("is_cover", { ascending: false })
       .order("sort_order"),
     admin

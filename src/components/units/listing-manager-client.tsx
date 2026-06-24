@@ -21,7 +21,9 @@ import {
   DollarSign,
   Droplets,
   ExternalLink,
+  Film,
   Flame,
+  GripVertical,
   Home,
   Image as ImageIcon,
   Info,
@@ -32,6 +34,7 @@ import {
   Minus,
   Mountain,
   PawPrint,
+  Play,
   PlayCircle,
   Plus,
   Shield,
@@ -45,6 +48,7 @@ import {
   Trash2,
   Tv,
   Upload,
+  Video,
   WashingMachine,
   Waves,
   Wifi,
@@ -52,6 +56,23 @@ import {
   Zap,
   type LucideIcon,
 } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   Dialog,
   DialogContent,
@@ -76,11 +97,15 @@ import {
   deletePricingRule,
 } from "@/lib/actions/listings";
 import {
+  createUnitVideoUploadUrls,
   deleteUnitPhoto,
+  recordUnitVideo,
   reorderUnitPhotos,
   setUnitPhotoCover,
   uploadUnitPhoto,
 } from "@/lib/actions/unit-photos";
+import { createClient } from "@/lib/supabase/client";
+import { compressVideo, extractPosterAndMeta } from "@/lib/marketplace/video-compress";
 import type {
   MarketplaceAmenity,
   Unit,
@@ -882,6 +907,18 @@ function PhotosTab({
 }) {
   const [uploading, setUploading] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  // Video: fase de compresión (con %) → fase de subida.
+  const [videoPhase, setVideoPhase] = useState<
+    null | { phase: "compress"; pct: number } | { phase: "upload" }
+  >(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+
+  // Sólo PointerSensor + Keyboard, igual que el resto del repo (Kanban/PMS/liquidaciones).
+  // El drag va por el handle (touch-action:none), así que el scroll táctil no se ve afectado.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
 
   async function uploadFiles(files: FileList | File[]) {
     const arr = Array.from(files);
@@ -950,22 +987,101 @@ function PhotosTab({
     }
   }
 
-  async function move(id: string, dir: -1 | 1) {
-    const idx = photos.findIndex((p) => p.id === id);
-    const swap = idx + dir;
-    if (idx < 0 || swap < 0 || swap >= photos.length) return;
-    const next = [...photos];
-    [next[idx], next[swap]] = [next[swap], next[idx]];
-    onPhotosChange(next);
+  async function handleDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const oldIndex = photos.findIndex((p) => p.id === active.id);
+    const newIndex = photos.findIndex((p) => p.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const prev = photos;
+    const next = arrayMove(photos, oldIndex, newIndex);
+    onPhotosChange(next); // optimista
     try {
       await reorderUnitPhotos(unitId, next.map((p) => p.id));
     } catch {
       toast.error("No se pudo reordenar");
-      onPhotosChange(photos);
+      onPhotosChange(prev); // rollback
+    }
+  }
+
+  async function handleVideoUpload(file: File) {
+    if (!file.type.startsWith("video/")) {
+      toast.error("El archivo no es un video");
+      return;
+    }
+    if (file.size > 200 * 1024 * 1024) {
+      toast.error("El video supera los 200 MB. Probá subirlo desde una computadora.");
+      return;
+    }
+    setVideoPhase({ phase: "compress", pct: 0 });
+    try {
+      const blob = await compressVideo(file, (r) =>
+        setVideoPhase({ phase: "compress", pct: Math.round(r * 100) }),
+      );
+      // El poster es "best-effort": si extraer el frame falla (Safari iOS puede ser
+      // caprichoso), igual subimos el video sin thumbnail (la UI maneja poster nulo).
+      let posterBlob: Blob | null = null;
+      let durationMs = 0;
+      let width: number | undefined;
+      let height: number | undefined;
+      try {
+        const meta = await extractPosterAndMeta(blob);
+        posterBlob = meta.posterBlob;
+        durationMs = meta.durationMs;
+        width = meta.width;
+        height = meta.height;
+      } catch {
+        // seguimos sin poster
+      }
+
+      setVideoPhase({ phase: "upload" });
+
+      const urls = await createUnitVideoUploadUrls({ unit_id: unitId });
+      const supabase = createClient();
+
+      const upV = await supabase.storage
+        .from("unit-photos")
+        .uploadToSignedUrl(urls.video.path, urls.video.token, blob, {
+          contentType: "video/mp4",
+        });
+      if (upV.error) {
+        toast.error("No se pudo subir el video");
+        return;
+      }
+
+      let posterPath: string | null = null;
+      if (posterBlob) {
+        const upP = await supabase.storage
+          .from("unit-photos")
+          .uploadToSignedUrl(urls.poster.path, urls.poster.token, posterBlob, {
+            contentType: "image/jpeg",
+          });
+        if (!upP.error) posterPath = urls.poster.path;
+      }
+
+      const r = await recordUnitVideo({
+        unit_id: unitId,
+        video_path: urls.video.path,
+        poster_path: posterPath,
+        duration_ms: durationMs,
+        size_bytes: blob.size,
+        width,
+        height,
+      });
+      if (r.ok && r.photo) {
+        onPhotosChange([...photos, r.photo as UnitPhoto]);
+        toast.success("Video subido");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo subir el video");
+    } finally {
+      setVideoPhase(null);
+      if (videoInputRef.current) videoInputRef.current.value = "";
     }
   }
 
   const isUploading = uploading > 0;
+  const isVideoBusy = videoPhase !== null;
 
   return (
     <div className="space-y-5">
@@ -978,29 +1094,73 @@ function PhotosTab({
               : `${photos.length} ${photos.length === 1 ? "foto" : "fotos"} · la portada aparece primero en las cards.`}
           </p>
         </div>
-        <label className="inline-flex">
-          <Button asChild>
-            <span className="cursor-pointer">
-              {isUploading ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Plus size={14} />
-              )}
-              {isUploading ? `Subiendo ${uploading}…` : "Subir fotos"}
-            </span>
-          </Button>
-          <input
-            type="file"
-            accept="image/jpeg,image/png,image/webp"
-            onChange={(e) => {
-              if (e.target.files) uploadFiles(e.target.files);
-              e.target.value = "";
-            }}
-            multiple
-            className="hidden"
-            disabled={isUploading}
-          />
-        </label>
+        <div className="flex flex-col items-stretch gap-2 sm:items-end">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex">
+              <Button asChild disabled={isUploading || isVideoBusy}>
+                <span className="cursor-pointer">
+                  {isUploading ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Plus size={14} />
+                  )}
+                  {isUploading ? `Subiendo ${uploading}…` : "Subir fotos"}
+                </span>
+              </Button>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(e) => {
+                  if (e.target.files) uploadFiles(e.target.files);
+                  e.target.value = "";
+                }}
+                multiple
+                className="hidden"
+                disabled={isUploading || isVideoBusy}
+              />
+            </label>
+            <label className="inline-flex">
+              <Button asChild variant="outline" disabled={isUploading || isVideoBusy}>
+                <span className="cursor-pointer">
+                  {isVideoBusy ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Video size={14} />
+                  )}
+                  {videoPhase?.phase === "compress"
+                    ? `Comprimiendo ${videoPhase.pct}%`
+                    : videoPhase?.phase === "upload"
+                      ? "Subiendo…"
+                      : "Subir video"}
+                </span>
+              </Button>
+              <input
+                ref={videoInputRef}
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm,video/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleVideoUpload(f);
+                }}
+                className="hidden"
+                disabled={isUploading || isVideoBusy}
+              />
+            </label>
+          </div>
+          {videoPhase?.phase === "compress" ? (
+            <div className="h-1.5 w-full sm:w-56 rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full bg-primary transition-[width] duration-200"
+                style={{ width: `${videoPhase.pct}%` }}
+              />
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground sm:text-right max-w-xs">
+              Comprimimos el video en tu navegador para que cargue rápido sin
+              perder calidad (puede tardar un toque).
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Dropzone (when empty or as add tile) */}
@@ -1046,113 +1206,168 @@ function PhotosTab({
           </p>
         </label>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {photos.map((p, idx) => (
-            <PhotoCard
-              key={p.id}
-              photo={p}
-              isFirst={idx === 0}
-              isLast={idx === photos.length - 1}
-              onSetCover={() => handleSetCover(p.id)}
-              onDelete={() => handleDelete(p.id)}
-              onMoveUp={() => move(p.id, -1)}
-              onMoveDown={() => move(p.id, 1)}
-            />
-          ))}
-          {/* Add tile */}
-          <label
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              if (e.dataTransfer.files.length > 0) {
-                uploadFiles(e.dataTransfer.files);
-              }
-            }}
-            className={cn(
-              "aspect-[4/3] rounded-xl border-2 border-dashed cursor-pointer transition-all flex flex-col items-center justify-center gap-2 text-muted-foreground hover:text-foreground",
-              dragOver
-                ? "border-primary bg-primary/5 text-primary"
-                : "border-border hover:border-foreground/40 bg-card/40",
-            )}
-          >
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onChange={(e) => {
-                if (e.target.files) uploadFiles(e.target.files);
-                e.target.value = "";
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <SortableContext
+              items={photos.map((p) => p.id)}
+              strategy={rectSortingStrategy}
+            >
+              {photos.map((p) => (
+                <PhotoCard
+                  key={p.id}
+                  photo={p}
+                  onSetCover={() => handleSetCover(p.id)}
+                  onDelete={() => handleDelete(p.id)}
+                />
+              ))}
+            </SortableContext>
+            {/* Add tile — hermano del grid, fuera del SortableContext */}
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
               }}
-              multiple
-              className="hidden"
-            />
-            <Plus size={22} />
-            <span className="text-xs font-medium">Agregar más</span>
-          </label>
-        </div>
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                if (e.dataTransfer.files.length > 0) {
+                  uploadFiles(e.dataTransfer.files);
+                }
+              }}
+              className={cn(
+                "aspect-[4/3] rounded-xl border-2 border-dashed cursor-pointer transition-all flex flex-col items-center justify-center gap-2 text-muted-foreground hover:text-foreground",
+                dragOver
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "border-border hover:border-foreground/40 bg-card/40",
+              )}
+            >
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(e) => {
+                  if (e.target.files) uploadFiles(e.target.files);
+                  e.target.value = "";
+                }}
+                multiple
+                className="hidden"
+              />
+              <Plus size={22} />
+              <span className="text-xs font-medium">Agregar más</span>
+            </label>
+          </div>
+        </DndContext>
       )}
     </div>
   );
 }
 
+function formatDuration(ms: number | null): string | null {
+  if (!ms || ms <= 0) return null;
+  const totalSec = Math.round(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 function PhotoCard({
   photo,
-  isFirst,
-  isLast,
   onSetCover,
   onDelete,
-  onMoveUp,
-  onMoveDown,
 }: {
   photo: UnitPhoto;
-  isFirst: boolean;
-  isLast: boolean;
   onSetCover: () => void;
   onDelete: () => void;
-  onMoveUp: () => void;
-  onMoveDown: () => void;
 }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: photo.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+    touchAction: "manipulation",
+  };
+
+  const isVideo = photo.media_type === "video";
+  const duration = formatDuration(photo.duration_ms);
+
   return (
-    <div className="relative group">
+    <div ref={setNodeRef} style={style} className="relative group">
       <div className="aspect-[4/3] relative rounded-xl overflow-hidden border border-border bg-muted">
-        <Image
-          src={photo.public_url}
-          alt={photo.alt_text ?? ""}
-          fill
-          className="object-cover"
-          sizes="(max-width: 640px) 100vw, 33vw"
-        />
-        {photo.is_cover ? (
-          <div className="absolute top-2 left-2 inline-flex items-center gap-1 bg-background/95 backdrop-blur text-xs font-medium px-2.5 py-1 rounded-full shadow-sm border border-border">
+        {isVideo ? (
+          photo.poster_url ? (
+            <Image
+              src={photo.poster_url}
+              alt={photo.alt_text ?? ""}
+              fill
+              className="object-cover"
+              sizes="(max-width: 640px) 100vw, 33vw"
+            />
+          ) : (
+            <div className="absolute inset-0 grid place-items-center bg-muted">
+              <Film size={28} className="text-muted-foreground" />
+            </div>
+          )
+        ) : (
+          <Image
+            src={photo.public_url}
+            alt={photo.alt_text ?? ""}
+            fill
+            className="object-cover"
+            sizes="(max-width: 640px) 100vw, 33vw"
+          />
+        )}
+
+        {/* Drag handle — siempre visible (no hay hover en mobile) */}
+        <button
+          type="button"
+          aria-label="Reordenar"
+          {...attributes}
+          {...listeners}
+          style={{ touchAction: "none" }}
+          className="absolute top-2 left-2 size-7 grid place-items-center rounded-full bg-background/80 backdrop-blur border border-border shadow-sm text-muted-foreground cursor-grab active:cursor-grabbing hover:text-foreground hover:bg-background/95 transition-colors"
+        >
+          <GripVertical size={14} />
+        </button>
+
+        {/* Video overlay: play central + badge de duración */}
+        {isVideo ? (
+          <>
+            <div className="absolute inset-0 grid place-items-center pointer-events-none">
+              <div className="size-12 rounded-full bg-background/85 backdrop-blur grid place-items-center shadow-sm border border-border">
+                <Play size={20} className="fill-foreground stroke-foreground translate-x-[1px]" />
+              </div>
+            </div>
+            {duration ? (
+              <div className="absolute bottom-2 left-2 inline-flex items-center gap-1 bg-background/90 backdrop-blur text-[11px] font-medium px-2 py-0.5 rounded-full shadow-sm border border-border tabular-nums">
+                <Film size={10} />
+                {duration}
+              </div>
+            ) : null}
+          </>
+        ) : photo.is_cover ? (
+          <div className="absolute top-2 right-2 inline-flex items-center gap-1 bg-background/95 backdrop-blur text-xs font-medium px-2.5 py-1 rounded-full shadow-sm border border-border">
             <Star size={11} className="fill-amber-500 stroke-amber-500" />
             Portada
           </div>
         ) : null}
 
         {/* Hover controls */}
-        <div className="absolute inset-x-2 bottom-2 flex items-center justify-between gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute inset-x-2 bottom-2 flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           <div className="flex gap-1">
-            <IconBtn
-              label="Mover arriba"
-              disabled={isFirst}
-              onClick={onMoveUp}
-            >
-              <Minus size={13} className="rotate-90" />
-            </IconBtn>
-            <IconBtn
-              label="Mover abajo"
-              disabled={isLast}
-              onClick={onMoveDown}
-            >
-              <Minus size={13} className="-rotate-90" />
-            </IconBtn>
-          </div>
-          <div className="flex gap-1">
-            {!photo.is_cover ? (
+            {!isVideo && !photo.is_cover ? (
               <IconBtn label="Hacer portada" onClick={onSetCover}>
                 <Star size={13} />
               </IconBtn>

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { Heart, Star, Zap } from "lucide-react";
+import { ChevronLeft, ChevronRight, Heart, Star, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { formatInCurrency } from "@/lib/marketplace/currency-config";
@@ -26,8 +26,40 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
   const { currency, locale } = useMarketplacePrefs();
   const t = useT();
 
+  const trackRef = useRef<HTMLDivElement>(null);
+  const rafRef = useRef<number | null>(null);
+
   const photos = listing.photo_urls.length > 0 ? listing.photo_urls : [listing.cover_url].filter(Boolean) as string[];
   const target = href ?? `/u/${listing.slug}`;
+  const dotCount = Math.min(photos.length, 5);
+
+  function handleScroll() {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const el = trackRef.current;
+      if (!el || el.clientWidth === 0) return;
+      const next = Math.round(el.scrollLeft / el.clientWidth);
+      setPhotoIndex((prev) => (prev === next ? prev : next));
+    });
+  }
+
+  function scrollToSlide(i: number, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = trackRef.current;
+    if (!el) return;
+    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+  }
+
+  function scrollByDir(dir: -1 | 1, e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = trackRef.current;
+    if (!el) return;
+    const next = Math.min(Math.max(photoIndex + dir, 0), photos.length - 1);
+    el.scrollTo({ left: next * el.clientWidth, behavior: "smooth" });
+  }
 
   function handleFavoriteClick(e: React.MouseEvent) {
     e.preventDefault();
@@ -53,29 +85,62 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
     <Link href={target} className="group block">
       <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-neutral-100">
         {photos.length > 0 ? (
-          <Image
-            src={photos[photoIndex] ?? photos[0]}
-            alt={listing.marketplace_title}
-            fill
-            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
-            className="object-cover group-hover:scale-105 transition-transform duration-500"
-            priority={priority}
-          />
+          <div
+            ref={trackRef}
+            onScroll={handleScroll}
+            className="no-scrollbar absolute inset-0 flex overflow-x-auto snap-x snap-mandatory"
+          >
+            {photos.map((src, i) => (
+              <div key={i} className="relative w-full shrink-0 snap-start">
+                <Image
+                  src={src}
+                  alt={listing.marketplace_title}
+                  fill
+                  sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
+                  className="object-cover group-hover:scale-105 transition-transform duration-500"
+                  priority={i === 0 ? priority : undefined}
+                />
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="absolute inset-0 grid place-items-center text-neutral-400">Sin foto</div>
         )}
 
+        {/* Desktop hover arrows */}
+        {photos.length > 1 ? (
+          <>
+            <button
+              type="button"
+              onClick={(e) => scrollByDir(-1, e)}
+              aria-label="Foto anterior"
+              className="absolute left-2 top-1/2 z-10 hidden -translate-y-1/2 md:flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-neutral-900 shadow-md opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white disabled:opacity-0"
+              disabled={photoIndex === 0}
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => scrollByDir(1, e)}
+              aria-label="Foto siguiente"
+              className="absolute right-2 top-1/2 z-10 hidden -translate-y-1/2 md:flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-neutral-900 shadow-md opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white disabled:opacity-0"
+              disabled={photoIndex === photos.length - 1}
+            >
+              <ChevronRight size={18} />
+            </button>
+          </>
+        ) : null}
+
         {/* Photo dots */}
         {photos.length > 1 ? (
           <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5 z-10">
-            {photos.slice(0, 5).map((_, i) => (
+            {Array.from({ length: dotCount }).map((_, i) => (
               <button
+                type="button"
                 key={i}
-                onClick={(e) => {
-                  e.preventDefault();
-                  setPhotoIndex(i);
-                }}
-                aria-label={`Foto ${i + 1}`}
+                onClick={(e) => scrollToSlide(i, e)}
+                aria-label={`Ir a la foto ${i + 1}`}
+                aria-current={i === photoIndex}
                 className={cn(
                   "h-1.5 rounded-full transition-all",
                   i === photoIndex ? "w-4 bg-white" : "w-1.5 bg-white/60"

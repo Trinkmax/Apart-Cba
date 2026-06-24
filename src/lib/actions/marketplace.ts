@@ -124,6 +124,7 @@ export async function searchListings(filters: SearchFilters): Promise<{
     admin
       .from("unit_photos")
       .select("unit_id, public_url, sort_order, is_cover")
+      .eq("media_type", "image")
       .in("unit_id", unitIds)
       .order("is_cover", { ascending: false })
       .order("sort_order", { ascending: true }),

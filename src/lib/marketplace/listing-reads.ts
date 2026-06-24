@@ -125,9 +125,12 @@ export const getListingBySlug = cache(
     const pricingRules = (rulesRes.data ?? []) as UnitPricingRule[];
     const amenities = (amenitiesRes.data ?? []).map((a) => a.amenity_code);
 
+    // El summary (cover/photo_urls) sólo usa imágenes; los videos no deben
+    // aparecer como portada ni en los thumbnails de las cards.
+    const images = photos.filter((p) => p.media_type === "image");
     const summary = rowToSummary(
       row,
-      photos.map((p) => p.public_url),
+      images.map((p) => p.public_url),
       amenities
     );
 

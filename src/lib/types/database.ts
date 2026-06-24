@@ -1777,6 +1777,12 @@ export interface UnitPhoto {
   public_url: string;
   sort_order: number;
   is_cover: boolean;
+  /** "image" | "video" — el bucket unit-photos aloja ambos. */
+  media_type: "image" | "video";
+  /** Thumbnail (primer frame) del video; null para imágenes. */
+  poster_url: string | null;
+  /** Duración del video en ms; null para imágenes. */
+  duration_ms: number | null;
   alt_text: string | null;
   width: number | null;
   height: number | null;

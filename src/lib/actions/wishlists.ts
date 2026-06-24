@@ -87,6 +87,7 @@ export async function listWishlistDetails(): Promise<MarketplaceListingSummary[]
     admin
       .from("unit_photos")
       .select("unit_id, public_url, is_cover, sort_order")
+      .eq("media_type", "image")
       .in("unit_id", unitsArr.map((u) => u.id))
       .order("is_cover", { ascending: false })
       .order("sort_order"),

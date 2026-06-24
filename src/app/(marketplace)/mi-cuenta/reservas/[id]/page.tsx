@@ -22,7 +22,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
     .select(
       `
         *,
-        unit:units(*, photos:unit_photos(public_url, sort_order, is_cover)),
+        unit:units(*, photos:unit_photos(public_url, sort_order, is_cover, media_type)),
         organization:organizations(id, name, contact_email, contact_phone, logo_url),
         guest:guests(email, full_name, phone)
       `
@@ -48,7 +48,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
     house_rules: string | null;
     check_in_window_start: string | null;
     check_in_window_end: string | null;
-    photos: { public_url: string; sort_order: number; is_cover: boolean }[];
+    photos: { public_url: string; sort_order: number; is_cover: boolean; media_type: string }[];
   };
   const org = booking.organization as {
     id: string;
@@ -60,7 +60,7 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
 
   const cover =
     unit.photos
-      ?.slice()
+      ?.filter((p) => p.media_type === "image")
       .sort((a, b) => Number(b.is_cover) - Number(a.is_cover) || a.sort_order - b.sort_order)
       ?.[0]?.public_url ?? null;
 

@@ -228,7 +228,9 @@
       "Bash(npm ci *)",
       "Bash(echo \"=== eslint exit: $? ===\")",
       "Bash(./node_modules/.bin/eslint src/lib/pdf/settlement-pdf.ts)",
-      "Bash(echo \"=== EXIT: $? ===\")"
+      "Bash(echo \"=== EXIT: $? ===\")",
+      "Bash(sed -n '/export interface UnitPhoto/,/^}/p' src/lib/types/database.ts)",
+      "Bash(sed -n '/export interface MarketplaceListingDetail/,/^}/p' src/lib/types/database.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,
