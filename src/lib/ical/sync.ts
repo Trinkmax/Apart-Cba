@@ -82,6 +82,17 @@ export async function syncSingleFeed(
       // Self-import guard
       if (uid.includes("apartcba-")) { skipped++; continue; }
 
+      // NO importamos bloqueos de disponibilidad del OTA (Airbnb "Not available":
+      // corte del día, tope de la ventana de reservas a futuro, cierres manuales,
+      // etc.). No son reservas, no aportan nada accionable al PMS y solo ensucian
+      // el calendario (además rotan con UID nuevo cada día → churn). Solo entran
+      // RESERVAS reales ("Reserved", que traen datos del huésped).
+      // Seguro porque todos los feeds son de Airbnb ("Reserved" = reserva /
+      // "Not available" = bloqueo). Si algún día se agrega un feed de Booking.com
+      // (que usa "CLOSED - Not available" también para reservas), revisar este
+      // filtro para no descartar reservas reales de ese canal.
+      if (isBlock) { skipped++; continue; }
+
       // Track UIDs presentes en este feed para diff de cancelaciones más abajo
       seenUids.add(uid);
 
