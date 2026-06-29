@@ -33,6 +33,12 @@ const nextConfig: NextConfig = {
   // Libs Node-only que NO deben bundlearse en el server bundle (jspdf usa APIs del browser/node sin tree-shake claro; ical.js es CJS pesado).
   serverExternalPackages: ["jspdf", "jspdf-autotable", "ical.js", "exceljs"],
   images: {
+    // Loader propio: las imágenes de Supabase Storage se optimizan vía el endpoint
+    // `render/image` de Supabase (WebP en su CDN), NO con el optimizador de Vercel
+    // (que devolvía 402 al agotar la cuota del plan y dejaba todas las fotos en
+    // blanco). Ver `src/lib/marketplace/supabase-image-loader.ts`.
+    loader: "custom",
+    loaderFile: "./src/lib/marketplace/supabase-image-loader.ts",
     // Next.js 16+ requiere whitelistar valores de `quality` no estándar.
     // 75 = default; 92 = hero a calidad casi-original sin reventar bandwidth.
     qualities: [75, 92],

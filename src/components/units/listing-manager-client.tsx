@@ -105,6 +105,7 @@ import {
   uploadUnitPhoto,
 } from "@/lib/actions/unit-photos";
 import { createClient } from "@/lib/supabase/client";
+import { compressImage } from "@/lib/marketplace/image-compress";
 import { compressVideo, extractPosterAndMeta } from "@/lib/marketplace/video-compress";
 import type {
   MarketplaceAmenity,
@@ -927,29 +928,44 @@ function PhotosTab({
     let success = 0;
     let current = [...photos];
     for (const file of arr) {
-      if (file.size > 10 * 1024 * 1024) {
-        toast.error(`"${file.name}" supera los 10 MB`);
-        setUploading((u) => u - 1);
-        continue;
-      }
       if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
         toast.error(`"${file.name}" no es JPG/PNG/WEBP`);
         setUploading((u) => u - 1);
         continue;
       }
+      // Comprimimos en el navegador antes de subir, así que aceptamos originales
+      // grandes de cámara; el resultado pesa una fracción.
+      if (file.size > 30 * 1024 * 1024) {
+        toast.error(`"${file.name}" es demasiado grande (más de 30 MB)`);
+        setUploading((u) => u - 1);
+        continue;
+      }
       try {
-        const buffer = await file.arrayBuffer();
+        const compressed = await compressImage(file);
+        const blob: Blob = compressed?.blob ?? file;
+        if (blob.size > 10 * 1024 * 1024) {
+          toast.error(`No se pudo comprimir "${file.name}" (queda muy pesada)`);
+          continue;
+        }
+        const contentType: "image/jpeg" | "image/png" | "image/webp" = compressed
+          ? "image/jpeg"
+          : (file.type as "image/jpeg" | "image/png" | "image/webp");
+        const buffer = await blob.arrayBuffer();
         const base64 = bufferToBase64(buffer);
         const r = await uploadUnitPhoto({
           unit_id: unitId,
-          file_name: file.name,
-          content_type: file.type as "image/jpeg" | "image/png" | "image/webp",
+          file_name: file.name.replace(/\.[^.]+$/, "") || "foto",
+          content_type: contentType,
           base64_data: base64,
+          width: compressed?.width ?? null,
+          height: compressed?.height ?? null,
         });
-        if (r.ok && r.photo) {
-          current = [...current, r.photo as UnitPhoto];
+        if (r.ok) {
+          current = [...current, r.photo];
           onPhotosChange(current);
           success += 1;
+        } else {
+          toast.error(r.error);
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Error al subir");
@@ -967,7 +983,11 @@ function PhotosTab({
   async function handleDelete(id: string) {
     if (!confirm("¿Borrar esta foto?")) return;
     try {
-      await deleteUnitPhoto(id);
+      const r = await deleteUnitPhoto(id);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
       onPhotosChange(photos.filter((x) => x.id !== id));
       toast.success("Foto eliminada");
     } catch (err) {
@@ -977,7 +997,11 @@ function PhotosTab({
 
   async function handleSetCover(id: string) {
     try {
-      await setUnitPhotoCover(id);
+      const r = await setUnitPhotoCover(id);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
       onPhotosChange(
         photos.map((x) => ({ ...x, is_cover: x.id === id })),
       );
@@ -997,7 +1021,11 @@ function PhotosTab({
     const next = arrayMove(photos, oldIndex, newIndex);
     onPhotosChange(next); // optimista
     try {
-      await reorderUnitPhotos(unitId, next.map((p) => p.id));
+      const r = await reorderUnitPhotos(unitId, next.map((p) => p.id));
+      if (!r.ok) {
+        toast.error(r.error);
+        onPhotosChange(prev); // rollback
+      }
     } catch {
       toast.error("No se pudo reordenar");
       onPhotosChange(prev); // rollback
@@ -1037,6 +1065,10 @@ function PhotosTab({
       setVideoPhase({ phase: "upload" });
 
       const urls = await createUnitVideoUploadUrls({ unit_id: unitId });
+      if (!urls.ok) {
+        toast.error(urls.error);
+        return;
+      }
       const supabase = createClient();
 
       const upV = await supabase.storage
@@ -1068,10 +1100,12 @@ function PhotosTab({
         width,
         height,
       });
-      if (r.ok && r.photo) {
-        onPhotosChange([...photos, r.photo as UnitPhoto]);
-        toast.success("Video subido");
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
       }
+      onPhotosChange([...photos, r.photo]);
+      toast.success("Video subido");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "No se pudo subir el video");
     } finally {

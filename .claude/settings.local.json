@@ -230,7 +230,17 @@
       "Bash(./node_modules/.bin/eslint src/lib/pdf/settlement-pdf.ts)",
       "Bash(echo \"=== EXIT: $? ===\")",
       "Bash(sed -n '/export interface UnitPhoto/,/^}/p' src/lib/types/database.ts)",
-      "Bash(sed -n '/export interface MarketplaceListingDetail/,/^}/p' src/lib/types/database.ts)"
+      "Bash(sed -n '/export interface MarketplaceListingDetail/,/^}/p' src/lib/types/database.ts)",
+      "Bash(grep -nA8 \"canParse\" src/lib/inbound/parsers/airbnb.ts src/lib/inbound/parsers/booking.ts)",
+      "Bash(dig +short MX ota.apartcba.com)",
+      "Bash(dig +short www.apartcba.com)",
+      "Bash(dig +short A apartcba.com)",
+      "Bash(dig +short TXT resend._domainkey.apartcba.com)",
+      "Bash(vercel redeploy *)",
+      "Bash(perl -i -pe 's#^RESEND_INBOUND_WEBHOOK_SECRET=.*#RESEND_INBOUND_WEBHOOK_SECRET=whsec_4DQgBK5EYEjMMPD6uv70vpipSLEZ9/uf#' .env.local)",
+      "Bash(grep -q '^RESEND_INBOUND_WEBHOOK_SECRET=whsec_4DQgBK5EYEjMMPD6uv70vpipSLEZ9/uf$' .env.local)",
+      "Bash(echo \"eslint exit: $?\")",
+      "Bash(echo \"build exit: $?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
