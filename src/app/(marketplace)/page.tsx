@@ -95,7 +95,7 @@ async function FeaturedListings() {
               {t("featured.empty.body")}
             </p>
             <Link
-              href="/login"
+              href="/buscar"
               className="mt-6 inline-flex items-center gap-2 rounded-full bg-neutral-900 text-white px-5 py-2.5 text-sm font-semibold hover:bg-neutral-800 transition-colors"
             >
               {t("featured.empty.cta")}

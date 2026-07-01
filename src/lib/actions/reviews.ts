@@ -34,20 +34,15 @@ export async function submitReview(input: z.infer<typeof reviewSchema>): Promise
   // Verificar que el booking exista, esté completado y pertenezca al guest
   const { data: booking, error: bkErr } = await admin
     .from("bookings")
-    .select(
-      `
-        id, organization_id, unit_id, status, check_out_date,
-        guest:guests(email)
-      `
-    )
+    .select("id, organization_id, unit_id, status, check_out_date, marketplace_user_id")
     .eq("id", parsed.data.booking_id)
     .maybeSingle();
   if (bkErr) return { ok: false, error: bkErr.message };
   if (!booking) return { ok: false, error: "Reserva no encontrada" };
 
-  // Validar que sea el huésped real (match por email)
-  const guestEmail = (booking.guest as unknown as { email?: string } | null)?.email;
-  if (!guestEmail || guestEmail !== session.email) {
+  // Validar que sea el huésped real por identidad autenticada (no por email:
+  // la operación reutiliza emails placeholder para huéspedes distintos).
+  if (booking.marketplace_user_id !== session.userId) {
     return { ok: false, error: "Solo el huésped puede dejar la reseña" };
   }
   if (booking.status !== "check_out") {
@@ -154,19 +149,13 @@ export async function listReviewableBookings(): Promise<
   if (!session) return [];
   const admin = createAdminClient();
 
-  const { data: guestRows } = await admin
-    .from("guests")
-    .select("id")
-    .eq("email", session.email);
-  const ids = (guestRows ?? []).map((g) => g.id);
-  if (ids.length === 0) return [];
-
+  // Reservas del huésped por identidad autenticada, no por email.
   const { data } = await admin
     .from("bookings")
     .select(
       `id, check_out_date, unit:units(id, slug, marketplace_title, cover_image_url, name), organization:organizations(name)`
     )
-    .in("guest_id", ids)
+    .eq("marketplace_user_id", session.userId)
     .eq("status", "check_out")
     .order("check_out_date", { ascending: false });
 

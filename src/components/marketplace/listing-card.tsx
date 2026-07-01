@@ -201,6 +201,11 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
           </span>
           <span className="text-sm text-neutral-500"> {t("featured.per_night")}</span>
         </div>
+        {listing.min_nights > 1 ? (
+          <div className="text-xs text-neutral-500">
+            Mínimo {listing.min_nights} noches
+          </div>
+        ) : null}
       </div>
     </Link>
   );

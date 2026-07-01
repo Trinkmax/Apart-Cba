@@ -11,10 +11,24 @@ import {
   requestGuestPasswordReset,
 } from "@/lib/actions/guest-auth";
 
+// Sólo permitimos redirigir a rutas internas relativas: deben empezar con "/"
+// pero no con "//" ni "/\" (evita open redirects hacia dominios externos).
+function safeRedirect(value: string | null): string {
+  if (
+    value &&
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.startsWith("/\\")
+  ) {
+    return value;
+  }
+  return "/mi-cuenta";
+}
+
 export function GuestSignInForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const redirectTo = params.get("redirect") ?? "/mi-cuenta";
+  const redirectTo = safeRedirect(params.get("redirect"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
@@ -123,7 +137,7 @@ export function GuestSignInForm() {
 export function GuestSignUpForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const redirectTo = params.get("redirect") ?? "/mi-cuenta";
+  const redirectTo = safeRedirect(params.get("redirect"));
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");

@@ -358,6 +358,24 @@ export async function GET(req: Request) {
     results.weekly_archive = { error: (err as Error).message };
   }
 
+  // 8. Expirar booking_requests vencidas. Las solicitudes de reserva del
+  //    marketplace tienen expires_at; si el staff no las aprueba/rechaza a
+  //    tiempo quedan colgadas en "pendiente" para siempre (el badge y la lista
+  //    de reservas-pendientes se contradicen). Las pasamos a "expirada".
+  try {
+    const admin = createAdminClient();
+    const { data: expired, error: expiredErr } = await admin
+      .from("booking_requests")
+      .update({ status: "expirada" })
+      .eq("status", "pendiente")
+      .lt("expires_at", new Date().toISOString())
+      .select("id");
+    if (expiredErr) throw new Error(expiredErr.message);
+    results.booking_requests_expired = { count: expired?.length ?? 0 };
+  } catch (err) {
+    results.booking_requests_expired = { error: (err as Error).message };
+  }
+
   const duration_ms = Date.now() - startedAt;
   console.log(`[cron/daily-dispatch] completed in ${duration_ms}ms`, results);
   return NextResponse.json({ ok: true, duration_ms, ...results });

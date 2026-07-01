@@ -41,8 +41,10 @@ export default async function MiCuentaPage() {
   const session = await requireGuestSession();
   const { bookings, requests } = await listGuestBookings();
 
-  const allBookings = bookings as BookingRow[];
-  const allRequests = requests as RequestRow[];
+  // Cast vía unknown: PostgREST infiere los embeds to-one como arrays, pero en
+  // runtime son objetos (join a-uno).
+  const allBookings = bookings as unknown as BookingRow[];
+  const allRequests = requests as unknown as RequestRow[];
 
   const today = new Date().toISOString().slice(0, 10);
   const upcoming = allBookings.filter((b) => b.check_in_date >= today && b.status !== "cancelada");

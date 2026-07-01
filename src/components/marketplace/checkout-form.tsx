@@ -33,7 +33,8 @@ export function CheckoutForm({
 }: Props) {
   const router = useRouter();
   const [fullName, setFullName] = useState(guest.full_name);
-  const [email, setEmail] = useState(guestEmail);
+  // El email no es editable: el server usa la identidad de la sesión.
+  const [email] = useState(guestEmail);
   const [phone, setPhone] = useState(guest.phone ?? "");
   const [document, setDocument] = useState(guest.document_number ?? "");
   const [specialRequests, setSpecialRequests] = useState("");
@@ -106,12 +107,12 @@ export function CheckoutForm({
               <input
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                disabled={pending}
+                readOnly
+                aria-readonly="true"
                 autoComplete="email"
-                className={inputCls}
+                className={cn(inputCls, "bg-neutral-50 text-neutral-500 cursor-not-allowed")}
               />
+              <p className="mt-1 text-xs text-neutral-500">Se usa el email de tu cuenta.</p>
             </Field>
             <Field label="Teléfono">
               <input

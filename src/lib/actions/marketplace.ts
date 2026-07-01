@@ -6,8 +6,11 @@ import type {
   Review,
   UnitPricingRule,
 } from "@/lib/types/database";
-import { getBlockedDates } from "@/lib/marketplace/availability";
-import { computePricing } from "@/lib/marketplace/pricing";
+import {
+  getBlockedDates,
+  OCCUPYING_BOOKING_STATUSES,
+} from "@/lib/marketplace/availability";
+import { addDaysIso, computePricing } from "@/lib/marketplace/pricing";
 import { rowToSummary, type UnitRow } from "@/lib/marketplace/listing-reads";
 
 export type SearchFilters = {
@@ -41,16 +44,23 @@ export async function searchListings(filters: SearchFilters): Promise<{
   const limit = Math.min(filters.limit ?? 30, 60);
   const offset = filters.offset ?? 0;
 
+  // Los filtros por disponibilidad (fechas) y amenities se resuelven en memoria,
+  // así que NO podemos paginar en la DB ni usar count:"exact" (darían totales y
+  // páginas inconsistentes — el bug de "40 lugares" mostrando 25). Traemos el
+  // conjunto que matchea los filtros SQL con una cota de seguridad y paginamos
+  // ya filtrado. A escala grande esto debería moverse a un RPC / columna
+  // materializada de "próxima fecha disponible".
+  const HARD_SCAN_CAP = 500;
+
   let q = admin
     .from("units")
     .select(
       `
         id, organization_id, slug, marketplace_title, name, marketplace_property_type,
-        neighborhood, address, bedrooms, bathrooms, max_guests, size_m2,
+        neighborhood, city, address, bedrooms, bathrooms, max_guests, size_m2,
         latitude, longitude, base_price, marketplace_currency, cleaning_fee, instant_book,
         marketplace_rating_avg, marketplace_rating_count, cover_image_url, min_nights, max_nights
-      `,
-      { count: "exact" }
+      `
     )
     .eq("marketplace_published", true)
     .eq("active", true)
@@ -58,9 +68,12 @@ export async function searchListings(filters: SearchFilters): Promise<{
     .not("base_price", "is", null);
 
   if (filters.city) {
-    q = q.or(
-      `address.ilike.%${filters.city}%,neighborhood.ilike.%${filters.city}%`
-    );
+    // El argumento de .or() lo parsea PostgREST: `,` `(` `)` `*` son estructurales.
+    // Sin escapar, un `?ciudad=a,base_price.gt.0)` rompe el filtro (crash/DoS).
+    const safeCity = filters.city.replace(/[,()*\\%]/g, "").trim();
+    if (safeCity) {
+      q = q.or(`address.ilike.%${safeCity}%,neighborhood.ilike.%${safeCity}%`);
+    }
   }
   if (filters.neighborhood) {
     q = q.ilike("neighborhood", `%${filters.neighborhood}%`);
@@ -107,19 +120,54 @@ export async function searchListings(filters: SearchFilters): Promise<{
         .order("created_at", { ascending: false });
   }
 
-  q = q.range(offset, offset + limit - 1);
+  q = q.limit(HARD_SCAN_CAP);
 
-  const { data: rows, error, count } = await q;
+  const { data: rows, error } = await q;
   if (error) throw new Error(`Error buscando: ${error.message}`);
-  const unitsRaw = (rows ?? []) as UnitRow[];
+  let unitsRaw = (rows ?? []) as UnitRow[];
 
   if (unitsRaw.length === 0) {
-    return { listings: [], total: count ?? 0 };
+    return { listings: [], total: 0 };
   }
 
-  const unitIds = unitsRaw.map((u) => u.id);
+  // 1) Filtro por disponibilidad (solo si hay rango de fechas). Se aplica ANTES
+  //    de paginar para que el total y las páginas sean consistentes.
+  if (filters.checkIn && filters.checkOut) {
+    const checkIn = filters.checkIn;
+    const checkOut = filters.checkOut;
+    const ids = unitsRaw.map((u) => u.id);
 
-  // Fetch fotos + amenities en paralelo
+    const [bookingsRes, requestsRes] = await Promise.all([
+      admin
+        .from("bookings")
+        .select("unit_id")
+        .in("unit_id", ids)
+        .in("status", OCCUPYING_BOOKING_STATUSES as unknown as string[])
+        .lt("check_in_date", checkOut)
+        .gt("check_out_date", checkIn),
+      admin
+        .from("booking_requests")
+        .select("unit_id")
+        .in("unit_id", ids)
+        .eq("status", "pendiente")
+        .gt("expires_at", new Date().toISOString())
+        .lt("check_in_date", checkOut)
+        .gt("check_out_date", checkIn),
+    ]);
+
+    const blocked = new Set<string>();
+    for (const r of bookingsRes.data ?? []) blocked.add(r.unit_id);
+    for (const r of requestsRes.data ?? []) blocked.add(r.unit_id);
+
+    unitsRaw = unitsRaw.filter((u) => !blocked.has(u.id));
+  }
+
+  if (unitsRaw.length === 0) {
+    return { listings: [], total: 0 };
+  }
+
+  // 2) Fotos + amenities para el conjunto ya filtrado por disponibilidad.
+  const unitIds = unitsRaw.map((u) => u.id);
   const [photosRes, amenitiesRes] = await Promise.all([
     admin
       .from("unit_photos")
@@ -147,41 +195,11 @@ export async function searchListings(filters: SearchFilters): Promise<{
     amenitiesByUnit.set(a.unit_id, arr);
   }
 
-  // Si hay rango de fechas → filtrar las que no tengan disponibilidad
   let listings = unitsRaw.map((u) =>
     rowToSummary(u, photosByUnit.get(u.id) ?? [], amenitiesByUnit.get(u.id) ?? [])
   );
 
-  if (filters.checkIn && filters.checkOut) {
-    const checkIn = filters.checkIn;
-    const checkOut = filters.checkOut;
-
-    const [bookingsRes, requestsRes] = await Promise.all([
-      admin
-        .from("bookings")
-        .select("unit_id")
-        .in("unit_id", unitIds)
-        .in("status", ["confirmada", "check_in"])
-        .lt("check_in_date", checkOut)
-        .gt("check_out_date", checkIn),
-      admin
-        .from("booking_requests")
-        .select("unit_id")
-        .in("unit_id", unitIds)
-        .eq("status", "pendiente")
-        .gt("expires_at", new Date().toISOString())
-        .lt("check_in_date", checkOut)
-        .gt("check_out_date", checkIn),
-    ]);
-
-    const blocked = new Set<string>();
-    for (const r of bookingsRes.data ?? []) blocked.add(r.unit_id);
-    for (const r of requestsRes.data ?? []) blocked.add(r.unit_id);
-
-    listings = listings.filter((l) => !blocked.has(l.id));
-  }
-
-  // Filtrar por amenities (post-fetch — más simple que un join complejo)
+  // 3) Filtro por amenities (en memoria).
   if (filters.amenities && filters.amenities.length > 0) {
     const need = filters.amenities;
     listings = listings.filter((l) =>
@@ -189,13 +207,22 @@ export async function searchListings(filters: SearchFilters): Promise<{
     );
   }
 
-  return { listings, total: count ?? listings.length };
+  // 4) Total exacto (ya filtrado) + paginación en memoria.
+  const total = listings.length;
+  const paged = listings.slice(offset, offset + limit);
+  return { listings: paged, total };
 }
 
 export async function getFeaturedListings(limit = 8): Promise<MarketplaceListingSummary[]> {
+  // La home no tiene fechas elegidas, pero igual excluimos lo que está ocupado
+  // HOY (estadías largas activas) para no destacar propiedades que un huésped no
+  // podría reservar ni esta noche.
+  const today = new Date().toISOString().slice(0, 10);
   const { listings } = await searchListings({
     sort: "rating",
     limit,
+    checkIn: today,
+    checkOut: addDaysIso(today, 1),
   });
   return listings;
 }

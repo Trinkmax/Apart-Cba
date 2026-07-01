@@ -179,12 +179,18 @@ async function findOrCreateGuestForOrg(params: {
   guest: { full_name: string; email: string; phone: string; document?: string | null };
 }): Promise<string> {
   const admin = createAdminClient();
-  // Match por email + org
+  // Match por email + org. Ojo: `guests` NO tiene unique(org,email) —la operación
+  // usa emails placeholder compartidos por varios huéspedes distintos— así que
+  // puede haber >1 fila. `.limit(1).maybeSingle()` evita el throw de `.maybeSingle()`
+  // ante múltiples matches (antes rompía el checkout). La identidad real del
+  // huésped del marketplace viaja por `bookings.marketplace_user_id`, no por acá.
   const { data: existing } = await admin
     .from("guests")
     .select("id, phone, document_number")
     .eq("organization_id", params.organizationId)
     .eq("email", params.guest.email)
+    .order("created_at", { ascending: true })
+    .limit(1)
     .maybeSingle();
 
   if (existing) {
@@ -226,11 +232,15 @@ async function createMarketplaceBooking(params: {
 }): Promise<CheckoutResult> {
   const admin = createAdminClient();
 
+  // Identidad de confianza = la sesión autenticada, no el email tipeado en el form
+  // (evita mandar la confirmación a un destinatario arbitrario y atribuir mal la reserva).
+  const guestEmail = params.session.email;
+
   const guestId = await findOrCreateGuestForOrg({
     organizationId: params.unit.organization_id,
     guest: {
       full_name: params.data.full_name,
-      email: params.data.email,
+      email: guestEmail,
       phone: params.data.phone,
       document: params.data.document ?? null,
     },
@@ -242,6 +252,7 @@ async function createMarketplaceBooking(params: {
       organization_id: params.unit.organization_id,
       unit_id: params.unit.id,
       guest_id: guestId,
+      marketplace_user_id: params.session.userId,
       source: "directo",
       status: "confirmada",
       mode: "temporario",
@@ -273,7 +284,7 @@ async function createMarketplaceBooking(params: {
   try {
     await notifyGuestBookingConfirmed({
       bookingId: booking.id,
-      guestEmail: params.data.email,
+      guestEmail,
       guestPhone: params.data.phone,
       guestName: params.data.full_name,
     });
@@ -323,7 +334,7 @@ async function createBookingRequest(params: {
       unit_id: params.unit.id,
       guest_user_id: params.session.userId,
       guest_full_name: params.data.full_name,
-      guest_email: params.data.email,
+      guest_email: params.session.email,
       guest_phone: params.data.phone,
       guest_document: params.data.document || null,
       check_in_date: params.data.check_in_date,
@@ -341,7 +352,15 @@ async function createBookingRequest(params: {
     .select()
     .single();
 
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    if (error.message.includes("booking_requests_no_overlap")) {
+      return {
+        ok: false,
+        error: "Ya hay una solicitud pendiente para esas fechas. Probá con otras.",
+      };
+    }
+    return { ok: false, error: error.message };
+  }
 
   const request = created as BookingRequest;
 
@@ -380,16 +399,19 @@ export async function listGuestBookings() {
   if (!session) return { bookings: [], requests: [] };
   const admin = createAdminClient();
 
+  // Identidad = marketplace_user_id (auth.users), NUNCA match por email: la
+  // operación reutiliza emails placeholder para huéspedes distintos, así que un
+  // match por email filtraría reservas/PII de terceros entre organizaciones.
   const [bookingsRes, requestsRes] = await Promise.all([
     admin
       .from("bookings")
       .select(
-        `id, organization_id, unit_id, check_in_date, check_out_date, total_amount, currency, status,
+        `id, organization_id, unit_id, check_in_date, check_out_date, total_amount, currency, status, paid_amount,
          unit:units(id, slug, marketplace_title, name, cover_image_url),
          organization:organizations(name)
         `
       )
-      .eq("guest_id", null)
+      .eq("marketplace_user_id", session.userId)
       .order("check_in_date", { ascending: false }),
     admin
       .from("booking_requests")
@@ -402,39 +424,8 @@ export async function listGuestBookings() {
       .order("created_at", { ascending: false }),
   ]);
 
-  // Los bookings del marketplace los buscamos por email match en guests
-  const { data: profile } = await admin
-    .from("guest_profiles")
-    .select("full_name")
-    .eq("user_id", session.userId)
-    .maybeSingle();
-
-  const { data: guestRows } = await admin
-    .from("guests")
-    .select("id, organization_id")
-    .eq("email", session.email);
-
-  let allBookings: unknown[] = [];
-  if ((guestRows ?? []).length > 0) {
-    const ids = (guestRows ?? []).map((g) => g.id);
-    const { data: bk } = await admin
-      .from("bookings")
-      .select(
-        `id, organization_id, unit_id, check_in_date, check_out_date, total_amount, currency, status, paid_amount,
-         unit:units(id, slug, marketplace_title, name, cover_image_url),
-         organization:organizations(name)
-        `
-      )
-      .in("guest_id", ids)
-      .order("check_in_date", { ascending: false });
-    allBookings = bk ?? [];
-  }
-
-  void bookingsRes; // silenciado, usamos el match por email
-  void profile;
-
   return {
-    bookings: allBookings,
+    bookings: bookingsRes.data ?? [],
     requests: requestsRes.data ?? [],
   };
 }

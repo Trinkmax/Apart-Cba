@@ -17,6 +17,14 @@ export type CurrencyCode = (typeof SUPPORTED_CURRENCIES)[number];
 export const DEFAULT_CURRENCY: CurrencyCode = "ARS";
 
 /**
+ * Aviso de conversión para mostrar cuando la moneda de visualización difiere
+ * de la moneda real de cobro del listing. Reemplazar `{currency}` por el código
+ * de moneda del host (ej. "ARS").
+ */
+export const CONVERSION_NOTICE = "Precio de referencia. Se cobra en {currency}.";
+
+// TODO: mover a tipos de cambio en vivo (cron diario / API); tabla estática, actualizar manualmente.
+/**
  * `rates[from][to]` = how many units of `to` you get for 1 unit of `from`.
  * Calibrated mid-May 2026 (approximate; not for payment decisions).
  */
@@ -28,6 +36,14 @@ const RATES: Record<CurrencyCode, Record<CurrencyCode, number>> = {
 
 export function isSupportedCurrency(value: unknown): value is CurrencyCode {
   return typeof value === "string" && (SUPPORTED_CURRENCIES as readonly string[]).includes(value);
+}
+
+/**
+ * `true` si la moneda de origen y la de destino difieren (es decir, el monto
+ * mostrado es una conversión de referencia y no la moneda real de cobro).
+ */
+export function isConverted(fromCurrency: string, toCurrency: string): boolean {
+  return fromCurrency.toUpperCase() !== toCurrency.toUpperCase();
 }
 
 /** Convert `amount` from source currency to target. Safe for unknown inputs. */

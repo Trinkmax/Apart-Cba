@@ -73,7 +73,7 @@ export async function listWishlistDetails(): Promise<MarketplaceListingSummary[]
         id, organization_id, slug, marketplace_title, name, marketplace_property_type,
         neighborhood, address, bedrooms, bathrooms, max_guests, size_m2,
         latitude, longitude, base_price, marketplace_currency, cleaning_fee, instant_book,
-        marketplace_rating_avg, marketplace_rating_count, cover_image_url
+        marketplace_rating_avg, marketplace_rating_count, cover_image_url, min_nights, max_nights
       `
     )
     .in("id", ids)
@@ -133,6 +133,8 @@ export async function listWishlistDetails(): Promise<MarketplaceListingSummary[]
       marketplace_currency: u.marketplace_currency ?? "ARS",
       cleaning_fee: u.cleaning_fee !== null ? Number(u.cleaning_fee) : null,
       instant_book: u.instant_book,
+      min_nights: u.min_nights ?? 1,
+      max_nights: u.max_nights ?? null,
       rating_avg: Number(u.marketplace_rating_avg ?? 0),
       rating_count: u.marketplace_rating_count ?? 0,
       cover_url: (photosByUnit.get(u.id) ?? [])[0] ?? u.cover_image_url,

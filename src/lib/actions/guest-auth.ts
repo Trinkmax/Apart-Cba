@@ -3,6 +3,7 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
 import {
   createClient,
@@ -10,6 +11,47 @@ import {
   createAuthAdminClient,
 } from "@/lib/supabase/server";
 import type { GuestProfile } from "@/lib/types/database";
+
+/** IP real del cliente (Vercel la inyecta en x-forwarded-for). */
+async function clientIp(): Promise<string> {
+  try {
+    const h = await headers();
+    return (
+      h.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      h.get("x-real-ip") ||
+      "unknown"
+    );
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Rate limit best-effort. FAIL-OPEN: ante cualquier error del limiter, permite
+ * el intento (nunca bloquea a un huésped legítimo por un bug del limiter).
+ * Devuelve true si el intento está permitido.
+ */
+async function allowAuthAttempt(
+  bucket: string,
+  max: number,
+  windowSecs: number
+): Promise<boolean> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.rpc("hit_auth_rate_limit", {
+      p_bucket: bucket,
+      p_max: max,
+      p_window_secs: windowSecs,
+    });
+    if (error) return true;
+    return data !== false;
+  } catch {
+    return true;
+  }
+}
+
+const RATE_LIMITED_MSG =
+  "Demasiados intentos. Esperá unos minutos e intentá de nuevo.";
 
 export type GuestSession = {
   userId: string;
@@ -53,6 +95,10 @@ const guestSessionLoader = cache(async (): Promise<GuestSession | null> => {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user || !user.email) return null;
+  // Fail-closed ante email sin verificar: si el proyecto tiene "Confirm email"
+  // activo, un signup con el email de otra persona no queda logueado hasta
+  // confirmar. (Con confirmación desactivada, Supabase autoconfirma y esto pasa.)
+  if (!user.email_confirmed_at) return null;
 
   const admin = createAdminClient();
   const { data: profile } = await admin
@@ -86,6 +132,11 @@ export async function signUpGuest(input: z.infer<typeof signUpSchema>): Promise<
   const parsed = signUpSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+
+  const ip = await clientIp();
+  if (!(await allowAuthAttempt(`signup:${ip}`, 8, 3600))) {
+    return { ok: false, error: RATE_LIMITED_MSG };
   }
 
   const supabase = await createClient();
@@ -154,6 +205,11 @@ export async function signInGuest(
   const parsed = signInSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+
+  const ip = await clientIp();
+  if (!(await allowAuthAttempt(`login:${ip}:${parsed.data.email.toLowerCase()}`, 10, 300))) {
+    return { ok: false, error: RATE_LIMITED_MSG };
   }
 
   const supabase = await createClient();
@@ -233,10 +289,18 @@ export async function requestGuestPasswordReset(
   email: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!email) return { ok: false, error: "Email requerido" };
+  const ip = await clientIp();
+  if (!(await allowAuthAttempt(`reset:${ip}:${email.toLowerCase()}`, 5, 3600))) {
+    return { ok: false, error: RATE_LIMITED_MSG };
+  }
   const supabase = await createClient();
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
+  // Pasa por /auth/callback para intercambiar el code por sesión (recovery).
+  // Antes apuntaba directo a /reset-password, que no establecía sesión -> el
+  // updateUser fallaba. REQUIERE además: NEXT_PUBLIC_APP_URL seteada y esta URL
+  // (y la de callback) en la allowlist de Redirect URLs de Supabase Auth.
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${appUrl}/reset-password`,
+    redirectTo: `${appUrl}/auth/callback?next=${encodeURIComponent("/reset-password")}`,
   });
   if (error) return { ok: false, error: error.message };
   return { ok: true };

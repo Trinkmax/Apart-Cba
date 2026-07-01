@@ -1,10 +1,11 @@
 import { notFound } from "next/navigation";
-import { ChevronLeft, Share, Heart } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { UnitGallery } from "@/components/marketplace/unit-gallery";
 import { UnitDetailInfo } from "@/components/marketplace/unit-detail-info";
 import { UnitBookingWidget } from "@/components/marketplace/unit-booking-widget";
 import { UnitLocationMap } from "@/components/marketplace/unit-location-map";
+import { ListingShareActions } from "@/components/marketplace/listing-share-actions";
 import {
   getListingBlockedDates,
   getReviewsForUnit,
@@ -20,12 +21,31 @@ export async function generateMetadata({ params }: { params: Params }) {
   const { slug } = await params;
   const listing = await getListingBySlug(slug);
   if (!listing) return { title: "Alojamiento no encontrado · ApartCBA" };
+
+  const title = `${listing.marketplace_title} · ApartCBA`;
+  const description =
+    listing.marketplace_description?.slice(0, 200) ??
+    `Reservá ${listing.marketplace_title} en ApartCBA.`;
+  const url = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://www.apartcba.com"}/u/${slug}`;
+  const images = listing.cover_url ? [{ url: listing.cover_url }] : undefined;
+
   return {
-    title: `${listing.marketplace_title} · ApartCBA`,
-    description:
-      listing.marketplace_description?.slice(0, 200) ??
-      `Reservá ${listing.marketplace_title} en ApartCBA.`,
-    openGraph: listing.cover_url ? { images: [{ url: listing.cover_url }] } : undefined,
+    title,
+    description,
+    alternates: { canonical: url },
+    openGraph: {
+      title,
+      description,
+      type: "website",
+      url,
+      images,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: listing.cover_url ? [listing.cover_url] : undefined,
+    },
   };
 }
 
@@ -44,7 +64,7 @@ export default async function UnitPage({
   const today = new Date().toISOString().slice(0, 10);
   const toIso = (() => {
     const d = new Date();
-    d.setMonth(d.getMonth() + 6);
+    d.setMonth(d.getMonth() + 12);
     return d.toISOString().slice(0, 10);
   })();
 
@@ -66,16 +86,11 @@ export default async function UnitPage({
           <ChevronLeft size={16} />
           Volver
         </Link>
-        <div className="hidden md:flex items-center gap-1">
-          <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100 rounded-lg">
-            <Share size={14} />
-            Compartir
-          </button>
-          <button className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100 rounded-lg">
-            <Heart size={14} />
-            Guardar
-          </button>
-        </div>
+        <ListingShareActions
+          slug={listing.slug}
+          title={listing.marketplace_title}
+          unitId={listing.id}
+        />
       </div>
 
       {/* Gallery */}

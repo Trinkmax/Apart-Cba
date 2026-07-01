@@ -32,9 +32,9 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
 
   if (!booking) notFound();
 
-  // Validar que el huésped autenticado es el dueño
-  const guestEmail = (booking.guest as { email?: string } | null)?.email;
-  if (!guestEmail || guestEmail !== session.email) {
+  // Validar propiedad por identidad autenticada (no por email: la operación
+  // reutiliza emails placeholder para huéspedes distintos).
+  if (booking.marketplace_user_id !== session.userId) {
     notFound();
   }
 

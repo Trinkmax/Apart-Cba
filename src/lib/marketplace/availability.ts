@@ -6,12 +6,22 @@ export type AvailabilityCheck = {
 };
 
 /**
+ * Estados de `bookings` que ocupan el calendario a los ojos del marketplace.
+ * DEBE coincidir con el `WHERE` de la exclusion constraint `bookings_no_overlap`
+ * (migración 030): incluye 'pendiente' para que las retenciones que hace
+ * recepción no se puedan revender por la web. Los bloqueos de "uso propietario"
+ * y operacionales viajan como bookings con guest_id NULL / status 'confirmada',
+ * así que también quedan cubiertos.
+ */
+export const OCCUPYING_BOOKING_STATUSES = ["pendiente", "confirmada", "check_in"] as const;
+
+/**
  * Verifica que [checkIn, checkOut) esté libre para una unidad.
- * "Libre" = sin bookings activos (confirmada / check_in) que solapen,
+ * "Libre" = sin bookings que ocupen (ver OCCUPYING_BOOKING_STATUSES) que solapen,
  * y sin booking_requests pendientes vigentes que solapen.
  *
- * Esta es la verificación pre-creación. La definitiva la hace el constraint
- * `bookings_no_overlap` cuando insertamos.
+ * Esta es la verificación pre-creación. La definitiva la hacen los constraints
+ * `bookings_no_overlap` / `booking_requests_no_overlap` cuando insertamos.
  */
 export async function checkUnitAvailability(params: {
   unitId: string;
@@ -29,7 +39,7 @@ export async function checkUnitAvailability(params: {
     .from("bookings")
     .select("id")
     .eq("unit_id", params.unitId)
-    .in("status", ["confirmada", "check_in"])
+    .in("status", OCCUPYING_BOOKING_STATUSES as unknown as string[])
     .lt("check_in_date", params.checkOutIso)
     .gt("check_out_date", params.checkInIso)
     .limit(1);
@@ -85,7 +95,7 @@ export async function getBlockedDates(params: {
       .from("bookings")
       .select("check_in_date, check_out_date")
       .eq("unit_id", params.unitId)
-      .in("status", ["confirmada", "check_in"])
+      .in("status", OCCUPYING_BOOKING_STATUSES as unknown as string[])
       .lt("check_in_date", params.toIso)
       .gt("check_out_date", params.fromIso),
     admin

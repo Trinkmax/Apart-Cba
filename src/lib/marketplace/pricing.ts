@@ -13,7 +13,7 @@ export type PricingBreakdown = {
   cleaning_fee: number;
   total: number;
   nights_count: number;
-  /** Mediana del precio por noche (más representativa que el promedio para mostrar al usuario). */
+  /** Promedio (mean) del precio por noche: subtotal ÷ cantidad de noches. */
   avg_price_per_night: number;
 };
 

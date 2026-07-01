@@ -6,6 +6,20 @@ import { plainTextToHtml } from "@/lib/email/render";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
 
+/**
+ * Escapa caracteres HTML de campos controlados por el usuario (ej. el nombre
+ * del huésped) antes de interpolarlos en el HTML del email. El texto plano se
+ * envía sin escapar. (render.ts tiene un helper equivalente pero no exportado.)
+ */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 /** Notifica al host (org) que llegó una nueva reserva o solicitud del marketplace. */
 export async function notifyHostNewBooking(params: {
   organizationId: string;
@@ -62,7 +76,7 @@ export async function notifyHostNewBooking(params: {
       organizationId: params.organizationId,
       to: org.contact_email,
       subject,
-      html: plainTextToHtml(body),
+      html: plainTextToHtml(escapeHtml(body)),
       text: body,
     });
   }
@@ -128,7 +142,7 @@ Gracias por reservar con ApartCBA — esperamos que tengas una gran estadía.
     organizationId: booking.organization_id,
     to: params.guestEmail,
     subject,
-    html: plainTextToHtml(body),
+    html: plainTextToHtml(escapeHtml(body)),
     text: body,
     replyTo: org.contact_email ?? undefined,
   });
@@ -178,7 +192,7 @@ ${APP_URL}/mi-cuenta/reservas/${booking.id}
     organizationId: booking.organization_id,
     to: params.guestEmail,
     subject,
-    html: plainTextToHtml(body),
+    html: plainTextToHtml(escapeHtml(body)),
     text: body,
   });
 
@@ -232,7 +246,7 @@ ${APP_URL}/buscar
     organizationId: req.organization_id,
     to: params.guestEmail,
     subject,
-    html: plainTextToHtml(body),
+    html: plainTextToHtml(escapeHtml(body)),
     text: body,
   });
 

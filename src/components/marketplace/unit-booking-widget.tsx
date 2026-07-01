@@ -9,7 +9,11 @@ import {
   computePricing,
   countNights,
 } from "@/lib/marketplace/pricing";
-import { formatInCurrency } from "@/lib/marketplace/currency-config";
+import {
+  formatInCurrency,
+  isConverted,
+  CONVERSION_NOTICE,
+} from "@/lib/marketplace/currency-config";
 import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
 import type { MarketplaceListingDetail } from "@/lib/types/database";
 
@@ -216,7 +220,6 @@ export function UnitBookingWidget({
         <div className="space-y-2 pt-3 border-t border-neutral-200">
           <div className="flex justify-between text-sm">
             <span className="underline underline-offset-2 text-neutral-700">
-              {fmt(breakdown.avg_price_per_night)} ×{" "}
               {nights} {nights === 1 ? "noche" : "noches"}
             </span>
             <span>{fmt(breakdown.subtotal)}</span>
@@ -233,6 +236,11 @@ export function UnitBookingWidget({
             <span>Total</span>
             <span>{fmt(breakdown.total)}</span>
           </div>
+          {isConverted(listing.marketplace_currency, targetCurrency) ? (
+            <p className="pt-1 text-xs text-neutral-500">
+              {CONVERSION_NOTICE.replace("{currency}", listing.marketplace_currency)}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

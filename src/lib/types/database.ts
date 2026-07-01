@@ -1950,6 +1950,9 @@ export interface MarketplaceListingSummary {
   marketplace_currency: string;
   cleaning_fee: number | null;
   instant_book: boolean;
+  /** Estadía mínima/máxima en noches. Se muestra como badge en las cards. */
+  min_nights: number;
+  max_nights: number | null;
   rating_avg: number;
   rating_count: number;
   cover_url: string | null;
@@ -1962,8 +1965,6 @@ export interface MarketplaceListingDetail extends MarketplaceListingSummary {
   marketplace_description: string | null;
   house_rules: string | null;
   cancellation_policy: CancellationPolicy;
-  min_nights: number;
-  max_nights: number | null;
   check_in_window_start: string;
   check_in_window_end: string;
   photos: UnitPhoto[];

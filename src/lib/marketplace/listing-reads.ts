@@ -66,6 +66,8 @@ export function rowToSummary(
     marketplace_currency: row.marketplace_currency ?? "ARS",
     cleaning_fee: row.cleaning_fee !== null ? Number(row.cleaning_fee) : null,
     instant_book: row.instant_book,
+    min_nights: row.min_nights ?? 1,
+    max_nights: row.max_nights ?? null,
     rating_avg: Number(row.marketplace_rating_avg ?? 0),
     rating_count: row.marketplace_rating_count ?? 0,
     cover_url: photoUrls[0] ?? row.cover_image_url,
