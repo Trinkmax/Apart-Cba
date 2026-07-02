@@ -10,7 +10,7 @@ import {
   getBlockedDates,
   OCCUPYING_BOOKING_STATUSES,
 } from "@/lib/marketplace/availability";
-import { addDaysIso, computePricing } from "@/lib/marketplace/pricing";
+import { addDaysIso, computePricing, todayIsoAR } from "@/lib/marketplace/pricing";
 import { rowToSummary, type UnitRow } from "@/lib/marketplace/listing-reads";
 
 export type SearchFilters = {
@@ -216,8 +216,9 @@ export async function searchListings(filters: SearchFilters): Promise<{
 export async function getFeaturedListings(limit = 8): Promise<MarketplaceListingSummary[]> {
   // La home no tiene fechas elegidas, pero igual excluimos lo que está ocupado
   // HOY (estadías largas activas) para no destacar propiedades que un huésped no
-  // podría reservar ni esta noche.
-  const today = new Date().toISOString().slice(0, 10);
+  // podría reservar ni esta noche. "Hoy" en horario AR (no UTC) para no rodar de
+  // día después de las 21:00 local.
+  const today = todayIsoAR();
   const { listings } = await searchListings({
     sort: "rating",
     limit,

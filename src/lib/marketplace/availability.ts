@@ -118,9 +118,13 @@ export async function getBlockedDates(params: {
 
   const blocked = new Set<string>();
   for (const r of ranges) {
-    let cursor = r.start;
+    // Acotamos a la ventana visible [fromIso, toIso): un bloqueo que empieza
+    // mucho antes de fromIso (p.ej. estadía de años) agotaría el tope de
+    // iteraciones antes de llegar a las fechas que el date-picker muestra,
+    // dejando el calendario visible como "disponible" cuando no lo está.
+    let cursor = r.start < params.fromIso ? params.fromIso : r.start;
     let safety = 0;
-    while (cursor < r.end && safety < 365 * 2) {
+    while (cursor < r.end && cursor < params.toIso && safety < 366 * 2) {
       blocked.add(cursor);
       const d = new Date(`${cursor}T00:00:00Z`);
       d.setUTCDate(d.getUTCDate() + 1);

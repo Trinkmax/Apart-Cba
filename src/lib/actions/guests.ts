@@ -46,12 +46,18 @@ export async function searchGuests(query: string): Promise<Guest[]> {
   if (query.length < 2) return [];
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+  // PostgREST parsea el argumento de .or(): `,` `(` `)` `*` son estructurales.
+  // Sin sanitizar, un nombre como "O'Brien, John" rompe el filtro y un input
+  // malicioso podría inyectar cláusulas. El scope por org se aplica aparte con
+  // .eq(), pero igual saneamos por robustez.
+  const safe = query.replace(/[,()*\\%]/g, "").trim();
+  if (safe.length < 2) return [];
   const { data, error } = await admin
     .from("guests")
     .select("*")
     .eq("organization_id", organization.id)
     .or(
-      `full_name.ilike.%${query}%,email.ilike.%${query}%,phone.ilike.%${query}%,document_number.ilike.%${query}%`
+      `full_name.ilike.%${safe}%,email.ilike.%${safe}%,phone.ilike.%${safe}%,document_number.ilike.%${safe}%`
     )
     .limit(10);
   if (error) throw new Error(error.message);

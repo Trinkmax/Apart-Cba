@@ -5,13 +5,21 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getGuestSession } from "./guest-auth";
 import { checkUnitAvailability } from "@/lib/marketplace/availability";
-import { computePricing, countNights } from "@/lib/marketplace/pricing";
+import { computePricing, countNights, todayIsoAR } from "@/lib/marketplace/pricing";
 import type {
   Booking,
   BookingRequest,
   UnitPricingRule,
 } from "@/lib/types/database";
 import { notifyHostNewBooking, notifyGuestBookingConfirmed } from "@/lib/marketplace/notifications";
+
+/**
+ * Techo absoluto de noches para cualquier reserva del marketplace, aun cuando la
+ * unidad no tenga `max_nights` (41/42 unidades lo tienen en null). Sin esto un
+ * huésped autenticado podía crear una reserva confirmada de años (instant_book)
+ * que bloquea el calendario de la unidad gratis, o una solicitud absurda.
+ */
+const HARD_MAX_NIGHTS = 365;
 
 const checkoutSchema = z.object({
   unit_id: z.string().uuid(),
@@ -66,9 +74,18 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResu
   if (data.check_out_date <= data.check_in_date) {
     return { ok: false, error: "El check-out debe ser posterior al check-in" };
   }
+  // Piso: no se pueden reservar fechas pasadas. El date-picker lo impide en el
+  // cliente, pero submitCheckout es un server action y las fechas llegan por URL,
+  // así que hay que validarlo del lado servidor (usamos "hoy" en horario AR).
+  if (data.check_in_date < todayIsoAR()) {
+    return { ok: false, error: "No podés reservar fechas pasadas" };
+  }
   const nights = countNights(data.check_in_date, data.check_out_date);
   if (nights < 1) {
     return { ok: false, error: "Estadía mínima de 1 noche" };
+  }
+  if (nights > HARD_MAX_NIGHTS) {
+    return { ok: false, error: `La estadía no puede superar ${HARD_MAX_NIGHTS} noches` };
   }
 
   const admin = createAdminClient();
@@ -85,7 +102,10 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResu
     )
     .eq("id", data.unit_id)
     .maybeSingle();
-  if (unitErr) return { ok: false, error: unitErr.message };
+  if (unitErr) {
+    console.error("[marketplace-bookings] fetch unidad:", unitErr);
+    return { ok: false, error: "No se pudo procesar la reserva. Probá de nuevo." };
+  }
   if (!unit || !unit.marketplace_published || !unit.active) {
     return { ok: false, error: "La unidad no está disponible" };
   }
@@ -124,6 +144,14 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResu
     rules: (rules ?? []) as UnitPricingRule[],
   });
   const currency = unit.marketplace_currency ?? "ARS";
+
+  // Guarda de precio: una unidad sin base_price (nullable) o con reglas que dan
+  // total <= 0 es alcanzable por /checkout/[unitId] directo (searchListings la
+  // esconde con `.not(base_price is null)`, pero el checkout no filtra). Sin esto
+  // se crearía una reserva confirmada de $0 (o negativa) que ocupa el calendario.
+  if (unit.base_price == null || Number(unit.base_price) <= 0 || breakdown.total <= 0) {
+    return { ok: false, error: "Esta unidad todavía no tiene un precio configurado" };
+  }
 
   // Camino A: instant_book → crear booking real directamente
   if (unit.instant_book) {
@@ -275,7 +303,8 @@ async function createMarketplaceBooking(params: {
     if (error.message.includes("bookings_no_overlap")) {
       return { ok: false, error: "Justo se reservaron esas fechas. Probá con otras." };
     }
-    return { ok: false, error: error.message };
+    console.error("[marketplace-bookings] insert booking:", error);
+    return { ok: false, error: "No se pudo confirmar la reserva. Probá de nuevo." };
   }
 
   const booking = created as Booking;
@@ -322,6 +351,21 @@ async function createBookingRequest(params: {
 }): Promise<CheckoutResult> {
   const admin = createAdminClient();
 
+  // Cierra la ventana entre lectura y constraint: la disponibilidad filtra
+  // `expires_at > now` (una solicitud vencida NO bloquea), pero el constraint
+  // booking_requests_no_overlap NO mira expires_at (dispara con cualquier
+  // status='pendiente'). El barrido de vencidas corre en daily-dispatch (1x/día),
+  // así que una solicitud vencida sin barrer haría que una fecha mostrada como
+  // libre rechace el insert. Expiramos acá las pendientes vencidas que solapan.
+  await admin
+    .from("booking_requests")
+    .update({ status: "expirada" })
+    .eq("unit_id", params.unit.id)
+    .eq("status", "pendiente")
+    .lt("expires_at", new Date().toISOString())
+    .lt("check_in_date", params.data.check_out_date)
+    .gt("check_out_date", params.data.check_in_date);
+
   const { data: created, error } = await admin
     .from("booking_requests")
     .insert({
@@ -354,7 +398,8 @@ async function createBookingRequest(params: {
         error: "Ya hay una solicitud pendiente para esas fechas. Probá con otras.",
       };
     }
-    return { ok: false, error: error.message };
+    console.error("[marketplace-bookings] insert solicitud:", error);
+    return { ok: false, error: "No se pudo enviar la solicitud. Probá de nuevo." };
   }
 
   const request = created as BookingRequest;

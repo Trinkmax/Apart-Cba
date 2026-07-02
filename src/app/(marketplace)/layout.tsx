@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { ThemeProvider } from "next-themes";
 import { SiteHeader } from "@/components/marketplace/site-header";
 import { SiteFooter } from "@/components/marketplace/site-footer";
@@ -7,6 +8,14 @@ import {
   getActiveCurrency,
   getActiveLocale,
 } from "@/lib/actions/marketplace-preferences";
+
+// Base absoluta para resolver canonical/OG/twitter y cualquier URL relativa de
+// metadata. Si NEXT_PUBLIC_APP_URL no está seteada, cae al dominio productivo.
+export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_APP_URL ?? "https://www.apartcba.com"
+  ),
+};
 
 export default async function MarketplaceLayout({ children }: { children: React.ReactNode }) {
   const [session, currency, locale] = await Promise.all([
