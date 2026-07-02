@@ -27,6 +27,17 @@ export function addDaysIso(iso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * "Hoy" en horario de Argentina (UTC-3, sin DST) como YYYY-MM-DD.
+ * `new Date().toISOString()` da UTC, que después de las 21:00 local ya rodó al
+ * día siguiente → un huésped en AR vería "hoy" como mañana. Usamos esto para el
+ * piso de fechas del checkout y para "ocupado esta noche" en la home.
+ */
+export function todayIsoAR(): string {
+  const nowUtcMs = new Date().getTime();
+  return new Date(nowUtcMs - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 /** Devuelve true si dateIso (YYYY-MM-DD) cae en `start..end` (ambos inclusive, formato ISO). */
 function isWithinRange(dateIso: string, start: string, end: string): boolean {
   return dateIso >= start && dateIso <= end;
@@ -74,7 +85,10 @@ export function priceForNight(
     if (a.rule_type !== b.rule_type) {
       return a.rule_type === "date_range" ? -1 : 1;
     }
-    return 0;
+    // desempate final estable por id: sin esto el orden dependía del orden en
+    // que Postgres devolvió las filas, así que la cotización (quoteListing) y el
+    // cargo persistido (submitCheckout) podían diferir ante dos reglas empatadas.
+    return (a.id ?? "").localeCompare(b.id ?? "");
   });
 
   const winner = matching[0];

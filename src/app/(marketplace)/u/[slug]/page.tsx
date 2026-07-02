@@ -17,6 +17,17 @@ import { getGuestSession } from "@/lib/actions/guest-auth";
 type Params = Promise<{ slug: string }>;
 type SearchParams = Promise<Record<string, string | undefined>>;
 
+/**
+ * `?huespedes=` puede venir malformado (ej. "abc"): parseInt daría NaN, que se
+ * propaga al widget (muestra "NaN huésped") y al URL de checkout. Devolvemos
+ * null salvo un entero positivo válido.
+ */
+function parseGuestsParam(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export async function generateMetadata({ params }: { params: Params }) {
   const { slug } = await params;
   const listing = await getListingBySlug(slug);
@@ -135,7 +146,7 @@ export default async function UnitPage({
             isAuthenticated={Boolean(session)}
             prefillCheckIn={sp.checkin ?? null}
             prefillCheckOut={sp.checkout ?? null}
-            prefillGuests={sp.huespedes ? parseInt(sp.huespedes, 10) : null}
+            prefillGuests={parseGuestsParam(sp.huespedes)}
           />
         </aside>
       </div>
