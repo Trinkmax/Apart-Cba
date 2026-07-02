@@ -247,7 +247,12 @@
       "Bash(ps -Ao pid,command)",
       "Bash(lsof -nP -iTCP:3000-3010 -sTCP:LISTEN)",
       "Bash(echo \"markers: $?\")",
-      "Bash(GIT_EDITOR=true git rebase --continue)"
+      "Bash(GIT_EDITOR=true git rebase --continue)",
+      "Bash(rg -n --context 3 'from\\\\\\(\"cleaning_tasks\"\\\\\\)\\\\s*$|from\\\\\\(\"cleaning_tasks\"\\\\\\)' /Users/ignaciobaldovino/Apart-Cba/src -g '*.ts')",
+      "Bash(rg -n \"30 \\\\* 60|1800|setMinutes|scheduled_for\" /Users/ignaciobaldovino/Apart-Cba/src/lib/actions/*.ts /Users/ignaciobaldovino/Apart-Cba/src/lib/**/*.ts)",
+      "Bash(rg -rn \"Date.now\\\\\\(\\\\\\) \\\\+ 30|getTime\\\\\\(\\\\\\) \\\\+ 30|\\\\+ 30 \\\\*|30 \\\\* 60_000|30\\\\*60\" /Users/ignaciobaldovino/Apart-Cba/src -g '*.ts' -g '*.tsx')",
+      "Bash(rg -rn \"America/Argentina|timeZone|timezone\" /Users/ignaciobaldovino/Apart-Cba/src/lib --include-zero -g '*.ts')",
+      "Bash(perl -pi -e 's/\\\\btomorrowInTz\\\\\\(/tomorrowYmdInTz\\(/g; s/\\\\btodayInTz\\\\\\(/todayYmdInTz\\(/g' src/lib/actions/parte-diario.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,

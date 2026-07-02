@@ -7,6 +7,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { syncSingleFeed } from "@/lib/ical/sync";
+import { DEFAULT_ORG_TIMEZONE, addDaysYmd, todayYmdInTz } from "@/lib/dates";
 import type {
   IcalFeed,
   IcalFeedWithHealth,
@@ -127,9 +128,28 @@ export async function syncIcalFeed(
   const result = await syncSingleFeed(admin, feed, "manual");
   if (result.error) throw new Error(result.error);
 
+  await ensureCleaningForNearCheckouts(organization.id);
+
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");
   return { imported: result.imported, skipped: result.skipped, cancelled: result.cancelled };
+}
+
+// Reservas importadas con check-out hoy/mañana entran DESPUÉS del cron
+// nocturno → sin esto nunca tendrían tarea de limpieza (idempotente).
+async function ensureCleaningForNearCheckouts(orgId: string): Promise<void> {
+  try {
+    const { ensureCleaningTasksForCheckouts } = await import("./cleaning");
+    const today = todayYmdInTz(DEFAULT_ORG_TIMEZONE);
+    await Promise.all([
+      ensureCleaningTasksForCheckouts(orgId, today, null),
+      ensureCleaningTasksForCheckouts(orgId, addDaysYmd(today, 1), null),
+    ]);
+    revalidatePath("/dashboard/limpieza");
+    revalidatePath("/dashboard/parte-diario");
+  } catch (err) {
+    console.warn("[ical] ensure cleaning post-sync falló", (err as Error).message);
+  }
 }
 
 export async function syncAllFeeds(): Promise<{
@@ -157,6 +177,8 @@ export async function syncAllFeeds(): Promise<{
     totalCancelled += r.cancelled;
     if (r.error) errors++;
   }
+
+  await ensureCleaningForNearCheckouts(organization.id);
 
   revalidatePath("/dashboard/channel-manager");
   revalidatePath("/dashboard/reservas");

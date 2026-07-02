@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { differenceInCalendarDays } from "date-fns";
+import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, TriangleAlert, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CLEANING_STATUS_META } from "@/lib/constants";
-import { formatDateTime } from "@/lib/format";
+import { formatDayRelative } from "@/lib/format";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
 import type { CleaningStatus, CleaningTask, UnitRef, UserRole } from "@/lib/types/database";
@@ -41,6 +42,14 @@ export function CleaningBoard({
 }: Props) {
   const [tasks, setTasks] = useState<CT[]>(initialTasks);
   const [openId, setOpenId] = useState<string | null>(null);
+
+  // Tick por minuto: los chips "Hoy/Mañana/Atrasada" cruzan la medianoche
+  // correctamente en tableros que quedan abiertos toda la noche.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   const unitsById = useMemo(() => {
     const m = new Map<string, UnitRef>();
@@ -106,7 +115,7 @@ export function CleaningBoard({
           setTasks((cur) => cur.map((t) => (t.id === id ? { ...t, status } : t)));
         }}
         onCardClick={(t) => setOpenId(t.id)}
-        renderCard={(t, { dragging }) => <CleaningCard task={t} dragging={dragging} />}
+        renderCard={(t, { dragging }) => <CleaningCard task={t} dragging={dragging} nowMs={nowMs} />}
         sortFn={(a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime()}
         xlCols={5}
       />
@@ -141,11 +150,17 @@ export function CleaningBoard({
   );
 }
 
-function CleaningCard({ task, dragging }: { task: CT; dragging: boolean }) {
+function CleaningCard({ task, dragging, nowMs }: { task: CT; dragging: boolean; nowMs: number }) {
   const meta = CLEANING_STATUS_META[task.status as CleaningStatus];
   const cl = (task.checklist as { item: string; done: boolean }[]) ?? [];
   const done = cl.filter((c) => c.done).length;
   const total = cl.length;
+
+  // Día relativo en la tz del navegador (el staff opera en la misma ciudad).
+  const active = task.status === "pendiente" || task.status === "en_progreso";
+  const dayDiff = differenceInCalendarDays(new Date(task.scheduled_for), new Date(nowMs));
+  const overdue = active && dayDiff < 0;
+  const isDueToday = active && dayDiff === 0;
 
   return (
     <div
@@ -167,9 +182,22 @@ function CleaningCard({ task, dragging }: { task: CT; dragging: boolean }) {
           <span className="font-mono font-medium text-foreground">{task.unit.code}</span>
           <span className="truncate">· {task.unit.name}</span>
         </div>
-        <div className="flex items-center gap-1 mt-2 text-[10px] text-muted-foreground">
-          <Calendar size={10} />
-          {formatDateTime(task.scheduled_for)}
+        <div className="mt-2">
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 text-[10px] rounded-md",
+              overdue
+                ? "px-1.5 py-0.5 font-medium text-red-700 dark:text-red-400 bg-red-500/10 border border-red-500/25"
+                : isDueToday
+                  ? "px-1.5 py-0.5 font-medium text-cyan-700 dark:text-cyan-300 bg-cyan-500/10 border border-cyan-500/25"
+                  : "text-muted-foreground"
+            )}
+            title={overdue ? "Limpieza atrasada" : undefined}
+          >
+            {overdue ? <TriangleAlert size={10} /> : <Calendar size={10} />}
+            {formatDayRelative(task.scheduled_for)}
+            {overdue && " · Atrasada"}
+          </span>
         </div>
         {total > 0 && (
           <div className="mt-2.5">

@@ -6,6 +6,12 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { UNIT_REF_SELECT } from "@/lib/constants";
+import {
+  DEFAULT_ORG_TIMEZONE,
+  dayRangeInTz,
+  todayYmdInTz,
+  zonedTimeToUtc,
+} from "@/lib/dates";
 import type { CleaningEvent, CleaningStatus, CleaningTask } from "@/lib/types/database";
 
 // Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
@@ -102,9 +108,10 @@ export async function listCleaningTasks(filters?: {
   if (filters?.status) q = q.eq("status", filters.status);
   if (filters?.assignedTo) q = q.eq("assigned_to", filters.assignedTo);
   if (filters?.upcoming) {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    q = q.gte("scheduled_for", todayStart.toISOString()).in("status", ["pendiente", "en_progreso"]);
+    // Inicio del día en la tz de la org — NO la del server (Vercel corre en UTC;
+    // su medianoche son las 21:00 del día anterior en Argentina).
+    const { startIso } = dayRangeInTz(todayYmdInTz(DEFAULT_ORG_TIMEZONE));
+    q = q.gte("scheduled_for", startIso).in("status", ["pendiente", "en_progreso"]);
   }
   const { data, error } = filters?.showArchived
     ? await q.order("archived_at", { ascending: false })
@@ -117,6 +124,11 @@ export async function listCleaningTasks(filters?: {
  * Idempotente: por cada booking con check_out_date = `date` que aún no tenga
  * una cleaning_task agendada para esa fecha, la crea en estado "pendiente".
  *
+ * `date` es el día LOCAL de la org (YYYY-MM-DD). El `scheduled_for` insertado
+ * es un timestamptz real: la hora de check-out del booking en la timezone de
+ * la org (no medianoche UTC — eso corría la tarea al día anterior en el
+ * tablero, que fue el bug de "limpiezas del 3/07 apareciendo el día 2").
+ *
  * No requiere session (se llama desde crons). El caller debe encargarse de la
  * autorización (CRON_SECRET o requireSession + permission check).
  *
@@ -127,6 +139,7 @@ export async function ensureCleaningTasksForCheckouts(
   organizationId: string,
   date: string,
   actorId: string | null = null,
+  timezone: string = DEFAULT_ORG_TIMEZONE,
 ): Promise<
   Array<{
     cleaning_task_id: string;
@@ -138,29 +151,55 @@ export async function ensureCleaningTasksForCheckouts(
 
   const { data: outs } = await admin
     .from("bookings")
-    .select("id, unit_id")
+    .select("id, unit_id, check_out_time")
     .eq("organization_id", organizationId)
     .eq("check_out_date", date)
     .eq("is_block", false) // los bloqueos OTA no generan limpieza
     .in("status", ["confirmada", "check_in", "check_out"]);
 
-  const bookingsByUnit = new Map<string, string>();
-  for (const b of (outs ?? []) as Array<{ id: string; unit_id: string }>) {
-    bookingsByUnit.set(b.unit_id, b.id);
-  }
-  if (bookingsByUnit.size === 0) return [];
+  const outBookings = (outs ?? []) as Array<{
+    id: string;
+    unit_id: string;
+    check_out_time: string | null;
+  }>;
+  if (outBookings.length === 0) return [];
 
-  const { data: existing } = await admin
-    .from("cleaning_tasks")
-    .select("unit_id")
-    .eq("organization_id", organizationId)
-    .eq("scheduled_for", date);
-  const existingUnitIds = new Set(
-    (existing ?? []).map((r) => (r as { unit_id: string }).unit_id),
+  // Idempotencia doble:
+  //  - sameDay: ya hay una limpieza ACTIVA/hecha ese día local para la unidad
+  //    (rango, no eq — los timestamps reales nunca matchean una medianoche
+  //    exacta). Las canceladas NO cuentan: si se cancela una reserva y la
+  //    unidad se revende para la misma noche, el booking nuevo necesita su task.
+  //  - sameBooking: ese booking ya tiene task (cualquier estado, incluso
+  //    cancelada — si el staff la canceló a mano no la resucitamos; también
+  //    cubre la task del trigger de check-out aunque haya quedado en otro día).
+  const { startIso, endIso } = dayRangeInTz(date, timezone);
+  const bookingIds = outBookings.map((b) => b.id);
+  const [{ data: sameDay }, { data: sameBooking }] = await Promise.all([
+    admin
+      .from("cleaning_tasks")
+      .select("unit_id")
+      .eq("organization_id", organizationId)
+      .gte("scheduled_for", startIso)
+      .lt("scheduled_for", endIso)
+      .neq("status", "cancelada")
+      .is("archived_at", null),
+    admin
+      .from("cleaning_tasks")
+      .select("booking_out_id")
+      .eq("organization_id", organizationId)
+      .in("booking_out_id", bookingIds),
+  ]);
+  const coveredUnitIds = new Set(
+    (sameDay ?? []).map((r) => (r as { unit_id: string }).unit_id),
+  );
+  const coveredBookingIds = new Set(
+    (sameBooking ?? []).map((r) => (r as { booking_out_id: string }).booking_out_id),
   );
 
   // Acumular las filas de cleaning_tasks a insertar (saltando las que ya existen
-  // para esa fecha → idempotencia) y hacer UN insert batch.
+  // → idempotencia) y hacer UN insert batch. Se itera por booking (no por
+  // unidad) para que un booking viejo ya limpiado no tape al checkout real
+  // del día cuando ambos comparten unidad.
   const checklist = DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
   const taskRows: Array<{
     organization_id: string;
@@ -170,13 +209,20 @@ export async function ensureCleaningTasksForCheckouts(
     status: "pendiente";
     checklist: { item: string; done: boolean }[];
   }> = [];
-  for (const [unitId, bookingId] of bookingsByUnit.entries()) {
-    if (existingUnitIds.has(unitId)) continue;
+  for (const booking of outBookings) {
+    if (coveredBookingIds.has(booking.id)) continue;
+    if (coveredUnitIds.has(booking.unit_id)) continue;
+    coveredUnitIds.add(booking.unit_id); // 1 task por unidad por día
     taskRows.push({
       organization_id: organizationId,
-      unit_id: unitId,
-      booking_out_id: bookingId,
-      scheduled_for: date,
+      unit_id: booking.unit_id,
+      booking_out_id: booking.id,
+      // La limpieza arranca cuando el huésped se va: hora de check-out local.
+      scheduled_for: zonedTimeToUtc(
+        date,
+        booking.check_out_time ?? "11:00",
+        timezone,
+      ).toISOString(),
       status: "pendiente",
       checklist,
     });
@@ -243,6 +289,16 @@ export async function createCleaningTask(input: CleaningInput) {
   const session = await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = cleaningSchema.parse(input);
+  // scheduled_for es timestamptz: un string date-only caería a medianoche UTC
+  // (= 21:00 del día anterior en Argentina y la task aparece el día equivocado).
+  // Normalizamos a las 11:00 locales de ese día.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(validated.scheduled_for)) {
+    validated.scheduled_for = zonedTimeToUtc(
+      validated.scheduled_for,
+      "11:00",
+      DEFAULT_ORG_TIMEZONE,
+    ).toISOString();
+  }
   const checklist = validated.checklist.length > 0
     ? validated.checklist
     : DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));

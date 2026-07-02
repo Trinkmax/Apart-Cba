@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import {
   Building2, Clock, Sparkles, CheckCircle2, ChevronDown, ChevronUp, BadgeCheck,
 } from "lucide-react";
@@ -12,9 +12,10 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { UnitAccessInfo } from "@/components/units/unit-access-info";
 import { UnitTipsInline } from "@/components/unit-tips/unit-tips-inline";
+import { differenceInCalendarDays } from "date-fns";
 import { changeCleaningStatus, updateCleaningChecklist } from "@/lib/actions/cleaning";
 import { CLEANING_STATUS_META } from "@/lib/constants";
-import { formatDateTime } from "@/lib/format";
+import { formatDayRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { CleaningTask, UnitRef, UserRole } from "@/lib/types/database";
 
@@ -33,6 +34,13 @@ export function MobileCleaningList({
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [expanded, setExpanded] = useState<string | null>(tasks[0]?.id ?? null);
+
+  // Tick por minuto para que "Hoy/Mañana/Atrasada" cruce la medianoche bien.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   function start(id: string) {
     startTransition(async () => {
@@ -76,6 +84,10 @@ export function MobileCleaningList({
         const done = checklist.filter((i) => i.done).length;
         const total = checklist.length;
         const isOpen = expanded === t.id;
+        const active = t.status === "pendiente" || t.status === "en_progreso";
+        const dayDiff = differenceInCalendarDays(new Date(t.scheduled_for), new Date(nowMs));
+        const overdue = active && dayDiff < 0;
+        const isDueToday = active && dayDiff === 0;
 
         return (
           <Card key={t.id} className="overflow-hidden">
@@ -90,9 +102,19 @@ export function MobileCleaningList({
                     <span className="font-mono text-xs text-muted-foreground">{t.unit.code}</span>
                   </div>
                   <div className="font-semibold mt-1">{t.unit.name}</div>
-                  <div className="flex items-center gap-1 mt-1 text-[11px] text-muted-foreground">
+                  <div
+                    className={cn(
+                      "flex items-center gap-1 mt-1 text-[11px]",
+                      overdue
+                        ? "font-medium text-red-700 dark:text-red-400"
+                        : isDueToday
+                          ? "font-medium text-cyan-700 dark:text-cyan-300"
+                          : "text-muted-foreground"
+                    )}
+                  >
                     <Clock size={10} />
-                    {formatDateTime(t.scheduled_for)}
+                    {formatDayRelative(t.scheduled_for)}
+                    {overdue && " · Atrasada"}
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-2">

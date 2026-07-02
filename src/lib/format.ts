@@ -1,4 +1,11 @@
-import { format, formatDistanceToNow, parseISO } from "date-fns";
+import {
+  format,
+  formatDistanceToNow,
+  isToday,
+  isTomorrow,
+  isYesterday,
+  parseISO,
+} from "date-fns";
 import { es } from "date-fns/locale";
 
 const CURRENCY_DECIMALS: Record<string, number> = {
@@ -85,6 +92,21 @@ export function formatDateTime(date: string | Date | null | undefined): string {
   if (!date) return "—";
   const d = typeof date === "string" ? parseISO(date) : date;
   return format(d, "dd/MM/yyyy HH:mm", { locale: es });
+}
+
+/**
+ * Etiqueta de día relativa para tareas operativas: "Hoy · 11:00",
+ * "Mañana · 11:00", "Ayer · 14:30" o "vie 3/7 · 11:00". Responde de una la
+ * pregunta que el equipo se hace frente al tablero: ¿esto toca hoy?
+ */
+export function formatDayRelative(date: string | Date | null | undefined): string {
+  if (!date) return "—";
+  const d = typeof date === "string" ? parseISO(date) : date;
+  const time = format(d, "HH:mm");
+  if (isToday(d)) return `Hoy · ${time}`;
+  if (isTomorrow(d)) return `Mañana · ${time}`;
+  if (isYesterday(d)) return `Ayer · ${time}`;
+  return `${format(d, "EEE d/M", { locale: es })} · ${time}`;
 }
 
 export function formatTimeAgo(date: string | Date | null | undefined): string {

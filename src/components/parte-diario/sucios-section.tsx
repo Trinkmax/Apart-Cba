@@ -20,6 +20,7 @@ import {
   createMissingCleaningTasksForDate,
 } from "@/lib/actions/parte-diario";
 import { createCleaningTask } from "@/lib/actions/cleaning";
+import { zonedTimeToUtc } from "@/lib/dates";
 import type {
   ParteDiarioCleaningRow,
   ParteDiarioCleanerLoad,
@@ -107,7 +108,12 @@ export function SuciosSection({ date, rows, cleaners, canEdit }: SuciosSectionPr
       try {
         await createCleaningTask({
           unit_id: row.unit_id,
-          scheduled_for: date,
+          // Timestamp real del día del parte a la hora de check-out (un
+          // date-only caería a medianoche UTC = día anterior en el tablero).
+          scheduled_for: zonedTimeToUtc(
+            date,
+            row.check_out_time?.slice(0, 5) ?? "11:00",
+          ).toISOString(),
           assigned_to: null,
           status: "pendiente",
           checklist: [],

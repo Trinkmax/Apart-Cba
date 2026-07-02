@@ -98,7 +98,7 @@ export const pmsAssignCleaning = defineNode({
           .from("bookings")
           .select("unit_id")
           .eq("guest_id", contact.guest_id)
-          .order("check_out", { ascending: false })
+          .order("check_out_date", { ascending: false })
           .limit(1)
           .maybeSingle();
         unitId = booking?.unit_id ?? unitId;
@@ -111,7 +111,7 @@ export const pmsAssignCleaning = defineNode({
       .insert({
         organization_id: ctx.organizationId,
         unit_id: unitId,
-        scheduled_at: config.scheduledAt ?? new Date().toISOString(),
+        scheduled_for: config.scheduledAt ?? new Date().toISOString(),
         status: "pendiente",
         notes: config.notes ? renderTemplate(config.notes, ctx.variables as VarsMap) : null,
       })

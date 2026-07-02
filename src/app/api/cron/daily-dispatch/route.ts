@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { generatePaymentReminders } from "@/lib/actions/notifications";
 import { dispatchEvent } from "@/lib/crm/workflows/dispatcher";
+import { DEFAULT_ORG_TIMEZONE, addDaysYmd, todayYmdInTz } from "@/lib/dates";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,8 +87,11 @@ export async function GET(req: Request) {
   // 4.5 Detectar check-ins / check-outs / recordatorios y publicar eventos CRM
   try {
     const admin = createAdminClient();
-    const today = new Date().toISOString().slice(0, 10);
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    // "Hoy"/"mañana" en la timezone de la operación, NO en UTC: entre las
+    // 21:00 y las 24:00 de Argentina el día UTC ya es el siguiente y todos
+    // los eventos/limpiezas se correrían un día.
+    const today = todayYmdInTz(DEFAULT_ORG_TIMEZONE);
+    const tomorrow = addDaysYmd(today, 1);
 
     const { data: checkinsToday } = await admin
       .from("bookings")
@@ -176,59 +180,106 @@ export async function GET(req: Request) {
       crmEventsPublished += 1;
     }
 
-    // Auto-crear cleaning tasks por organización (1 query batch por org).
-    const orgIdsTomorrow = Array.from(
-      new Set(checkoutsTomorrowList.map((b) => b.organization_id))
-    );
+    // Auto-crear cleaning tasks para los check-outs de HOY y de MAÑANA
+    // (idempotente). "Hoy" cubre las reservas que entraron después del cron
+    // de anoche (iCal, inbound email, carga manual) — antes quedaban sin
+    // tarea de limpieza para siempre.
     let cleaningTasksCreated = 0;
     let checkoutNotifications = 0;
 
-    if (orgIdsTomorrow.length > 0) {
+    const { data: checkoutOrgRows } = await admin
+      .from("bookings")
+      .select("organization_id, check_out_date")
+      .in("check_out_date", [today, tomorrow])
+      .eq("is_block", false)
+      .in("status", ["confirmada", "check_in", "check_out"]);
+
+    const orgDates = new Map<string, Set<string>>();
+    for (const r of (checkoutOrgRows ?? []) as Array<{
+      organization_id: string;
+      check_out_date: string;
+    }>) {
+      if (!orgDates.has(r.organization_id)) orgDates.set(r.organization_id, new Set());
+      orgDates.get(r.organization_id)!.add(r.check_out_date);
+    }
+
+    if (orgDates.size > 0) {
       const { ensureCleaningTasksForCheckouts } = await import(
         "@/lib/actions/cleaning"
       );
       const { notifyOrg } = await import("@/lib/actions/notifications");
-      for (const orgId of orgIdsTomorrow) {
-        try {
-          const created = await ensureCleaningTasksForCheckouts(
-            orgId,
-            tomorrow,
-            null
-          );
-          cleaningTasksCreated += created.length;
 
-          // Notificación in-app por cada limpieza creada (dedup_key por unit+date)
-          for (const c of created) {
-            const bk = checkoutsTomorrowList.find(
-              (x) => x.id === c.booking_out_id
+      const createdAll: Array<{
+        org_id: string;
+        date: string;
+        cleaning_task_id: string;
+        unit_id: string;
+        booking_out_id: string;
+      }> = [];
+
+      for (const [orgId, dates] of orgDates.entries()) {
+        for (const date of dates) {
+          try {
+            const created = await ensureCleaningTasksForCheckouts(orgId, date, null);
+            cleaningTasksCreated += created.length;
+            for (const c of created) {
+              createdAll.push({ org_id: orgId, date, ...c });
+            }
+          } catch (err) {
+            console.warn(
+              "[cron/daily-dispatch] auto-cleaning falló",
+              orgId,
+              date,
+              (err as Error).message
             );
-            const unitLabel = bk?.unit
-              ? `${bk.unit.code} · ${bk.unit.name}`
-              : "Unidad";
-            const guestLabel = bk?.guest?.full_name
-              ? ` · ${bk.guest.full_name}`
-              : "";
+          }
+        }
+      }
+
+      // Metadata (unidad / huésped / hora) en un solo batch para las notificaciones.
+      if (createdAll.length > 0) {
+        const { data: bkRows } = await admin
+          .from("bookings")
+          .select(
+            "id, check_out_time, unit:units(code,name), guest:guests(full_name)"
+          )
+          .in("id", createdAll.map((c) => c.booking_out_id));
+        const bkById = new Map(
+          ((bkRows ?? []) as unknown as Array<{
+            id: string;
+            check_out_time: string | null;
+            unit: { code: string; name: string } | null;
+            guest: { full_name: string } | null;
+          }>).map((b) => [b.id, b])
+        );
+
+        for (const c of createdAll) {
+          try {
+            const bk = bkById.get(c.booking_out_id);
+            const unitLabel = bk?.unit ? `${bk.unit.code} · ${bk.unit.name}` : "Unidad";
+            const guestLabel = bk?.guest?.full_name ? ` · ${bk.guest.full_name}` : "";
             const checkoutTime = bk?.check_out_time
               ? bk.check_out_time.slice(0, 5)
               : "11:00";
-            await notifyOrg(orgId, {
+            const dayLabel = c.date === today ? "hoy" : "mañana";
+            await notifyOrg(c.org_id, {
               type: "task_reminder",
               severity: "info",
               title: `Limpieza programada · ${unitLabel}`,
-              body: `Check-out mañana ${checkoutTime}${guestLabel}. Tarea de limpieza creada automáticamente.`,
+              body: `Check-out ${dayLabel} ${checkoutTime}${guestLabel}. Tarea de limpieza creada automáticamente.`,
               ref_type: "cleaning_task",
               ref_id: c.cleaning_task_id,
               action_url: `/dashboard/limpieza`,
-              dedup_key: `cleaning_auto:${c.unit_id}:${tomorrow}`,
+              dedup_key: `cleaning_auto:${c.unit_id}:${c.date}`,
             });
             checkoutNotifications += 1;
+          } catch (err) {
+            console.warn(
+              "[cron/daily-dispatch] notificación de limpieza falló",
+              c.cleaning_task_id,
+              (err as Error).message
+            );
           }
-        } catch (err) {
-          console.warn(
-            "[cron/daily-dispatch] checkout_tomorrow auto-cleaning falló",
-            orgId,
-            (err as Error).message
-          );
         }
       }
     }

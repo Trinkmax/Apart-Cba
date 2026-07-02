@@ -25,31 +25,19 @@ import type {
 // ─── Helpers de fecha en timezone de la org ─────────────────────────────────
 // Cada org puede operar en su propia ciudad → todo cómputo de "hoy" o "mañana"
 // debe pivotar sobre su zona horaria, no sobre UTC ni sobre el server.
+// Los helpers viven en @/lib/dates (compartidos con cleaning y crons).
+//
+// OJO: cleaning_tasks.scheduled_for es timestamptz con hora real → los
+// queries "del día X" van SIEMPRE por rango [00:00, 24:00) local
+// (dayRangeInTz), nunca por .eq(fecha) — eso sólo matcheaba filas insertadas
+// exactamente a medianoche UTC y dejaba invisibles las tasks manuales.
 
-function ymdInTimezone(date: Date, timezone: string): string {
-  // Intl.DateTimeFormat 'en-CA' produce YYYY-MM-DD predictible.
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
-
-function addDaysToYmd(ymd: string, days: number): string {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + days);
-  return dt.toISOString().slice(0, 10);
-}
-
-function todayInTz(timezone: string): string {
-  return ymdInTimezone(new Date(), timezone);
-}
-
-function tomorrowInTz(timezone: string): string {
-  return addDaysToYmd(todayInTz(timezone), 1);
-}
+import {
+  DEFAULT_ORG_TIMEZONE,
+  dayRangeInTz,
+  todayYmdInTz,
+  tomorrowYmdInTz,
+} from "@/lib/dates";
 
 function dateLabelEs(ymd: string): string {
   // Render bonito en español: "Miércoles 7 de mayo".
@@ -144,6 +132,7 @@ const ASSIGNABLE_CLEANING_ROLES: UserRole[] = ["limpieza", "recepcion", "manteni
 async function loadCleanerLoads(
   orgId: string,
   reportDate: string,
+  timezone: string = DEFAULT_ORG_TIMEZONE,
 ): Promise<ParteDiarioCleanerLoad[]> {
   const admin = createAdminClient();
   // Miembros activos con rol asignable a limpieza
@@ -165,12 +154,14 @@ async function loadCleanerLoads(
     (profiles ?? []).map((p) => [p.user_id as string, (p.full_name as string) ?? "Sin nombre"]),
   );
 
-  // Tareas asignadas a cada uno para el reportDate
+  // Tareas asignadas a cada uno para el reportDate (rango de día local)
+  const loadRange = dayRangeInTz(reportDate, timezone);
   const { data: tasks } = await admin
     .from("cleaning_tasks")
     .select("assigned_to")
     .eq("organization_id", orgId)
-    .eq("scheduled_for", reportDate)
+    .gte("scheduled_for", loadRange.startIso)
+    .lt("scheduled_for", loadRange.endIso)
     .in("status", ["pendiente", "en_progreso"]);
   const counts = new Map<string, number>();
   for (const t of tasks ?? []) {
@@ -200,9 +191,11 @@ async function buildSnapshot(
   org: OrgBrandingForSnapshot,
   organizationName: string,
   reportDate: string,
+  timezone: string = DEFAULT_ORG_TIMEZONE,
 ): Promise<ParteDiarioSnapshot> {
   const orgId = org.id;
   const admin = createAdminClient();
+  const dayRange = dayRangeInTz(reportDate, timezone);
 
   type BookingJoin = {
     id: string;
@@ -283,7 +276,8 @@ async function buildSnapshot(
            unit:units(id, code, name)`,
         )
         .eq("organization_id", orgId)
-        .eq("scheduled_for", reportDate)
+        .gte("scheduled_for", dayRange.startIso)
+        .lt("scheduled_for", dayRange.endIso)
         .in("status", ["pendiente", "en_progreso", "completada"]),
       admin
         .from("maintenance_tickets")
@@ -510,7 +504,7 @@ export async function getParteDiario(date?: string): Promise<ParteDiarioPayload>
   if (!can(role, "parte_diario", "view")) throw new Error("Sin permisos");
 
   const settings = await ensureSettings(organization.id, organization.name);
-  const reportDate = date ?? tomorrowInTz(settings.timezone);
+  const reportDate = date ?? tomorrowYmdInTz(settings.timezone);
 
   const admin = createAdminClient();
   const [{ data: report }, snapshot] = await Promise.all([
@@ -520,7 +514,7 @@ export async function getParteDiario(date?: string): Promise<ParteDiarioPayload>
       .eq("organization_id", organization.id)
       .eq("report_date", reportDate)
       .maybeSingle(),
-    buildSnapshot(organization, organization.name, reportDate),
+    buildSnapshot(organization, organization.name, reportDate, settings.timezone),
   ]);
 
   return {
@@ -541,7 +535,7 @@ export async function getParteDiarioForUser(
   const { organization } = await getCurrentOrg();
   const targetUser = userId ?? session.userId;
   const settings = await ensureSettings(organization.id, organization.name);
-  const reportDate = date ?? todayInTz(settings.timezone);
+  const reportDate = date ?? todayYmdInTz(settings.timezone);
 
   const admin = createAdminClient();
 
@@ -555,7 +549,8 @@ export async function getParteDiarioForUser(
         )
         .eq("organization_id", organization.id)
         .eq("assigned_to", targetUser)
-        .eq("scheduled_for", reportDate)
+        .gte("scheduled_for", dayRangeInTz(reportDate, settings.timezone).startIso)
+        .lt("scheduled_for", dayRangeInTz(reportDate, settings.timezone).endIso)
         .in("status", ["pendiente", "en_progreso", "completada"])
         .order("scheduled_for"),
       admin
@@ -780,16 +775,23 @@ export async function createMissingCleaningTasksForDate(date: string): Promise<{
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "parte_diario", "update")) throw new Error("Sin permisos");
-  return createMissingCleaningTasksForDateInternal(organization.id, date, session.userId);
+  const settings = await ensureSettings(organization.id, organization.name);
+  return createMissingCleaningTasksForDateInternal(
+    organization.id,
+    date,
+    session.userId,
+    settings.timezone,
+  );
 }
 
 async function createMissingCleaningTasksForDateInternal(
   orgId: string,
   date: string,
   actorId: string | null,
+  timezone: string = DEFAULT_ORG_TIMEZONE,
 ): Promise<{ created: number }> {
   const { ensureCleaningTasksForCheckouts } = await import("./cleaning");
-  const created = await ensureCleaningTasksForCheckouts(orgId, date, actorId);
+  const created = await ensureCleaningTasksForCheckouts(orgId, date, actorId, timezone);
   return { created: created.length };
 }
 
@@ -799,27 +801,31 @@ export async function autoAssignCleanings(date: string): Promise<{ assigned: num
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "parte_diario", "update")) throw new Error("Sin permisos");
-  return autoAssignCleaningsInternal(organization.id, date, session.userId);
+  const settings = await ensureSettings(organization.id, organization.name);
+  return autoAssignCleaningsInternal(organization.id, date, session.userId, settings.timezone);
 }
 
 async function autoAssignCleaningsInternal(
   orgId: string,
   date: string,
   actorId: string | null,
+  timezone: string = DEFAULT_ORG_TIMEZONE,
 ): Promise<{ assigned: number }> {
   const admin = createAdminClient();
 
+  const assignRange = dayRangeInTz(date, timezone);
   const { data: tasks } = await admin
     .from("cleaning_tasks")
     .select("id")
     .eq("organization_id", orgId)
-    .eq("scheduled_for", date)
+    .gte("scheduled_for", assignRange.startIso)
+    .lt("scheduled_for", assignRange.endIso)
     .is("assigned_to", null)
     .in("status", ["pendiente", "en_progreso"]);
   const unassignedIds = (tasks ?? []).map((t) => (t as { id: string }).id);
   if (unassignedIds.length === 0) return { assigned: 0 };
 
-  const loads = await loadCleanerLoads(orgId, date);
+  const loads = await loadCleanerLoads(orgId, date, timezone);
   if (loads.length === 0) return { assigned: 0 };
 
   // Min-heap improvisado: sort y pick first cada iteración.
@@ -903,15 +909,20 @@ export async function generateParteDiarioManual(date?: string) {
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "parte_diario", "create")) throw new Error("Sin permisos");
   const settings = await ensureSettings(organization.id, organization.name);
-  const reportDate = date ?? tomorrowInTz(settings.timezone);
+  const reportDate = date ?? tomorrowYmdInTz(settings.timezone);
 
   const admin = createAdminClient();
 
   if (settings.auto_create_cleaning_tasks) {
-    await createMissingCleaningTasksForDateInternal(organization.id, reportDate, session.userId);
+    await createMissingCleaningTasksForDateInternal(
+      organization.id,
+      reportDate,
+      session.userId,
+      settings.timezone,
+    );
   }
   if (settings.auto_assign_cleaning) {
-    await autoAssignCleaningsInternal(organization.id, reportDate, session.userId);
+    await autoAssignCleaningsInternal(organization.id, reportDate, session.userId, settings.timezone);
   }
 
   await admin
@@ -957,10 +968,10 @@ export async function generateParteDiarioForCron(orgId: string, reportDate: stri
     .maybeSingle();
 
   if (settings.auto_create_cleaning_tasks) {
-    await createMissingCleaningTasksForDateInternal(orgId, reportDate, null);
+    await createMissingCleaningTasksForDateInternal(orgId, reportDate, null, settings.timezone);
   }
   if (settings.auto_assign_cleaning) {
-    await autoAssignCleaningsInternal(orgId, reportDate, null);
+    await autoAssignCleaningsInternal(orgId, reportDate, null, settings.timezone);
   }
 
   if (!existing) {
@@ -1227,6 +1238,7 @@ export async function sendParteDiario(date: string): Promise<{ sent: number; fai
     organization,
     settings.organization_label ?? organization.name,
     date,
+    settings.timezone,
   );
 
   const admin = createAdminClient();
