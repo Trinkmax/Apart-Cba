@@ -3,6 +3,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
+import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
 
@@ -82,127 +83,158 @@ export async function notifyHostNewBooking(params: {
   }
 }
 
-/** Confirmación al huésped por email (y WhatsApp si la org tiene CRM channel activo). */
-export async function notifyGuestBookingConfirmed(params: {
+/**
+ * Carga el booking + relaciones y arma el render del email premium de
+ * confirmación. Devuelve también el teléfono del huésped (para WhatsApp). null
+ * si el booking no existe o el huésped no tiene email.
+ */
+async function buildConfirmationEmail(params: {
   bookingId: string;
-  guestEmail: string;
+  deposit: number | null;
+}): Promise<{
+  organizationId: string;
+  to: string;
+  replyTo: string | undefined;
+  subject: string;
+  html: string;
+  text: string;
   guestPhone: string | null;
-  guestName: string;
-}): Promise<void> {
+  guestFirstName: string;
+  unitTitle: string;
+  checkIn: string;
+  checkOut: string;
+  totalLabel: string;
+} | null> {
   const admin = createAdminClient();
   const { data: booking } = await admin
     .from("bookings")
     .select(
       `
-        id, check_in_date, check_out_date, total_amount, currency, organization_id,
-        unit:units(name, marketplace_title, address, neighborhood, slug),
-        organization:organizations(name, contact_email, contact_phone)
+        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id,
+        guest:guests(full_name, email, phone),
+        unit:units(name, marketplace_title, slug),
+        organization:organizations(name, logo_url, primary_color, contact_email, contact_phone)
       `
     )
     .eq("id", params.bookingId)
     .maybeSingle();
-  if (!booking) return;
+  if (!booking) return null;
 
+  const guest = booking.guest as unknown as {
+    full_name: string;
+    email: string | null;
+    phone: string | null;
+  } | null;
   const unit = booking.unit as unknown as {
     name: string;
     marketplace_title: string | null;
-    address: string | null;
-    neighborhood: string | null;
     slug: string | null;
-  };
+  } | null;
   const org = booking.organization as unknown as {
     name: string;
+    logo_url: string | null;
+    primary_color: string | null;
     contact_email: string | null;
     contact_phone: string | null;
-  };
+  } | null;
 
-  const title = unit.marketplace_title ?? unit.name;
-  const where = unit.neighborhood || unit.address || "";
-  const total = `${booking.currency} ${Number(booking.total_amount).toLocaleString("es-AR")}`;
+  if (!guest?.email) return null;
 
-  const subject = `¡Tu reserva está confirmada en ApartCBA! — ${title}`;
-  const body = `Hola ${params.guestName},
+  const unitTitle = unit?.marketplace_title || unit?.name || "tu departamento";
+  const listingUrl = unit?.slug ? `${APP_URL}/u/${unit.slug}` : null;
+  const currency = String(booking.currency ?? "ARS");
+  const total = Number(booking.total_amount ?? 0);
 
-¡Listo! Tu reserva está confirmada.
-
-  Propiedad: ${title}${where ? `\n  Ubicación: ${where}` : ""}
-  Check-in: ${booking.check_in_date}
-  Check-out: ${booking.check_out_date}
-  Total: ${total}
-  Anfitrión: ${org.name}
-
-Podés ver el detalle y contactar al anfitrión en cualquier momento:
-${APP_URL}/mi-cuenta/reservas/${booking.id}
-
-Gracias por reservar con ApartCBA — esperamos que tengas una gran estadía.
-
-— Equipo ApartCBA`;
-
-  await sendGuestMail({
-    organizationId: booking.organization_id,
-    to: params.guestEmail,
-    subject,
-    html: plainTextToHtml(escapeHtml(body)),
-    text: body,
-    replyTo: org.contact_email ?? undefined,
+  const { subject, html, text } = renderBookingConfirmationEmail({
+    guestName: guest.full_name ?? "",
+    unitTitle,
+    checkInIso: booking.check_in_date as string,
+    checkOutIso: booking.check_out_date as string,
+    guestsCount: Number(booking.guests_count ?? 1),
+    currency,
+    total,
+    deposit: params.deposit,
+    listingUrl,
+    org: {
+      name: org?.name ?? "",
+      logoUrl: org?.logo_url ?? null,
+      primaryColor: org?.primary_color ?? null,
+      contactEmail: org?.contact_email ?? null,
+      contactPhone: org?.contact_phone ?? null,
+    },
   });
 
-  // WhatsApp (best-effort, requiere CRM channel activo)
-  if (params.guestPhone) {
+  return {
+    organizationId: booking.organization_id as string,
+    to: guest.email,
+    replyTo: org?.contact_email ?? undefined,
+    subject,
+    html,
+    text,
+    guestPhone: guest.phone ?? null,
+    guestFirstName: (guest.full_name ?? "").split(" ")[0] ?? "",
+    unitTitle,
+    checkIn: booking.check_in_date as string,
+    checkOut: booking.check_out_date as string,
+    totalLabel: `${currency} ${total.toLocaleString("es-AR")}`,
+  };
+}
+
+/**
+ * Punto único de envío de la confirmación de reserva al huésped (email premium
+ * + WhatsApp best-effort). Lo usan tanto las reservas instantáneas
+ * (deposit=null → "seña a coordinar") como la aprobación de solicitudes
+ * (deposit=seña cargada por el staff → muestra Seña + Restante).
+ */
+export async function sendBookingConfirmation(params: {
+  bookingId: string;
+  deposit: number | null;
+}): Promise<void> {
+  const built = await buildConfirmationEmail(params);
+  if (!built) return;
+
+  await sendGuestMail({
+    organizationId: built.organizationId,
+    to: built.to,
+    subject: built.subject,
+    html: built.html,
+    text: built.text,
+    replyTo: built.replyTo,
+  });
+
+  if (built.guestPhone) {
+    const senaNote =
+      params.deposit !== null && params.deposit > 0
+        ? " La seña queda registrada y el resto se abona al ingresar."
+        : "";
     await sendWhatsAppIfPossible({
-      organizationId: booking.organization_id,
-      phone: params.guestPhone,
-      message: `Hola ${params.guestName}, tu reserva en ${title} está confirmada del ${booking.check_in_date} al ${booking.check_out_date}. Total: ${total}. Detalles: ${APP_URL}/mi-cuenta/reservas/${booking.id}`,
+      organizationId: built.organizationId,
+      phone: built.guestPhone,
+      message: `¡Hola ${built.guestFirstName}! Tu reserva en ${built.unitTitle} quedó confirmada del ${built.checkIn} al ${built.checkOut}. Total: ${built.totalLabel}.${senaNote} Detalles: ${APP_URL}/mi-cuenta/reservas/${params.bookingId}`,
     });
   }
 }
 
-export async function notifyGuestRequestApproved(params: {
-  requestId: string;
+/** Confirmación al huésped por reserva instantánea (sin staff → seña a coordinar). */
+export async function notifyGuestBookingConfirmed(params: {
   bookingId: string;
-  guestEmail: string;
-  guestPhone: string | null;
-  guestName: string;
 }): Promise<void> {
-  const admin = createAdminClient();
-  const { data: booking } = await admin
-    .from("bookings")
-    .select(
-      `id, organization_id, unit:units(marketplace_title, name), organization:organizations(name)`
-    )
-    .eq("id", params.bookingId)
-    .maybeSingle();
-  if (!booking) return;
+  await sendBookingConfirmation({ bookingId: params.bookingId, deposit: null });
+}
 
-  const unit = booking.unit as unknown as { marketplace_title: string | null; name: string };
-  const org = booking.organization as unknown as { name: string };
-  const title = unit.marketplace_title ?? unit.name;
-
-  const subject = `¡Tu solicitud fue aprobada! — ${title}`;
-  const body = `Hola ${params.guestName},
-
-¡Buenas noticias! ${org.name} aprobó tu solicitud para hospedarte en ${title}.
-
-Tu reserva está confirmada. Podés ver el detalle acá:
-${APP_URL}/mi-cuenta/reservas/${booking.id}
-
-— Equipo ApartCBA`;
-
-  await sendGuestMail({
-    organizationId: booking.organization_id,
-    to: params.guestEmail,
-    subject,
-    html: plainTextToHtml(escapeHtml(body)),
-    text: body,
+/**
+ * Confirmación al huésped tras aprobar una solicitud. El staff carga la seña al
+ * aprobar; `depositAmount` se muestra como Seña + Restante en el email.
+ * `null` → cae al texto "a coordinar con el anfitrión".
+ */
+export async function notifyGuestRequestApproved(params: {
+  bookingId: string;
+  depositAmount: number | null;
+}): Promise<void> {
+  await sendBookingConfirmation({
+    bookingId: params.bookingId,
+    deposit: params.depositAmount,
   });
-
-  if (params.guestPhone) {
-    await sendWhatsAppIfPossible({
-      organizationId: booking.organization_id,
-      phone: params.guestPhone,
-      message: `¡Hola ${params.guestName}! Tu solicitud para hospedarte en ${title} fue aprobada. Mirá los detalles: ${APP_URL}/mi-cuenta/reservas/${booking.id}`,
-    });
-  }
 }
 
 export async function notifyGuestRequestRejected(params: {

@@ -107,7 +107,11 @@ export default async function BookingRequestDetailPage({ params }: { params: Par
 
           {isPending ? (
             <div className="pt-4 border-t">
-              <BookingRequestActions requestId={request.id} />
+              <BookingRequestActions
+                requestId={request.id}
+                total={Number(request.total_amount)}
+                currency={request.currency}
+              />
             </div>
           ) : null}
         </Card>

@@ -50,7 +50,7 @@ export async function getBookingRequest(id: string): Promise<BookingRequestWithR
 
 export async function approveBookingRequest(
   id: string,
-  options?: { internal_note?: string | null }
+  options?: { internal_note?: string | null; deposit_amount?: number | null }
 ): Promise<{ ok: true; booking_id: string } | { ok: false; error: string }> {
   const session = await requireSession();
   const { organization } = await getCurrentOrg();
@@ -71,6 +71,30 @@ export async function approveBookingRequest(
   if (new Date(req.expires_at).getTime() < Date.now()) {
     return { ok: false, error: "La solicitud ya expiró" };
   }
+
+  // Seña que el staff define al aprobar: va en el email de confirmación
+  // (Seña + Restante). NO tocamos paid_amount/caja para no duplicar el monto
+  // —el cobro real se registra en Caja como siempre—; la dejamos asentada en
+  // internal_notes para trazabilidad. null → el email dice "a coordinar".
+  const totalAmount = Number(req.total_amount ?? 0);
+  let deposit: number | null = null;
+  if (options?.deposit_amount != null) {
+    const d = Number(options.deposit_amount);
+    if (Number.isFinite(d) && d > 0) {
+      deposit = Math.min(Math.round(d * 100) / 100, totalAmount);
+    }
+  }
+  const senaNote =
+    deposit != null
+      ? ` Seña informada al huésped: ${req.currency} ${deposit.toLocaleString(
+          "es-AR"
+        )} · Restante: ${req.currency} ${(totalAmount - deposit).toLocaleString(
+          "es-AR"
+        )}.`
+      : "";
+  const baseNote = options?.internal_note
+    ? `Aprobada desde solicitud ${id}. ${options.internal_note}`
+    : `Aprobada desde solicitud ${id}`;
 
   // 2) Crear / encontrar el huésped en la org
   let guestId: string | null = null;
@@ -105,6 +129,9 @@ export async function approveBookingRequest(
       organization_id: organization.id,
       unit_id: req.unit_id,
       guest_id: guestId,
+      // Identidad marketplace del solicitante: sin esto el huésped no ve la
+      // reserva aprobada en /mi-cuenta (listado y detalle filtran por este campo).
+      marketplace_user_id: req.guest_user_id ?? null,
       source: "directo",
       status: "confirmada",
       mode: "temporario",
@@ -118,9 +145,7 @@ export async function approveBookingRequest(
       paid_amount: 0,
       cleaning_fee: req.cleaning_fee ?? 0,
       notes: req.special_requests,
-      internal_notes: options?.internal_note
-        ? `Aprobada desde solicitud ${id}. ${options.internal_note}`
-        : `Aprobada desde solicitud ${id}`,
+      internal_notes: `${baseNote}${senaNote}`,
       created_by: session.userId,
     })
     .select()
@@ -150,11 +175,8 @@ export async function approveBookingRequest(
   // 5) Notificar al huésped
   try {
     await notifyGuestRequestApproved({
-      requestId: id,
       bookingId: booking.id,
-      guestEmail: req.guest_email,
-      guestPhone: req.guest_phone,
-      guestName: req.guest_full_name,
+      depositAmount: deposit,
     });
   } catch (e) {
     console.warn("[booking-requests] notificación falló:", e);

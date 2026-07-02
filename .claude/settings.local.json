@@ -240,7 +240,14 @@
       "Bash(perl -i -pe 's#^RESEND_INBOUND_WEBHOOK_SECRET=.*#RESEND_INBOUND_WEBHOOK_SECRET=whsec_4DQgBK5EYEjMMPD6uv70vpipSLEZ9/uf#' .env.local)",
       "Bash(grep -q '^RESEND_INBOUND_WEBHOOK_SECRET=whsec_4DQgBK5EYEjMMPD6uv70vpipSLEZ9/uf$' .env.local)",
       "Bash(echo \"eslint exit: $?\")",
-      "Bash(echo \"build exit: $?\")"
+      "Bash(echo \"build exit: $?\")",
+      "Bash(xargs kill)",
+      "Bash(ps -Ao pid,ppid,command)",
+      "Bash(lsof -nP -iTCP -sTCP:LISTEN)",
+      "Bash(ps -Ao pid,command)",
+      "Bash(lsof -nP -iTCP:3000-3010 -sTCP:LISTEN)",
+      "Bash(echo \"markers: $?\")",
+      "Bash(GIT_EDITOR=true git rebase --continue)"
     ]
   },
   "enableAllProjectMcpServers": true,

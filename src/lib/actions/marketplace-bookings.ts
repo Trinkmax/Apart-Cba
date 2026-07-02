@@ -282,12 +282,7 @@ async function createMarketplaceBooking(params: {
 
   // Notificaciones (best-effort)
   try {
-    await notifyGuestBookingConfirmed({
-      bookingId: booking.id,
-      guestEmail,
-      guestPhone: params.data.phone,
-      guestName: params.data.full_name,
-    });
+    await notifyGuestBookingConfirmed({ bookingId: booking.id });
     await notifyHostNewBooking({
       organizationId: params.unit.organization_id,
       bookingId: booking.id,
