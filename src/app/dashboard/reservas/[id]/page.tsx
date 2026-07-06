@@ -64,8 +64,10 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
     currency: b.currency,
     total: Number(b.total_amount),
     deposit: b.deposit_amount != null ? Number(b.deposit_amount) : null,
+    // .trim() + sin barra final: el env de Vercel puede traer un "\n" al final y
+    // eso parte el link ("...com⏎/u/slug"), rompiéndolo en WhatsApp.
     listingUrl: b.unit.slug
-      ? `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/u/${b.unit.slug}`
+      ? `${(process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/+$/, "")}/u/${b.unit.slug}`
       : null,
   });
 

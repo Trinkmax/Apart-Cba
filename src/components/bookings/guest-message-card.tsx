@@ -6,8 +6,14 @@ import { toast } from "sonner";
 
 /**
  * Muestra el mensaje de confirmación ya completado con los datos de la reserva,
- * listo para copiar y mandar a mano (o abrir en WhatsApp con el texto precargado).
- * El texto se arma server-side con `renderBookingConfirmationText`.
+ * listo para copiar y mandar a mano. El texto se arma server-side con
+ * `renderBookingConfirmationText`.
+ *
+ * OJO — por qué el botón de WhatsApp NO precarga el texto vía `wa.me?text=`:
+ * en iOS ese pre-cargado rompe los emojis (los muestra como ◇ = U+FFFD) y puede
+ * partir el link. El camino confiable es copiar al portapapeles y pegar: WhatsApp
+ * renderiza los emojis nativos sin fallar. Así que el botón copia el mensaje y
+ * abre el chat del huésped; el usuario solo pega.
  */
 export function GuestMessageCard({
   message,
@@ -19,23 +25,38 @@ export function GuestMessageCard({
   const [copied, setCopied] = useState(false);
 
   const waDigits = phone ? phone.replace(/[^\d]/g, "") : "";
-  const waUrl = waDigits
-    ? `https://wa.me/${waDigits}?text=${encodeURIComponent(message)}`
-    : null;
+  const waUrl = waDigits ? `https://wa.me/${waDigits}` : null;
 
-  async function copy() {
+  async function writeClipboard(): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(message);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function copy() {
+    if (await writeClipboard()) {
       setCopied(true);
       toast.success("Mensaje copiado", {
         description: "Pegalo donde quieras mandarlo.",
       });
       setTimeout(() => setCopied(false), 2000);
-    } catch {
+    } else {
       toast.error("No se pudo copiar", {
         description: "Copialo manualmente desde el cuadro.",
       });
     }
+  }
+
+  // Copia (dentro del gesto del click, para que el navegador lo permita) y deja
+  // que el <a> abra el chat. El usuario pega en el chat.
+  function onWhatsApp() {
+    void writeClipboard();
+    toast.success("Mensaje copiado 📋", {
+      description: "Pegalo en el chat de WhatsApp que se abrió.",
+    });
   }
 
   return (
@@ -46,7 +67,7 @@ export function GuestMessageCard({
             Mensaje para el huésped
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Ya completado con los datos. Copialo y mandalo, o abrilo en WhatsApp.
+            Ya completado con los datos. Copialo y pegalo en WhatsApp.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -66,10 +87,11 @@ export function GuestMessageCard({
               href={waUrl}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={onWhatsApp}
               className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-[#25D366] text-white text-sm font-medium hover:brightness-95 transition"
             >
               <MessageCircle size={14} />
-              WhatsApp
+              Copiar y abrir chat
             </a>
           ) : null}
         </div>

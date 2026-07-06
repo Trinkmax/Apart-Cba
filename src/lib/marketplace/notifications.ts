@@ -5,7 +5,12 @@ import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
 import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
 
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
+// .trim() + sin barra final: el env de Vercel puede venir con un salto de línea
+// al final ("https://www.apartcba.com\n"), y sin esto el link del depto queda
+// partido ("...com⏎/u/slug") y WhatsApp/clientes de correo lo cortan en ".com".
+const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001")
+  .trim()
+  .replace(/\/+$/, "");
 
 /**
  * Escapa caracteres HTML de campos controlados por el usuario (ej. el nombre
