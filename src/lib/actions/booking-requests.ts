@@ -72,10 +72,10 @@ export async function approveBookingRequest(
     return { ok: false, error: "La solicitud ya expiró" };
   }
 
-  // Seña que el staff define al aprobar: va en el email de confirmación
-  // (Seña + Restante). NO tocamos paid_amount/caja para no duplicar el monto
-  // —el cobro real se registra en Caja como siempre—; la dejamos asentada en
-  // internal_notes para trazabilidad. null → el email dice "a coordinar".
+  // Seña que el staff define al aprobar. Se guarda en booking.deposit_amount
+  // (informativa) y alimenta el mensaje/email de confirmación (Seña + Restante).
+  // NO tocamos paid_amount/caja para no duplicar el monto: el cobro real se
+  // registra en Caja como siempre. null → "a coordinar con el anfitrión".
   const totalAmount = Number(req.total_amount ?? 0);
   let deposit: number | null = null;
   if (options?.deposit_amount != null) {
@@ -84,14 +84,6 @@ export async function approveBookingRequest(
       deposit = Math.min(Math.round(d * 100) / 100, totalAmount);
     }
   }
-  const senaNote =
-    deposit != null
-      ? ` Seña informada al huésped: ${req.currency} ${deposit.toLocaleString(
-          "es-AR"
-        )} · Restante: ${req.currency} ${(totalAmount - deposit).toLocaleString(
-          "es-AR"
-        )}.`
-      : "";
   const baseNote = options?.internal_note
     ? `Aprobada desde solicitud ${id}. ${options.internal_note}`
     : `Aprobada desde solicitud ${id}`;
@@ -143,9 +135,10 @@ export async function approveBookingRequest(
       currency: req.currency,
       total_amount: req.total_amount,
       paid_amount: 0,
+      deposit_amount: deposit,
       cleaning_fee: req.cleaning_fee ?? 0,
       notes: req.special_requests,
-      internal_notes: `${baseNote}${senaNote}`,
+      internal_notes: baseNote,
       created_by: session.userId,
     })
     .select()
@@ -174,10 +167,7 @@ export async function approveBookingRequest(
 
   // 5) Notificar al huésped
   try {
-    await notifyGuestRequestApproved({
-      bookingId: booking.id,
-      depositAmount: deposit,
-    });
+    await notifyGuestRequestApproved({ bookingId: booking.id });
   } catch (e) {
     console.warn("[booking-requests] notificación falló:", e);
   }

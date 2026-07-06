@@ -400,6 +400,8 @@ export interface Booking {
   monthly_rent: number | null;
   monthly_expenses: number | null;
   security_deposit: number | null;
+  /** Seña informada al huésped (anticipo). NO es dinero cobrado —eso es paid_amount/caja—; alimenta el mensaje/email de confirmación. Distinta de security_deposit (garantía). */
+  deposit_amount: number | null;
   monthly_inflation_adjustment_pct: number | null;
   rent_billing_day: number | null;
   lease_group_id: string | null;

@@ -15,8 +15,10 @@ import { BookingActions } from "@/components/bookings/booking-actions";
 import { ExtensionHistory } from "@/components/bookings/extension-history";
 import { QuickPayCard } from "@/components/bookings/quick-pay-card";
 import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
+import { GuestMessageCard } from "@/components/bookings/guest-message-card";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
+import { renderBookingConfirmationText } from "@/lib/email/booking-confirmation";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
 
 type BookingDetail = Booking & {
@@ -51,6 +53,21 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
+
+  // Mensaje de confirmación ya completado, para copiar/mandar a mano.
+  const guestMessage = renderBookingConfirmationText({
+    guestName: b.guest?.full_name ?? "",
+    unitTitle: b.unit.marketplace_title ?? b.unit.name,
+    checkInIso: b.check_in_date,
+    checkOutIso: b.check_out_date,
+    guestsCount: b.guests_count,
+    currency: b.currency,
+    total: Number(b.total_amount),
+    deposit: b.deposit_amount != null ? Number(b.deposit_amount) : null,
+    listingUrl: b.unit.slug
+      ? `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/u/${b.unit.slug}`
+      : null,
+  });
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
@@ -238,6 +255,12 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
         </Card>
         )}
       </div>
+
+      {canViewMoney && (
+        <Card className="p-4 sm:p-5">
+          <GuestMessageCard message={guestMessage} phone={b.guest?.phone ?? null} />
+        </Card>
+      )}
     </div>
   );
 }

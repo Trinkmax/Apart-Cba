@@ -404,9 +404,9 @@ export function renderBookingConfirmationEmail(
   const textLines: string[] = [
     "¡Nos pone muy contentos de tenerte como huésped!",
     "",
-    `🏡 Tu reserva es del ${fmtLong(checkInIso)} hasta el ${fmtLong(
+    `🏡 Tu reserva es del ${fmtLong(checkInIso).toLowerCase()} hasta el ${fmtLong(
       checkOutIso
-    )} en el departamento "${unitTitle}", para ${guestsCount} ${
+    ).toLowerCase()} en el departamento "${unitTitle}", para ${guestsCount} ${
       guestsCount === 1 ? "persona" : "personas"
     } (${nights} ${nights === 1 ? "noche" : "noches"}).`,
   ];
@@ -441,4 +441,80 @@ export function renderBookingConfirmationEmail(
   if (org.name) textLines.push(`— Equipo de ${org.name}`);
 
   return { subject, html, text: textLines.join("\n") };
+}
+
+// ---------------------------------------------------------------------------
+// Mensaje de texto plano para copiar/pegar (WhatsApp manual). Reproduce el copy
+// EXACTO del dueño, solo completando las variables. Se muestra en el panel
+// (detalle de reserva) para que el staff lo copie y lo mande a mano.
+// ---------------------------------------------------------------------------
+
+export interface BookingConfirmationTextParams {
+  guestName: string;
+  unitTitle: string;
+  checkInIso: string;
+  checkOutIso: string;
+  guestsCount: number;
+  currency: string;
+  total: number;
+  deposit: number | null;
+  listingUrl: string | null;
+}
+
+/** Formato de plata para el mensaje: sin decimales si es entero (más limpio en WhatsApp). */
+function moneyMsg(n: number, currency: string): string {
+  const decimals = Number.isInteger(n) ? 0 : 2;
+  try {
+    return new Intl.NumberFormat("es-AR", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(n);
+  } catch {
+    return `${currency} ${n.toLocaleString("es-AR")}`;
+  }
+}
+
+export function renderBookingConfirmationText(
+  p: BookingConfirmationTextParams
+): string {
+  const hasDeposit = p.deposit !== null && p.deposit > 0;
+  const guests = `${p.guestsCount} ${p.guestsCount === 1 ? "persona" : "personas"}`;
+
+  const lines: string[] = [];
+  lines.push("Nos pone muy contentos de tenerte como huésped!");
+  lines.push("");
+  lines.push(
+    `🏡 Su reserva es el día ${fmtLong(p.checkInIso).toLowerCase()} hasta el ${fmtLong(
+      p.checkOutIso
+    ).toLowerCase()} en el departamento llamado ${p.unitTitle} y es para ${guests}`
+  );
+  lines.push(`A nombre de: ${p.guestName}`);
+  lines.push("");
+  lines.push(`💰 Monto total: ${moneyMsg(p.total, p.currency)}`);
+  if (hasDeposit) {
+    lines.push(`Seña: ${moneyMsg(p.deposit as number, p.currency)}`);
+    lines.push(`Restante: ${moneyMsg(p.total - (p.deposit as number), p.currency)}`);
+  } else {
+    lines.push("Seña: a coordinar con el anfitrión");
+  }
+  lines.push("");
+  lines.push(
+    "Que se abonaría el día que entregamos las llaves, en efectivo o por transferencia."
+  );
+  lines.push("");
+  lines.push(
+    "🚗🧭🗺 Para facilitar la llegada al alojamiento, recordá que en el enlace del departamento encontrarás el link que te llevará directamente al destino."
+  );
+  if (p.listingUrl) lines.push(p.listingUrl);
+  lines.push("");
+  lines.push(
+    "📅 Uno o dos días antes de la fecha de ingreso, vamos a estar contactándote para coordinar los últimos detalles, como el horario de check-in, entrega de llaves, etc"
+  );
+  lines.push("En caso que veas errores en este mensaje, avisenos!");
+  lines.push("");
+  lines.push("👋🏻 ¡Gracias y nos vemos pronto!");
+
+  return lines.join("\n");
 }

@@ -90,7 +90,6 @@ export async function notifyHostNewBooking(params: {
  */
 async function buildConfirmationEmail(params: {
   bookingId: string;
-  deposit: number | null;
 }): Promise<{
   organizationId: string;
   to: string;
@@ -104,13 +103,14 @@ async function buildConfirmationEmail(params: {
   checkIn: string;
   checkOut: string;
   totalLabel: string;
+  deposit: number | null;
 } | null> {
   const admin = createAdminClient();
   const { data: booking } = await admin
     .from("bookings")
     .select(
       `
-        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id,
+        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id, deposit_amount,
         guest:guests(full_name, email, phone),
         unit:units(name, marketplace_title, slug),
         organization:organizations(name, logo_url, primary_color, contact_email, contact_phone)
@@ -144,6 +144,8 @@ async function buildConfirmationEmail(params: {
   const listingUrl = unit?.slug ? `${APP_URL}/u/${unit.slug}` : null;
   const currency = String(booking.currency ?? "ARS");
   const total = Number(booking.total_amount ?? 0);
+  const deposit =
+    booking.deposit_amount != null ? Number(booking.deposit_amount) : null;
 
   const { subject, html, text } = renderBookingConfirmationEmail({
     guestName: guest.full_name ?? "",
@@ -153,7 +155,7 @@ async function buildConfirmationEmail(params: {
     guestsCount: Number(booking.guests_count ?? 1),
     currency,
     total,
-    deposit: params.deposit,
+    deposit,
     listingUrl,
     org: {
       name: org?.name ?? "",
@@ -177,18 +179,18 @@ async function buildConfirmationEmail(params: {
     checkIn: booking.check_in_date as string,
     checkOut: booking.check_out_date as string,
     totalLabel: `${currency} ${total.toLocaleString("es-AR")}`,
+    deposit,
   };
 }
 
 /**
  * Punto único de envío de la confirmación de reserva al huésped (email premium
- * + WhatsApp best-effort). Lo usan tanto las reservas instantáneas
- * (deposit=null → "seña a coordinar") como la aprobación de solicitudes
- * (deposit=seña cargada por el staff → muestra Seña + Restante).
+ * + WhatsApp best-effort). La seña sale de `booking.deposit_amount`: null/0 →
+ * "seña a coordinar" (reservas instantáneas); >0 → muestra Seña + Restante
+ * (solicitudes que el staff aprobó cargando la seña).
  */
 export async function sendBookingConfirmation(params: {
   bookingId: string;
-  deposit: number | null;
 }): Promise<void> {
   const built = await buildConfirmationEmail(params);
   if (!built) return;
@@ -204,7 +206,7 @@ export async function sendBookingConfirmation(params: {
 
   if (built.guestPhone) {
     const senaNote =
-      params.deposit !== null && params.deposit > 0
+      built.deposit !== null && built.deposit > 0
         ? " La seña queda registrada y el resto se abona al ingresar."
         : "";
     await sendWhatsAppIfPossible({
@@ -219,22 +221,17 @@ export async function sendBookingConfirmation(params: {
 export async function notifyGuestBookingConfirmed(params: {
   bookingId: string;
 }): Promise<void> {
-  await sendBookingConfirmation({ bookingId: params.bookingId, deposit: null });
+  await sendBookingConfirmation({ bookingId: params.bookingId });
 }
 
 /**
- * Confirmación al huésped tras aprobar una solicitud. El staff carga la seña al
- * aprobar; `depositAmount` se muestra como Seña + Restante en el email.
- * `null` → cae al texto "a coordinar con el anfitrión".
+ * Confirmación al huésped tras aprobar una solicitud. La seña ya quedó guardada
+ * en `booking.deposit_amount` durante la aprobación; el email la lee de ahí.
  */
 export async function notifyGuestRequestApproved(params: {
   bookingId: string;
-  depositAmount: number | null;
 }): Promise<void> {
-  await sendBookingConfirmation({
-    bookingId: params.bookingId,
-    deposit: params.depositAmount,
-  });
+  await sendBookingConfirmation({ bookingId: params.bookingId });
 }
 
 export async function notifyGuestRequestRejected(params: {
