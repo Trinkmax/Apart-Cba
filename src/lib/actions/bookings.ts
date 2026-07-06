@@ -797,6 +797,49 @@ export async function getBooking(id: string) {
   return data;
 }
 
+/**
+ * Setea (o limpia con null) la seña informada al huésped en una reserva.
+ * Alimenta el mensaje/email de confirmación (Seña + Restante). Se clampea a
+ * [0, total]. NO toca `paid_amount`/caja —el cobro real se registra en Caja
+ * aparte— para no duplicar el monto.
+ */
+export async function setBookingDeposit(
+  bookingId: string,
+  amount: number | null
+): Promise<{ ok: true; deposit: number | null } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update")) {
+    return { ok: false, error: "No tenés permisos para editar la reserva" };
+  }
+  const admin = createAdminClient();
+  const { data: bk, error: readErr } = await admin
+    .from("bookings")
+    .select("total_amount")
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!bk) return { ok: false, error: "Reserva no encontrada" };
+
+  const total = Number(bk.total_amount ?? 0);
+  let deposit: number | null = null;
+  if (amount != null) {
+    const d = Number(amount);
+    if (Number.isFinite(d) && d > 0) deposit = Math.min(Math.round(d * 100) / 100, total);
+  }
+
+  const { error } = await admin
+    .from("bookings")
+    .update({ deposit_amount: deposit })
+    .eq("id", bookingId)
+    .eq("organization_id", organization.id);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath(`/dashboard/reservas/${bookingId}`);
+  return { ok: true, deposit };
+}
+
 export async function createBooking(
   input: BookingInputWithAccount
 ): Promise<Booking> {

@@ -43,7 +43,6 @@ function formatDateRange(checkIn: string | null, checkOut: string | null): strin
 export function CompactSearchBar() {
   const router = useRouter();
   const t = useT();
-  const [city, setCity] = useState("");
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [guests, setGuests] = useState(2);
@@ -52,11 +51,11 @@ export function CompactSearchBar() {
 
   function buildHref() {
     const params = new URLSearchParams();
-    if (city.trim()) params.set("ciudad", city.trim());
     if (checkIn) params.set("checkin", checkIn);
     if (checkOut) params.set("checkout", checkOut);
     if (guests > 1) params.set("huespedes", String(guests));
-    return `/buscar?${params.toString()}`;
+    const qs = params.toString();
+    return `/buscar${qs ? `?${qs}` : ""}`;
   }
 
   function handleSearch(e: React.FormEvent) {
@@ -74,15 +73,10 @@ export function CompactSearchBar() {
       onSubmit={handleSearch}
       className="flex items-center rounded-full border border-neutral-200 shadow-sm hover:shadow-md transition-shadow bg-white overflow-hidden"
     >
-      {/* Destino */}
-      <div className="flex-1 min-w-0 px-4 py-2.5">
-        <input
-          type="text"
-          placeholder={t("header.search_placeholder")}
-          className="w-full text-sm font-medium placeholder:text-neutral-400 focus:outline-none bg-transparent"
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-        />
+      {/* Destino fijo — por ahora sólo operamos en Córdoba */}
+      <div className="flex-1 min-w-0 px-4 py-2.5 flex items-center gap-1.5 text-sm font-medium text-neutral-900 whitespace-nowrap">
+        <MapPin size={13} className="text-sage-600 shrink-0" strokeWidth={2.25} />
+        Córdoba, Argentina
       </div>
 
       <Divider />
@@ -282,7 +276,7 @@ function SymStepper({
 
 /* ───────────────────────── Hero search bar ───────────────────────── */
 
-type FieldId = "destino" | "llegada" | "salida" | "huespedes";
+type FieldId = "llegada" | "salida" | "huespedes";
 
 function Field({
   id,
@@ -330,7 +324,6 @@ export function HeroSearchBar() {
   const router = useRouter();
   const t = useT();
   const baseId = useId();
-  const [city, setCity] = useState("");
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [guests, setGuests] = useState(2);
@@ -341,11 +334,11 @@ export function HeroSearchBar() {
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
     const params = new URLSearchParams();
-    if (city.trim()) params.set("ciudad", city.trim());
     if (checkIn) params.set("checkin", checkIn);
     if (checkOut) params.set("checkout", checkOut);
     if (guests > 1) params.set("huespedes", String(guests));
-    router.push(`/buscar?${params.toString()}`);
+    const qs = params.toString();
+    router.push(`/buscar${qs ? `?${qs}` : ""}`);
   }
 
   return (
@@ -364,24 +357,19 @@ export function HeroSearchBar() {
                  overflow-hidden
                  divide-y md:divide-y-0 md:divide-x divide-neutral-200/60"
     >
-      <Field
-        id={`${baseId}-destino`}
-        label={t("search.destination")}
-        icon={<MapPin size={11} strokeWidth={2.25} />}
-        isActive={activeField === "destino"}
-        onActivate={() => setActiveField("destino")}
-      >
-        <input
-          id={`${baseId}-destino`}
-          type="text"
-          className="w-full text-[15px] placeholder:text-neutral-400 focus:outline-none bg-transparent"
-          placeholder={t("search.destination_placeholder")}
-          value={city}
-          onChange={(e) => setCity(e.target.value)}
-          onFocus={() => setActiveField("destino")}
-          autoComplete="off"
-        />
-      </Field>
+      {/* Destino fijo — Córdoba. Un solo destino: mostrarlo como dato, no
+          como input, le saca un paso (y una duda) al huésped. */}
+      <div className="hidden md:flex flex-col justify-center px-6 py-3.5 select-none">
+        <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-neutral-700 flex items-center gap-1.5">
+          <span className="text-sage-600 inline-flex">
+            <MapPin size={11} strokeWidth={2.25} />
+          </span>
+          {t("search.destination")}
+        </div>
+        <div className="mt-0.5 text-[15px] text-neutral-900 whitespace-nowrap">
+          Córdoba, Argentina
+        </div>
+      </div>
 
       <Field
         id={`${baseId}-llegada`}

@@ -1952,6 +1952,12 @@ export interface MarketplaceListingSummary {
   marketplace_currency: string;
   cleaning_fee: number | null;
   instant_book: boolean;
+  /**
+   * Vocación de la unidad (units.default_mode): temporario | mensual | mixto.
+   * El marketplace filtra por ella (tabs Temporales/Mensuales) y las cards de
+   * unidades 'mensual' muestran precio estimado por mes en vez de por noche.
+   */
+  default_mode: UnitDefaultMode;
   /** Estadía mínima/máxima en noches. Se muestra como badge en las cards. */
   min_nights: number;
   max_nights: number | null;

@@ -15,7 +15,7 @@ export async function HomeHostCta() {
                      flex items-end"
         >
           <Image
-            src="/cordoba/sierras.jpg"
+            src="/cordoba/sierras.webp"
             alt=""
             fill
             sizes="(max-width: 1400px) 100vw, 1400px"

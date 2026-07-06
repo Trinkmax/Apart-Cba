@@ -1,4 +1,4 @@
-import { CategoryChips } from "@/components/marketplace/category-chips";
+import { ModeTabs } from "@/components/marketplace/mode-tabs";
 import { SearchFiltersBar } from "@/components/marketplace/search-filters-bar";
 import { SearchResultsClient } from "@/components/marketplace/search-results-client";
 import { searchListings, type SearchFilters } from "@/lib/actions/marketplace";
@@ -39,6 +39,8 @@ export default async function BuscarPage({
     priceMax: getInt("precio_max"),
     propertyTypes: getStr("tipo") ? [getStr("tipo") as string] : null,
     instantBookOnly: getStr("instant") === "1",
+    // Tabs Temporales/Mensuales: sin param = temporales (default del sitio).
+    mode: getStr("modo") === "mensual" ? "mensual" : "temporario",
     sort: (getStr("orden") as SearchFilters["sort"]) ?? "recommended",
     limit: 40,
   };
@@ -66,7 +68,7 @@ export default async function BuscarPage({
 
   return (
     <div>
-      <CategoryChips basePath="/buscar" />
+      <ModeTabs basePath="/buscar" />
       <SearchFiltersBar totalResults={total} activeFilters={activeFilters} />
       <SearchResultsClient listings={listings} favoritedIds={Array.from(favIds)} />
     </div>

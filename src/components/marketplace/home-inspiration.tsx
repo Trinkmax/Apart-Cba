@@ -32,7 +32,9 @@ const VIBES: Vibe[] = [
   {
     titleKey: "inspire.sierras.title",
     captionKey: "inspire.sierras.body",
-    href: "/buscar?vibe=montana",
+    // Sin unidades publicadas en las Sierras todavía: mejor aterrizar en la
+    // búsqueda completa que en un resultado vacío.
+    href: "/buscar",
     icon: Mountain,
     blobClass: "from-stone-50 to-white",
     iconBgClass: "bg-stone-200 text-stone-700",
@@ -48,7 +50,8 @@ const VIBES: Vibe[] = [
   {
     titleKey: "inspire.workation.title",
     captionKey: "inspire.workation.body",
-    href: "/buscar?vibe=diseno",
+    // Workation = estadía larga: la pestaña Mensuales es el match real.
+    href: "/buscar?modo=mensual",
     icon: Briefcase,
     blobClass: "from-sage-50 to-white",
     iconBgClass: "bg-sage-100 text-sage-700",

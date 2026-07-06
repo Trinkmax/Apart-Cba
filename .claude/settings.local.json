@@ -252,7 +252,8 @@
       "Bash(rg -n \"30 \\\\* 60|1800|setMinutes|scheduled_for\" /Users/ignaciobaldovino/Apart-Cba/src/lib/actions/*.ts /Users/ignaciobaldovino/Apart-Cba/src/lib/**/*.ts)",
       "Bash(rg -rn \"Date.now\\\\\\(\\\\\\) \\\\+ 30|getTime\\\\\\(\\\\\\) \\\\+ 30|\\\\+ 30 \\\\*|30 \\\\* 60_000|30\\\\*60\" /Users/ignaciobaldovino/Apart-Cba/src -g '*.ts' -g '*.tsx')",
       "Bash(rg -rn \"America/Argentina|timeZone|timezone\" /Users/ignaciobaldovino/Apart-Cba/src/lib --include-zero -g '*.ts')",
-      "Bash(perl -pi -e 's/\\\\btomorrowInTz\\\\\\(/tomorrowYmdInTz\\(/g; s/\\\\btodayInTz\\\\\\(/todayYmdInTz\\(/g' src/lib/actions/parte-diario.ts)"
+      "Bash(perl -pi -e 's/\\\\btomorrowInTz\\\\\\(/tomorrowYmdInTz\\(/g; s/\\\\btodayInTz\\\\\\(/todayYmdInTz\\(/g' src/lib/actions/parte-diario.ts)",
+      "Bash(grep -viE \"^\\\\s*$\")"
     ]
   },
   "enableAllProjectMcpServers": true,

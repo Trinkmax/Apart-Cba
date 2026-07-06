@@ -108,6 +108,7 @@ export default async function CheckoutPage({
     marketplace_currency: currency,
     cleaning_fee: unit.cleaning_fee !== null ? Number(unit.cleaning_fee) : null,
     instant_book: unit.instant_book,
+    default_mode: unit.default_mode ?? "temporario",
     rating_avg: Number(unit.marketplace_rating_avg ?? 0),
     rating_count: unit.marketplace_rating_count ?? 0,
     cover_url: photos[0]?.public_url ?? unit.cover_image_url,

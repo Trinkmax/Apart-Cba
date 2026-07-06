@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import type {
   MarketplaceListingDetail,
   MarketplaceListingSummary,
+  UnitDefaultMode,
   UnitPhoto,
   UnitPricingRule,
 } from "@/lib/types/database";
@@ -29,6 +30,7 @@ export type UnitRow = {
   marketplace_currency: string | null;
   cleaning_fee: number | null;
   instant_book: boolean;
+  default_mode: UnitDefaultMode | null;
   marketplace_rating_avg: number | null;
   marketplace_rating_count: number | null;
   cover_image_url: string | null;
@@ -66,6 +68,7 @@ export function rowToSummary(
     marketplace_currency: row.marketplace_currency ?? "ARS",
     cleaning_fee: row.cleaning_fee !== null ? Number(row.cleaning_fee) : null,
     instant_book: row.instant_book,
+    default_mode: row.default_mode ?? "temporario",
     min_nights: row.min_nights ?? 1,
     max_nights: row.max_nights ?? null,
     rating_avg: Number(row.marketplace_rating_avg ?? 0),

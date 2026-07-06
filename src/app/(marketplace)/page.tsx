@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import type { Viewport } from "next";
 import { ArrowRight, BadgeCheck, MessageCircle, Sparkles } from "lucide-react";
-import { CategoryChips } from "@/components/marketplace/category-chips";
+import { ModeTabs } from "@/components/marketplace/mode-tabs";
 import { HomeHero } from "@/components/marketplace/home-hero";
 import { HomeInspiration } from "@/components/marketplace/home-inspiration";
 import { HomeHowItWorks } from "@/components/marketplace/home-how-it-works";
@@ -27,7 +27,7 @@ export const viewport: Viewport = {
 export default async function MarketplaceHome() {
   return (
     <>
-      <CategoryChips basePath="/buscar" />
+      <ModeTabs basePath="/buscar" />
       <HomeHero />
 
       <Suspense fallback={<FeaturedSkeleton />}>
@@ -176,7 +176,7 @@ const CORDOBA_DESTINATIONS: Array<{
     eyebrowKey: "destinos.centro.eyebrow",
     titleKey: "destinos.centro.title",
     subtitleKey: "destinos.centro.body",
-    image: "/cordoba/buenpastor.avif",
+    image: "/cordoba/buenpastor.webp",
     href: "/buscar?ciudad=C%C3%B3rdoba&barrio=Centro",
   },
   {
@@ -190,8 +190,10 @@ const CORDOBA_DESTINATIONS: Array<{
     eyebrowKey: "destinos.sierras.eyebrow",
     titleKey: "destinos.sierras.title",
     subtitleKey: "destinos.sierras.body",
-    image: "/cordoba/sierras.jpg",
-    href: "/buscar?ciudad=Sierras",
+    image: "/cordoba/sierras.webp",
+    // "ciudad=Sierras" matchea 0 unidades publicadas hoy: mandar a la
+    // búsqueda completa hasta que haya inventario serrano.
+    href: "/buscar",
   },
 ];
 

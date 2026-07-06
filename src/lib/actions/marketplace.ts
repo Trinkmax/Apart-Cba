@@ -25,6 +25,12 @@ export type SearchFilters = {
   amenities?: string[] | null;
   instantBookOnly?: boolean | null;
   propertyTypes?: string[] | null;
+  /**
+   * Modo de estadía (tabs Temporales/Mensuales). Mapea a units.default_mode:
+   * "temporario" incluye las unidades mixtas, "mensual" también. Sin valor no
+   * se filtra (p.ej. favoritos, mapa con bbox heredando el modo por separado).
+   */
+  mode?: "temporario" | "mensual" | null;
   /** Bounding box [minLat, minLng, maxLat, maxLng] (mapa). */
   bbox?: [number, number, number, number] | null;
   sort?: "recommended" | "price_asc" | "price_desc" | "rating";
@@ -59,7 +65,8 @@ export async function searchListings(filters: SearchFilters): Promise<{
         id, organization_id, slug, marketplace_title, name, marketplace_property_type,
         neighborhood, city, address, bedrooms, bathrooms, max_guests, size_m2,
         latitude, longitude, base_price, marketplace_currency, cleaning_fee, instant_book,
-        marketplace_rating_avg, marketplace_rating_count, cover_image_url, min_nights, max_nights
+        default_mode, marketplace_rating_avg, marketplace_rating_count, cover_image_url,
+        min_nights, max_nights
       `
     )
     .eq("marketplace_published", true)
@@ -89,6 +96,10 @@ export async function searchListings(filters: SearchFilters): Promise<{
   if (filters.instantBookOnly) q = q.eq("instant_book", true);
   if (filters.propertyTypes && filters.propertyTypes.length > 0) {
     q = q.in("marketplace_property_type", filters.propertyTypes);
+  }
+  if (filters.mode) {
+    // "mixto" acepta ambos modos, así que entra en las dos pestañas.
+    q = q.in("default_mode", [filters.mode, "mixto"]);
   }
   if (filters.bbox) {
     const [minLat, minLng, maxLat, maxLng] = filters.bbox;
@@ -224,6 +235,8 @@ export async function getFeaturedListings(limit = 8): Promise<MarketplaceListing
     limit,
     checkIn: today,
     checkOut: addDaysIso(today, 1),
+    // La vidriera de la home es de temporarios (la pestaña default del sitio).
+    mode: "temporario",
   });
   return listings;
 }

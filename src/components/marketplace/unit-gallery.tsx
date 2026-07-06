@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { ChevronLeft, ChevronRight, X, Grid3x3, Play, PlayCircle } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, Grid3x3, Loader2, Play, PlayCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { UnitPhoto } from "@/lib/types/database";
 
@@ -151,25 +151,92 @@ function Lightbox({
   onClose: () => void;
 }) {
   const [index, setIndex] = useState(startIndex);
+  // Ids de imágenes que ya terminaron de decodificar: gobierna el spinner.
+  const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
+  const thumbRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const touchStartX = useRef<number | null>(null);
 
-  function go(delta: number) {
-    setIndex((i) => (i + delta + photos.length) % photos.length);
-  }
+  const count = photos.length;
+
+  const go = useCallback(
+    (delta: number) => {
+      setIndex((i) => (i + delta + count) % count);
+    },
+    [count]
+  );
+
+  // Teclado (Esc / flechas) + scroll-lock del body mientras el lightbox está abierto.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") go(1);
+      else if (e.key === "ArrowLeft") go(-1);
+    }
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [go, onClose]);
+
+  // El thumbnail activo se mantiene a la vista al navegar con flechas/swipe.
+  useEffect(() => {
+    thumbRefs.current[index]?.scrollIntoView({
+      behavior: "smooth",
+      inline: "center",
+      block: "nearest",
+    });
+  }, [index]);
 
   const current = photos[index];
 
+  // Ventana de slides montados: el activo ± 1. Los vecinos (sólo imágenes,
+  // nunca <video>: seguiría sonando invisible) se montan con opacity-0 para
+  // que el avance sea instantáneo — la foto ya está descargada y decodificada.
+  // Cada slide lleva key={p.id}: sin key, React reutiliza el mismo <img> y
+  // Safari sigue mostrando el bitmap anterior tras mutar src/srcset (el bug
+  // de "paso de foto y no cambia").
+  const mounted = new Set([index, (index + 1) % count, (index - 1 + count) % count]);
+
+  const showSpinner = current.media_type === "image" && !loadedIds.has(current.id);
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex flex-col">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex flex-col"
+    >
       <div className="h-14 flex items-center justify-between px-4 text-white">
-        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full">
+        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full" aria-label="Cerrar">
           <X size={22} />
         </button>
-        <div className="text-sm">
-          {index + 1} / {photos.length}
+        <div className="text-sm tabular-nums">
+          {index + 1} / {count}
         </div>
         <div className="w-9" />
       </div>
-      <div className="flex-1 relative flex items-center justify-center px-2 md:px-12">
+      <div
+        className="flex-1 relative flex items-center justify-center px-2 md:px-12"
+        onTouchStart={(e) => {
+          // Un drag sobre los controles nativos del <video> (seek bar) no es
+          // un swipe de navegación: ignorarlo o el scrubbing cambia de slide.
+          if ((e.target as HTMLElement).closest("video")) {
+            touchStartX.current = null;
+            return;
+          }
+          touchStartX.current = e.touches[0].clientX;
+        }}
+        onTouchEnd={(e) => {
+          const startX = touchStartX.current;
+          touchStartX.current = null;
+          if (startX === null) return;
+          const dx = e.changedTouches[0].clientX - startX;
+          if (Math.abs(dx) > 48) go(dx < 0 ? 1 : -1);
+        }}
+      >
         <button
           onClick={() => go(-1)}
           className="absolute left-3 md:left-6 h-12 w-12 rounded-full bg-white/15 hover:bg-white/25 grid place-items-center text-white transition-colors z-10"
@@ -177,29 +244,72 @@ function Lightbox({
         >
           <ChevronLeft size={22} />
         </button>
-        <div className="relative w-full max-w-5xl aspect-[4/3] md:aspect-[3/2] flex items-center justify-center">
-          {current.media_type === "video" ? (
-            // Sólo se monta el <video> del índice activo: al cambiar de slide el
-            // anterior se desmonta y la reproducción se detiene automáticamente.
-            // `key` fuerza un nuevo elemento por cada video distinto.
-            <video
-              key={current.id}
-              src={current.public_url}
-              poster={current.poster_url ?? undefined}
-              controls
-              autoPlay
-              playsInline
-              className="max-h-full max-w-full object-contain"
-            />
-          ) : (
-            <Image
-              src={current.public_url}
-              alt={current.alt_text ?? title}
-              fill
-              sizes="100vw"
-              className="object-contain"
-            />
-          )}
+        <div className="relative w-full max-w-5xl aspect-[4/3] md:aspect-[3/2]">
+          {showSpinner ? (
+            <div className="absolute inset-0 grid place-items-center">
+              <Loader2 size={32} className="animate-spin text-white/60" />
+            </div>
+          ) : null}
+          {photos.map((p, i) => {
+            if (!mounted.has(i)) return null;
+            const isActive = i === index;
+            if (p.media_type === "video") {
+              // Sólo se monta el <video> del índice activo: al cambiar de
+              // slide se desmonta y la reproducción se detiene sola.
+              if (!isActive) return null;
+              return (
+                <video
+                  key={p.id}
+                  src={p.public_url}
+                  poster={p.poster_url ?? undefined}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="absolute inset-0 h-full w-full object-contain"
+                />
+              );
+            }
+            return (
+              <div
+                key={p.id}
+                className={cn(
+                  "absolute inset-0 transition-opacity duration-200",
+                  isActive ? "opacity-100" : "opacity-0 pointer-events-none"
+                )}
+                aria-hidden={!isActive}
+              >
+                <Image
+                  src={p.public_url}
+                  alt={p.alt_text ?? title}
+                  fill
+                  // El contenedor es max-w-5xl (~1024px): pedir 100vw en
+                  // desktop descargaba el doble de píxeles de los que se ven.
+                  sizes="(max-width: 1024px) 100vw, 1024px"
+                  className="object-contain"
+                  priority={isActive}
+                  loading="eager"
+                  onLoad={() =>
+                    setLoadedIds((prev) => {
+                      if (prev.has(p.id)) return prev;
+                      const next = new Set(prev);
+                      next.add(p.id);
+                      return next;
+                    })
+                  }
+                  // Si la foto falla (objeto borrado, transform caído) el
+                  // spinner no puede quedar girando para siempre.
+                  onError={() =>
+                    setLoadedIds((prev) => {
+                      if (prev.has(p.id)) return prev;
+                      const next = new Set(prev);
+                      next.add(p.id);
+                      return next;
+                    })
+                  }
+                />
+              </div>
+            );
+          })}
         </div>
         <button
           onClick={() => go(1)}
@@ -214,7 +324,12 @@ function Lightbox({
           {photos.map((p, i) => (
             <button
               key={p.id}
+              ref={(el) => {
+                thumbRefs.current[i] = el;
+              }}
               onClick={() => setIndex(i)}
+              aria-label={`Ver ${p.media_type === "video" ? "video" : "foto"} ${i + 1}`}
+              aria-current={i === index}
               className={cn(
                 "relative h-16 w-24 shrink-0 rounded overflow-hidden border-2 transition bg-neutral-800",
                 i === index ? "border-white" : "border-transparent opacity-60"

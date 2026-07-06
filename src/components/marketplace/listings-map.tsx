@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import Map, { Marker, Popup, NavigationControl } from "react-map-gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { formatInCurrency } from "@/lib/marketplace/currency-config";
+import supabaseImageLoader from "@/lib/marketplace/supabase-image-loader";
 import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
 import type { MarketplaceListingSummary } from "@/lib/types/database";
 import { cn } from "@/lib/utils";
@@ -98,7 +99,10 @@ export function ListingsMap({ listings, hoveredId, onMarkerHover }: Props) {
                   : "bg-white text-neutral-900 hover:scale-105"
               )}
             >
-              {formatInCurrency(l.base_price, l.marketplace_currency, targetCurrency, locale)}
+              {/* Unidades mensuales: estimado por mes, igual que la card. */}
+              {l.default_mode === "mensual"
+                ? `≈ ${formatInCurrency(l.base_price * 30, l.marketplace_currency, targetCurrency, locale)}`
+                : formatInCurrency(l.base_price, l.marketplace_currency, targetCurrency, locale)}
             </button>
           </Marker>
         );
@@ -122,7 +126,13 @@ export function ListingsMap({ listings, hoveredId, onMarkerHover }: Props) {
               {selectedListing.cover_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={selectedListing.cover_url}
+                  // El popup mide 224px: pedir la transformación de 448px en
+                  // vez del original de Storage (que puede pesar varios MB).
+                  src={supabaseImageLoader({
+                    src: selectedListing.cover_url,
+                    width: 448,
+                    quality: 75,
+                  })}
                   alt={selectedListing.marketplace_title}
                   className="w-full h-full object-cover"
                 />
@@ -137,14 +147,19 @@ export function ListingsMap({ listings, hoveredId, onMarkerHover }: Props) {
               </div>
               <div className="text-sm">
                 <span className="font-semibold">
+                  {selectedListing.default_mode === "mensual" ? "≈ " : ""}
                   {formatInCurrency(
-                    selectedListing.base_price,
+                    selectedListing.default_mode === "mensual"
+                      ? selectedListing.base_price * 30
+                      : selectedListing.base_price,
                     selectedListing.marketplace_currency,
                     targetCurrency,
                     locale,
                   )}
                 </span>
-                <span className="text-neutral-500"> /noche</span>
+                <span className="text-neutral-500">
+                  {selectedListing.default_mode === "mensual" ? " /mes" : " /noche"}
+                </span>
               </div>
             </div>
           </a>

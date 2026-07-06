@@ -37,7 +37,9 @@ export function SearchFiltersBar({
   }
 
   function clearAll() {
-    navigate("/buscar");
+    // "Limpiar todo" limpia filtros, no la pestaña Temporales/Mensuales.
+    const modo = params.get("modo");
+    navigate(modo ? `/buscar?modo=${modo}` : "/buscar");
   }
 
   const sort = params.get("orden") ?? "recommended";

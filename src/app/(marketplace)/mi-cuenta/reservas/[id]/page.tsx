@@ -96,7 +96,13 @@ export default async function ReservaDetailPage({ params }: { params: Params }) 
           <div className="rounded-2xl border border-neutral-200 overflow-hidden bg-white">
             <div className="relative h-48 md:h-64 bg-neutral-100">
               {cover ? (
-                <Image src={cover} alt={unit.marketplace_title ?? unit.name} fill className="object-cover" />
+                <Image
+                  src={cover}
+                  alt={unit.marketplace_title ?? unit.name}
+                  fill
+                  sizes="(max-width: 768px) 100vw, 640px"
+                  className="object-cover"
+                />
               ) : null}
             </div>
             <div className="p-6">

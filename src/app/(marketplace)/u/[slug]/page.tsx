@@ -1,9 +1,10 @@
 import { notFound } from "next/navigation";
-import { ChevronLeft } from "lucide-react";
+import { AlertTriangle, ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { UnitGallery } from "@/components/marketplace/unit-gallery";
 import { UnitDetailInfo } from "@/components/marketplace/unit-detail-info";
 import { UnitBookingWidget } from "@/components/marketplace/unit-booking-widget";
+import { MobileReserveBar } from "@/components/marketplace/mobile-reserve-bar";
 import { UnitLocationMap } from "@/components/marketplace/unit-location-map";
 import { ListingShareActions } from "@/components/marketplace/listing-share-actions";
 import {
@@ -11,6 +12,7 @@ import {
   getReviewsForUnit,
 } from "@/lib/actions/marketplace";
 import { getListingBySlug } from "@/lib/marketplace/listing-reads";
+import { todayIsoAR } from "@/lib/marketplace/pricing";
 import { listMarketplaceAmenitiesCatalog } from "@/lib/actions/listings";
 import { getGuestSession } from "@/lib/actions/guest-auth";
 
@@ -27,6 +29,19 @@ function parseGuestsParam(raw: string | undefined): number | null {
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+
+/**
+ * Mensajes que el checkout puede mandar por `?error=` (ver
+ * checkUnitAvailability y checkout/[unitId]/page.tsx). Cualquier otro texto
+ * se reemplaza por un genérico para que nadie use el banner como vector de
+ * mensajes falsos vía links compartidos.
+ */
+const KNOWN_CHECKOUT_ERRORS = new Set<string>([
+  "Las fechas son inválidas",
+  "Esas fechas ya están reservadas",
+  "Hay una solicitud pendiente para esas fechas. Probá con otras o esperá unas horas.",
+  "No podés reservar fechas pasadas",
+]);
 
 export async function generateMetadata({ params }: { params: Params }) {
   const { slug } = await params;
@@ -72,9 +87,12 @@ export default async function UnitPage({
   const listing = await getListingBySlug(slug);
   if (!listing) notFound();
 
-  const today = new Date().toISOString().slice(0, 10);
+  // "Hoy" en horario argentino, igual que el widget y el piso del checkout.
+  // Con UTC, de 21:00 a 24:00 AR la ventana arrancaba "mañana" y la noche de
+  // hoy ocupada se mostraba libre en el calendario.
+  const today = todayIsoAR();
   const toIso = (() => {
-    const d = new Date();
+    const d = new Date(`${today}T00:00:00`);
     d.setMonth(d.getMonth() + 12);
     return d.toISOString().slice(0, 10);
   })();
@@ -104,13 +122,30 @@ export default async function UnitPage({
         />
       </div>
 
+      {/* El checkout redirige acá con ?error= cuando la disponibilidad cambió
+          entre la selección y el pago (otro huésped ganó las fechas). Sin este
+          banner el usuario volvía a la página sin ninguna explicación.
+          Sólo se refleja texto de la whitelist: el param viene por URL y un
+          link armado podría poner cualquier cosa dentro de un banner "oficial". */}
+      {sp.error ? (
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-900">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <div>
+            {KNOWN_CHECKOUT_ERRORS.has(sp.error)
+              ? sp.error
+              : "No pudimos completar la reserva con esas fechas. Verificá la disponibilidad e intentá de nuevo."}
+          </div>
+        </div>
+      ) : null}
+
       {/* Gallery */}
       <div className="relative">
         <UnitGallery photos={listing.photos} title={listing.marketplace_title} />
       </div>
 
-      {/* Two-column layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-8 lg:gap-12 mt-8 md:mt-12 pb-12">
+      {/* Two-column layout. pb extra en mobile: la MobileReserveBar fija abajo
+          no debe tapar el final del contenido. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-8 lg:gap-12 mt-8 md:mt-12 pb-28 lg:pb-12">
         <div>
           <UnitDetailInfo
             listing={listing}
@@ -139,7 +174,7 @@ export default async function UnitPage({
         </div>
 
         {/* Booking widget */}
-        <aside className="lg:sticky lg:top-28 self-start">
+        <aside id="booking-widget" className="lg:sticky lg:top-28 self-start scroll-mt-24">
           <UnitBookingWidget
             listing={listing}
             blockedDates={blockedDates}
@@ -150,6 +185,8 @@ export default async function UnitPage({
           />
         </aside>
       </div>
+
+      <MobileReserveBar listing={listing} />
     </div>
   );
 }

@@ -229,12 +229,4 @@ function UserAvatarMenu({
   );
 }
 
-export function SiteHeaderMobileSearch() {
-  return (
-    <div className="md:hidden border-b border-neutral-200 bg-white px-4 py-3">
-      <CompactSearchBar />
-    </div>
-  );
-}
-
 void User; // keep import parity

@@ -1,28 +1,71 @@
 "use client";
 
-import { useState } from "react";
-import { Copy, Check, MessageCircle } from "lucide-react";
+import { useState, useTransition } from "react";
+import { Copy, Check, MessageCircle, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
+import { formatMoney } from "@/lib/format";
+import { renderBookingConfirmationText } from "@/lib/email/booking-confirmation";
+import { setBookingDeposit } from "@/lib/actions/bookings";
 
 /**
- * Muestra el mensaje de confirmación ya completado con los datos de la reserva,
- * listo para copiar y mandar a mano. El texto se arma server-side con
- * `renderBookingConfirmationText`.
+ * Mensaje de confirmación ya completado + editor de seña con preview en vivo.
+ * Al cambiar la seña el mensaje se re-renderiza al instante; "Guardar" la
+ * persiste en la reserva (`deposit_amount`) para que también la use el email.
  *
- * OJO — por qué el botón de WhatsApp NO precarga el texto vía `wa.me?text=`:
- * en iOS ese pre-cargado rompe los emojis (los muestra como ◇ = U+FFFD) y puede
- * partir el link. El camino confiable es copiar al portapapeles y pegar: WhatsApp
- * renderiza los emojis nativos sin fallar. Así que el botón copia el mensaje y
- * abre el chat del huésped; el usuario solo pega.
+ * El botón de WhatsApp NO precarga el texto vía `wa.me?text=` (en iOS eso rompe
+ * los emojis → ◇): copia el mensaje y abre el chat; el usuario pega.
  */
 export function GuestMessageCard({
-  message,
+  bookingId,
+  guestName,
+  unitTitle,
+  checkInIso,
+  checkOutIso,
+  guestsCount,
+  currency,
+  total,
+  initialDeposit,
+  listingUrl,
   phone,
+  canEdit,
 }: {
-  message: string;
+  bookingId: string;
+  guestName: string;
+  unitTitle: string;
+  checkInIso: string;
+  checkOutIso: string;
+  guestsCount: number;
+  currency: string;
+  total: number;
+  initialDeposit: number | null;
+  listingUrl: string | null;
   phone?: string | null;
+  canEdit: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [sena, setSena] = useState<string>(
+    initialDeposit != null ? String(initialDeposit) : ""
+  );
+  const [saved, setSaved] = useState<number | null>(initialDeposit);
+  const [pending, startTransition] = useTransition();
+
+  const senaNum =
+    sena.trim() === "" ? null : Math.max(0, Math.min(Number(sena) || 0, total));
+  const restante = senaNum === null ? null : Math.max(0, total - senaNum);
+  const dirty = senaNum !== saved;
+  const pct = (p: number) => String(Math.round(total * p));
+
+  const message = renderBookingConfirmationText({
+    guestName,
+    unitTitle,
+    checkInIso,
+    checkOutIso,
+    guestsCount,
+    currency,
+    total,
+    deposit: senaNum,
+    listingUrl,
+  });
 
   const waDigits = phone ? phone.replace(/[^\d]/g, "") : "";
   const waUrl = waDigits ? `https://wa.me/${waDigits}` : null;
@@ -39,25 +82,37 @@ export function GuestMessageCard({
   async function copy() {
     if (await writeClipboard()) {
       setCopied(true);
-      toast.success("Mensaje copiado", {
-        description: "Pegalo donde quieras mandarlo.",
-      });
+      toast.success("Mensaje copiado", { description: "Pegalo donde quieras mandarlo." });
       setTimeout(() => setCopied(false), 2000);
     } else {
-      toast.error("No se pudo copiar", {
-        description: "Copialo manualmente desde el cuadro.",
-      });
+      toast.error("No se pudo copiar", { description: "Copialo manualmente desde el cuadro." });
     }
   }
 
-  // Copia (dentro del gesto del click, para que el navegador lo permita) y deja
-  // que el <a> abra el chat. El usuario pega en el chat.
   function onWhatsApp() {
     void writeClipboard();
     toast.success("Mensaje copiado 📋", {
       description: "Pegalo en el chat de WhatsApp que se abrió.",
     });
   }
+
+  function saveSena() {
+    startTransition(async () => {
+      const r = await setBookingDeposit(bookingId, senaNum);
+      if (!r.ok) {
+        toast.error("No se pudo guardar la seña", { description: r.error });
+        return;
+      }
+      setSaved(r.deposit);
+      setSena(r.deposit != null ? String(r.deposit) : "");
+      toast.success("Seña guardada", {
+        description: "Queda en la reserva y en el email de confirmación.",
+      });
+    });
+  }
+
+  const chipCls =
+    "px-2.5 py-1 rounded-full text-xs font-medium border border-input bg-background hover:bg-accent transition-colors";
 
   return (
     <div className="space-y-3">
@@ -96,6 +151,64 @@ export function GuestMessageCard({
           ) : null}
         </div>
       </div>
+
+      {canEdit ? (
+        <div className="rounded-xl border border-border bg-muted/30 p-3 sm:p-4">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <label className="text-xs font-medium text-muted-foreground">
+              Seña a informar
+            </label>
+            <span className="text-xs text-muted-foreground">
+              Restante:{" "}
+              <span className="font-semibold text-foreground">
+                {restante === null ? "—" : formatMoney(restante, currency)}
+              </span>
+            </span>
+          </div>
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                {currency}
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={total}
+                value={sena}
+                onChange={(e) => setSena(e.target.value)}
+                placeholder="A coordinar"
+                className="h-9 w-40 pl-11 pr-2 rounded-lg border border-input bg-background text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring/40"
+              />
+            </div>
+            <button type="button" onClick={() => setSena(pct(0.3))} className={chipCls}>
+              30%
+            </button>
+            <button type="button" onClick={() => setSena(pct(0.5))} className={chipCls}>
+              50%
+            </button>
+            <button type="button" onClick={() => setSena("")} className={chipCls}>
+              Sin seña
+            </button>
+            <button
+              type="button"
+              onClick={saveSena}
+              disabled={pending || !dirty}
+              className={`ml-auto inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-60 ${
+                dirty
+                  ? "bg-primary text-primary-foreground hover:opacity-90"
+                  : "border border-input bg-background text-muted-foreground"
+              }`}
+            >
+              {pending ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Save size={14} />
+              )}
+              {dirty ? "Guardar" : "Guardado"}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground bg-muted/40 border rounded-xl p-4">
         {message}
