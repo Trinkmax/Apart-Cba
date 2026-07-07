@@ -19,6 +19,7 @@ import {
   countNights,
   todayIsoAR,
 } from "@/lib/marketplace/pricing";
+import { dateToIso, formatDayLabel, isoToDate } from "@/lib/marketplace/dates";
 import {
   formatInCurrency,
   isConverted,
@@ -35,27 +36,6 @@ type Props = {
   prefillCheckOut?: string | null;
   prefillGuests?: number | null;
 };
-
-/** Date local (00:00) desde un ISO YYYY-MM-DD — sin saltos de timezone. */
-function isoToDate(iso: string): Date {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d);
-}
-
-/** ISO YYYY-MM-DD desde un Date usando componentes locales (lo que ve el usuario). */
-function dateToIso(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function formatDayLabel(iso: string): string {
-  return isoToDate(iso).toLocaleDateString("es-AR", {
-    day: "numeric",
-    month: "short",
-  });
-}
 
 const DESKTOP_MQ = "(min-width: 768px)";
 

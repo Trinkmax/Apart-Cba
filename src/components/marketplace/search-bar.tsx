@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useId } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Search,
@@ -12,26 +12,18 @@ import {
 } from "lucide-react";
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { SearchRangeCalendar } from "@/components/marketplace/search-range-calendar";
+import { formatDayLabel } from "@/lib/marketplace/dates";
 import { cn } from "@/lib/utils";
 import { useT } from "@/lib/i18n/use-t";
 
-function formatDateInput(value: string | null): string {
-  return value ?? "";
-}
-
-function formatDateLabel(value: string | null, locale = "es-AR"): string | null {
-  if (!value) return null;
-  const d = new Date(`${value}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return null;
-  return d.toLocaleDateString(locale, { day: "numeric", month: "short" });
-}
-
 function formatDateRange(checkIn: string | null, checkOut: string | null): string | null {
-  const a = formatDateLabel(checkIn);
-  const b = formatDateLabel(checkOut);
+  const a = checkIn ? formatDayLabel(checkIn) : null;
+  const b = checkOut ? formatDayLabel(checkOut) : null;
   if (a && b) return `${a} → ${b}`;
   if (a) return `Desde ${a}`;
   if (b) return `Hasta ${b}`;
@@ -46,8 +38,7 @@ export function CompactSearchBar() {
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [guests, setGuests] = useState(2);
-
-  const today = new Date().toISOString().slice(0, 10);
+  const [datesOpen, setDatesOpen] = useState(false);
 
   function buildHref() {
     const params = new URLSearchParams();
@@ -81,8 +72,8 @@ export function CompactSearchBar() {
 
       <Divider />
 
-      {/* Fechas */}
-      <Popover>
+      {/* Fechas — siempre abre el calendario de rango */}
+      <Popover open={datesOpen} onOpenChange={setDatesOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
@@ -94,35 +85,20 @@ export function CompactSearchBar() {
             {datesLabel ?? t("header.any_date")}
           </button>
         </PopoverTrigger>
-        <PopoverContent align="center" sideOffset={12} className="w-80 p-4">
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <DateField
-                label={t("search.checkin")}
-                value={checkIn}
-                min={today}
-                onChange={setCheckIn}
-              />
-              <DateField
-                label={t("search.checkout")}
-                value={checkOut}
-                min={checkIn ?? today}
-                onChange={setCheckOut}
-              />
-            </div>
-            {(checkIn || checkOut) ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setCheckIn(null);
-                  setCheckOut(null);
-                }}
-                className="text-xs text-neutral-500 hover:text-neutral-900 underline"
-              >
-                Limpiar fechas
-              </button>
-            ) : null}
-          </div>
+        <PopoverContent
+          align="center"
+          sideOffset={12}
+          className="w-auto max-w-[calc(100vw-1.5rem)] p-0 max-h-[80vh] overflow-y-auto"
+        >
+          <SearchRangeCalendar
+            checkIn={checkIn}
+            checkOut={checkOut}
+            onChange={(ci, co, complete) => {
+              setCheckIn(ci);
+              setCheckOut(co);
+              if (complete) setDatesOpen(false);
+            }}
+          />
         </PopoverContent>
       </Popover>
 
@@ -167,33 +143,6 @@ export function CompactSearchBar() {
 
 function Divider() {
   return <div className="hidden md:block self-stretch w-px bg-neutral-200" />;
-}
-
-function DateField({
-  label,
-  value,
-  min,
-  onChange,
-}: {
-  label: string;
-  value: string | null;
-  min?: string;
-  onChange: (v: string | null) => void;
-}) {
-  return (
-    <label className="block">
-      <div className="text-[10.5px] font-semibold uppercase tracking-[0.12em] text-neutral-500 mb-1">
-        {label}
-      </div>
-      <input
-        type="date"
-        min={min}
-        value={formatDateInput(value)}
-        onChange={(e) => onChange(e.target.value || null)}
-        className="w-full h-10 px-3 rounded-lg border border-neutral-200 bg-white text-sm text-neutral-900 focus:border-sage-500 focus:ring-2 focus:ring-sage-500/20 outline-none transition"
-      />
-    </label>
-  );
 }
 
 function GuestStepper({
@@ -279,7 +228,6 @@ function SymStepper({
 type FieldId = "llegada" | "salida" | "huespedes";
 
 function Field({
-  id,
   label,
   icon,
   isActive,
@@ -287,7 +235,6 @@ function Field({
   children,
   className,
 }: {
-  id: string;
   label: string;
   icon: React.ReactNode;
   isActive: boolean;
@@ -296,12 +243,18 @@ function Field({
   className?: string;
 }) {
   return (
-    <label
-      htmlFor={id}
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onActivate}
-      onFocus={onActivate}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
       className={cn(
-        "relative flex-1 px-5 md:px-6 py-2.5 md:py-3.5 cursor-text transition-all duration-200",
+        "relative flex-1 px-5 md:px-6 py-2.5 md:py-3.5 cursor-pointer transition-all duration-200 focus:outline-none",
         "before:absolute before:inset-1 before:rounded-full before:transition-all before:duration-200",
         isActive
           ? "before:bg-white before:shadow-[0_6px_24px_-8px_rgb(0_0_0/0.18),0_0_0_1px_rgb(0_0_0/0.04)]"
@@ -316,20 +269,18 @@ function Field({
         </div>
         <div className="mt-0.5">{children}</div>
       </div>
-    </label>
+    </div>
   );
 }
 
 export function HeroSearchBar() {
   const router = useRouter();
   const t = useT();
-  const baseId = useId();
   const [checkIn, setCheckIn] = useState<string | null>(null);
   const [checkOut, setCheckOut] = useState<string | null>(null);
   const [guests, setGuests] = useState(2);
   const [activeField, setActiveField] = useState<FieldId | null>(null);
-
-  const today = new Date().toISOString().slice(0, 10);
+  const [calOpen, setCalOpen] = useState(false);
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
@@ -341,14 +292,14 @@ export function HeroSearchBar() {
     router.push(`/buscar${qs ? `?${qs}` : ""}`);
   }
 
+  function openCalendar(field: "llegada" | "salida") {
+    setActiveField(field);
+    setCalOpen(true);
+  }
+
   return (
     <form
       onSubmit={handleSearch}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-          setActiveField(null);
-        }
-      }}
       className="group/search relative flex flex-col md:flex-row items-stretch
                  rounded-3xl md:rounded-full bg-white
                  shadow-[0_20px_60px_-15px_rgb(0_0_0/0.25),0_0_0_1px_rgb(0_0_0/0.04)]
@@ -371,44 +322,63 @@ export function HeroSearchBar() {
         </div>
       </div>
 
-      <Field
-        id={`${baseId}-llegada`}
-        label={t("search.checkin")}
-        icon={<CalendarIcon size={11} strokeWidth={2.25} />}
-        isActive={activeField === "llegada"}
-        onActivate={() => setActiveField("llegada")}
+      {/* Fechas: tocar Llegada o Salida abre SIEMPRE el calendario de rango
+          (nada de date-picker nativo, que en Safari ni siquiera se abre al
+          click). El PopoverAnchor ancla el calendario bajo los dos campos. */}
+      <Popover
+        open={calOpen}
+        onOpenChange={(open) => {
+          setCalOpen(open);
+          if (!open) setActiveField(null);
+        }}
       >
-        <input
-          id={`${baseId}-llegada`}
-          type="date"
-          className="w-full text-[15px] placeholder:text-neutral-400 focus:outline-none bg-transparent appearance-none [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
-          min={today}
-          value={formatDateInput(checkIn)}
-          onChange={(e) => setCheckIn(e.target.value || null)}
-          onFocus={() => setActiveField("llegada")}
-        />
-      </Field>
+        <PopoverAnchor asChild>
+          <div className="flex flex-col md:flex-row md:flex-[2] divide-y md:divide-y-0 md:divide-x divide-neutral-200/60">
+            <Field
+              label={t("search.checkin")}
+              icon={<CalendarIcon size={11} strokeWidth={2.25} />}
+              isActive={calOpen && activeField === "llegada"}
+              onActivate={() => openCalendar("llegada")}
+            >
+              <div className={cn("text-[15px]", checkIn ? "text-neutral-900" : "text-neutral-400")}>
+                {checkIn ? formatDayLabel(checkIn) : t("header.any_date")}
+              </div>
+            </Field>
+
+            <Field
+              label={t("search.checkout")}
+              icon={<CalendarIcon size={11} strokeWidth={2.25} />}
+              isActive={calOpen && activeField === "salida"}
+              onActivate={() => openCalendar("salida")}
+            >
+              <div className={cn("text-[15px]", checkOut ? "text-neutral-900" : "text-neutral-400")}>
+                {checkOut ? formatDayLabel(checkOut) : t("header.any_date")}
+              </div>
+            </Field>
+          </div>
+        </PopoverAnchor>
+        <PopoverContent
+          align="start"
+          sideOffset={10}
+          className="w-auto max-w-[calc(100vw-1.5rem)] p-0 max-h-[80vh] overflow-y-auto"
+        >
+          <SearchRangeCalendar
+            checkIn={checkIn}
+            checkOut={checkOut}
+            onChange={(ci, co, complete) => {
+              setCheckIn(ci);
+              setCheckOut(co);
+              setActiveField(ci && !co ? "salida" : "llegada");
+              if (complete) {
+                setCalOpen(false);
+                setActiveField(null);
+              }
+            }}
+          />
+        </PopoverContent>
+      </Popover>
 
       <Field
-        id={`${baseId}-salida`}
-        label={t("search.checkout")}
-        icon={<CalendarIcon size={11} strokeWidth={2.25} />}
-        isActive={activeField === "salida"}
-        onActivate={() => setActiveField("salida")}
-      >
-        <input
-          id={`${baseId}-salida`}
-          type="date"
-          className="w-full text-[15px] placeholder:text-neutral-400 focus:outline-none bg-transparent appearance-none [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
-          min={checkIn ?? today}
-          value={formatDateInput(checkOut)}
-          onChange={(e) => setCheckOut(e.target.value || null)}
-          onFocus={() => setActiveField("salida")}
-        />
-      </Field>
-
-      <Field
-        id={`${baseId}-huespedes`}
         label={t("search.guests")}
         icon={<Users size={11} strokeWidth={2.25} />}
         isActive={activeField === "huespedes"}
@@ -444,4 +414,3 @@ export function HeroSearchBar() {
     </form>
   );
 }
-
