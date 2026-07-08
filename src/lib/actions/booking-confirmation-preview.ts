@@ -3,7 +3,7 @@
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { createAdminClient } from "@/lib/supabase/server";
-import { buildBookingContext, getRenderedBookingTemplate } from "@/lib/email/booking-templates";
+import { buildOwnerConfirmationDraft } from "@/lib/email/booking-templates";
 
 /**
  * Server action que arma el "preview" del booking para el dialog y además
@@ -51,15 +51,9 @@ export async function getBookingConfirmationPreview(bookingId: string): Promise<
     | null;
   const unit = booking.unit as unknown as { name: string } | null;
 
-  const ctx = await buildBookingContext(bookingId);
-  const template = ctx
-    ? await getRenderedBookingTemplate({
-        organizationId: ctx.organizationId,
-        eventType: "booking_confirmed",
-        channel: "email",
-        variables: ctx.variables,
-      })
-    : null;
+  // Pre-cargamos el modal con el copy del dueño (mismo mensaje que la card de
+  // WhatsApp: seña + restante + depósito ya completos), no con el template genérico.
+  const template = await buildOwnerConfirmationDraft(bookingId);
 
   return {
     ok: true,

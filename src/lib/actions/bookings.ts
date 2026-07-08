@@ -21,7 +21,7 @@ import type {
 } from "@/lib/types/database";
 import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
-import { buildBookingContext, getRenderedBookingTemplate } from "@/lib/email/booking-templates";
+import { buildBookingContext, buildOwnerConfirmationDraft } from "@/lib/email/booking-templates";
 
 // Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
 // en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
@@ -1973,19 +1973,14 @@ export async function confirmBookingWithMessages(
         subject = parsed.data.emailOverride.subject ?? null;
         body = parsed.data.emailOverride.body;
       } else {
-        const tpl = await getRenderedBookingTemplate({
-          organizationId: ctx.organizationId,
-          eventType: "booking_confirmed",
-          channel: "email",
-          variables: ctx.variables,
-        });
-        if (!tpl) {
-          channelsFailed.push({ channel: "email", error: "Template no encontrado" });
+        const draft = await buildOwnerConfirmationDraft(parsed.data.bookingId);
+        if (!draft) {
+          channelsFailed.push({ channel: "email", error: "No se pudo armar el mensaje" });
           subject = null;
           body = "";
         } else {
-          subject = tpl.subject;
-          body = tpl.body;
+          subject = draft.subject;
+          body = draft.body;
         }
       }
       if (body) {
@@ -2050,15 +2045,10 @@ export async function resendBookingConfirmation(
     subject = parsed.data.emailOverride.subject ?? null;
     body = parsed.data.emailOverride.body;
   } else {
-    const tpl = await getRenderedBookingTemplate({
-      organizationId: ctx.organizationId,
-      eventType: "booking_confirmed",
-      channel: "email",
-      variables: ctx.variables,
-    });
-    if (!tpl) return { ok: false, error: "Template no encontrado" };
-    subject = tpl.subject;
-    body = tpl.body;
+    const draft = await buildOwnerConfirmationDraft(parsed.data.bookingId);
+    if (!draft) return { ok: false, error: "No se pudo armar el mensaje" };
+    subject = draft.subject;
+    body = draft.body;
   }
 
   const result = await sendGuestMail({

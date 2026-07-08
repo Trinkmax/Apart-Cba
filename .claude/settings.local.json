@@ -258,7 +258,11 @@
       "Bash(rg -n \"full_name|guest_name|guest\\\\?\\\\.|Sin nombre|Bloqueo|guest\\\\.|\\\\.name\" src/components/units/pms/*.tsx)",
       "Bash(rg -n \"security_deposit|deposit_amount|\\\\.select\\\\\\(|getBookingById|const b =|b\\\\.mode|mode|total_amount\" src/app/dashboard/reservas/[id]/page.tsx)",
       "Bash(echo \"ESLINT_EXIT=$?\")",
-      "Bash(echo \"TSC_EXIT=$?\")"
+      "Bash(echo \"TSC_EXIT=$?\")",
+      "Bash(rg -rln \"Reenviar confirmación|Editá el contenido|Vista previa|resendBookingConfirmation|emailOverride\" src/components src/app --glob \"*.tsx\")",
+      "Bash(rg -rn \"Te confirmamos la reserva|DEFAULT_TEMPLATE|defaultBody|defaultTemplate|getOrCreate.*[Tt]emplate|Cualquier consulta, escribinos\" src supabase --glob \"*.ts\" --glob \"*.tsx\" --glob \"*.sql\")",
+      "Bash(rg -rn \"ConfirmBookingDialog|initialTemplate|getBookingConfirmationPreview|booking-confirmation-preview\" src/components src/app src/lib --glob \"*.ts\" --glob \"*.tsx\")",
+      "Bash(rg -rn \"getRenderedBookingTemplate|buildBookingContext|buildOwnerConfirmationDraft\" src --glob \"*.ts\" --glob \"*.tsx\")"
     ]
   },
   "enableAllProjectMcpServers": true,
