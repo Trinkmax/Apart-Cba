@@ -560,3 +560,23 @@ export function renderBookingConfirmationText(
 
   return lines.join("\n");
 }
+
+/**
+ * Seña que se informa en el mensaje/email de confirmación.
+ *
+ * Regla del dueño (2026-07-08): al cargar la reserva la seña se anota en el
+ * campo **"Cobrado"** del formulario (= `bookings.paid_amount`), así que esa es
+ * la fuente por defecto. Si además hay una seña informada explícita
+ * (`deposit_amount` — la que carga el staff en la card o al aprobar una
+ * solicitud del marketplace), esa manda. Si no hay ninguna → null ("a coordinar").
+ *
+ * Precedencia: `deposit_amount` (override explícito) → `paid_amount` (Cobrado) → null.
+ */
+export function effectiveSena(
+  depositAmount: number | null | undefined,
+  paidAmount: number | null | undefined
+): number | null {
+  if (depositAmount != null && depositAmount > 0) return depositAmount;
+  if (paidAmount != null && paidAmount > 0) return paidAmount;
+  return null;
+}

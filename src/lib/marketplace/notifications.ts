@@ -3,7 +3,10 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
-import { renderBookingConfirmationEmail } from "@/lib/email/booking-confirmation";
+import {
+  renderBookingConfirmationEmail,
+  effectiveSena,
+} from "@/lib/email/booking-confirmation";
 
 // .trim() + sin barra final: el env de Vercel puede venir con un salto de línea
 // al final ("https://www.apartcba.com\n"), y sin esto el link del depto queda
@@ -115,7 +118,7 @@ async function buildConfirmationEmail(params: {
     .from("bookings")
     .select(
       `
-        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id, deposit_amount, security_deposit,
+        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id, deposit_amount, paid_amount, security_deposit,
         guest:guests(full_name, email, phone),
         unit:units(name, marketplace_title, slug),
         organization:organizations(name, logo_url, primary_color, contact_email, contact_phone)
@@ -149,8 +152,12 @@ async function buildConfirmationEmail(params: {
   const listingUrl = unit?.slug ? `${APP_URL}/u/${unit.slug}` : null;
   const currency = String(booking.currency ?? "ARS");
   const total = Number(booking.total_amount ?? 0);
-  const deposit =
-    booking.deposit_amount != null ? Number(booking.deposit_amount) : null;
+  // Seña informada: la explícita (deposit_amount) o, si no hay, lo ya cobrado
+  // ("Cobrado" = paid_amount, donde el staff anota la seña al cargar la reserva).
+  const deposit = effectiveSena(
+    booking.deposit_amount != null ? Number(booking.deposit_amount) : null,
+    booking.paid_amount != null ? Number(booking.paid_amount) : null
+  );
   const securityDeposit =
     booking.security_deposit != null ? Number(booking.security_deposit) : null;
 

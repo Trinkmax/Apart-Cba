@@ -4,7 +4,10 @@ import { useState, useTransition } from "react";
 import { Copy, Check, MessageCircle, Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { formatMoney } from "@/lib/format";
-import { renderBookingConfirmationText } from "@/lib/email/booking-confirmation";
+import {
+  renderBookingConfirmationText,
+  effectiveSena,
+} from "@/lib/email/booking-confirmation";
 import { setBookingDeposit } from "@/lib/actions/bookings";
 
 /**
@@ -25,6 +28,7 @@ export function GuestMessageCard({
   currency,
   total,
   initialDeposit,
+  paidAmount,
   securityDeposit,
   listingUrl,
   phone,
@@ -38,7 +42,10 @@ export function GuestMessageCard({
   guestsCount: number;
   currency: string;
   total: number;
+  /** Seña informada explícita (deposit_amount). Si es null se usa lo cobrado. */
   initialDeposit: number | null;
+  /** Lo ya cobrado en la reserva ("Cobrado" = paid_amount). Fuente por defecto de la seña. */
+  paidAmount: number;
   /** Depósito en garantía (reservas mensuales). Solo lectura acá; se carga en la reserva. */
   securityDeposit: number | null;
   listingUrl: string | null;
@@ -46,10 +53,14 @@ export function GuestMessageCard({
   canEdit: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  // La seña por defecto es lo cobrado ("Cobrado" = paidAmount); un deposit_amount
+  // explícito manda. Así el mensaje toma la seña de lo que se cargó en la reserva
+  // sin re-tipearla. Ver effectiveSena().
+  const effectiveInitialDeposit = effectiveSena(initialDeposit, paidAmount);
   const [sena, setSena] = useState<string>(
-    initialDeposit != null ? String(initialDeposit) : ""
+    effectiveInitialDeposit != null ? String(effectiveInitialDeposit) : ""
   );
-  const [saved, setSaved] = useState<number | null>(initialDeposit);
+  const [saved, setSaved] = useState<number | null>(effectiveInitialDeposit);
   const [pending, startTransition] = useTransition();
 
   const senaNum =
@@ -57,6 +68,16 @@ export function GuestMessageCard({
   const restante = senaNum === null ? null : Math.max(0, total - senaNum);
   const dirty = senaNum !== saved;
   const pct = (p: number) => String(Math.round(total * p));
+  // La seña suele ser el valor de una noche → chip de acceso rápido.
+  const nights = Math.max(
+    1,
+    Math.round(
+      (new Date(checkOutIso + "T12:00:00").getTime() -
+        new Date(checkInIso + "T12:00:00").getTime()) /
+        86_400_000
+    )
+  );
+  const oneNight = Math.round(total / nights);
 
   const message = renderBookingConfirmationText({
     guestName,
@@ -169,6 +190,9 @@ export function GuestMessageCard({
               </span>
             </span>
           </div>
+          <p className="text-[11px] leading-snug text-muted-foreground mt-1">
+            Por defecto toma lo cobrado en la reserva. Ajustala si querés.
+          </p>
           <div className="mt-2 flex items-center gap-2 flex-wrap">
             <div className="relative">
               <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
@@ -184,6 +208,13 @@ export function GuestMessageCard({
                 className="h-9 w-40 pl-11 pr-2 rounded-lg border border-input bg-background text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-ring/40"
               />
             </div>
+            <button
+              type="button"
+              onClick={() => setSena(String(oneNight))}
+              className={chipCls}
+            >
+              1 noche
+            </button>
             <button type="button" onClick={() => setSena(pct(0.3))} className={chipCls}>
               30%
             </button>

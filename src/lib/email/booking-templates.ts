@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/server";
 import { renderTemplate } from "./render";
 import { formatMoney } from "@/lib/format";
+import { effectiveSena } from "./booking-confirmation";
 
 const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const MONTH_NAMES = [
@@ -77,10 +78,14 @@ export async function buildBookingContext(
   const balance =
     Number(booking.total_amount ?? 0) - Number(booking.paid_amount ?? 0);
   const currency = String(booking.currency ?? "ARS");
-  const hasDepositAmount = booking.deposit_amount != null;
-  const remainingAfterDeposit = hasDepositAmount
-    ? Math.max(0, Number(booking.total_amount ?? 0) - Number(booking.deposit_amount))
-    : null;
+  // Seña informada: la explícita (deposit_amount) o, si no hay, lo cobrado
+  // ("Cobrado" = paid_amount, donde el staff carga la seña). Ver effectiveSena().
+  const sena = effectiveSena(
+    booking.deposit_amount != null ? Number(booking.deposit_amount) : null,
+    booking.paid_amount != null ? Number(booking.paid_amount) : null
+  );
+  const remainingAfterDeposit =
+    sena != null ? Math.max(0, Number(booking.total_amount ?? 0) - sena) : null;
 
   const variables = {
     guest: {
@@ -111,11 +116,9 @@ export async function buildBookingContext(
       total_amount_raw: String(booking.total_amount ?? 0),
       currency,
       balance_due: formatMoney(balance, currency),
-      // Seña informada al huésped (deposit_amount) y restante = total − seña.
-      deposit_amount: hasDepositAmount
-        ? formatMoney(Number(booking.deposit_amount), currency)
-        : "",
-      deposit_amount_raw: hasDepositAmount ? String(booking.deposit_amount) : "",
+      // Seña informada al huésped (deposit_amount → o lo cobrado) y restante = total − seña.
+      deposit_amount: sena != null ? formatMoney(sena, currency) : "",
+      deposit_amount_raw: sena != null ? String(sena) : "",
       remaining_after_deposit:
         remainingAfterDeposit != null
           ? formatMoney(remainingAfterDeposit, currency)

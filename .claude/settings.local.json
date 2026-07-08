@@ -257,7 +257,8 @@
       "Bash(rg -n \"guest_name|full_name|Sin nombre|guest\\\\?\\\\.|guest\\\\.full_name|nombre\" src/components/units/*grid* src/components/units/*kanban* src/components/units/*calendar*)",
       "Bash(rg -n \"full_name|guest_name|guest\\\\?\\\\.|Sin nombre|Bloqueo|guest\\\\.|\\\\.name\" src/components/units/pms/*.tsx)",
       "Bash(rg -n \"security_deposit|deposit_amount|\\\\.select\\\\\\(|getBookingById|const b =|b\\\\.mode|mode|total_amount\" src/app/dashboard/reservas/[id]/page.tsx)",
-      "Bash(echo \"ESLINT_EXIT=$?\")"
+      "Bash(echo \"ESLINT_EXIT=$?\")",
+      "Bash(echo \"TSC_EXIT=$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,
