@@ -47,6 +47,12 @@ const SAMPLE_VARS = {
     total_amount_raw: "240000",
     currency: "ARS",
     balance_due: "$ 0",
+    deposit_amount: "$ 72.000",
+    deposit_amount_raw: "72000",
+    remaining_after_deposit: "$ 168.000",
+    security_deposit: "$ 120.000",
+    security_deposit_raw: "120000",
+    mode: "mensual",
     payment_link: "https://app/pay/abc123",
   },
 };

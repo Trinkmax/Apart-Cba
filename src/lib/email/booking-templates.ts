@@ -41,6 +41,9 @@ export async function buildBookingContext(
       total_amount,
       currency,
       paid_amount,
+      deposit_amount,
+      security_deposit,
+      mode,
       guests_count,
       guest:guests(full_name, email, phone),
       unit:units(name, code, address),
@@ -74,6 +77,10 @@ export async function buildBookingContext(
   const balance =
     Number(booking.total_amount ?? 0) - Number(booking.paid_amount ?? 0);
   const currency = String(booking.currency ?? "ARS");
+  const hasDepositAmount = booking.deposit_amount != null;
+  const remainingAfterDeposit = hasDepositAmount
+    ? Math.max(0, Number(booking.total_amount ?? 0) - Number(booking.deposit_amount))
+    : null;
 
   const variables = {
     guest: {
@@ -104,6 +111,23 @@ export async function buildBookingContext(
       total_amount_raw: String(booking.total_amount ?? 0),
       currency,
       balance_due: formatMoney(balance, currency),
+      // Seña informada al huésped (deposit_amount) y restante = total − seña.
+      deposit_amount: hasDepositAmount
+        ? formatMoney(Number(booking.deposit_amount), currency)
+        : "",
+      deposit_amount_raw: hasDepositAmount ? String(booking.deposit_amount) : "",
+      remaining_after_deposit:
+        remainingAfterDeposit != null
+          ? formatMoney(remainingAfterDeposit, currency)
+          : "",
+      // Depósito en garantía (reservas mensuales), monto aparte del total.
+      security_deposit:
+        booking.security_deposit != null
+          ? formatMoney(Number(booking.security_deposit), currency)
+          : "",
+      security_deposit_raw:
+        booking.security_deposit != null ? String(booking.security_deposit) : "",
+      mode: String(booking.mode ?? "temporario"),
       payment_link: "",
     },
   };

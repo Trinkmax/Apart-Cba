@@ -115,7 +115,7 @@ async function buildConfirmationEmail(params: {
     .from("bookings")
     .select(
       `
-        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id, deposit_amount,
+        id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id, deposit_amount, security_deposit,
         guest:guests(full_name, email, phone),
         unit:units(name, marketplace_title, slug),
         organization:organizations(name, logo_url, primary_color, contact_email, contact_phone)
@@ -151,6 +151,8 @@ async function buildConfirmationEmail(params: {
   const total = Number(booking.total_amount ?? 0);
   const deposit =
     booking.deposit_amount != null ? Number(booking.deposit_amount) : null;
+  const securityDeposit =
+    booking.security_deposit != null ? Number(booking.security_deposit) : null;
 
   const { subject, html, text } = renderBookingConfirmationEmail({
     guestName: guest.full_name ?? "",
@@ -161,6 +163,7 @@ async function buildConfirmationEmail(params: {
     currency,
     total,
     deposit,
+    securityDeposit,
     listingUrl,
     org: {
       name: org?.name ?? "",

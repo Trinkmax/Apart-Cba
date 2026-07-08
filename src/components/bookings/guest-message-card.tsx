@@ -25,6 +25,7 @@ export function GuestMessageCard({
   currency,
   total,
   initialDeposit,
+  securityDeposit,
   listingUrl,
   phone,
   canEdit,
@@ -38,6 +39,8 @@ export function GuestMessageCard({
   currency: string;
   total: number;
   initialDeposit: number | null;
+  /** Depósito en garantía (reservas mensuales). Solo lectura acá; se carga en la reserva. */
+  securityDeposit: number | null;
   listingUrl: string | null;
   phone?: string | null;
   canEdit: boolean;
@@ -64,6 +67,7 @@ export function GuestMessageCard({
     currency,
     total,
     deposit: senaNum,
+    securityDeposit,
     listingUrl,
   });
 

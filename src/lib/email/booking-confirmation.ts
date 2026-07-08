@@ -13,6 +13,10 @@ import { formatMoney } from "@/lib/format";
  * `deposit` (seña):
  *   - número  → muestra "Seña" y "Restante" (total − seña).
  *   - null    → reservas instantáneas: "Seña: a coordinar con el anfitrión".
+ *
+ * `securityDeposit` (depósito en garantía, típico de reservas mensuales):
+ *   - > 0     → muestra "Depósito en garantía" (monto aparte del total, reintegrable).
+ *   - null/0  → no se muestra.
  */
 
 export interface BookingConfirmationEmailParams {
@@ -24,6 +28,8 @@ export interface BookingConfirmationEmailParams {
   currency: string;
   total: number;
   deposit: number | null;
+  /** Depósito en garantía (reservas mensuales). Se muestra aparte del total. */
+  securityDeposit: number | null;
   listingUrl: string | null;
   org: {
     name: string;
@@ -135,6 +141,7 @@ export function renderBookingConfirmationEmail(
     currency,
     total,
     deposit,
+    securityDeposit,
     listingUrl,
     org,
   } = params;
@@ -148,6 +155,10 @@ export function renderBookingConfirmationEmail(
   const depositFmt = hasDeposit ? formatMoney(deposit as number, currency) : null;
   const remaining = hasDeposit ? Math.max(0, total - (deposit as number)) : null;
   const remainingFmt = remaining !== null ? formatMoney(remaining, currency) : null;
+  const hasSecurityDeposit = securityDeposit !== null && securityDeposit > 0;
+  const securityDepositFmt = hasSecurityDeposit
+    ? formatMoney(securityDeposit as number, currency)
+    : null;
 
   const ci = fmtBadge(checkInIso);
   const co = fmtBadge(checkOutIso);
@@ -185,22 +196,42 @@ export function renderBookingConfirmationEmail(
       </tr>`;
   }
 
+  // Fila de depósito en garantía (reservas mensuales). Va al final del bloque,
+  // con una micro-aclaración de que es un monto aparte del total y reintegrable
+  // —así el huésped no lo confunde con la seña.
+  const securityDepositRows = hasSecurityDeposit
+    ? `
+      ${moneyRow("Depósito en garantía", securityDepositFmt as string, { strong: true })}
+      <tr><td colspan="2" style="padding:0 0 2px;font-family:${FONT};font-size:12px;line-height:1.5;color:${C.muted};">Garantía reintegrable, aparte del monto total.</td></tr>`
+    : "";
+
   const moneyRows = hasDeposit
     ? `
       ${moneyRow("Monto total", totalFmt, { strong: true })}
       <tr><td colspan="2" style="border-top:1px solid ${C.hair};font-size:0;line-height:0;">&nbsp;</td></tr>
       ${moneyRow("Seña", depositFmt as string, { strong: true })}
       ${moneyRow("Restante al ingresar", remainingFmt as string, { accent: true })}
+      ${securityDepositRows}
     `
     : `
       ${moneyRow("Monto total", totalFmt, { strong: true })}
       <tr><td colspan="2" style="border-top:1px solid ${C.hair};font-size:0;line-height:0;">&nbsp;</td></tr>
       ${moneyRow("Seña", "A coordinar con el anfitrión", { muted: true })}
+      ${securityDepositRows}
     `;
 
+  // Qué se abona al entregar las llaves: el restante y —si hay— el depósito.
+  const dueParts: string[] = [];
+  if (hasDeposit) dueParts.push("el restante");
+  if (hasSecurityDeposit) dueParts.push("el depósito en garantía");
+  const dueVerb = dueParts.length > 1 ? "se abonan" : "se abona";
   const payNote = hasDeposit
-    ? "El restante se abona el día que te entregamos las llaves, en efectivo o por transferencia."
-    : "Coordinás la seña y la forma de pago directamente con el anfitrión. El saldo se abona al ingresar, en efectivo o por transferencia.";
+    ? `${cap(dueParts.join(" y "))} ${dueVerb} el día que te entregamos las llaves, en efectivo o por transferencia.`
+    : `Coordinás la seña y la forma de pago directamente con el anfitrión. El saldo${
+        hasSecurityDeposit ? " y el depósito en garantía" : ""
+      } ${
+        hasSecurityDeposit ? "se abonan" : "se abona"
+      } al ingresar, en efectivo o por transferencia.`;
 
   // --- CTA "cómo llegar" ---
   const ctaBlock = listingUrl
@@ -419,6 +450,9 @@ export function renderBookingConfirmationEmail(
   } else {
     textLines.push("Seña: a coordinar con el anfitrión");
   }
+  if (hasSecurityDeposit) {
+    textLines.push(`Depósito en garantía: ${securityDepositFmt}`);
+  }
   textLines.push("");
   textLines.push(payNote);
   textLines.push("");
@@ -458,6 +492,8 @@ export interface BookingConfirmationTextParams {
   currency: string;
   total: number;
   deposit: number | null;
+  /** Depósito en garantía (reservas mensuales). Se informa aparte del total. */
+  securityDeposit: number | null;
   listingUrl: string | null;
 }
 
@@ -480,6 +516,7 @@ export function renderBookingConfirmationText(
   p: BookingConfirmationTextParams
 ): string {
   const hasDeposit = p.deposit !== null && p.deposit > 0;
+  const hasSecurityDeposit = p.securityDeposit !== null && p.securityDeposit > 0;
   const guests = `${p.guestsCount} ${p.guestsCount === 1 ? "persona" : "personas"}`;
 
   const lines: string[] = [];
@@ -498,6 +535,11 @@ export function renderBookingConfirmationText(
     lines.push(`Restante: ${moneyMsg(p.total - (p.deposit as number), p.currency)}`);
   } else {
     lines.push("Seña: a coordinar con el anfitrión");
+  }
+  if (hasSecurityDeposit) {
+    lines.push(
+      `Depósito en garantía: ${moneyMsg(p.securityDeposit as number, p.currency)}`
+    );
   }
   lines.push("");
   lines.push(

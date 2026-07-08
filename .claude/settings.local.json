@@ -253,7 +253,11 @@
       "Bash(rg -rn \"Date.now\\\\\\(\\\\\\) \\\\+ 30|getTime\\\\\\(\\\\\\) \\\\+ 30|\\\\+ 30 \\\\*|30 \\\\* 60_000|30\\\\*60\" /Users/ignaciobaldovino/Apart-Cba/src -g '*.ts' -g '*.tsx')",
       "Bash(rg -rn \"America/Argentina|timeZone|timezone\" /Users/ignaciobaldovino/Apart-Cba/src/lib --include-zero -g '*.ts')",
       "Bash(perl -pi -e 's/\\\\btomorrowInTz\\\\\\(/tomorrowYmdInTz\\(/g; s/\\\\btodayInTz\\\\\\(/todayYmdInTz\\(/g' src/lib/actions/parte-diario.ts)",
-      "Bash(grep -viE \"^\\\\s*$\")"
+      "Bash(grep -viE \"^\\\\s*$\")",
+      "Bash(rg -n \"guest_name|full_name|Sin nombre|guest\\\\?\\\\.|guest\\\\.full_name|nombre\" src/components/units/*grid* src/components/units/*kanban* src/components/units/*calendar*)",
+      "Bash(rg -n \"full_name|guest_name|guest\\\\?\\\\.|Sin nombre|Bloqueo|guest\\\\.|\\\\.name\" src/components/units/pms/*.tsx)",
+      "Bash(rg -n \"security_deposit|deposit_amount|\\\\.select\\\\\\(|getBookingById|const b =|b\\\\.mode|mode|total_amount\" src/app/dashboard/reservas/[id]/page.tsx)",
+      "Bash(echo \"ESLINT_EXIT=$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,

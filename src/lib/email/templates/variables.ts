@@ -26,6 +26,12 @@ export const ALLOWED_TEMPLATE_VARS: Record<string, readonly string[]> = {
     "booking.total_amount_raw",
     "booking.currency",
     "booking.balance_due",
+    "booking.deposit_amount",
+    "booking.deposit_amount_raw",
+    "booking.remaining_after_deposit",
+    "booking.security_deposit",
+    "booking.security_deposit_raw",
+    "booking.mode",
     "booking.payment_link",
   ],
 };

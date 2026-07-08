@@ -258,6 +258,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
             currency={b.currency}
             total={Number(b.total_amount)}
             initialDeposit={b.deposit_amount != null ? Number(b.deposit_amount) : null}
+            securityDeposit={b.security_deposit != null ? Number(b.security_deposit) : null}
             listingUrl={listingUrl}
             phone={b.guest?.phone ?? null}
             canEdit={canEditBooking}
