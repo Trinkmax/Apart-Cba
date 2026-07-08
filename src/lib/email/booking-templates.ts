@@ -78,11 +78,14 @@ export async function buildBookingContext(
   const balance =
     Number(booking.total_amount ?? 0) - Number(booking.paid_amount ?? 0);
   const currency = String(booking.currency ?? "ARS");
-  // Seña informada: la explícita (deposit_amount) o, si no hay, lo cobrado
-  // ("Cobrado" = paid_amount, donde el staff carga la seña). Ver effectiveSena().
+  // Seña informada: la explícita (deposit_amount) → lo cobrado ("Cobrado" =
+  // paid_amount) → el valor de una noche por defecto. Ver effectiveSena().
+  const oneNight =
+    nights > 0 ? Math.round(Number(booking.total_amount ?? 0) / nights) : null;
   const sena = effectiveSena(
     booking.deposit_amount != null ? Number(booking.deposit_amount) : null,
-    booking.paid_amount != null ? Number(booking.paid_amount) : null
+    booking.paid_amount != null ? Number(booking.paid_amount) : null,
+    oneNight
   );
   const remainingAfterDeposit =
     sena != null ? Math.max(0, Number(booking.total_amount ?? 0) - sena) : null;

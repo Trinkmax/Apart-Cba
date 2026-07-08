@@ -53,10 +53,20 @@ export function GuestMessageCard({
   canEdit: boolean;
 }) {
   const [copied, setCopied] = useState(false);
-  // La seña por defecto es lo cobrado ("Cobrado" = paidAmount); un deposit_amount
-  // explícito manda. Así el mensaje toma la seña de lo que se cargó en la reserva
-  // sin re-tipearla. Ver effectiveSena().
-  const effectiveInitialDeposit = effectiveSena(initialDeposit, paidAmount);
+  // La seña suele ser el valor de una noche → default + chip de acceso rápido.
+  const nights = Math.max(
+    1,
+    Math.round(
+      (new Date(checkOutIso + "T12:00:00").getTime() -
+        new Date(checkInIso + "T12:00:00").getTime()) /
+        86_400_000
+    )
+  );
+  const oneNight = Math.round(total / nights);
+  // Seña por defecto: la explícita (deposit_amount) → lo cobrado ("Cobrado" =
+  // paidAmount) → el valor de una noche. Así el mensaje sale siempre completo,
+  // con seña y restante, sin re-tipear nada. Ver effectiveSena().
+  const effectiveInitialDeposit = effectiveSena(initialDeposit, paidAmount, oneNight);
   const [sena, setSena] = useState<string>(
     effectiveInitialDeposit != null ? String(effectiveInitialDeposit) : ""
   );
@@ -68,16 +78,6 @@ export function GuestMessageCard({
   const restante = senaNum === null ? null : Math.max(0, total - senaNum);
   const dirty = senaNum !== saved;
   const pct = (p: number) => String(Math.round(total * p));
-  // La seña suele ser el valor de una noche → chip de acceso rápido.
-  const nights = Math.max(
-    1,
-    Math.round(
-      (new Date(checkOutIso + "T12:00:00").getTime() -
-        new Date(checkInIso + "T12:00:00").getTime()) /
-        86_400_000
-    )
-  );
-  const oneNight = Math.round(total / nights);
 
   const message = renderBookingConfirmationText({
     guestName,
