@@ -1,12 +1,13 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Sparkles, Loader2, ChevronRight } from "lucide-react";
+import { Sparkles, Loader2, ChevronRight, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -27,6 +28,7 @@ import {
 import { generateSettlementsForPeriod } from "@/lib/actions/settlements";
 import { MONTHS, SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
 import { formatMoney } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 type PeriodSettlement = {
   id: string;
@@ -59,15 +61,21 @@ export function PeriodBatchPanel({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  // Transición dedicada a los cambios de período: mantiene la tabla actual
+  // visible (sin flash del skeleton) mientras el server trae los datos nuevos.
+  const [navPending, startNav] = useTransition();
+  const [query, setQuery] = useState("");
   const nowYear = new Date().getFullYear();
 
   function navigate(next: { year?: number; month?: number; currency?: string }) {
     const y = next.year ?? year;
     const m = next.month ?? month;
     const c = next.currency ?? currency;
-    router.push(
-      `/dashboard/liquidaciones/periodo?year=${y}&month=${m}&currency=${c}`,
-    );
+    startNav(() => {
+      router.push(
+        `/dashboard/liquidaciones?tab=periodo&year=${y}&month=${m}&currency=${c}`,
+      );
+    });
   }
 
   function generateAll() {
@@ -104,14 +112,21 @@ export function PeriodBatchPanel({
       }
     }
   }
-  const visible =
+  const scoped =
     currency === "all"
       ? display
       : display.filter((d) => !d.st || d.st.currency === currency);
+  // El buscador es un "encontrar", no un filtro de alcance: afina las filas
+  // visibles por nombre de propietario, pero los totales de abajo siguen
+  // reflejando el período completo (según la moneda elegida).
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? scoped.filter((d) => d.owner.full_name.toLowerCase().includes(q))
+    : scoped;
 
   // Totales por moneda (no se pueden sumar monedas distintas).
   const totalsByCcy = new Map<string, { count: number; sum: number }>();
-  for (const d of visible) {
+  for (const d of scoped) {
     if (!d.st) continue;
     const t = totalsByCcy.get(d.st.currency) ?? { count: 0, sum: 0 };
     t.count += 1;
@@ -186,6 +201,23 @@ export function PeriodBatchPanel({
             </SelectContent>
           </Select>
         </div>
+        <div className="space-y-1.5">
+          <label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Buscar
+          </label>
+          <div className="relative w-44 sm:w-52">
+            <Search
+              size={14}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              placeholder="Propietario…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="pl-8 h-9"
+            />
+          </div>
+        </div>
         <div className="ml-auto">
           {canCreate && (
             <Button
@@ -204,7 +236,13 @@ export function PeriodBatchPanel({
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      <div
+        className={cn(
+          "overflow-x-auto transition-opacity",
+          navPending && "opacity-60 pointer-events-none",
+        )}
+        aria-busy={navPending}
+      >
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50">
@@ -223,7 +261,9 @@ export function PeriodBatchPanel({
                   colSpan={6}
                   className="text-center text-sm text-muted-foreground py-8"
                 >
-                  No hay propietarios activos.
+                  {q
+                    ? `Sin resultados para «${query.trim()}».`
+                    : "No hay propietarios activos."}
                 </TableCell>
               </TableRow>
             )}

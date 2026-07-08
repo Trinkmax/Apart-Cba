@@ -153,8 +153,8 @@ function computeTotals(
 }
 
 function revalidateSettlement(id?: string) {
+  // Ambas vistas (Por propietario / Por período) viven ahora en esta única ruta.
   revalidatePath("/dashboard/liquidaciones");
-  revalidatePath("/dashboard/liquidaciones/periodo");
   if (id) revalidatePath(`/dashboard/liquidaciones/${id}`);
 }
 
@@ -2486,34 +2486,39 @@ export async function listOwnersForPeriod(year: number, month: number) {
   }
   const admin = createAdminClient();
 
-  const { data: units } = await admin
-    .from("units")
-    .select("id")
-    .eq("organization_id", organization.id);
-  const unitIds = (units ?? []).map((u) => u.id);
-
-  const [{ data: owners }, { data: settles }, { data: uo }] = await Promise.all([
-    admin
-      .from("owners")
-      .select("id, full_name, email, cbu, alias_cbu, preferred_currency")
-      .eq("organization_id", organization.id)
-      .eq("active", true)
-      .order("full_name"),
-    admin
-      .from("owner_settlements")
-      .select("id, owner_id, status, net_payable, currency, generated_at")
-      .eq("organization_id", organization.id)
-      .eq("period_year", year)
-      .eq("period_month", month)
-      .order("currency"),
-    unitIds.length
-      ? admin.from("unit_owners").select("owner_id, unit_id").in("unit_id", unitIds)
-      : Promise.resolve({ data: [] as Array<{ owner_id: string; unit_id: string }> }),
-  ]);
+  const [{ data: owners }, { data: settles }, { data: orgUnits }] =
+    await Promise.all([
+      admin
+        .from("owners")
+        .select("id, full_name, email, cbu, alias_cbu, preferred_currency")
+        .eq("organization_id", organization.id)
+        .eq("active", true)
+        .order("full_name"),
+      admin
+        .from("owner_settlements")
+        .select("id, owner_id, status, net_payable, currency, generated_at")
+        .eq("organization_id", organization.id)
+        .eq("period_year", year)
+        .eq("period_month", month)
+        .order("currency"),
+      // Conteo de unidades por propietario en UNA sola query: partimos de units
+      // (filtro por organización, que es columna real → type-safe) y embebemos
+      // sus unit_owners. Antes eran dos idas a la DB encadenadas (ids de units →
+      // unit_owners.in(unitIds)), una ronda extra de latencia contra la base.
+      admin
+        .from("units")
+        .select("unit_owners(owner_id)")
+        .eq("organization_id", organization.id),
+    ]);
 
   const unitCount = new Map<string, number>();
-  for (const r of uo ?? [])
-    unitCount.set(r.owner_id, (unitCount.get(r.owner_id) ?? 0) + 1);
+  for (const u of orgUnits ?? []) {
+    const links =
+      (u as { unit_owners: { owner_id: string }[] | null }).unit_owners ?? [];
+    for (const r of links) {
+      unitCount.set(r.owner_id, (unitCount.get(r.owner_id) ?? 0) + 1);
+    }
+  }
 
   type PeriodSettlement = {
     id: string;
@@ -2776,7 +2781,6 @@ export async function registerSettlementPayment(
 
   for (const p of [
     "/dashboard/liquidaciones",
-    "/dashboard/liquidaciones/periodo",
     `/dashboard/liquidaciones/${v.settlement_id}`,
     "/dashboard/caja",
     `/dashboard/caja/${v.account_id}`,
