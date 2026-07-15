@@ -1,7 +1,7 @@
 "use client";
 
-import { useTransition } from "react";
-import { MoreVertical, UserX, Loader2 } from "lucide-react";
+import { useState, useTransition } from "react";
+import { MoreVertical, UserX, UserCog, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
+import { MemberProfileSheet } from "@/components/team/member-profile-sheet";
 import { changeMemberRole, deactivateMember } from "@/lib/actions/team";
 import { ROLE_META } from "@/lib/constants";
 import type { OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
@@ -24,6 +25,7 @@ interface Props {
 export function TeamMemberActions({ member }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   function handleChangeRole(newRole: UserRole) {
     startTransition(async () => {
@@ -51,28 +53,37 @@ export function TeamMemberActions({ member }: Props) {
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button size="icon" variant="ghost" className="size-8" disabled={isPending}>
-          {isPending ? <Loader2 className="size-4 animate-spin" /> : <MoreVertical size={14} />}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Cambiar rol</DropdownMenuLabel>
-        {(Object.keys(ROLE_META) as UserRole[])
-          .filter((r) => r !== member.role)
-          .map((r) => (
-            <DropdownMenuItem key={r} onClick={() => handleChangeRole(r)}>
-              <span className="size-2 rounded-full mr-2" style={{ backgroundColor: ROLE_META[r].color }} />
-              {ROLE_META[r].label}
-            </DropdownMenuItem>
-          ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={handleDeactivate} className="text-destructive focus:text-destructive">
-          <UserX size={14} />
-          Desactivar
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="icon" variant="ghost" className="size-8" disabled={isPending}>
+            {isPending ? <Loader2 className="size-4 animate-spin" /> : <MoreVertical size={14} />}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem onClick={() => setSheetOpen(true)}>
+            <UserCog size={14} />
+            Editar perfil
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs text-muted-foreground">Cambiar rol</DropdownMenuLabel>
+          {(Object.keys(ROLE_META) as UserRole[])
+            .filter((r) => r !== member.role)
+            .map((r) => (
+              <DropdownMenuItem key={r} onClick={() => handleChangeRole(r)}>
+                <span className="size-2 rounded-full mr-2" style={{ backgroundColor: ROLE_META[r].color }} />
+                {ROLE_META[r].label}
+              </DropdownMenuItem>
+            ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={handleDeactivate} className="text-destructive focus:text-destructive">
+            <UserX size={14} />
+            Desactivar
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <MemberProfileSheet member={member} open={sheetOpen} onOpenChange={setSheetOpen} />
+    </>
   );
 }

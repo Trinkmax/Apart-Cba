@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
 import { createAdminClient } from "@/lib/supabase/server";
 import { IdentitySection } from "./identity-section";
 import { BrandingSection } from "./branding-section";
@@ -12,7 +13,10 @@ export const dynamic = "force-dynamic";
 export default async function OrganizacionPage() {
   const session = await getSession();
   if (!session) redirect("/login");
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  // Config de la organización: solo admin/recepción (esta ruta es hermana del
+  // grupo (settings), así que NO hereda el guard de (settings)/layout.tsx).
+  if (!isAdminLevel(role)) redirect("/dashboard");
 
   const admin = createAdminClient();
   const { data: templates } = await admin

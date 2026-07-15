@@ -1,5 +1,8 @@
+import { redirect } from "next/navigation";
 import { UserPlus, Users } from "lucide-react";
 import { listTeamMembers } from "@/lib/actions/team";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -10,6 +13,11 @@ import { ROLE_META } from "@/lib/constants";
 import { getInitials, formatTimeAgo } from "@/lib/format";
 
 export default async function EquipoPage() {
+  // Los perfiles del equipo incluyen datos personales sensibles (DNI, CUIT,
+  // domicilio, contacto de emergencia…): solo admin/recepción pueden verlos.
+  const { role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) redirect("/dashboard");
+
   const members = await listTeamMembers();
 
   return (
@@ -46,6 +54,9 @@ export default async function EquipoPage() {
                     {!m.active && <Badge variant="secondary" className="text-[10px]">Inactivo</Badge>}
                   </div>
                   <div className="text-xs text-muted-foreground">{m.email ?? "—"}</div>
+                  {m.profile?.job_title && (
+                    <div className="text-xs text-muted-foreground">{m.profile.job_title}</div>
+                  )}
                   {m.joined_at && (
                     <div className="text-[10px] text-muted-foreground mt-0.5">
                       Se unió {formatTimeAgo(m.joined_at)}

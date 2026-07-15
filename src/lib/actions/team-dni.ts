@@ -29,7 +29,7 @@ async function assertCanManageDni(targetUserId: string): Promise<void> {
     .from("organization_members")
     .select("organization_id, role, active")
     .eq("user_id", session.userId)
-    .eq("role", "admin")
+    .in("role", ["admin", "recepcion"])
     .eq("active", true);
   if (error) throw new Error(error.message);
 

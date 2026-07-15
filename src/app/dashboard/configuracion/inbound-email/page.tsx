@@ -1,8 +1,15 @@
+import { redirect } from "next/navigation";
 import { Mail } from "lucide-react";
 import { getInboundEmailConfig, listInboundEmails } from "@/lib/actions/inbound-email";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
 import { InboundEmailClient } from "@/components/inbound-email/inbound-email-client";
 
 export default async function InboundEmailPage() {
+  // Ruta hermana del grupo (settings): NO hereda su guard admin → lo ponemos acá.
+  const { role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) redirect("/dashboard");
+
   const [config, emails] = await Promise.all([
     getInboundEmailConfig(),
     listInboundEmails(),

@@ -17,8 +17,36 @@ const inviteSchema = z.object({
 
 export type InviteInput = z.infer<typeof inviteSchema>;
 
+// Perfil personal de un miembro del equipo (lo cargan los admins desde /equipo).
+const memberProfileSchema = z.object({
+  full_name: z.string().min(2, "Nombre muy corto").max(120),
+  phone: z.string().max(40).nullish(),
+  job_title: z.string().max(80).nullish(),
+  dni_number: z.string().max(30).nullish(),
+  cuit_cuil: z.string().max(20).nullish(),
+  address: z.string().max(200).nullish(),
+  birth_date: z.string().nullish(),
+  emergency_contact_name: z.string().max(120).nullish(),
+  emergency_contact_phone: z.string().max(40).nullish(),
+  notes: z.string().max(2000).nullish(),
+});
+
+export type MemberProfileInput = z.infer<typeof memberProfileSchema>;
+
+/** "" | "   " | null | undefined → null; caso contrario, el valor trimeado. */
+function emptyToNull(v?: string | null): string | null {
+  const t = (v ?? "").trim();
+  return t.length ? t : null;
+}
+
 export async function listTeamMembers(): Promise<(OrganizationMember & { profile: UserProfile | null; email: string | null })[]> {
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  // Defensa en profundidad: los perfiles traen PII del staff (DNI, CUIT,
+  // domicilio, contacto de emergencia…) → solo admin/recepción o superadmin.
+  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
+    throw new Error("Solo los administradores pueden ver los perfiles del equipo");
+  }
   const admin = createAdminClient();
 
   const { data: members } = await admin
@@ -174,6 +202,59 @@ export async function changeMemberRole(userId: string, newRole: UserRole) {
     .eq("user_id", userId);
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/configuracion/equipo");
+}
+
+/**
+ * Edita el perfil personal de un miembro del equipo. Solo admins de la org (o
+ * superadmin) y solo sobre miembros de la propia organización. El nombre se
+ * refleja también en el resto de la app (tickets, historial, etc.).
+ */
+export async function updateMemberProfile(userId: string, input: MemberProfileInput) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
+    throw new Error("Solo los admins pueden editar perfiles del equipo");
+  }
+
+  const admin = createAdminClient();
+
+  // El target tiene que ser miembro de esta organización.
+  const { data: membership, error: memErr } = await admin
+    .from("organization_members")
+    .select("user_id")
+    .eq("organization_id", organization.id)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (memErr) throw new Error(memErr.message);
+  if (!membership) throw new Error("La persona no pertenece a esta organización");
+
+  const v = memberProfileSchema.parse(input);
+
+  // birth_date: normalizamos "" → null y validamos formato yyyy-mm-dd para no
+  // pasarle basura al tipo `date` de Postgres.
+  const birth = emptyToNull(v.birth_date);
+  const birthDate = birth && /^\d{4}-\d{2}-\d{2}$/.test(birth) ? birth : null;
+
+  const { error } = await admin
+    .from("user_profiles")
+    .update({
+      full_name: v.full_name.trim(),
+      phone: emptyToNull(v.phone),
+      job_title: emptyToNull(v.job_title),
+      dni_number: emptyToNull(v.dni_number),
+      cuit_cuil: emptyToNull(v.cuit_cuil),
+      address: emptyToNull(v.address),
+      birth_date: birthDate,
+      emergency_contact_name: emptyToNull(v.emergency_contact_name),
+      emergency_contact_phone: emptyToNull(v.emergency_contact_phone),
+      notes: emptyToNull(v.notes),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/dashboard/configuracion/equipo");
+  revalidatePath("/dashboard", "layout");
 }
 
 export async function deactivateMember(userId: string) {

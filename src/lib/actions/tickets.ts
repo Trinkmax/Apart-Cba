@@ -22,6 +22,10 @@ const ticketSchema = z.object({
   cost_currency: z.string().default("ARS"),
   billable_to: z.enum(["owner", "apartcba", "guest"]).default("apartcba"),
   related_owner_id: z.string().uuid().optional().nullable(),
+  // Contacto alternativo para coordinar el arreglo (por si el ocupante no está
+  // en el depto). Queda guardado en el ticket para que el técnico lo tenga.
+  contact_name: z.string().max(120).optional().nullable(),
+  contact_phone: z.string().max(40).optional().nullable(),
   notes: z.string().optional().nullable(),
 });
 

@@ -1,10 +1,17 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Building2, Clock } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  Clock,
+  MessageCircle,
+  Phone,
+} from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getTicket } from "@/lib/actions/tickets";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatDate, formatTimeAgo } from "@/lib/format";
 import { MobileTicketEditor } from "@/components/tickets/mobile-ticket-editor";
@@ -25,6 +32,8 @@ export default async function MobileTicketDetailPage({ params }: PageProps) {
   const sm = TICKET_STATUS_META[ticket.status as keyof typeof TICKET_STATUS_META];
   const pm =
     TICKET_PRIORITY_META[ticket.priority as keyof typeof TICKET_PRIORITY_META];
+  const contactPhone = ticket.contact_phone?.trim() ?? "";
+  const contactDigits = contactPhone.replace(/\D/g, "");
 
   return (
     <div className="p-4 space-y-4">
@@ -89,6 +98,50 @@ export default async function MobileTicketDetailPage({ params }: PageProps) {
           </div>
         </div>
       </Card>
+
+      {(contactPhone || ticket.contact_name) && (
+        <Card className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-950/30">
+          <div className="space-y-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+              <Phone size={12} /> Contacto para coordinar
+            </div>
+            <div className="text-sm">
+              {ticket.contact_name && (
+                <span className="font-medium">{ticket.contact_name}</span>
+              )}
+              {ticket.contact_name && contactPhone && (
+                <span className="text-muted-foreground"> · </span>
+              )}
+              {contactPhone && <span className="tabular-nums">{contactPhone}</span>}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Coordiná el arreglo con este contacto.
+            </p>
+            {contactDigits && (
+              <div className="flex items-center gap-2">
+                <Button asChild size="sm" variant="outline">
+                  <a href={`tel:${contactPhone}`}>
+                    <Phone size={14} /> Llamar
+                  </a>
+                </Button>
+                <Button
+                  asChild
+                  size="sm"
+                  className="bg-[#25D366] text-white hover:bg-[#1fb955]"
+                >
+                  <a
+                    href={`https://wa.me/${contactDigits}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <MessageCircle size={14} /> WhatsApp
+                  </a>
+                </Button>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       <MobileTicketEditor
         ticketId={ticket.id}

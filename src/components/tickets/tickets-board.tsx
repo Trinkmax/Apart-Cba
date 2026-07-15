@@ -131,7 +131,7 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, me
       />
 
       {/* FAB siempre visible — vía garantizada para crear tickets */}
-      <TicketFormDialog units={units} owners={owners} occupancyByUnit={occupancyByUnit}>
+      <TicketFormDialog units={units} owners={owners} members={members} occupancyByUnit={occupancyByUnit}>
         <Button
           size="lg"
           className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"

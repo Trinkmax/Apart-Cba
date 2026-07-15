@@ -63,7 +63,7 @@ export default async function MantenimientoPage({
         <div className="flex items-center gap-2 justify-self-start sm:justify-self-end">
           <HistoryToggle basePath="/dashboard/mantenimiento" active={showArchived} />
           {!showArchived && (
-            <TicketFormDialog units={units} owners={owners} occupancyByUnit={occupancyByUnit}>
+            <TicketFormDialog units={units} owners={owners} members={members} occupancyByUnit={occupancyByUnit}>
               <Button className="gap-2 shrink-0">
                 <Plus size={16} /> Nuevo ticket
               </Button>

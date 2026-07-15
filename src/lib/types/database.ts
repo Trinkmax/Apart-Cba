@@ -180,6 +180,15 @@ export interface UserProfile {
   dni_front_path: string | null;
   dni_back_path: string | null;
   dni_updated_at: string | null;
+  // Información personal del staff (la cargan admins desde /configuracion/equipo)
+  job_title: string | null;
+  dni_number: string | null;
+  cuit_cuil: string | null;
+  address: string | null;
+  birth_date: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -454,6 +463,9 @@ export interface MaintenanceTicket {
   charged_to_owner_at: string | null;
   charged_to_settlement_id: string | null;
   notes: string | null;
+  // Contacto alternativo para coordinar el arreglo (por si el ocupante no está)
+  contact_name: string | null;
+  contact_phone: string | null;
   archived_at: string | null;
   created_at: string;
   updated_at: string;

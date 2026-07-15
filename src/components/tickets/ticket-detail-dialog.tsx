@@ -8,8 +8,10 @@ import {
   CheckCircle2,
   Clock,
   Loader2,
+  MessageCircle,
   Package,
   Pencil,
+  Phone,
   Trash2,
   UserCog,
   Wrench,
@@ -112,6 +114,8 @@ function buildForm(t: Props["ticket"]): TicketInput | null {
         billable_to: t.billable_to,
         related_owner_id: t.related_owner_id ?? null,
         notes: t.notes ?? "",
+        contact_name: t.contact_name ?? "",
+        contact_phone: t.contact_phone ?? "",
       }
     : null;
 }
@@ -411,6 +415,69 @@ export function TicketDetailDialog({
               <p className="text-sm text-muted-foreground italic">Sin descripción</p>
             )}
           </Field>
+
+          {/* Contacto para coordinar el arreglo */}
+          {isEditing ? (
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Contacto (nombre)" icon={<Phone size={13} />}>
+                <Input
+                  value={form.contact_name ?? ""}
+                  onChange={(e) => set("contact_name", e.target.value)}
+                  placeholder="Nombre de quien coordina"
+                />
+              </Field>
+              <Field label="Teléfono de contacto">
+                <Input
+                  value={form.contact_phone ?? ""}
+                  onChange={(e) => set("contact_phone", e.target.value)}
+                  placeholder="Ej: +54 351 555 1234"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Por si el ocupante no está en el depto.
+                </p>
+              </Field>
+            </div>
+          ) : (
+            (ticket.contact_phone || ticket.contact_name) && (
+              <Field label="Contacto para coordinar" icon={<Phone size={13} />}>
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-900/50 dark:bg-amber-950/30 space-y-2">
+                  <div className="text-sm">
+                    {ticket.contact_name && (
+                      <span className="font-medium">{ticket.contact_name}</span>
+                    )}
+                    {ticket.contact_name && ticket.contact_phone && (
+                      <span className="text-muted-foreground"> · </span>
+                    )}
+                    {ticket.contact_phone && (
+                      <span className="tabular-nums">{ticket.contact_phone}</span>
+                    )}
+                  </div>
+                  {ticket.contact_phone && ticket.contact_phone.replace(/\D/g, "") !== "" && (
+                    <div className="flex items-center gap-2">
+                      <Button asChild size="sm" variant="outline">
+                        <a href={`tel:${ticket.contact_phone}`}>
+                          <Phone size={14} /> Llamar
+                        </a>
+                      </Button>
+                      <Button
+                        asChild
+                        size="sm"
+                        className="bg-[#25D366] text-white hover:bg-[#1fb955]"
+                      >
+                        <a
+                          href={`https://wa.me/${ticket.contact_phone.replace(/\D/g, "")}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <MessageCircle size={14} /> WhatsApp
+                        </a>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </Field>
+            )
+          )}
 
           {/* Grid: prioridad / categoría */}
           <div className="grid grid-cols-2 gap-4">

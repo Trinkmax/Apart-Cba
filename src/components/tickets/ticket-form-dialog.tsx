@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { CircleCheck, Loader2, MessageCircle, Pencil, Phone, UserCheck } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { CircleCheck, Loader2, MessageCircle, Pencil, Phone, UserCheck, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -19,17 +19,22 @@ import { createTicket, updateTicket, type TicketInput } from "@/lib/actions/tick
 import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import type { MaintenanceTicket, Unit, Owner } from "@/lib/types/database";
 import type { CurrentOccupancy } from "@/lib/actions/bookings";
+import type { TicketMember } from "./ticket-detail-dialog";
+import { cn } from "@/lib/utils";
+
+const UNASSIGNED = "__none__";
 
 interface Props {
   children: React.ReactNode;
   ticket?: MaintenanceTicket;
   units: Pick<Unit, "id" | "code" | "name">[];
   owners: Owner[];
+  members?: TicketMember[];
   defaultUnitId?: string;
   occupancyByUnit?: Record<string, CurrentOccupancy>;
 }
 
-export function TicketFormDialog({ children, ticket, units, owners, defaultUnitId, occupancyByUnit }: Props) {
+export function TicketFormDialog({ children, ticket, units, owners, members, defaultUnitId, occupancyByUnit }: Props) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -49,6 +54,8 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
     billable_to: ticket?.billable_to ?? "apartcba",
     related_owner_id: ticket?.related_owner_id ?? null,
     notes: ticket?.notes ?? "",
+    contact_name: ticket?.contact_name ?? null,
+    contact_phone: ticket?.contact_phone ?? null,
   });
 
   function set<K extends keyof TicketInput>(k: K, v: TicketInput[K]) {
@@ -95,6 +102,10 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
               <OccupancyPanel
                 key={form.unit_id}
                 occupancy={occupancyByUnit[form.unit_id] ?? null}
+                onContactChange={(contact) => {
+                  set("contact_name", contact.name);
+                  set("contact_phone", contact.phone);
+                }}
               />
             )}
           </div>
@@ -152,6 +163,28 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
             </div>
           </div>
 
+          {members && members.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="flex items-center gap-1.5">
+                <Wrench size={13} /> Asignar a
+              </Label>
+              <Select
+                value={form.assigned_to ?? UNASSIGNED}
+                onValueChange={(v) => set("assigned_to", v === UNASSIGNED ? null : v)}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent className="max-h-72">
+                  <SelectItem value={UNASSIGNED}>Sin asignar</SelectItem>
+                  {members.map((mem) => (
+                    <SelectItem key={mem.user_id} value={mem.user_id}>
+                      {mem.full_name?.trim() || "Sin nombre"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3 border-t pt-4">
             <div className="space-y-1.5">
               <Label>Costo estimado</Label>
@@ -200,65 +233,114 @@ export function TicketFormDialog({ children, ticket, units, owners, defaultUnitI
   );
 }
 
-function OccupancyPanel({ occupancy }: { occupancy: CurrentOccupancy | null }) {
-  const original = occupancy?.guest_phone?.trim() ?? "";
-  const [phone, setPhone] = useState(original);
+function OccupancyPanel({
+  occupancy,
+  onContactChange,
+}: {
+  occupancy: CurrentOccupancy | null;
+  onContactChange?: (contact: { name: string | null; phone: string | null }) => void;
+}) {
+  const occupied = !!occupancy;
+  const occName = occupancy?.guest_name?.trim() ?? "";
+  const occPhone = occupancy?.guest_phone?.trim() ?? "";
+
+  // Prellenamos el contacto con los datos del ocupante (si hay); recepción
+  // puede editarlos o —en un depto vacío— cargar a quién llamar (encargado…).
+  const [phone, setPhone] = useState(occPhone);
+  const [contactName, setContactName] = useState(occName);
   const [editing, setEditing] = useState(false);
 
-  if (!occupancy) {
-    return (
-      <div className="mt-2 flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs dark:border-emerald-900/50 dark:bg-emerald-950/30">
-        <CircleCheck size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-        <span className="font-medium text-emerald-900 dark:text-emerald-200">Disponible</span>
-        <span className="text-emerald-700/70 dark:text-emerald-300/70">— sin huéspedes en el depto</span>
-      </div>
-    );
-  }
-
-  const isMonthly = occupancy.mode === "mensual";
-  const label = isMonthly ? "Inquilino" : "Huésped";
-  const statusLabel = occupancy.status === "check_in" ? "Ocupado" : "Reservado";
-
   const trimmed = phone.trim();
+  const nameTrimmed = contactName.trim();
+
+  // Guardamos SIEMPRE el nombre+teléfono mostrados en el ticket, para que el
+  // técnico tenga con quién coordinar desde el celular; vacío → null. Deps
+  // acotadas para no re-disparar en cada render (React Compiler).
+  useEffect(() => {
+    if (!onContactChange) return;
+    onContactChange({ name: nameTrimmed || null, phone: trimmed || null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trimmed, nameTrimmed]);
+
+  const isMonthly = occupancy?.mode === "mensual";
+  const occLabel = isMonthly ? "Inquilino" : "Huésped";
+  const statusLabel = occupancy?.status === "check_in" ? "Ocupado" : "Reservado";
+
   const phoneDigits = trimmed.replace(/\D/g, "");
   const waHref = phoneDigits ? `https://wa.me/${phoneDigits}` : null;
-  const telHref = trimmed ? `tel:${trimmed}` : null;
-  const edited = trimmed !== original;
+  const telHref = phoneDigits ? `tel:${trimmed}` : null;
+  const edited = occupied && (trimmed !== occPhone || nameTrimmed !== occName);
+
+  const cx = occupied
+    ? {
+        wrap: "border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30",
+        accent: "text-amber-700 dark:text-amber-400",
+        strong: "text-amber-900 dark:text-amber-200",
+        soft: "text-amber-700/70 dark:text-amber-300/70",
+        link: "text-amber-700 dark:text-amber-300",
+        help: "text-amber-800/70 dark:text-amber-300/70",
+      }
+    : {
+        wrap: "border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/30",
+        accent: "text-emerald-600 dark:text-emerald-400",
+        strong: "text-emerald-900 dark:text-emerald-200",
+        soft: "text-emerald-700/70 dark:text-emerald-300/70",
+        link: "text-emerald-700 dark:text-emerald-300",
+        help: "text-emerald-800/70 dark:text-emerald-300/70",
+      };
 
   return (
-    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs dark:border-amber-900/50 dark:bg-amber-950/30">
+    <div className={cn("mt-2 rounded-md border p-3 text-xs", cx.wrap)}>
       <div className="flex items-center gap-2">
-        <UserCheck size={14} className="text-amber-700 dark:text-amber-400 shrink-0" />
-        <span className="font-semibold text-amber-900 dark:text-amber-200">{statusLabel}</span>
-        <span className="text-amber-700/70 dark:text-amber-300/70">
-          · {label} hasta {formatShortDate(occupancy.check_out_date)}
+        {occupied ? (
+          <UserCheck size={14} className={cn("shrink-0", cx.accent)} />
+        ) : (
+          <CircleCheck size={14} className={cn("shrink-0", cx.accent)} />
+        )}
+        <span className={cn("font-semibold", cx.strong)}>
+          {occupied ? statusLabel : "Disponible"}
+        </span>
+        <span className={cx.soft}>
+          {occupied
+            ? `· ${occLabel} hasta ${formatShortDate(occupancy!.check_out_date)}`
+            : "— sin huéspedes en el depto"}
         </span>
       </div>
 
       <div className="mt-2 pl-6">
-        <div className="font-medium text-foreground truncate">
-          {occupancy.guest_name ?? "Sin nombre"}
-        </div>
+        {(occupied || nameTrimmed !== "") && (
+          <div className="font-medium text-foreground truncate">
+            {nameTrimmed || "Sin nombre"}
+          </div>
+        )}
 
         {editing ? (
-          <div className="mt-1.5 flex items-center gap-2">
+          <div className="mt-1.5 space-y-1.5">
             <Input
               type="tel"
               autoFocus
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              placeholder="+54 9 351 555-1234"
+              placeholder="Teléfono — +54 9 351 555-1234"
               className="h-7 text-xs"
             />
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => setEditing(false)}
-            >
-              Listo
-            </Button>
+            <div className="flex items-center gap-2">
+              <Input
+                value={contactName}
+                onChange={(e) => setContactName(e.target.value)}
+                placeholder="Nombre del contacto (opcional)"
+                className="h-7 text-xs"
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 shrink-0 px-2 text-[11px]"
+                onClick={() => setEditing(false)}
+              >
+                Listo
+              </Button>
+            </div>
           </div>
         ) : (
           <div className="mt-0.5 flex items-center justify-between gap-2">
@@ -266,61 +348,67 @@ function OccupancyPanel({ occupancy }: { occupancy: CurrentOccupancy | null }) {
               {trimmed ? (
                 <span className="truncate tabular-nums text-muted-foreground">{trimmed}</span>
               ) : (
-                <span className="italic text-muted-foreground">Sin teléfono cargado</span>
+                <span className="italic text-muted-foreground">
+                  {occupied ? "Sin teléfono cargado" : "Sin contacto"}
+                </span>
               )}
               <button
                 type="button"
                 onClick={() => setEditing(true)}
-                className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-700 hover:underline dark:text-amber-300"
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 text-[11px] font-medium hover:underline",
+                  cx.link
+                )}
               >
-                <Pencil size={11} /> {trimmed ? "Editar" : "Agregar"}
+                <Pencil size={11} /> {trimmed ? "Editar" : "Agregar contacto"}
               </button>
               {edited && (
                 <button
                   type="button"
-                  onClick={() => setPhone(original)}
+                  onClick={() => {
+                    setPhone(occPhone);
+                    setContactName(occName);
+                  }}
                   className="shrink-0 text-[11px] text-muted-foreground hover:underline"
                 >
                   Restablecer
                 </button>
               )}
             </div>
-            {trimmed && (
+            {phoneDigits.length > 0 && (
               <div className="flex items-center gap-1 shrink-0">
-                {telHref && (
-                  <Button
-                    asChild
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 px-2 text-[11px]"
-                    title="Llamar"
-                  >
-                    <a href={telHref}>
-                      <Phone size={12} /> Llamar
-                    </a>
-                  </Button>
-                )}
-                {waHref && (
-                  <Button
-                    asChild
-                    size="sm"
-                    className="h-7 gap-1 bg-[#25D366] px-2 text-[11px] text-white hover:bg-[#1fb955]"
-                    title="Coordinar por WhatsApp"
-                  >
-                    <a href={waHref} target="_blank" rel="noopener noreferrer">
-                      <MessageCircle size={12} /> WhatsApp
-                    </a>
-                  </Button>
-                )}
+                <Button
+                  asChild
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 px-2 text-[11px]"
+                  title="Llamar"
+                >
+                  <a href={telHref!}>
+                    <Phone size={12} /> Llamar
+                  </a>
+                </Button>
+                <Button
+                  asChild
+                  size="sm"
+                  className="h-7 gap-1 bg-[#25D366] px-2 text-[11px] text-white hover:bg-[#1fb955]"
+                  title="Coordinar por WhatsApp"
+                >
+                  <a href={waHref!} target="_blank" rel="noopener noreferrer">
+                    <MessageCircle size={12} /> WhatsApp
+                  </a>
+                </Button>
               </div>
             )}
           </div>
         )}
       </div>
 
-      <p className="mt-2 pl-6 text-[11px] leading-snug text-amber-800/70 dark:text-amber-300/70">
-        Coordiná día y horario del arreglo directamente con {isMonthly ? "el inquilino" : "el huésped"}.
-        {edited ? " Estás usando un número distinto al cargado en la reserva." : ""}
+      <p className={cn("mt-2 pl-6 text-[11px] leading-snug", cx.help)}>
+        {occupied
+          ? `Coordiná día y horario del arreglo directamente con ${isMonthly ? "el inquilino" : "el huésped"}.`
+          : "Depto vacío. Si hay quién abra o coordine (encargado, dueño…), agregá su contacto."}
+        {edited ? " Estás usando datos distintos a los de la reserva." : ""}
       </p>
     </div>
   );

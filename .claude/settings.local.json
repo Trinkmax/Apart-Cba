@@ -262,7 +262,11 @@
       "Bash(rg -rln \"Reenviar confirmación|Editá el contenido|Vista previa|resendBookingConfirmation|emailOverride\" src/components src/app --glob \"*.tsx\")",
       "Bash(rg -rn \"Te confirmamos la reserva|DEFAULT_TEMPLATE|defaultBody|defaultTemplate|getOrCreate.*[Tt]emplate|Cualquier consulta, escribinos\" src supabase --glob \"*.ts\" --glob \"*.tsx\" --glob \"*.sql\")",
       "Bash(rg -rn \"ConfirmBookingDialog|initialTemplate|getBookingConfirmationPreview|booking-confirmation-preview\" src/components src/app src/lib --glob \"*.ts\" --glob \"*.tsx\")",
-      "Bash(rg -rn \"getRenderedBookingTemplate|buildBookingContext|buildOwnerConfirmationDraft\" src --glob \"*.ts\" --glob \"*.tsx\")"
+      "Bash(rg -rn \"getRenderedBookingTemplate|buildBookingContext|buildOwnerConfirmationDraft\" src --glob \"*.ts\" --glob \"*.tsx\")",
+      "Bash(rg -n \"members\" src/components/tickets/*.tsx)",
+      "Bash(rg -n \"TicketMember\" src/components/tickets/*.tsx src/lib/**/*.ts)",
+      "Bash(rg -n \"export function getInitials|export function formatTimeAgo|export function formatDate\" src/lib/format.ts src/lib/*.ts)",
+      "Bash(echo \"=== LINT EXIT: $? ===\")"
     ]
   },
   "enableAllProjectMcpServers": true,
