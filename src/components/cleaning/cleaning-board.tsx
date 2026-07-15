@@ -6,6 +6,7 @@ import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, T
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CLEANING_STATUS_META } from "@/lib/constants";
+import { isAdminLevel } from "@/lib/permissions";
 import { formatDayRelative } from "@/lib/format";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,9 @@ export function CleaningBoard({
   const [tasks, setTasks] = useState<CT[]>(initialTasks);
   const [openId, setOpenId] = useState<string | null>(null);
 
+  // Visibilidad por fila: admin/recepción ven todo; limpieza solo lo asignado.
+  const restrictToUserId = isAdminLevel(currentUserRole) ? null : currentUserId;
+
   // Tick por minuto: los chips "Hoy/Mañana/Atrasada" cruzan la medianoche
   // correctamente en tableros que quedan abiertos toda la noche.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -77,17 +81,27 @@ export function CleaningBoard({
 
   const onInsert = useCallback(
     (row: CleaningTask) => {
+      if (restrictToUserId && row.assigned_to !== restrictToUserId) return;
       setTasks((cur) => (cur.some((t) => t.id === row.id) ? cur : [enrich(row), ...cur]));
     },
-    [enrich]
+    [enrich, restrictToUserId]
   );
   const onUpdate = useCallback(
     (row: CleaningTask) => {
-      setTasks((cur) =>
-        cur.map((t) => (t.id === row.id ? { ...t, ...row, unit: t.unit ?? enrich(row).unit } : t))
-      );
+      // En vista restringida: si la tarea se reasignó a otra persona, sacarla;
+      // si se reasignó a este usuario, incorporarla aunque no estuviera.
+      if (restrictToUserId && row.assigned_to !== restrictToUserId) {
+        setTasks((cur) => cur.filter((t) => t.id !== row.id));
+        return;
+      }
+      setTasks((cur) => {
+        if (cur.some((t) => t.id === row.id)) {
+          return cur.map((t) => (t.id === row.id ? { ...t, ...row, unit: t.unit ?? enrich(row).unit } : t));
+        }
+        return restrictToUserId ? [enrich(row), ...cur] : cur;
+      });
     },
-    [enrich]
+    [enrich, restrictToUserId]
   );
   const onDelete = useCallback((id: string) => {
     setTasks((cur) => cur.filter((t) => t.id !== id));

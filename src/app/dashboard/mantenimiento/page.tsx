@@ -5,6 +5,8 @@ import { listOwners } from "@/lib/actions/owners";
 import { listOrgMemberNames } from "@/lib/actions/team";
 import { listCurrentOccupancyByUnit } from "@/lib/actions/bookings";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { requireSession } from "@/lib/actions/auth";
+import { isAdminLevel } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { TicketFormDialog } from "@/components/tickets/ticket-form-dialog";
 import { TicketsBoard } from "@/components/tickets/tickets-board";
@@ -22,8 +24,9 @@ export default async function MantenimientoPage({
   const { historial } = await searchParams;
   const showArchived = historial === "1";
 
-  const [{ organization }, tickets, units, owners, members, occupancyByUnit] =
+  const [session, { organization, role }, tickets, units, owners, members, occupancyByUnit] =
     await Promise.all([
+      requireSession(),
       getCurrentOrg(),
       listTickets({ showArchived }),
       listUnitsEnriched(),
@@ -31,6 +34,8 @@ export default async function MantenimientoPage({
       listOrgMemberNames(),
       listCurrentOccupancyByUnit(),
     ]);
+  // Mantenimiento ve solo lo asignado a esa persona; admin/recepción, todo.
+  const restrictToUserId = isAdminLevel(role) ? null : session.userId;
 
   const open = tickets.filter(
     (t) => !["resuelto", "cerrado"].includes((t as TicketWithUnit).status)
@@ -83,6 +88,7 @@ export default async function MantenimientoPage({
         <TicketsBoard
           organizationId={organization.id}
           initialTickets={tickets as TicketWithUnit[]}
+          restrictToUserId={restrictToUserId}
           units={units.map((u) => ({
             id: u.id,
             code: u.code,

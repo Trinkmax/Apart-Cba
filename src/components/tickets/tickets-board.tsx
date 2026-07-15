@@ -32,9 +32,12 @@ interface Props {
   owners: Owner[];
   members?: TicketMember[];
   occupancyByUnit: Record<string, CurrentOccupancy>;
+  /** Si tiene valor, la vista se limita a los tickets asignados a ese usuario
+   *  (mantenimiento ve solo lo suyo). null/undefined = ve todo (admin/recepción). */
+  restrictToUserId?: string | null;
 }
 
-export function TicketsBoard({ organizationId, initialTickets, units, owners, members, occupancyByUnit }: Props) {
+export function TicketsBoard({ organizationId, initialTickets, units, owners, members, occupancyByUnit, restrictToUserId }: Props) {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
 
@@ -64,17 +67,27 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, me
 
   const onInsert = useCallback(
     (row: MaintenanceTicket) => {
+      if (restrictToUserId && row.assigned_to !== restrictToUserId) return;
       setTickets((cur) => (cur.some((t) => t.id === row.id) ? cur : [enrich(row), ...cur]));
     },
-    [enrich]
+    [enrich, restrictToUserId]
   );
   const onUpdate = useCallback(
     (row: MaintenanceTicket) => {
-      setTickets((cur) =>
-        cur.map((t) => (t.id === row.id ? { ...t, ...row, unit: t.unit ?? enrich(row).unit } : t))
-      );
+      // En vista restringida: si el ticket se reasignó a otra persona, sacarlo;
+      // si se reasignó a este usuario, incorporarlo aunque no estuviera.
+      if (restrictToUserId && row.assigned_to !== restrictToUserId) {
+        setTickets((cur) => cur.filter((t) => t.id !== row.id));
+        return;
+      }
+      setTickets((cur) => {
+        if (cur.some((t) => t.id === row.id)) {
+          return cur.map((t) => (t.id === row.id ? { ...t, ...row, unit: t.unit ?? enrich(row).unit } : t));
+        }
+        return restrictToUserId ? [enrich(row), ...cur] : cur;
+      });
     },
-    [enrich]
+    [enrich, restrictToUserId]
   );
   const onDelete = useCallback((id: string) => {
     setTickets((cur) => cur.filter((t) => t.id !== id));

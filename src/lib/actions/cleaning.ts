@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { UNIT_REF_SELECT } from "@/lib/constants";
+import { isAdminLevel } from "@/lib/permissions";
 import {
   DEFAULT_ORG_TIMEZONE,
   dayRangeInTz,
@@ -94,7 +95,8 @@ export async function listCleaningTasks(filters?: {
   /** Si es `true`, devuelve sólo las tareas ya archivadas por el reset semanal. Default: sólo activas. */
   showArchived?: boolean;
 }) {
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   let q = admin
     .from("cleaning_tasks")
@@ -106,7 +108,10 @@ export async function listCleaningTasks(filters?: {
     q = q.is("archived_at", null);
   }
   if (filters?.status) q = q.eq("status", filters.status);
-  if (filters?.assignedTo) q = q.eq("assigned_to", filters.assignedTo);
+  // Visibilidad por fila: admin/recepción ven todo (respetando el filtro
+  // opcional assignedTo); el resto (limpieza) solo ve sus tareas asignadas.
+  const effectiveAssignedTo = isAdminLevel(role) ? filters?.assignedTo : session.userId;
+  if (effectiveAssignedTo) q = q.eq("assigned_to", effectiveAssignedTo);
   if (filters?.upcoming) {
     // Inicio del día en la tz de la org — NO la del server (Vercel corre en UTC;
     // su medianoche son las 21:00 del día anterior en Argentina).
@@ -493,8 +498,19 @@ export async function updateCleaningTask(id: string, input: Partial<CleaningInpu
 export async function listCleaningEvents(taskId: string): Promise<
   (CleaningEvent & { actor: { full_name: string | null } | null })[]
 > {
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
+  // Visibilidad por fila: limpieza solo ve el historial de sus tareas.
+  if (!isAdminLevel(role)) {
+    const { data: owner } = await admin
+      .from("cleaning_tasks")
+      .select("assigned_to")
+      .eq("id", taskId)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (!owner || owner.assigned_to !== session.userId) return [];
+  }
   const { data, error } = await admin
     .from("cleaning_events")
     .select("*")

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
-import { can } from "@/lib/permissions";
+import { can, isAdminLevel } from "@/lib/permissions";
 import { UNIT_REF_SELECT } from "@/lib/constants";
 import type { MaintenanceTicket, TicketEvent, TicketStatus } from "@/lib/types/database";
 
@@ -38,12 +38,16 @@ export async function listTickets(filters?: {
   /** Si es `true`, devuelve sólo los tickets ya archivados por el reset semanal. Default: sólo activos. */
   showArchived?: boolean;
 }) {
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   let q = admin
     .from("maintenance_tickets")
     .select(`*, unit:units(${UNIT_REF_SELECT})`)
     .eq("organization_id", organization.id);
+  // Visibilidad por fila: admin/recepción ven todo; el resto (mantenimiento)
+  // solo ve los tickets asignados a esa persona.
+  if (!isAdminLevel(role)) q = q.eq("assigned_to", session.userId);
   if (filters?.showArchived) {
     q = q.not("archived_at", "is", null);
   } else {
@@ -60,7 +64,8 @@ export async function listTickets(filters?: {
 }
 
 export async function getTicket(id: string) {
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("maintenance_tickets")
@@ -69,6 +74,9 @@ export async function getTicket(id: string) {
     .eq("organization_id", organization.id)
     .maybeSingle();
   if (error) throw new Error(error.message);
+  // Visibilidad por fila: mantenimiento solo puede abrir sus propios tickets
+  // (defensa ante acceso por URL directa); admin/recepción, cualquiera.
+  if (data && !isAdminLevel(role) && data.assigned_to !== session.userId) return null;
   return data;
 }
 
@@ -314,8 +322,19 @@ export async function changeTicketStatus(id: string, status: TicketStatus) {
 export async function listTicketEvents(ticketId: string): Promise<
   (TicketEvent & { actor: { full_name: string | null } | null })[]
 > {
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
+  // Visibilidad por fila: mantenimiento solo ve el historial de sus tickets.
+  if (!isAdminLevel(role)) {
+    const { data: owner } = await admin
+      .from("maintenance_tickets")
+      .select("assigned_to")
+      .eq("id", ticketId)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (!owner || owner.assigned_to !== session.userId) return [];
+  }
   const { data, error } = await admin
     .from("ticket_events")
     .select("*")
