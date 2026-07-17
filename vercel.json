@@ -33,6 +33,12 @@
     },
     "src/app/api/inbound/resend/route.ts": {
       "maxDuration": 30
+    },
+    "src/app/api/cron/channel-dispatch/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/webhooks/channel-email/resend/route.ts": {
+      "maxDuration": 30
     }
   }
 }

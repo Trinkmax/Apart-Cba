@@ -32,10 +32,20 @@ export async function GET(req: Request) {
   const results: Record<string, unknown> = {};
   const admin = createAdminClient();
 
-  // 1. Sync iCal (llamada directa, sin HTTP roundtrip)
+  // 1. Sync iCal LEGACY — solo si Canales de venta v2 no está activo.
+  //    Con channel_links activos, el dispatcher de pg_cron (cada minuto) es el
+  //    único pipeline; correr ambos duplicaría el trabajo.
   try {
-    const { syncAllFeedsCron } = await import("@/lib/ical/sync");
-    results.ical = await syncAllFeedsCron(admin, "cron");
+    const { count: activeLinks } = await admin
+      .from("channel_links")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "active");
+    if ((activeLinks ?? 0) > 0) {
+      results.ical = { skipped: "channels_v2_active", active_links: activeLinks };
+    } else {
+      const { syncAllFeedsCron } = await import("@/lib/ical/sync");
+      results.ical = await syncAllFeedsCron(admin, "cron");
+    }
   } catch (err) {
     results.ical = { error: (err as Error).message };
   }

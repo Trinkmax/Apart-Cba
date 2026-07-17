@@ -17,3 +17,7 @@ tsconfig.tsbuildinfo
 
 # Claude Code worktrees (isolated agent workspaces)
 .claude/worktrees/
+
+# Playwright
+/test-results/
+/playwright-report/

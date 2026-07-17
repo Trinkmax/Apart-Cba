@@ -835,6 +835,46 @@ export type IcalFeedWithHealth = IcalFeed & {
   last_ok_at: string | null;
 };
 
+// ─── Canales de venta v2 (channel_*) ────────────────────────────────────────
+// Los row-types canónicos viven en src/lib/channels/types.ts; acá se re-exportan
+// para mantener database.ts como índice único de tipos del schema.
+export type {
+  Channel,
+  ChannelTransport,
+  ChannelLinkStatus,
+  ChannelEventStatus,
+  ChannelLinkHealth,
+  ChannelLinkRow as ChannelLink,
+  ChannelReservationRow as ChannelReservation,
+  ChannelIssueRow as ChannelIssue,
+  ChannelIssueType,
+} from "@/lib/channels/types";
+
+export interface ChannelSettings {
+  id: string;
+  organization_id: string;
+  operating_mode: "active" | "paused";
+  email_ingest_enabled: boolean;
+  email_verified_at: string | null;
+  last_email_at: string | null;
+  config: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChannelSyncRun {
+  id: string;
+  run_type: "dispatch" | "reconcile" | "manual" | "backfill";
+  organization_id: string | null;
+  claimed_count: number;
+  processed_count: number;
+  results: Record<string, unknown>;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
 export type OtaProvider = "airbnb" | "booking" | "expedia" | "vrbo" | "otro";
 
 export interface OtaListing {

@@ -15,6 +15,7 @@ export type Resource =
   | "concierge"
   | "amenities"
   | "ical"
+  | "channels"
   | "messaging"
   | "users"
   | "crm_inbox"

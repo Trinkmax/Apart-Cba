@@ -16,6 +16,7 @@ import { ExtensionHistory } from "@/components/bookings/extension-history";
 import { QuickPayCard } from "@/components/bookings/quick-pay-card";
 import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { GuestMessageCard } from "@/components/bookings/guest-message-card";
+import { BookingChannelStatus } from "@/components/bookings/booking-channel-status";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
@@ -152,6 +153,15 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               </Link>
             ) : (
               <p className="text-sm text-muted-foreground mt-2">Sin huésped asignado</p>
+            )}
+            {(b.source === "airbnb" || b.source === "booking") && (
+              <div className="mt-3">
+                <BookingChannelStatus
+                  bookingId={b.id}
+                  organizationId={b.organization_id}
+                  hasGuest={Boolean(b.guest)}
+                />
+              </div>
             )}
           </div>
 

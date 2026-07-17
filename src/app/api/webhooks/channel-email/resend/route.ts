@@ -11,10 +11,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 /**
- * ADAPTADOR LEGACY — el webhook de Resend sigue configurado contra esta URL.
- * Delega en el pipeline canónico de Canales de venta (mismo handler que
- * /api/webhooks/channel-email/resend). El pipeline viejo de inbound email
- * (handler.ts → bookings directo) quedó desactivado: TODO pasa por ingest.ts.
+ * Webhook canónico de inbound email para Canales de venta.
+ * (El endpoint legacy /api/inbound/resend delega acá y sigue funcionando.)
+ *
+ *   - firma Svix verificada sobre el body crudo + ventana anti-replay de 5 min
+ *   - dedupe por provider message ID
+ *   - evento durable ANTES de responder; sin raw bodies persistidos
+ *   - fail-closed en producción si falta el secret
  */
 export async function POST(req: Request) {
   const webhookSecret = process.env.RESEND_INBOUND_WEBHOOK_SECRET;
@@ -34,7 +37,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "invalid_signature" }, { status: 401 });
     }
   } else if (process.env.NODE_ENV === "production") {
-    console.error("[inbound/resend] RESEND_INBOUND_WEBHOOK_SECRET no configurada");
+    console.error("[webhooks/channel-email] RESEND_INBOUND_WEBHOOK_SECRET no configurada");
     return NextResponse.json({ ok: false, error: "webhook_secret_missing" }, { status: 500 });
   }
 
