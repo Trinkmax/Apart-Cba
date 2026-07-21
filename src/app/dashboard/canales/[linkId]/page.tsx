@@ -10,8 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { HealthBadge } from "@/components/canales/health-badge";
 import { LinkActions } from "@/components/canales/link-actions";
 import { IssuesPanel } from "@/components/canales/issues-panel";
-import { CopyButton } from "@/components/canales/copy-button";
-import { getLinkExportUrl } from "@/lib/actions/channels";
+import { ExportUrlCopy } from "@/components/canales/export-url-copy";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDistanceToNow, format } from "date-fns";
 import { es } from "date-fns/locale";
@@ -104,11 +103,7 @@ export default async function LinkDetailPage({
             />
           </dl>
           <div className="pt-1">
-            <CopyButton
-              getValue={() => getLinkExportUrl(link.id)}
-              label="Copiar enlace de nuestro calendario"
-              size="sm"
-            />
+            <ExportUrlCopy linkId={link.id} />
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             La consulta demuestra que la OTA accede al enlace; cuándo aplica los cambios lo decide la

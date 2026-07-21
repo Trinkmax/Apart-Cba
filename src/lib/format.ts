@@ -64,6 +64,25 @@ export function formatMoney(amount: number | null | undefined, currency: string 
   }).format(amount);
 }
 
+/**
+ * Parsea un importe tipeado por el usuario aceptando tanto `.` como `,` como
+ * separador decimal (es-AR usa coma; el placeholder de los inputs muestra
+ * "0,00"). Vacío o inválido → null. Ej: "1.500,50" y "1500.50" → 1500.5.
+ * Sin esto, `Number("1500,50")` es NaN y rompe silenciosamente la carga.
+ */
+export function parseAmountInput(v: string | null | undefined): number | null {
+  if (v == null) return null;
+  const trimmed = v.trim();
+  if (trimmed === "") return null;
+  // Heurística: probamos el input "internacional" (solo coma→punto). Si no
+  // parsea (tenía miles con punto), quitamos los puntos de miles y usamos coma.
+  const direct = Number(trimmed.replace(",", "."));
+  const n = Number.isFinite(direct)
+    ? direct
+    : Number(trimmed.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+
 export function formatMoneyShort(amount: number | null | undefined, currency: string = "ARS"): string {
   if (amount === null || amount === undefined) return "—";
   const symbol = CURRENCY_SYMBOL[currency] ?? currency;

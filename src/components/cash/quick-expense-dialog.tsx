@@ -26,7 +26,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { registerExpense, type QuickExpenseInput } from "@/lib/actions/cash";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, parseAmountInput } from "@/lib/format";
+import { todayYmdInTz, zonedTimeToUtc } from "@/lib/dates";
 import type { CashAccount } from "@/lib/types/database";
 
 type ExpenseCategory = NonNullable<QuickExpenseInput["category"]>;
@@ -59,7 +60,7 @@ export function QuickExpenseDialog({
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<ExpenseCategory>("supplies");
   const [description, setDescription] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayYmdInTz());
 
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.id === accountId) ?? null,
@@ -72,12 +73,12 @@ export function QuickExpenseDialog({
     setAmount("");
     setCategory("supplies");
     setDescription("");
-    setDate(new Date().toISOString().slice(0, 10));
+    setDate(todayYmdInTz());
   }
 
   function submit() {
-    const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) {
+    const n = parseAmountInput(amount);
+    if (n == null || n <= 0) {
       toast.error("Ingresá un importe válido");
       return;
     }
@@ -92,7 +93,7 @@ export function QuickExpenseDialog({
           amount: n,
           category,
           description: description.trim() || null,
-          occurred_at: date ? new Date(date).toISOString() : undefined,
+          occurred_at: date ? zonedTimeToUtc(date, "12:00").toISOString() : undefined,
         });
         toast.success(`Gasto de ${formatMoney(n, currency)} registrado`, {
           description: `Debitado de ${selectedAccount?.name ?? "la cuenta"}.`,

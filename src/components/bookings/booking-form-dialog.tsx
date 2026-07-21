@@ -34,6 +34,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { GuestFormDialog } from "@/components/guests/guest-form-dialog";
+import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/bookings";
 import { searchGuests } from "@/lib/actions/guests";
 import { BOOKING_MODE_META, BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
@@ -1280,6 +1281,25 @@ export function BookingFormDialog({
               </div>
             );
           })()}
+
+          {/* Cobro extra — solo en edición: cochera, late check-out, daños.
+              Ingreso aparte que NO toca el total ni el saldo de la reserva. */}
+          {isEdit && booking && (
+            <div className="rounded-lg border border-dashed border-indigo-300/60 dark:border-indigo-800/40 bg-indigo-50/40 dark:bg-indigo-950/20 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] uppercase tracking-wider text-indigo-900/80 dark:text-indigo-200/80 font-semibold">
+                  Cobro extra
+                </span>
+                <span className="text-[10px] text-muted-foreground">No modifica el total</span>
+              </div>
+              <ExtraChargeDialog
+                bookingId={booking.id}
+                currency={booking.currency}
+                accounts={accounts}
+                disabled={booking.status === "cancelada" || booking.status === "no_show"}
+              />
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label>Notas para el huésped</Label>

@@ -2702,7 +2702,7 @@ export function PmsBoard({
                         de pintar bg-primary en cada celda del día actual. */}
                     {todayOff >= 0 && todayOff < windowDays && (
                       <div
-                        className="absolute top-0 bottom-0 bg-orange-500/[0.05] dark:bg-orange-400/[0.07] pointer-events-none"
+                        className="absolute top-0 bottom-0 bg-orange-500/[0.07] dark:bg-orange-400/[0.09] pointer-events-none"
                         style={{ left: todayOff * CELL, width: CELL }}
                       />
                     )}
@@ -3066,7 +3066,7 @@ function DayChip({
           mark
             ? "font-bold"
             : hoy
-              ? "flex size-[18px] shrink-0 items-center justify-center rounded-full bg-orange-500 text-[11px] font-bold text-white shadow-sm"
+              ? "flex size-5 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-orange-400 to-orange-600 text-[11px] font-bold text-white shadow-[0_2px_8px_-1px_rgba(249,115,22,0.6)] ring-2 ring-orange-500/25"
               : wk
                 ? "text-amber-700 dark:text-amber-400"
                 : "text-foreground/90"
@@ -3083,13 +3083,20 @@ function DayChip({
           style={{ backgroundColor: mark.color }}
         />
       )}
+      {/* Acento de "hoy" al pie del header (pestaña activa, no línea vertical) */}
+      {hoy && !mark && (
+        <span
+          aria-hidden
+          className="absolute inset-x-1 bottom-0 h-[3px] rounded-t-full bg-orange-500 shadow-[0_0_6px_rgba(249,115,22,0.7)]"
+        />
+      )}
     </>
   );
 
   const className = cn(
     "shrink-0 flex flex-col items-center justify-center gap-0.5 border-r border-border/50 text-[10px] relative",
     hoy
-      ? "bg-orange-50 dark:bg-orange-500/[0.08]"
+      ? "bg-orange-100/70 dark:bg-orange-500/[0.12]"
       : wk
         ? "bg-amber-50/60 dark:bg-amber-500/[0.03]"
         : "",

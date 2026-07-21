@@ -25,7 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { registerSettlementPayment } from "@/lib/actions/settlements";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, parseAmountInput } from "@/lib/format";
+import { todayYmdInTz, zonedTimeToUtc } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { CashAccount } from "@/lib/types/database";
 
@@ -67,18 +68,23 @@ export function RecordPaymentDialog({
   const [splits, setSplits] = useState<Split[]>([
     { ...newSplit(net > 0 ? net.toFixed(2) : ""), account_id: "" },
   ]);
-  const [paidAt, setPaidAt] = useState(new Date().toISOString().slice(0, 10));
+  const [paidAt, setPaidAt] = useState(todayYmdInTz());
   const [notes, setNotes] = useState("");
 
   const total = round2(
-    splits.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+    splits.reduce((s, r) => s + (parseAmountInput(r.amount) ?? 0), 0),
   );
   const remaining = round2(net - total);
-  const balanced = Math.abs(remaining) < 0.01;
+  const sumBalanced = net > 0 && Math.abs(remaining) < 0.01;
+  // Toda línea con importe > 0 debe tener cuenta elegida (si no, el verde de
+  // "cuadra" sería engañoso). El botón se habilita solo si además cuadra.
+  const positiveRows = splits.filter((s) => (parseAmountInput(s.amount) ?? 0) > 0);
+  const allPositiveHaveAccount = positiveRows.every((s) => s.account_id);
+  const balanced = sumBalanced && positiveRows.length > 0 && allPositiveHaveAccount;
 
   function reset() {
     setSplits([{ ...newSplit(net > 0 ? net.toFixed(2) : ""), account_id: "" }]);
-    setPaidAt(new Date().toISOString().slice(0, 10));
+    setPaidAt(todayYmdInTz());
     setNotes("");
   }
 
@@ -100,17 +106,17 @@ export function RecordPaymentDialog({
 
   function submit() {
     const rows = splits
-      .map((s) => ({ account_id: s.account_id, amount: Number(s.amount) }))
-      .filter((s) => s.account_id && Number.isFinite(s.amount) && s.amount > 0);
+      .map((s) => ({ account_id: s.account_id, amount: parseAmountInput(s.amount) ?? 0 }))
+      .filter((s) => s.account_id && s.amount > 0);
     if (rows.length === 0) {
       toast.error("Cargá al menos una cuenta con importe");
       return;
     }
-    if (splits.some((s) => Number(s.amount) > 0 && !s.account_id)) {
+    if (splits.some((s) => (parseAmountInput(s.amount) ?? 0) > 0 && !s.account_id)) {
       toast.error("Elegí la cuenta de cada línea");
       return;
     }
-    if (!balanced) {
+    if (!sumBalanced) {
       toast.error("La suma no coincide con el neto", {
         description:
           remaining > 0
@@ -124,7 +130,7 @@ export function RecordPaymentDialog({
         await registerSettlementPayment({
           settlement_id: settlementId,
           splits: rows,
-          paid_at: paidAt ? new Date(paidAt).toISOString() : undefined,
+          paid_at: paidAt ? zonedTimeToUtc(paidAt, "12:00").toISOString() : undefined,
           notes: notes.trim() || undefined,
         });
         toast.success("Pago registrado", {
@@ -253,10 +259,14 @@ export function RecordPaymentDialog({
                 {balanced ? <Check size={13} /> : <AlertTriangle size={13} />}
                 {balanced ? (
                   <span>Total {formatMoney(total, currency)}</span>
-                ) : remaining > 0 ? (
-                  <span>Faltan {formatMoney(remaining, currency)}</span>
+                ) : !sumBalanced ? (
+                  remaining > 0 ? (
+                    <span>Faltan {formatMoney(remaining, currency)}</span>
+                  ) : (
+                    <span>Excede {formatMoney(Math.abs(remaining), currency)}</span>
+                  )
                 ) : (
-                  <span>Excede {formatMoney(Math.abs(remaining), currency)}</span>
+                  <span>Elegí la cuenta de cada línea</span>
                 )}
               </div>
             </div>

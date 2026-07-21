@@ -25,7 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { addBookingExtraCharge } from "@/lib/actions/bookings";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, parseAmountInput } from "@/lib/format";
+import { todayYmdInTz, zonedTimeToUtc } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import type { CashAccount } from "@/lib/types/database";
 
@@ -53,23 +54,23 @@ export function ExtraChargeDialog({
   const [amount, setAmount] = useState("");
   const [accountId, setAccountId] = useState("");
   const [billableTo, setBillableTo] = useState<"apartcba" | "owner">("apartcba");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayYmdInTz());
 
   function reset() {
     setConcept("");
     setAmount("");
     setAccountId(matchingAccounts[0]?.id ?? "");
     setBillableTo("apartcba");
-    setDate(new Date().toISOString().slice(0, 10));
+    setDate(todayYmdInTz());
   }
 
   function submit() {
-    const n = Number(amount);
+    const n = parseAmountInput(amount);
     if (!concept.trim() || concept.trim().length < 2) {
       toast.error("Describí el concepto del cobro");
       return;
     }
-    if (!Number.isFinite(n) || n <= 0) {
+    if (n == null || n <= 0) {
       toast.error("Ingresá un importe válido");
       return;
     }
@@ -85,7 +86,7 @@ export function ExtraChargeDialog({
           account_id: accountId,
           concept: concept.trim(),
           billable_to: billableTo,
-          occurred_at: date ? new Date(date).toISOString() : undefined,
+          occurred_at: date ? zonedTimeToUtc(date, "12:00").toISOString() : undefined,
         });
         toast.success(`Cobro extra de ${formatMoney(n, currency)} registrado`, {
           description: "Se sumó a Caja sin tocar el total de la reserva.",

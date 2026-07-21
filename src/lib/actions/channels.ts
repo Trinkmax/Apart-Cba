@@ -192,7 +192,6 @@ export async function createDraftLinks(input: z.infer<typeof createDraftSchema>)
     if (existingByUnit.has(u.id)) continue;
     // reusa el token per-unit para que la URL legacy siga siendo válida
     const token = u.ical_export_token as string;
-    const secretId = await createSecret(`channels_v2_export_link_${u.id}_${validated.channel}`, token);
     const { data: link, error } = await admin
       .from("channel_links")
       .insert({
@@ -201,11 +200,14 @@ export async function createDraftLinks(input: z.infer<typeof createDraftSchema>)
         channel: validated.channel,
         status: "draft",
         export_token_hash: sha256Hex(token),
-        export_secret_id: secretId,
       })
       .select("id")
       .single();
     if (error) throw new Error(error.message);
+    // el nombre del secreto usa el id del link (único por fila): recrear una
+    // conexión borrada no colisiona en Vault
+    const secretId = await createSecret(`channels_v2_export_link_${link.id}`, token);
+    await admin.from("channel_links").update({ export_secret_id: secretId }).eq("id", link.id);
     created.push(link.id);
   }
 

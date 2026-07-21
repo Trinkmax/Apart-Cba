@@ -12,6 +12,7 @@ import {
   Play,
   Search,
   ExternalLink,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -31,6 +32,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -40,7 +51,7 @@ import {
 } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
 import { HealthBadge } from "./health-badge";
-import { pauseLink, resumeLink, syncChannelsNow } from "@/lib/actions/channels";
+import { deleteLink, pauseLink, resumeLink, syncChannelsNow } from "@/lib/actions/channels";
 import type { ChannelLinkOverview } from "@/lib/actions/channels";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDistanceToNow } from "date-fns";
@@ -170,6 +181,7 @@ export function ConnectionsTable({ links }: { links: ChannelLinkOverview[] }) {
 function ConnectionRow({ link }: { link: ChannelLinkOverview }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const src = BOOKING_SOURCE_META[link.channel];
 
   function doSync() {
@@ -201,6 +213,19 @@ function ConnectionRow({ link }: { link: ChannelLinkOverview }) {
         router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Error");
+      }
+    });
+  }
+
+  function doDelete() {
+    startTransition(async () => {
+      try {
+        await deleteLink(link.id);
+        toast.success(link.status === "draft" ? "Borrador eliminado" : "Conexión eliminada");
+        setDeleteOpen(false);
+        router.refresh();
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "No se pudo eliminar");
       }
     });
   }
@@ -271,8 +296,38 @@ function ConnectionRow({ link }: { link: ChannelLinkOverview }) {
                 )}
               </DropdownMenuItem>
             )}
+            {link.status !== "active" && (
+              <DropdownMenuItem
+                onClick={() => setDeleteOpen(true)}
+                disabled={pending}
+                className="text-rose-600 dark:text-rose-400 focus:text-rose-600"
+              >
+                <Trash2 size={14} /> {link.status === "draft" ? "Eliminar borrador" : "Eliminar"}
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                ¿Eliminar {link.status === "draft" ? "el borrador" : "la conexión"} de {link.unit.code}?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {link.status === "draft"
+                  ? "El borrador se descarta sin afectar nada más. Podés volver a crearlo desde el asistente cuando quieras."
+                  : "Se deja de sincronizar este canal para la unidad. Las reservas ya importadas no se tocan."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={pending}>Cancelar</AlertDialogCancel>
+              <AlertDialogAction onClick={doDelete} disabled={pending}>
+                Eliminar
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </TableCell>
     </TableRow>
   );
