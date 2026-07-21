@@ -2795,30 +2795,51 @@ export async function registerSettlementPayment(
 
   // Movimiento principal (ancla de paid_movement_id + de los ajustes futuros).
   const primaryId = movements[0].id as string;
+  const movementIds = movements.map((m) => m.id as string);
+  // Compensación: borra los egresos recién insertados (delete directo del
+  // service_role — el lock de liquidación vive en las RPC, no en un trigger, así
+  // que este DELETE crudo no queda bloqueado aunque el settlement ya esté cerrado).
+  const rollbackMovements = () =>
+    admin.from("cash_movements").delete().in("id", movementIds);
 
-  // 2) Cerrar la liquidación + linkear el movimiento principal
-  const { error: updErr } = await admin
-    .from("owner_settlements")
-    .update({
-      status: "pagada",
-      paid_at: occurredAt,
-      paid_movement_id: primaryId,
-      last_edited_by: session.userId,
-      last_edited_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", v.settlement_id)
-    .eq("organization_id", organization.id);
-  if (updErr) {
-    // Compensación: que los movimientos no queden huérfanos
-    await admin
-      .from("cash_movements")
-      .delete()
-      .in(
-        "id",
-        movements.map((m) => m.id as string),
-      );
-    throw new Error(`No se pudo cerrar la liquidación: ${updErr.message}`);
+  // 2) Cerrar la liquidación + linkear el movimiento principal.
+  // Guardas de concurrencia en el propio UPDATE (no confiamos solo en el SELECT
+  // previo): solo cierra si SIGUE sin pago y en estado válido. Si otra request
+  // (doble click / doble tab) la pagó en paralelo, no matchea ninguna fila →
+  // revertimos nuestros egresos para no duplicar el pago en Caja.
+  let closedRows: { id: string }[] | null = null;
+  try {
+    const res = await admin
+      .from("owner_settlements")
+      .update({
+        status: "pagada",
+        paid_at: occurredAt,
+        paid_movement_id: primaryId,
+        last_edited_by: session.userId,
+        last_edited_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", v.settlement_id)
+      .eq("organization_id", organization.id)
+      .is("paid_movement_id", null)
+      .in("status", ["revisada", "enviada"])
+      .select("id");
+    if (res.error) throw new Error(res.error.message);
+    closedRows = (res.data as { id: string }[] | null) ?? null;
+  } catch (e) {
+    // Cualquier fallo tras insertar los egresos (error de la query O un fetch
+    // rechazado) revierte para no dejarlos huérfanos.
+    await rollbackMovements();
+    throw new Error(`No se pudo cerrar la liquidación: ${(e as Error).message}`);
+  }
+
+  if (!closedRows || closedRows.length === 0) {
+    // Ninguna fila matcheó las guardas: otra operación registró el pago en
+    // paralelo. Revertimos nuestros egresos duplicados.
+    await rollbackMovements();
+    throw new Error(
+      "Esta liquidación ya tiene un pago registrado (se registró en paralelo). Actualizá la pantalla.",
+    );
   }
 
   const sideEffects = accountIds.map(
