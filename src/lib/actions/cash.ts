@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
+import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import type { CashAccount, CashMovement } from "@/lib/types/database";
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -372,9 +373,21 @@ export async function deleteAccount(id: string) {
 
 export async function createMovement(input: MovementInput) {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "create")) {
+    throw new Error("No tenés permiso para registrar movimientos de caja.");
+  }
   const validated = movementSchema.parse(input);
   const admin = createAdminClient();
+  // Defensa multi-tenant: la cuenta debe ser de esta org (el account_id viene
+  // del cliente y cash_movements se inserta con la org del caller).
+  const { data: acct } = await admin
+    .from("cash_accounts")
+    .select("id")
+    .eq("id", validated.account_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!acct) throw new Error("Cuenta de caja no encontrada");
   const { data, error } = await admin
     .from("cash_movements")
     .insert({
@@ -403,6 +416,10 @@ const quickExpenseSchema = z.object({
     .default("supplies"),
   description: z.string().max(300).optional().nullable(),
   occurred_at: z.string().optional(),
+  // Opcional: imputar el gasto a un depto. Si `billable_to='owner'` + unidad,
+  // el egreso se descuenta en la liquidación del dueño principal de esa unidad.
+  unit_id: z.string().uuid().optional().nullable(),
+  billable_to: z.enum(["apartcba", "owner"]).default("apartcba"),
 });
 
 export type QuickExpenseInput = z.input<typeof quickExpenseSchema>;
@@ -461,6 +478,38 @@ export async function registerExpense(input: QuickExpenseInput) {
   if (!account) throw new Error("Cuenta de caja no encontrada");
   if (!account.active) throw new Error("La cuenta de caja está inactiva");
 
+  // Imputación: si lo paga el propietario, exigimos depto y resolvemos el dueño
+  // principal para que el egreso caiga en su liquidación (scan de egresos→liq.).
+  const unitId = v.unit_id ?? null;
+  const billableTo = v.billable_to;
+  let ownerId: string | null = null;
+  if (billableTo === "owner") {
+    if (!unitId) {
+      throw new Error(
+        "Para descontar un gasto al propietario, elegí el depto correspondiente.",
+      );
+    }
+    // Defensa multi-tenant: el depto debe ser de esta org (unit_owners no tiene
+    // organization_id, así que validamos la unidad antes de resolver el dueño).
+    const { data: unitRow } = await admin
+      .from("units")
+      .select("id")
+      .eq("id", unitId)
+      .eq("organization_id", organization.id)
+      .maybeSingle();
+    if (!unitRow) throw new Error("Depto no encontrado");
+    const { data: uOwners } = await admin
+      .from("unit_owners")
+      .select("owner_id, is_primary, ownership_pct")
+      .eq("unit_id", unitId);
+    ownerId = pickChargeOwner((uOwners ?? []) as UnitOwnerLite[]);
+    if (!ownerId) {
+      throw new Error(
+        "El depto no tiene propietario cargado: no se puede descontar el gasto a nadie.",
+      );
+    }
+  }
+
   const { data, error } = await admin
     .from("cash_movements")
     .insert({
@@ -470,7 +519,9 @@ export async function registerExpense(input: QuickExpenseInput) {
       amount: v.amount,
       currency: account.currency,
       category: v.category,
-      billable_to: "apartcba",
+      unit_id: unitId,
+      owner_id: ownerId,
+      billable_to: billableTo,
       description: v.description?.trim() || "Gasto corriente",
       occurred_at: v.occurred_at ?? new Date().toISOString(),
       created_by: session.userId,
@@ -482,6 +533,8 @@ export async function registerExpense(input: QuickExpenseInput) {
   revalidatePath("/dashboard/caja");
   revalidatePath(`/dashboard/caja/${account.id}`);
   revalidatePath("/dashboard");
+  // Si es gasto del propietario, impacta su liquidación.
+  if (billableTo === "owner") revalidatePath("/dashboard/liquidaciones");
   return data as CashMovement;
 }
 

@@ -23,6 +23,7 @@ import {
 import { es } from "date-fns/locale";
 import {
   ArrowDownUp,
+  ArrowUpFromLine,
   CalendarDays,
   CalendarRange,
   Check,
@@ -73,6 +74,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { QuickExpenseDialog } from "@/components/cash/quick-expense-dialog";
 import {
   Popover,
   PopoverAnchor,
@@ -179,6 +181,10 @@ interface PmsBoardProps {
   canEditBookings?: boolean;
   /** Si false, esconde montos (total/cobrado/saldo/comisión) y "Registrar pago" en el popover. */
   canViewMoney?: boolean;
+  /** Muestra el botón "Registrar gasto" en la toolbar del calendario. */
+  canRegisterExpense?: boolean;
+  /** Cuenta de gastos corrientes por defecto para "Registrar gasto". */
+  expenseDefaultId?: string | null;
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -300,6 +306,8 @@ export function PmsBoard({
   canEditDateMarks = false,
   canEditBookings = true,
   canViewMoney = true,
+  canRegisterExpense = false,
+  expenseDefaultId = null,
   organizationId,
   startISO,
   days,
@@ -1810,6 +1818,22 @@ export function PmsBoard({
                 </button>
               )}
             </div>
+            {canRegisterExpense && (
+              <QuickExpenseDialog
+                accounts={accounts}
+                defaultAccountId={expenseDefaultId}
+                units={units}
+              >
+                <Button
+                  size="icon"
+                  variant="outline"
+                  className="size-9 shrink-0 tap text-rose-600 dark:text-rose-400 border-rose-300/60 dark:border-rose-800/50"
+                  aria-label="Registrar gasto"
+                >
+                  <ArrowUpFromLine size={16} />
+                </Button>
+              </QuickExpenseDialog>
+            )}
           </div>
 
           {/* DESKTOP TOOLBAR */}
@@ -1865,6 +1889,23 @@ export function PmsBoard({
             </div>
 
             <div className="ml-auto flex items-center gap-1.5 flex-wrap">
+              {/* Registrar gasto — acción rápida de Caja desde el calendario */}
+              {canRegisterExpense && (
+                <QuickExpenseDialog
+                  accounts={accounts}
+                  defaultAccountId={expenseDefaultId}
+                  units={units}
+                >
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 text-xs border-rose-300/60 dark:border-rose-800/50 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                  >
+                    <ArrowUpFromLine size={12} /> Registrar gasto
+                  </Button>
+                </QuickExpenseDialog>
+              )}
+
               {/* Search — autocomplete global (server-side) */}
               <Popover
                 open={searchPopoverOpen && query.trim().length >= 2}

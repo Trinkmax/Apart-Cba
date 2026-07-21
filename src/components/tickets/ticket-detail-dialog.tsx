@@ -52,7 +52,9 @@ import { cn } from "@/lib/utils";
 import { EventTimeline } from "@/components/shared/event-timeline";
 import { UnitAccessInfo } from "@/components/units/unit-access-info";
 import { TicketPhotosSection } from "./ticket-photos-section";
+import { TicketPaymentDialog } from "./ticket-payment-dialog";
 import type {
+  CashAccount,
   MaintenanceTicket,
   Owner,
   TicketEvent,
@@ -82,6 +84,12 @@ interface Props {
   owners: Owner[];
   /** Miembros de la org para resolver "abierto por / técnico" y reasignar. */
   members?: TicketMember[];
+  /** Cuentas de Caja para el pago real del ticket (egreso). */
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type" | "is_expense_default">[];
+  /** Cuenta de gastos corrientes por defecto para el pago. */
+  expenseDefaultId?: string | null;
+  /** Puede registrar el pago (impacta Caja) — típicamente admin/recepción. */
+  canRegisterPayment?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpdated?: (updated: MaintenanceTicket) => void;
@@ -125,6 +133,9 @@ export function TicketDetailDialog({
   units,
   owners,
   members = [],
+  accounts = [],
+  expenseDefaultId = null,
+  canRegisterPayment = false,
   open,
   onOpenChange,
   onUpdated,
@@ -625,6 +636,43 @@ export function TicketDetailDialog({
                   </SelectContent>
                 </Select>
               </Field>
+            )}
+
+            {/* Pago real del ticket → egreso en Caja (pago al técnico) */}
+            {!isEditing && canRegisterPayment && (
+              <div className="pt-2 border-t border-border/50">
+                {ticket.paid_movement_id ? (
+                  <div className="flex items-center gap-2 text-xs text-emerald-700 dark:text-emerald-300">
+                    <CheckCircle2 size={14} className="shrink-0" />
+                    <span>
+                      Pagado
+                      {ticket.actual_cost != null
+                        ? ` ${formatMoney(ticket.actual_cost, ticket.cost_currency ?? "ARS")}`
+                        : ""}
+                      {ticket.paid_at ? ` · ${formatDate(ticket.paid_at)}` : ""}
+                    </span>
+                  </div>
+                ) : accounts.length > 0 ? (
+                  <TicketPaymentDialog
+                    ticketId={ticket.id}
+                    currency={ticket.cost_currency ?? "ARS"}
+                    actualCost={ticket.actual_cost}
+                    accounts={accounts}
+                    defaultAccountId={expenseDefaultId}
+                    onPaid={(mid) =>
+                      onUpdated?.({
+                        ...ticket,
+                        paid_movement_id: mid,
+                        paid_at: new Date().toISOString(),
+                      })
+                    }
+                  />
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">
+                    Creá una cuenta de Caja para registrar el pago.
+                  </p>
+                )}
+              </div>
             )}
           </div>
 

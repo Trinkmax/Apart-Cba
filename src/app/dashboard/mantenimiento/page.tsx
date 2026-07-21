@@ -4,9 +4,10 @@ import { listUnitsEnriched } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
 import { listOrgMemberNames } from "@/lib/actions/team";
 import { listCurrentOccupancyByUnit } from "@/lib/actions/bookings";
+import { listAccounts } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { requireSession } from "@/lib/actions/auth";
-import { isAdminLevel } from "@/lib/permissions";
+import { can, isAdminLevel } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { TicketFormDialog } from "@/components/tickets/ticket-form-dialog";
 import { TicketsBoard } from "@/components/tickets/tickets-board";
@@ -24,7 +25,7 @@ export default async function MantenimientoPage({
   const { historial } = await searchParams;
   const showArchived = historial === "1";
 
-  const [session, { organization, role }, tickets, units, owners, members, occupancyByUnit] =
+  const [session, { organization, role }, tickets, units, owners, members, occupancyByUnit, accounts] =
     await Promise.all([
       requireSession(),
       getCurrentOrg(),
@@ -33,9 +34,12 @@ export default async function MantenimientoPage({
       listOwners(),
       listOrgMemberNames(),
       listCurrentOccupancyByUnit(),
+      listAccounts(),
     ]);
   // Mantenimiento ve solo lo asignado a esa persona; admin/recepción, todo.
   const restrictToUserId = isAdminLevel(role) ? null : session.userId;
+  const canRegisterPayment = can(role, "cash", "create");
+  const expenseDefaultId = accounts.find((a) => a.is_expense_default)?.id ?? null;
 
   const open = tickets.filter(
     (t) => !["resuelto", "cerrado"].includes((t as TicketWithUnit).status)
@@ -103,6 +107,9 @@ export default async function MantenimientoPage({
           owners={owners}
           members={members}
           occupancyByUnit={occupancyByUnit}
+          accounts={accounts}
+          expenseDefaultId={expenseDefaultId}
+          canRegisterPayment={canRegisterPayment}
         />
       )}
     </div>

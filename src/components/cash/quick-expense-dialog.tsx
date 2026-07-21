@@ -3,7 +3,7 @@
 import { useState, useTransition, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, ArrowUpFromLine, Wallet, Star } from "lucide-react";
+import { Loader2, ArrowUpFromLine, Wallet, Star, Building, User2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -25,10 +25,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { registerExpense, type QuickExpenseInput } from "@/lib/actions/cash";
 import { formatMoney, parseAmountInput } from "@/lib/format";
 import { todayYmdInTz, zonedTimeToUtc } from "@/lib/dates";
-import type { CashAccount } from "@/lib/types/database";
+import { cn } from "@/lib/utils";
+import type { CashAccount, Unit } from "@/lib/types/database";
 
 type ExpenseCategory = NonNullable<QuickExpenseInput["category"]>;
 
@@ -45,10 +47,14 @@ const EXPENSE_CATEGORIES: { value: ExpenseCategory; label: string }[] = [
 export function QuickExpenseDialog({
   accounts,
   defaultAccountId,
+  units = [],
   children,
 }: {
-  accounts: Pick<CashAccount, "id" | "name" | "currency" | "type" | "is_expense_default">[];
+  accounts: (Pick<CashAccount, "id" | "name" | "currency" | "type"> & {
+    is_expense_default?: boolean;
+  })[];
   defaultAccountId: string | null;
+  units?: Pick<Unit, "id" | "code" | "name">[];
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -61,6 +67,8 @@ export function QuickExpenseDialog({
   const [category, setCategory] = useState<ExpenseCategory>("supplies");
   const [description, setDescription] = useState("");
   const [date, setDate] = useState(todayYmdInTz());
+  const [billableTo, setBillableTo] = useState<"apartcba" | "owner">("apartcba");
+  const [unitId, setUnitId] = useState<string | null>(null);
 
   const selectedAccount = useMemo(
     () => accounts.find((a) => a.id === accountId) ?? null,
@@ -74,6 +82,8 @@ export function QuickExpenseDialog({
     setCategory("supplies");
     setDescription("");
     setDate(todayYmdInTz());
+    setBillableTo("apartcba");
+    setUnitId(null);
   }
 
   function submit() {
@@ -86,6 +96,10 @@ export function QuickExpenseDialog({
       toast.error("Elegí una cuenta");
       return;
     }
+    if (billableTo === "owner" && !unitId) {
+      toast.error("Elegí el depto para descontarlo al propietario");
+      return;
+    }
     start(async () => {
       try {
         await registerExpense({
@@ -94,6 +108,8 @@ export function QuickExpenseDialog({
           category,
           description: description.trim() || null,
           occurred_at: date ? zonedTimeToUtc(date, "12:00").toISOString() : undefined,
+          billable_to: billableTo,
+          unit_id: billableTo === "owner" ? unitId : null,
         });
         toast.success(`Gasto de ${formatMoney(n, currency)} registrado`, {
           description: `Debitado de ${selectedAccount?.name ?? "la cuenta"}.`,
@@ -209,6 +225,47 @@ export function QuickExpenseDialog({
                 </SelectContent>
               </Select>
             </div>
+
+            {units.length > 0 && (
+              <div className="space-y-1.5">
+                <Label>¿Quién lo paga?</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      { v: "apartcba", label: "ApartCBA", icon: <Building size={14} /> },
+                      { v: "owner", label: "Propietario", icon: <User2 size={14} /> },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.v}
+                      type="button"
+                      onClick={() => setBillableTo(opt.v)}
+                      className={cn(
+                        "flex items-center justify-center gap-2 rounded-lg p-2.5 border-2 transition-all text-xs",
+                        billableTo === opt.v
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:border-primary/40",
+                      )}
+                    >
+                      {opt.icon}
+                      <span className="font-medium">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+                {billableTo === "owner" && (
+                  <div className="pt-1 space-y-1">
+                    <UnitCombobox
+                      units={units}
+                      value={unitId ?? ""}
+                      onChange={(id) => setUnitId(id ?? null)}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Se descuenta en la liquidación del dueño principal de este depto.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <Label htmlFor="expense-desc">Concepto</Label>

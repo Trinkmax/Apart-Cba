@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can, isAdminLevel } from "@/lib/permissions";
+import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import { UNIT_REF_SELECT } from "@/lib/constants";
 import type { MaintenanceTicket, TicketEvent, TicketStatus } from "@/lib/types/database";
 
@@ -249,6 +250,151 @@ export async function updateTicketCost(
  * resolver un ticket desaparecía de /m/mantenimiento (filtra openOnly) y nunca
  * se le podía cargar el monto después.
  */
+// ════════════════════════════════════════════════════════════════════════════
+// Pago real del ticket → egreso en Caja. El costo del ticket ya se carga al
+// propietario en la liquidación (vía el scan de maintenance_tickets); esto
+// registra la SALIDA de plata (pago al técnico). El egreso lleva
+// ref_type='ticket' y por eso queda EXCLUIDO del barrido de egresos→liquidación
+// (no se descuenta dos veces al propietario).
+// ════════════════════════════════════════════════════════════════════════════
+const ticketPaymentSchema = z.object({
+  ticket_id: z.string().uuid(),
+  account_id: z.string().uuid("Elegí una cuenta de caja"),
+  amount: z.coerce.number().positive().optional(),
+  paid_at: z.string().optional(),
+  notes: z.string().max(300).optional().nullable(),
+});
+
+export type TicketPaymentInput = z.input<typeof ticketPaymentSchema>;
+
+export async function registerTicketPayment(input: TicketPaymentInput) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "create")) {
+    throw new Error("No tenés permiso para registrar pagos en Caja.");
+  }
+  const v = ticketPaymentSchema.parse(input);
+  const admin = createAdminClient();
+
+  const { data: ticket } = await admin
+    .from("maintenance_tickets")
+    .select(
+      "id, title, unit_id, actual_cost, cost_currency, billable_to, related_owner_id, paid_movement_id",
+    )
+    .eq("id", v.ticket_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!ticket) throw new Error("Ticket no encontrado");
+  if (ticket.paid_movement_id) {
+    throw new Error("Este ticket ya tiene un pago registrado en Caja");
+  }
+
+  const amount = v.amount ?? Number(ticket.actual_cost ?? 0);
+  if (!(amount > 0)) {
+    throw new Error("Cargá el costo real del ticket antes de registrar el pago");
+  }
+  const currency = ticket.cost_currency ?? "ARS";
+
+  const { data: account } = await admin
+    .from("cash_accounts")
+    .select("id, currency, active, name")
+    .eq("id", v.account_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!account) throw new Error("Cuenta de caja no encontrada");
+  if (!account.active) throw new Error("La cuenta de caja está inactiva");
+  if (account.currency !== currency) {
+    throw new Error(
+      `La cuenta es ${account.currency} pero el costo del ticket es en ${currency}`,
+    );
+  }
+
+  // Si lo paga el propietario, imputamos al owner (related_owner_id o el
+  // principal de la unidad) para el filtro por propietario en Caja.
+  let ownerId: string | null = null;
+  if (ticket.billable_to === "owner") {
+    ownerId = ticket.related_owner_id ?? null;
+    if (!ownerId) {
+      const { data: uOwners } = await admin
+        .from("unit_owners")
+        .select("owner_id, is_primary, ownership_pct")
+        .eq("unit_id", ticket.unit_id);
+      ownerId = pickChargeOwner((uOwners ?? []) as UnitOwnerLite[]);
+    }
+  }
+
+  const occurredAt = v.paid_at ?? new Date().toISOString();
+
+  // 1) Egreso en Caja
+  const { data: movement, error: movErr } = await admin
+    .from("cash_movements")
+    .insert({
+      organization_id: organization.id,
+      account_id: account.id,
+      direction: "out",
+      amount,
+      currency,
+      category: "maintenance",
+      ref_type: "ticket",
+      ref_id: ticket.id,
+      unit_id: ticket.unit_id,
+      owner_id: ownerId,
+      billable_to: ticket.billable_to,
+      description: v.notes?.trim()
+        ? v.notes.trim()
+        : `Pago mantenimiento: ${ticket.title}`,
+      occurred_at: occurredAt,
+      created_by: session.userId,
+    })
+    .select("id")
+    .single();
+  if (movErr) {
+    throw new Error(`No se pudo registrar el egreso: ${movErr.message}`);
+  }
+
+  // 2) Linkear + (si estaba vacío) fijar el costo real. Guard atómico contra
+  // doble pago: solo cierra si paid_movement_id sigue nulo.
+  const patch: Record<string, unknown> = {
+    paid_movement_id: movement.id,
+    paid_at: occurredAt,
+  };
+  if (ticket.actual_cost == null) patch.actual_cost = amount;
+  const { data: closed, error: updErr } = await admin
+    .from("maintenance_tickets")
+    .update(patch)
+    .eq("id", v.ticket_id)
+    .eq("organization_id", organization.id)
+    .is("paid_movement_id", null)
+    .select("id");
+  if (updErr || !closed || closed.length === 0) {
+    await admin.from("cash_movements").delete().eq("id", movement.id);
+    throw new Error(
+      updErr
+        ? `No se pudo registrar el pago: ${updErr.message}`
+        : "El ticket ya tiene un pago registrado (se registró en paralelo).",
+    );
+  }
+
+  try {
+    await admin.from("ticket_events").insert({
+      ticket_id: v.ticket_id,
+      organization_id: organization.id,
+      actor_id: session.userId,
+      event_type: "cost_updated",
+      metadata: { paid: amount, currency, account: account.name },
+    });
+  } catch {
+    // el evento del timeline no es crítico
+  }
+
+  revalidatePath("/dashboard/mantenimiento");
+  revalidatePath(`/dashboard/mantenimiento/${v.ticket_id}`);
+  revalidatePath("/dashboard/caja");
+  revalidatePath(`/dashboard/caja/${account.id}`);
+  revalidatePath("/dashboard");
+  return { ok: true as const, movement_id: movement.id as string };
+}
+
 export async function listMyTicketsToBudget() {
   const session = await requireSession();
   const { organization } = await getCurrentOrg();

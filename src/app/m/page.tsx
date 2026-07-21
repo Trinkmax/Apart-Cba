@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Sparkles, Wrench, Bell, ChevronRight, ClipboardList, Lightbulb } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -14,6 +15,10 @@ export default async function MobileHome() {
   const session = await getSession();
   if (!session) return null;
   const { organization, role } = await getCurrentOrg();
+
+  // El inicio mobile es para el equipo de operación (limpieza/mantenimiento).
+  // Los admin no lo necesitan: van directo al calendario.
+  if (role === "admin") redirect("/dashboard/unidades/kanban");
 
   const [cleaning, tickets, concierge, tips] = await Promise.all([
     listCleaningTasks({ assignedTo: session.userId }),

@@ -8,7 +8,7 @@ import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatTimeAgo, formatMoney } from "@/lib/format";
 import { changeTicketStatus } from "@/lib/actions/tickets";
 import { cn } from "@/lib/utils";
-import type { MaintenanceTicket, Owner, TicketStatus, UnitRef } from "@/lib/types/database";
+import type { CashAccount, MaintenanceTicket, Owner, TicketStatus, UnitRef } from "@/lib/types/database";
 import type { CurrentOccupancy } from "@/lib/actions/bookings";
 import { KanbanBoard, type KanbanColumn } from "@/components/kanban/kanban-board";
 import { useRealtimeRows } from "@/hooks/use-realtime-rows";
@@ -32,12 +32,16 @@ interface Props {
   owners: Owner[];
   members?: TicketMember[];
   occupancyByUnit: Record<string, CurrentOccupancy>;
+  /** Cuentas de Caja + default de gastos para el pago real del ticket. */
+  accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type" | "is_expense_default">[];
+  expenseDefaultId?: string | null;
+  canRegisterPayment?: boolean;
   /** Si tiene valor, la vista se limita a los tickets asignados a ese usuario
    *  (mantenimiento ve solo lo suyo). null/undefined = ve todo (admin/recepción). */
   restrictToUserId?: string | null;
 }
 
-export function TicketsBoard({ organizationId, initialTickets, units, owners, members, occupancyByUnit, restrictToUserId }: Props) {
+export function TicketsBoard({ organizationId, initialTickets, units, owners, members, occupancyByUnit, accounts, expenseDefaultId, canRegisterPayment, restrictToUserId }: Props) {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
 
@@ -130,6 +134,9 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, me
         units={units}
         owners={owners}
         members={members}
+        accounts={accounts}
+        expenseDefaultId={expenseDefaultId}
+        canRegisterPayment={canRegisterPayment}
         open={!!openTicket}
         onOpenChange={(o) => !o && setOpenTicketId(null)}
         onUpdated={(updated) =>

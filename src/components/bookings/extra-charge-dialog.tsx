@@ -220,7 +220,7 @@ export function ExtraChargeDialog({
               <div className="grid grid-cols-2 gap-2">
                 {(
                   [
-                    { v: "apartcba", label: "Organización", icon: <Building size={14} /> },
+                    { v: "apartcba", label: "ApartCBA", icon: <Building size={14} /> },
                     { v: "owner", label: "Propietario", icon: <User2 size={14} /> },
                   ] as const
                 ).map((opt) => (

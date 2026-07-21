@@ -6,6 +6,7 @@ import {
 import { getDashboardKPIs } from "@/lib/actions/kpis";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
+import { listUnitsForBookingForm } from "@/lib/actions/units";
 import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -22,7 +23,9 @@ export default async function DashboardHome() {
   const canViewMoney = can(role, "payments", "view");
   const canViewBookings = can(role, "bookings", "view");
   const canRegisterExpense = can(role, "cash", "create");
-  const expenseAccounts = canRegisterExpense ? await listAccounts() : [];
+  const [expenseAccounts, expenseUnits] = canRegisterExpense
+    ? await Promise.all([listAccounts(), listUnitsForBookingForm()])
+    : [[], []];
   const expenseDefaultId =
     expenseAccounts.find((a) => a.is_expense_default)?.id ?? null;
   const statusHref = canViewBookings ? "/dashboard/unidades/kanban" : "/dashboard/unidades";
@@ -41,7 +44,7 @@ export default async function DashboardHome() {
         <DashboardGreeting />
         <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
           {canRegisterExpense && (
-            <QuickExpenseDialog accounts={expenseAccounts} defaultAccountId={expenseDefaultId}>
+            <QuickExpenseDialog accounts={expenseAccounts} defaultAccountId={expenseDefaultId} units={expenseUnits}>
               <Button variant="outline" className="gap-2 h-auto py-2.5 sm:py-3 border-rose-500/30 hover:border-rose-500/60 hover:bg-rose-500/5">
                 <span className="size-7 sm:size-8 rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
                   <ArrowUpFromLine size={16} />

@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can, isAdminLevel } from "@/lib/permissions";
+import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import {
   MAX_BOOKING_NIGHTS,
   nightsBetween,
@@ -1323,16 +1324,13 @@ export async function addBookingExtraCharge(input: ExtraChargeInput) {
   // (si lo hay) para que aparezca en el filtro por propietario de Caja.
   let ownerId: string | null = null;
   if (v.billable_to === "owner") {
-    // Sin garantía de un solo is_primary por unidad (no hay constraint), así que
-    // limitamos a 1 para no romper si hubiera varios dueños principales.
-    const { data: primary } = await admin
+    // Resolución robusta del dueño a imputar (1 dueño / principal / mayor %):
+    // no depender de is_primary, que en la base suele venir sin flaguear.
+    const { data: uOwners } = await admin
       .from("unit_owners")
-      .select("owner_id")
-      .eq("unit_id", booking.unit_id)
-      .eq("is_primary", true)
-      .limit(1)
-      .maybeSingle();
-    ownerId = (primary?.owner_id as string | undefined) ?? null;
+      .select("owner_id, is_primary, ownership_pct")
+      .eq("unit_id", booking.unit_id);
+    ownerId = pickChargeOwner((uOwners ?? []) as UnitOwnerLite[]);
   }
 
   const { data, error } = await admin

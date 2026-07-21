@@ -463,6 +463,9 @@ export interface MaintenanceTicket {
   related_owner_id: string | null;
   charged_to_owner_at: string | null;
   charged_to_settlement_id: string | null;
+  /** Egreso en Caja que pagó el costo real del ticket (pago al técnico). */
+  paid_movement_id: string | null;
+  paid_at: string | null;
   notes: string | null;
   // Contacto alternativo para coordinar el arreglo (por si el ocupante no está)
   contact_name: string | null;

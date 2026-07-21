@@ -9,6 +9,8 @@ import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
 import { formatMoney } from "@/lib/format";
 import { EDITABLE_STATUSES, formatPeriod } from "@/lib/settlements/labels";
+import { zonedTimeToUtc, addDaysYmd } from "@/lib/dates";
+import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import type {
   OwnerSettlement,
   SettlementLine,
@@ -165,16 +167,17 @@ function revalidateSettlement(id?: string) {
 // ════════════════════════════════════════════════════════════════════════════
 async function buildSettlementLines(opts: {
   admin: Admin;
+  organizationId: string;
   ownerId: string;
   year: number;
   month: number;
 }): Promise<{ lines: ComputedLine[]; ticketIds: string[] }> {
-  const { admin, ownerId, year, month } = opts;
+  const { admin, organizationId, ownerId, year, month } = opts;
 
   const { data: unitOwners } = await admin
     .from("unit_owners")
     .select(
-      "unit_id, ownership_pct, commission_pct_override, unit:units(id, code, name, default_commission_pct)",
+      "unit_id, ownership_pct, commission_pct_override, is_primary, unit:units(id, code, name, default_commission_pct)",
     )
     .eq("owner_id", ownerId);
 
@@ -184,6 +187,26 @@ async function buildSettlementLines(opts: {
   const periodStart = new Date(year, month - 1, 1).toISOString().slice(0, 10);
   const periodEnd = new Date(year, month, 0).toISOString().slice(0, 10);
   const daysInMonth = new Date(year, month, 0).getDate();
+
+  // Regen-safe: si ya hay una liquidación BORRADOR de este owner+período,
+  // liberamos sus tickets ya cobrados para volver a evaluarlos. Sin esto, al
+  // regenerar el borrador la línea de mantenimiento desaparecía (el ticket
+  // quedaba con charged_to_owner_at y se excluía, y las líneas auto se reescriben).
+  const { data: draftSettlements } = await admin
+    .from("owner_settlements")
+    .select("id")
+    .eq("organization_id", organizationId)
+    .eq("owner_id", ownerId)
+    .eq("period_year", year)
+    .eq("period_month", month)
+    .eq("status", "borrador");
+  const draftIds = (draftSettlements ?? []).map((s) => s.id as string);
+  if (draftIds.length > 0) {
+    await admin
+      .from("maintenance_tickets")
+      .update({ charged_to_owner_at: null, charged_to_settlement_id: null })
+      .in("charged_to_settlement_id", draftIds);
+  }
 
   // Multi-moneda: traemos las reservas SIN filtrar por moneda. Cada línea
   // luego persiste su `currency` y los totales se computan convirtiendo a la
@@ -358,6 +381,85 @@ async function buildSettlementLines(opts: {
     }
   }
 
+  // ── Egresos de Caja "Lo paga: Propietario" imputados a este dueño ──────────
+  // Un egreso con `billable_to='owner'` se descuenta en la liquidación del
+  // propietario (rentOS pagó al proveedor desde Caja; el dueño lo reintegra).
+  // Se imputa por `owner_id` directo o por unidad de la que es dueño PRINCIPAL
+  // (decisión de negocio: completo al principal, sin prorrateo). Se excluyen:
+  //   • ref_type='ticket' → el mantenimiento ya se carga por su propio camino
+  //     (arriba), no dos veces.
+  //   • category='owner_settlement' + ref_type settlement_* → son pagos/ajustes
+  //     de liquidación (también billable_to='owner'), NO gastos del inmueble.
+  //   • 'transfer' → movimientos entre cuentas propias.
+  // Período = mes del egreso (rango de día AR), regen-safe (no lleva marcador).
+  // Unidades donde ESTE dueño es el que absorbe los gastos (1 dueño / principal
+  // / mayor %). Traemos TODOS los dueños de las units del owner para resolverlo
+  // — no alcanza con is_primary, que suele venir sin flaguear.
+  const { data: allUnitOwners } = await admin
+    .from("unit_owners")
+    .select("unit_id, owner_id, is_primary, ownership_pct")
+    .in("unit_id", unitIds);
+  const ownersByUnit = new Map<string, UnitOwnerLite[]>();
+  for (const uo of (allUnitOwners ?? []) as Array<
+    UnitOwnerLite & { unit_id: string }
+  >) {
+    const arr = ownersByUnit.get(uo.unit_id) ?? [];
+    arr.push(uo);
+    ownersByUnit.set(uo.unit_id, arr);
+  }
+  const chargeOwnerUnitIds = unitIds.filter(
+    (uid) => pickChargeOwner(ownersByUnit.get(uid) ?? []) === ownerId,
+  );
+  const ownerMatch = [`owner_id.eq.${ownerId}`];
+  if (chargeOwnerUnitIds.length > 0) {
+    ownerMatch.push(
+      `and(owner_id.is.null,unit_id.in.(${chargeOwnerUnitIds.join(",")}))`,
+    );
+  }
+  const periodStartTs = zonedTimeToUtc(periodStart, "00:00").toISOString();
+  const periodEndExclusiveTs = zonedTimeToUtc(
+    addDaysYmd(periodEnd, 1),
+    "00:00",
+  ).toISOString();
+
+  // Egresos que ya se cargan por otro camino (tickets → maintenance_charge) o
+  // que son de la propia liquidación (pagos/ajustes). Se filtran en JS para no
+  // depender de `not.in` anidado en un `.or()` de PostgREST (el set es chico).
+  const EXCLUDED_EXPENSE_REF_TYPES = new Set([
+    "ticket",
+    "settlement_payment",
+    "settlement_adjustment",
+  ]);
+  const { data: expenseMovs } = await admin
+    .from("cash_movements")
+    .select("id, amount, currency, description, unit_id, category, ref_type")
+    .eq("organization_id", organizationId)
+    .eq("billable_to", "owner")
+    .eq("direction", "out")
+    .gte("occurred_at", periodStartTs)
+    .lt("occurred_at", periodEndExclusiveTs)
+    .not("category", "in", "(owner_settlement,transfer)")
+    .or(ownerMatch.join(","));
+
+  for (const m of expenseMovs ?? []) {
+    const amt = Number(m.amount);
+    if (!(amt > 0)) continue;
+    const rt = m.ref_type as string | null;
+    if (rt && EXCLUDED_EXPENSE_REF_TYPES.has(rt)) continue;
+    const desc = (m.description as string | null)?.trim();
+    lines.push({
+      line_type: "adjustment",
+      ref_type: "cash_movement",
+      ref_id: m.id as string,
+      unit_id: (m.unit_id as string | null) ?? null,
+      description: desc ? `Gasto: ${desc}` : "Gasto imputado al propietario",
+      amount: round2(amt),
+      sign: "-",
+      currency: (m.currency as string | null) ?? BASE_CURRENCY,
+      meta: null,
+    });
+  }
+
   return { lines, ticketIds: (tickets ?? []).map((t) => t.id) };
 }
 
@@ -454,17 +556,20 @@ async function persistSettlement(opts: {
   // a insertar la línea automática de esas reservas — duplicaría ingreso y
   // comisión para el mismo ref_id, y entonces el editor mostraría la suma de
   // ambas líneas mientras la edición solo toca una ("se guarda pero no cambia").
-  const editedBookingRefIds = new Set(
+  // Clave compuesta ref_type:ref_id (no solo ref_id): si una línea auto fue
+  // editada a mano (booking, ticket o cash_movement), quedó preservada como
+  // manual arriba; no la re-insertamos como auto para no duplicarla.
+  const editedRefKeys = new Set(
     [...manualLines, ...siblingManualLines]
-      .filter((l) => l.ref_type === "booking" && l.ref_id != null)
-      .map((l) => l.ref_id as string),
+      .filter((l) => l.ref_type != null && l.ref_id != null)
+      .map((l) => `${l.ref_type}:${l.ref_id}`),
   );
   const autoLinesToInsert = autoLines.filter(
     (l) =>
       !(
-        l.ref_type === "booking" &&
+        l.ref_type != null &&
         l.ref_id != null &&
-        editedBookingRefIds.has(l.ref_id)
+        editedRefKeys.has(`${l.ref_type}:${l.ref_id}`)
       ),
   );
 
@@ -641,9 +746,10 @@ async function generateOne(opts: {
   currency: string;
   userId: string;
 }): Promise<{ settlement: OwnerSettlement; lineCount: number }> {
-  const { admin, ownerId, year, month } = opts;
+  const { admin, organizationId, ownerId, year, month } = opts;
   const { lines: autoLines, ticketIds } = await buildSettlementLines({
     admin,
+    organizationId,
     ownerId,
     year,
     month,
@@ -692,6 +798,24 @@ export async function generateSettlement(
     };
   }
   const admin = createAdminClient();
+
+  // Defensa multi-tenant: el ownerId viene del cliente. Validamos que sea de
+  // esta org antes de generar (buildSettlementLines lee unit_owners/bookings/
+  // tickets por owner/unidad, sin filtro de org — sin este check se podría
+  // filtrar data de otra organización).
+  const { data: ownerRow } = await admin
+    .from("owners")
+    .select("id")
+    .eq("id", ownerId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!ownerRow) {
+    return {
+      ok: false,
+      reason: "unknown",
+      message: "Propietario no encontrado",
+    };
+  }
 
   let res: { settlement: OwnerSettlement; lineCount: number };
   try {
@@ -776,6 +900,7 @@ export async function generateSettlementsForPeriod(
     try {
       const { lines: autoLines, ticketIds } = await buildSettlementLines({
         admin,
+        organizationId: organization.id,
         ownerId: o.id,
         year,
         month,

@@ -34,14 +34,16 @@ export default async function PmsGridPage() {
   const bookingsEndISO = isoAddDays(startISO, 90);
 
   const canViewMoney = can(role, "payments", "view");
+  const canRegisterExpense = can(role, "cash", "create");
   const canEditBookings = can(role, "bookings", "update");
   const [units, bookings, accounts, schedule, dateMarks] = await Promise.all([
     listUnitsEnriched(),
     listBookingsInRange(startISO, bookingsEndISO),
-    canViewMoney ? listAccounts() : Promise.resolve([]),
+    canViewMoney || canRegisterExpense ? listAccounts() : Promise.resolve([]),
     listScheduleInRange(startISO, endISO).catch(() => []),
     listDateMarksInRange(startISO, endISO).catch(() => []),
   ]);
+  const expenseDefaultId = accounts.find((a) => a.is_expense_default)?.id ?? null;
 
   return (
     <PmsBoard
@@ -53,6 +55,8 @@ export default async function PmsGridPage() {
       canEditDateMarks={can(role, "date_marks", "create")}
       canEditBookings={canEditBookings}
       canViewMoney={canViewMoney}
+      canRegisterExpense={canRegisterExpense}
+      expenseDefaultId={expenseDefaultId}
       organizationId={organization.id}
       startISO={startISO}
       days={90}
