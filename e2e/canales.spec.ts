@@ -151,6 +151,60 @@ test("filtrar y buscar conexiones en la matriz", async ({ page }) => {
   await expect(page.getByText(/Ninguna conexión coincide/)).toBeVisible();
 });
 
+test("ver detalle de una conexión renderiza y permite eliminar el borrador", async ({ page }) => {
+  // siembra su propio borrador (independiente del orden de los tests)
+  const { data: unit } = await admin
+    .from("units")
+    .select("id, ical_export_token")
+    .eq("organization_id", DEMO_ORG_ID)
+    .eq("active", true)
+    .limit(1)
+    .single();
+  await admin
+    .from("channel_links")
+    .delete()
+    .eq("organization_id", DEMO_ORG_ID)
+    .eq("unit_id", unit!.id)
+    .eq("channel", "booking");
+  const { data: seeded, error: seedErr } = await admin
+    .from("channel_links")
+    .insert({
+      organization_id: DEMO_ORG_ID,
+      unit_id: unit!.id,
+      channel: "booking",
+      status: "draft",
+      export_token_hash: "0".repeat(64),
+    })
+    .select("id")
+    .single();
+  if (seedErr) throw new Error(seedErr.message);
+
+  await login(page);
+  await page.goto(`/dashboard/canales/${seeded!.id}`);
+
+  // la ficha carga completa (regresión: función server→client rompía el render)
+  await expect(page.getByText("Recepción de reservas")).toBeVisible();
+  await expect(page.getByText("Publicación de disponibilidad")).toBeVisible();
+  await expect(page.getByText("Reservas externas recientes")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Copiar enlace de nuestro calendario/ }),
+  ).toBeVisible();
+
+  // eliminar el borrador desde la ficha
+  await page.getByRole("button", { name: "Eliminar" }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Eliminar", exact: true })
+    .click();
+  await page.waitForURL(/\/dashboard\/canales$/);
+  const { data: gone } = await admin
+    .from("channel_links")
+    .select("id")
+    .eq("id", seeded!.id)
+    .maybeSingle();
+  expect(gone).toBeNull();
+});
+
 test("resolver una incidencia: descartar con motivo queda auditado", async ({ page }) => {
   await login(page);
   await page.goto("/dashboard/canales");
