@@ -73,7 +73,8 @@ export type MovementCategory =
   | "supplies"
   | "commission"
   | "refund"
-  | "other";
+  | "other"
+  | "extra_charge";
 
 export type SettlementStatus =
   | "borrador"
@@ -614,6 +615,8 @@ export interface CashAccount {
   icon: string | null;
   active: boolean;
   display_order: number | null;
+  /** Cuenta por defecto del botón rápido "Registrar gasto" (gastos corrientes). Máx. una por org. */
+  is_expense_default: boolean;
   created_at: string;
 }
 
