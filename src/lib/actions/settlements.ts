@@ -2654,9 +2654,21 @@ export async function deleteSettlement(settlementId: string) {
 // paid_movement_id (mismo patrón que cash.ts; el settlement_lock del 007
 // luego protege ese movimiento de ediciones mientras esté pagada).
 // ════════════════════════════════════════════════════════════════════════════
+// El pago puede dividirse en varias cuentas (efectivo + transferencia, etc.).
+// Se genera un egreso por cada cuenta; la suma debe igualar el neto por pagar.
+// Todos los egresos llevan ref_type='settlement_payment' + ref_id=settlement →
+// el lock del 043 los protege mientras la liquidación esté cerrada.
+const paymentSplitSchema = z.object({
+  account_id: z.string().uuid(),
+  amount: z.coerce.number().positive("Cada importe debe ser mayor a 0"),
+});
+
 const registerPaymentSchema = z.object({
   settlement_id: z.string().uuid(),
-  account_id: z.string().uuid(),
+  // Formato nuevo: una o más cuentas. Se conserva account_id/amount como
+  // compat hacia atrás (un solo pago) por si algún llamador viejo los manda.
+  splits: z.array(paymentSplitSchema).min(1).optional(),
+  account_id: z.string().uuid().optional(),
   amount: z.coerce.number().positive().optional(),
   paid_at: z.string().optional(),
   notes: z.string().max(300).optional().nullable(),
@@ -2691,67 +2703,106 @@ export async function registerSettlementPayment(
     );
   }
 
-  const { data: account } = await admin
-    .from("cash_accounts")
-    .select("id, currency, active, name")
-    .eq("id", v.account_id)
-    .eq("organization_id", organization.id)
-    .maybeSingle();
-  if (!account) throw new Error("Cuenta de caja no encontrada");
-  if (!account.active) throw new Error("La cuenta de caja está inactiva");
-  if (account.currency !== settlement.currency) {
-    throw new Error(
-      `Moneda incompatible: la cuenta es ${account.currency} y la liquidación ${settlement.currency}`,
-    );
-  }
-
-  const amount = v.amount ?? Number(settlement.net_payable);
-  if (!(amount > 0)) {
+  const net = round2(Number(settlement.net_payable));
+  if (!(net > 0)) {
     throw new Error(
       "El neto por pagar no es positivo: no se puede registrar el pago",
     );
   }
+
+  // Normalizar entrada: splits explícitos, o el par legacy account_id/amount.
+  const rawSplits =
+    v.splits && v.splits.length > 0
+      ? v.splits
+      : v.account_id
+        ? [{ account_id: v.account_id, amount: v.amount ?? net }]
+        : [];
+  if (rawSplits.length === 0) {
+    throw new Error("Elegí al menos una cuenta de Caja para el pago");
+  }
+
+  // Consolidar importes por cuenta (por si repiten la misma cuenta) y validar.
+  const byAccount = new Map<string, number>();
+  for (const s of rawSplits) {
+    byAccount.set(s.account_id, round2((byAccount.get(s.account_id) ?? 0) + Number(s.amount)));
+  }
+  const splitTotal = round2(
+    Array.from(byAccount.values()).reduce((a, b) => a + b, 0),
+  );
+  if (Math.abs(splitTotal - net) > 0.01) {
+    throw new Error(
+      `La suma de las cuentas (${formatMoney(splitTotal, settlement.currency)}) debe igualar el neto por pagar (${formatMoney(net, settlement.currency)})`,
+    );
+  }
+
+  // Validar todas las cuentas de una sola lectura.
+  const accountIds = Array.from(byAccount.keys());
+  const { data: accountsData } = await admin
+    .from("cash_accounts")
+    .select("id, currency, active, name")
+    .eq("organization_id", organization.id)
+    .in("id", accountIds);
+  const accountMap = new Map(
+    (accountsData ?? []).map((a) => [a.id as string, a]),
+  );
+  for (const id of accountIds) {
+    const acc = accountMap.get(id);
+    if (!acc) throw new Error("Cuenta de caja no encontrada");
+    if (!acc.active) throw new Error(`La cuenta "${acc.name}" está inactiva`);
+    if (acc.currency !== settlement.currency) {
+      throw new Error(
+        `Moneda incompatible: "${acc.name}" es ${acc.currency} y la liquidación ${settlement.currency}`,
+      );
+    }
+  }
+
   const occurredAt = v.paid_at ?? new Date().toISOString();
   const periodLabel = formatPeriod(
     settlement.period_year,
     settlement.period_month,
   );
+  const multi = accountIds.length > 1;
+  const baseDesc = v.notes?.trim() || `Pago liquidación ${periodLabel}`;
 
-  // 1) Egreso en Caja
-  const { data: movement, error: movErr } = await admin
+  // 1) Egresos en Caja (uno por cuenta)
+  const rows = accountIds.map((id) => ({
+    organization_id: organization.id,
+    account_id: id,
+    direction: "out" as const,
+    amount: byAccount.get(id)!,
+    currency: settlement.currency,
+    category: "owner_settlement" as const,
+    ref_type: "settlement_payment" as const,
+    ref_id: settlement.id,
+    owner_id: settlement.owner_id,
+    billable_to: "owner" as const,
+    description: multi
+      ? `${baseDesc} · ${accountMap.get(id)!.name}`
+      : baseDesc,
+    occurred_at: occurredAt,
+    created_by: session.userId,
+  }));
+
+  const { data: movements, error: movErr } = await admin
     .from("cash_movements")
-    .insert({
-      organization_id: organization.id,
-      account_id: v.account_id,
-      direction: "out",
-      amount,
-      currency: settlement.currency,
-      category: "owner_settlement",
-      ref_type: null,
-      ref_id: null,
-      owner_id: settlement.owner_id,
-      billable_to: "owner",
-      description: v.notes?.trim()
-        ? v.notes.trim()
-        : `Pago liquidación ${periodLabel}`,
-      occurred_at: occurredAt,
-      created_by: session.userId,
-    })
-    .select()
-    .single();
-  if (movErr) {
+    .insert(rows)
+    .select("id, account_id, amount");
+  if (movErr || !movements || movements.length === 0) {
     throw new Error(
-      `No se pudo registrar el movimiento de caja: ${movErr.message}`,
+      `No se pudo registrar el movimiento de caja: ${movErr?.message ?? "sin filas"}`,
     );
   }
 
-  // 2) Cerrar la liquidación + linkear el movimiento
+  // Movimiento principal (ancla de paid_movement_id + de los ajustes futuros).
+  const primaryId = movements[0].id as string;
+
+  // 2) Cerrar la liquidación + linkear el movimiento principal
   const { error: updErr } = await admin
     .from("owner_settlements")
     .update({
       status: "pagada",
       paid_at: occurredAt,
-      paid_movement_id: movement.id,
+      paid_movement_id: primaryId,
       last_edited_by: session.userId,
       last_edited_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -2759,10 +2810,21 @@ export async function registerSettlementPayment(
     .eq("id", v.settlement_id)
     .eq("organization_id", organization.id);
   if (updErr) {
-    // Compensación: que el movimiento no quede huérfano
-    await admin.from("cash_movements").delete().eq("id", movement.id);
+    // Compensación: que los movimientos no queden huérfanos
+    await admin
+      .from("cash_movements")
+      .delete()
+      .in(
+        "id",
+        movements.map((m) => m.id as string),
+      );
     throw new Error(`No se pudo cerrar la liquidación: ${updErr.message}`);
   }
+
+  const sideEffects = accountIds.map(
+    (id) =>
+      `Egreso en Caja ${formatMoney(byAccount.get(id)!, settlement.currency)} (${accountMap.get(id)!.name})`,
+  );
 
   await admin.from("settlement_audit").insert({
     organization_id: organization.id,
@@ -2772,25 +2834,28 @@ export async function registerSettlementPayment(
     actor_name: actorNameOf(session),
     changes: {
       status: { from: settlement.status, to: "pagada" },
-      amount,
+      amount: net,
+      cuentas: accountIds.length,
     },
-    side_effects: [
-      `Egreso en Caja ${formatMoney(amount, settlement.currency)} (${account.name})`,
-    ],
+    side_effects: sideEffects,
   });
 
   for (const p of [
     "/dashboard/liquidaciones",
     `/dashboard/liquidaciones/${v.settlement_id}`,
     "/dashboard/caja",
-    `/dashboard/caja/${v.account_id}`,
+    ...accountIds.map((id) => `/dashboard/caja/${id}`),
     "/dashboard/alertas",
     "/dashboard",
   ]) {
     revalidatePath(p);
   }
 
-  return { ok: true as const, movement_id: movement.id as string };
+  return {
+    ok: true as const,
+    movement_id: primaryId,
+    movement_ids: movements.map((m) => m.id as string),
+  };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

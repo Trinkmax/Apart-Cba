@@ -14,6 +14,7 @@ import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
 import { BookingActions } from "@/components/bookings/booking-actions";
 import { ExtensionHistory } from "@/components/bookings/extension-history";
 import { QuickPayCard } from "@/components/bookings/quick-pay-card";
+import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { GuestMessageCard } from "@/components/bookings/guest-message-card";
 import { BookingChannelStatus } from "@/components/bookings/booking-channel-status";
@@ -31,6 +32,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   const { id } = await params;
   const { role } = await getCurrentOrg();
   const canViewMoney = can(role, "payments", "view");
+  const canCreatePayment = can(role, "payments", "create");
   const canEditBooking = can(role, "bookings", "update");
   const [booking, units, accounts, movements] = await Promise.all([
     getBooking(id),
@@ -210,7 +212,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               )}
 
               {/* Pago rápido — visible salvo que la reserva esté cancelada/no_show */}
-              <div className="pt-1">
+              <div className="pt-1 space-y-2">
                 <QuickPayCard
                   bookingId={b.id}
                   currency={b.currency}
@@ -219,6 +221,14 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                   accounts={accounts}
                   disabled={b.status === "cancelada" || b.status === "no_show"}
                 />
+                {canCreatePayment && (
+                  <ExtraChargeDialog
+                    bookingId={b.id}
+                    currency={b.currency}
+                    accounts={accounts}
+                    disabled={b.status === "cancelada" || b.status === "no_show"}
+                  />
+                )}
               </div>
 
               {/* Movimientos vinculados a esta reserva (incluye cuotas) */}

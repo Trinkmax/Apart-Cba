@@ -2702,7 +2702,7 @@ export function PmsBoard({
                         de pintar bg-primary en cada celda del día actual. */}
                     {todayOff >= 0 && todayOff < windowDays && (
                       <div
-                        className="absolute top-0 bottom-0 bg-primary/5 dark:bg-primary/10 pointer-events-none"
+                        className="absolute top-0 bottom-0 bg-orange-500/[0.05] dark:bg-orange-400/[0.07] pointer-events-none"
                         style={{ left: todayOff * CELL, width: CELL }}
                       />
                     )}
@@ -2809,21 +2809,8 @@ export function PmsBoard({
               );
             })()}
 
-            {/* Today vertical line (over all rows) */}
-            {todayOff >= 0 && todayOff < windowDays && (
-              <div
-                className="absolute top-0 bottom-0 pointer-events-none z-[5]"
-                style={{
-                  left: SIDEBAR + todayOff * CELL,
-                  width: CELL,
-                }}
-              >
-                <div className="absolute inset-y-0 left-0 w-0.5 bg-primary/60 shadow-[0_0_8px_rgba(var(--primary-rgb,59,130,246),0.35)]" />
-                <div className="absolute top-0 left-0 -translate-x-1/2 bg-primary text-primary-foreground text-[9px] px-1.5 py-0.5 rounded-b-md font-semibold tracking-widest uppercase shadow-sm">
-                  Hoy
-                </div>
-              </div>
-            )}
+            {/* "Hoy" se marca en el DayChip del header (círculo naranja), no con
+                una línea vertical: la línea confundía con los bordes de mes. */}
 
             {/* Empty state when no units */}
             {units.length === 0 && (
@@ -3068,7 +3055,7 @@ function DayChip({
       <span
         className={cn(
           "uppercase text-[8px] leading-tight font-medium tracking-widest",
-          hoy ? "text-primary" : "text-muted-foreground"
+          hoy ? "font-bold text-orange-600 dark:text-orange-400" : "text-muted-foreground"
         )}
       >
         {format(date, "EEE", { locale: es }).slice(0, 3)}
@@ -3079,7 +3066,7 @@ function DayChip({
           mark
             ? "font-bold"
             : hoy
-              ? "text-primary text-sm"
+              ? "flex size-[18px] shrink-0 items-center justify-center rounded-full bg-orange-500 text-[11px] font-bold text-white shadow-sm"
               : wk
                 ? "text-amber-700 dark:text-amber-400"
                 : "text-foreground/90"
@@ -3100,9 +3087,12 @@ function DayChip({
   );
 
   const className = cn(
-    "shrink-0 flex flex-col items-center justify-center border-r border-border/50 text-[10px] relative",
-    wk && "bg-amber-50/60 dark:bg-amber-500/[0.03]",
-    hoy && "bg-primary/10",
+    "shrink-0 flex flex-col items-center justify-center gap-0.5 border-r border-border/50 text-[10px] relative",
+    hoy
+      ? "bg-orange-50 dark:bg-orange-500/[0.08]"
+      : wk
+        ? "bg-amber-50/60 dark:bg-amber-500/[0.03]"
+        : "",
     monthBoundary && "border-l-2 border-border",
     isClickable && "hover:bg-accent/40 cursor-pointer transition-colors"
   );

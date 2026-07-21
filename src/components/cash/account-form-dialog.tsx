@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { Wallet } from "lucide-react";
 import { createAccount, updateAccount, type AccountInput } from "@/lib/actions/cash";
 import type { CashAccount } from "@/lib/types/database";
 
@@ -51,6 +53,7 @@ export function AccountFormDialog({
     notes: account?.notes ?? "",
     color: account?.color ?? "#0F766E",
     icon: account?.icon ?? "wallet",
+    is_expense_default: account?.is_expense_default ?? false,
   });
 
   function set<K extends keyof AccountInput>(k: K, v: AccountInput[K]) {
@@ -160,6 +163,22 @@ export function AccountFormDialog({
               ))}
             </div>
           </div>
+          <label className="flex items-start justify-between gap-3 rounded-lg border bg-muted/30 p-3 cursor-pointer">
+            <span className="flex items-start gap-2.5 min-w-0">
+              <Wallet size={16} className="text-primary mt-0.5 shrink-0" />
+              <span className="min-w-0">
+                <span className="text-sm font-medium block">Cuenta de gastos corrientes</span>
+                <span className="text-[11px] text-muted-foreground leading-snug block">
+                  El botón &ldquo;Registrar gasto&rdquo; del inicio debita de esta cuenta por defecto. Solo una por organización.
+                </span>
+              </span>
+            </span>
+            <Switch
+              checked={form.is_expense_default}
+              onCheckedChange={(v) => set("is_expense_default", v)}
+              className="mt-0.5 shrink-0"
+            />
+          </label>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
             <Button type="submit" disabled={isPending}>

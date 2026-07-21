@@ -1,13 +1,16 @@
 import Link from "next/link";
 import {
   Wrench, Sparkles, TrendingUp,
-  LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet,
+  LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet, ArrowUpFromLine,
 } from "lucide-react";
 import { getDashboardKPIs } from "@/lib/actions/kpis";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { listAccounts } from "@/lib/actions/cash";
 import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { QuickExpenseDialog } from "@/components/cash/quick-expense-dialog";
 import RevenueChart from "@/components/dashboard/revenue-chart-lazy";
 import { DashboardGreeting } from "@/components/dashboard/dashboard-greeting";
 import { UNIT_STATUS_META } from "@/lib/constants";
@@ -18,6 +21,10 @@ export default async function DashboardHome() {
   const [kpis, { role }] = await Promise.all([getDashboardKPIs(), getCurrentOrg()]);
   const canViewMoney = can(role, "payments", "view");
   const canViewBookings = can(role, "bookings", "view");
+  const canRegisterExpense = can(role, "cash", "create");
+  const expenseAccounts = canRegisterExpense ? await listAccounts() : [];
+  const expenseDefaultId =
+    expenseAccounts.find((a) => a.is_expense_default)?.id ?? null;
   const statusHref = canViewBookings ? "/dashboard/unidades/kanban" : "/dashboard/unidades";
   // Layout: 3 cols si hay revenue, 2 cols si hay reservas pero no plata,
   // 1 col si el rol sólo ve Atención requerida (mantenimiento / limpieza).
@@ -32,15 +39,30 @@ export default async function DashboardHome() {
       {/* Hero */}
       <div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
         <DashboardGreeting />
-        <Card className="px-3 sm:px-5 py-2.5 sm:py-3 flex items-center gap-2.5 sm:gap-3 shrink-0">
-          <div className="size-9 sm:size-10 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
-            <TrendingUp size={18} />
-          </div>
-          <div>
-            <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-muted-foreground">Ocupación 30d</div>
-            <div className="text-xl sm:text-2xl font-bold tabular-nums">{kpis.occupancy_pct_30d.toFixed(1)}%</div>
-          </div>
-        </Card>
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+          {canRegisterExpense && (
+            <QuickExpenseDialog accounts={expenseAccounts} defaultAccountId={expenseDefaultId}>
+              <Button variant="outline" className="gap-2 h-auto py-2.5 sm:py-3 border-rose-500/30 hover:border-rose-500/60 hover:bg-rose-500/5">
+                <span className="size-7 sm:size-8 rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                  <ArrowUpFromLine size={16} />
+                </span>
+                <span className="text-left leading-tight">
+                  <span className="block text-[9px] sm:text-[10px] uppercase tracking-wider text-muted-foreground font-normal">Gasto rápido</span>
+                  <span className="block text-sm font-semibold">Registrar gasto</span>
+                </span>
+              </Button>
+            </QuickExpenseDialog>
+          )}
+          <Card className="px-3 sm:px-5 py-2.5 sm:py-3 flex items-center gap-2.5 sm:gap-3 shrink-0">
+            <div className="size-9 sm:size-10 rounded-lg bg-primary/15 text-primary flex items-center justify-center shrink-0">
+              <TrendingUp size={18} />
+            </div>
+            <div>
+              <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-muted-foreground">Ocupación 30d</div>
+              <div className="text-xl sm:text-2xl font-bold tabular-nums">{kpis.occupancy_pct_30d.toFixed(1)}%</div>
+            </div>
+          </Card>
+        </div>
       </div>
 
       {/* Status grid de units — 2 columnas en mobile, denso pero legible */}

@@ -34,6 +34,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   supplies: "Insumos",
   commission: "Comisión",
   refund: "Devolución",
+  extra_charge: "Extra",
   other: "Otro",
 };
 

@@ -135,6 +135,8 @@ const accountSchema = z.object({
   notes: z.string().optional().nullable(),
   color: z.string().default("#0F766E"),
   icon: z.string().default("wallet"),
+  /** Cuenta por defecto del botón rápido "Registrar gasto" (gastos corrientes). */
+  is_expense_default: z.boolean().default(false),
 });
 
 const movementSchema = z.object({
@@ -144,7 +146,7 @@ const movementSchema = z.object({
   currency: z.string(),
   category: z.enum([
     "booking_payment", "maintenance", "cleaning", "owner_settlement", "transfer",
-    "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other",
+    "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other", "extra_charge",
   ]),
   unit_id: z.string().uuid().optional().nullable(),
   owner_id: z.string().uuid().optional().nullable(),
@@ -301,6 +303,15 @@ export async function createAccount(input: AccountInput) {
   }
   const validated = accountSchema.parse(input);
   const admin = createAdminClient();
+  // Solo una cuenta de gastos corrientes por org: liberamos las demás antes de
+  // insertar la nueva marcada, para no chocar con el índice parcial único.
+  if (validated.is_expense_default) {
+    await admin
+      .from("cash_accounts")
+      .update({ is_expense_default: false })
+      .eq("organization_id", organization.id)
+      .eq("is_expense_default", true);
+  }
   const { data, error } = await admin
     .from("cash_accounts")
     .insert({ ...validated, organization_id: organization.id })
@@ -308,6 +319,7 @@ export async function createAccount(input: AccountInput) {
     .single();
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard");
   return data as CashAccount;
 }
 
@@ -319,6 +331,16 @@ export async function updateAccount(id: string, input: AccountInput) {
   }
   const validated = accountSchema.parse(input);
   const admin = createAdminClient();
+  // Idem createAccount: si esta pasa a ser la cuenta de gastos corrientes,
+  // liberamos cualquier otra que lo fuera (excluyéndola a ella misma).
+  if (validated.is_expense_default) {
+    await admin
+      .from("cash_accounts")
+      .update({ is_expense_default: false })
+      .eq("organization_id", organization.id)
+      .eq("is_expense_default", true)
+      .neq("id", id);
+  }
   const { data, error } = await admin
     .from("cash_accounts")
     .update(validated)
@@ -328,6 +350,7 @@ export async function updateAccount(id: string, input: AccountInput) {
     .single();
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard");
   return data as CashAccount;
 }
 
@@ -364,6 +387,101 @@ export async function createMovement(input: MovementInput) {
     .single();
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/caja");
+  return data as CashMovement;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Registrar gasto rápido — botón del inicio. Egreso de gastos corrientes que
+// sale de la cuenta marcada `is_expense_default` (editable en el diálogo).
+// ════════════════════════════════════════════════════════════════════════════
+const quickExpenseSchema = z.object({
+  // account_id opcional: si no viene, se usa la cuenta de gastos corrientes.
+  account_id: z.string().uuid().optional().nullable(),
+  amount: z.coerce.number().positive("El importe debe ser mayor a 0"),
+  category: z
+    .enum(["utilities", "supplies", "salary", "tax", "maintenance", "cleaning", "other"])
+    .default("supplies"),
+  description: z.string().max(300).optional().nullable(),
+  occurred_at: z.string().optional(),
+});
+
+export type QuickExpenseInput = z.input<typeof quickExpenseSchema>;
+
+/**
+ * Devuelve la cuenta de gastos corrientes de la org (is_expense_default), o null
+ * si todavía no se designó ninguna. El botón "Registrar gasto" la pre-selecciona.
+ */
+export async function getExpenseDefaultAccount(): Promise<CashAccount | null> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("cash_accounts")
+    .select("*")
+    .eq("organization_id", organization.id)
+    .eq("is_expense_default", true)
+    .eq("active", true)
+    .maybeSingle();
+  return (data as CashAccount | null) ?? null;
+}
+
+export async function registerExpense(input: QuickExpenseInput) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "create")) {
+    throw new Error("No tenés permiso para registrar gastos.");
+  }
+  const v = quickExpenseSchema.parse(input);
+  const admin = createAdminClient();
+
+  // Resolver cuenta: explícita > cuenta de gastos corrientes de la org.
+  let accountId = v.account_id ?? null;
+  if (!accountId) {
+    const { data: def } = await admin
+      .from("cash_accounts")
+      .select("id")
+      .eq("organization_id", organization.id)
+      .eq("is_expense_default", true)
+      .eq("active", true)
+      .maybeSingle();
+    accountId = (def?.id as string | undefined) ?? null;
+  }
+  if (!accountId) {
+    throw new Error(
+      "No hay cuenta de gastos corrientes configurada. Elegí una cuenta o marcá una como 'Gastos corrientes' en Caja.",
+    );
+  }
+
+  const { data: account } = await admin
+    .from("cash_accounts")
+    .select("id, currency, active, name")
+    .eq("id", accountId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!account) throw new Error("Cuenta de caja no encontrada");
+  if (!account.active) throw new Error("La cuenta de caja está inactiva");
+
+  const { data, error } = await admin
+    .from("cash_movements")
+    .insert({
+      organization_id: organization.id,
+      account_id: account.id,
+      direction: "out",
+      amount: v.amount,
+      currency: account.currency,
+      category: v.category,
+      billable_to: "apartcba",
+      description: v.description?.trim() || "Gasto corriente",
+      occurred_at: v.occurred_at ?? new Date().toISOString(),
+      created_by: session.userId,
+    })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/dashboard/caja");
+  revalidatePath(`/dashboard/caja/${account.id}`);
+  revalidatePath("/dashboard");
   return data as CashMovement;
 }
 
@@ -768,14 +886,38 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
     }
   }
 
-  // Settlement vinculado (vía paid_movement_id)
+  // Settlement vinculado: por paid_movement_id (movimiento principal) o, para
+  // los egresos de un pago dividido / ajustes, por ref_id.
   if (movement.category === "owner_settlement") {
-    const { data: st } = await admin
+    type LinkedSt = {
+      id: string;
+      status: string;
+      period_year: number;
+      period_month: number;
+      owner_id: string;
+      owner: { full_name: string } | null;
+    };
+    const linkByRef =
+      (movement.ref_type === "settlement_payment" ||
+        movement.ref_type === "settlement_adjustment") &&
+      movement.ref_id;
+    let st: LinkedSt | null = null;
+    const { data: byPaid } = await admin
       .from("owner_settlements")
       .select("id, status, period_year, period_month, owner_id, owner:owners(full_name)")
       .eq("paid_movement_id", movementId)
       .eq("organization_id", organization.id)
       .maybeSingle();
+    st = (byPaid as unknown as LinkedSt | null) ?? null;
+    if (!st && linkByRef) {
+      const { data: byRef } = await admin
+        .from("owner_settlements")
+        .select("id, status, period_year, period_month, owner_id, owner:owners(full_name)")
+        .eq("id", movement.ref_id as string)
+        .eq("organization_id", organization.id)
+        .maybeSingle();
+      st = (byRef as unknown as LinkedSt | null) ?? null;
+    }
     if (st) {
       const o = st.owner as unknown as { full_name: string } | null;
       linked_settlement = {
@@ -847,7 +989,7 @@ const updateMovementSchema = z.object({
   amount: z.coerce.number().positive(),
   category: z.enum([
     "booking_payment", "maintenance", "cleaning", "owner_settlement", "transfer",
-    "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other",
+    "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other", "extra_charge",
   ]),
   unit_id: z.string().uuid().optional().nullable(),
   owner_id: z.string().uuid().optional().nullable(),
@@ -1122,7 +1264,7 @@ const exportFiltersSchema = z.object({
     .array(
       z.enum([
         "booking_payment", "maintenance", "cleaning", "owner_settlement", "transfer",
-        "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other",
+        "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other", "extra_charge",
       ])
     )
     .optional(),

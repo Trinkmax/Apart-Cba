@@ -76,6 +76,7 @@ const CATEGORY_LABELS: Record<UpdateMovementInput["category"], string> = {
   supplies: "Insumos",
   commission: "Comisión",
   refund: "Devolución",
+  extra_charge: "Cobro extra",
   other: "Otro",
 };
 

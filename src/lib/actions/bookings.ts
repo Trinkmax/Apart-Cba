@@ -18,6 +18,7 @@ import type {
   BookingSearchResult,
   BookingWithRelations,
   BookingStatus,
+  CashMovement,
 } from "@/lib/types/database";
 import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
@@ -1262,6 +1263,106 @@ export async function addBookingPayment(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   return data as Booking;
+}
+
+/**
+ * Registra un COBRO EXTRA sobre una reserva (cochera, late check-out, daños).
+ * A diferencia de addBookingPayment, NO toca total_amount ni paid_amount: es un
+ * ingreso aparte, vinculado a la reserva (ref_type='booking'), que aparece en
+ * Caja y en el historial de pagos de la reserva. `billable_to` define a quién
+ * corresponde la plata (organización o propietario). Si es del propietario y la
+ * unidad tiene dueño principal, se imputa a ese owner para el filtrado en Caja.
+ */
+const extraChargeSchema = z.object({
+  booking_id: z.string().uuid(),
+  amount: z.coerce.number().positive("El importe debe ser mayor a 0"),
+  account_id: z.string().uuid("Elegí una cuenta de caja"),
+  concept: z.string().trim().min(2, "Describí el concepto").max(200),
+  billable_to: z.enum(["apartcba", "owner"]).default("apartcba"),
+  occurred_at: z.string().optional(),
+});
+
+export type ExtraChargeInput = z.input<typeof extraChargeSchema>;
+
+export async function addBookingExtraCharge(input: ExtraChargeInput) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "payments", "create")) {
+    throw new Error("No tenés permisos para registrar cobros");
+  }
+  const v = extraChargeSchema.parse(input);
+  const admin = createAdminClient();
+
+  const { data: booking, error: bkErr } = await admin
+    .from("bookings")
+    .select("id, currency, unit_id, status")
+    .eq("id", v.booking_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (bkErr) throw new Error(bkErr.message);
+  if (!booking) throw new Error("Reserva no encontrada");
+  if (booking.status === "cancelada" || booking.status === "no_show") {
+    throw new Error("No se puede cobrar un extra sobre una reserva cancelada");
+  }
+
+  const { data: account } = await admin
+    .from("cash_accounts")
+    .select("id, currency, active, name")
+    .eq("id", v.account_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!account) throw new Error("Cuenta de caja no encontrada");
+  if (!account.active) throw new Error("La cuenta de caja está inactiva");
+  if (account.currency !== booking.currency) {
+    throw new Error(
+      `La cuenta es ${account.currency} pero la reserva es en ${booking.currency}`,
+    );
+  }
+
+  // Si el extra es del propietario, lo imputamos al dueño principal de la unidad
+  // (si lo hay) para que aparezca en el filtro por propietario de Caja.
+  let ownerId: string | null = null;
+  if (v.billable_to === "owner") {
+    // Sin garantía de un solo is_primary por unidad (no hay constraint), así que
+    // limitamos a 1 para no romper si hubiera varios dueños principales.
+    const { data: primary } = await admin
+      .from("unit_owners")
+      .select("owner_id")
+      .eq("unit_id", booking.unit_id)
+      .eq("is_primary", true)
+      .limit(1)
+      .maybeSingle();
+    ownerId = (primary?.owner_id as string | undefined) ?? null;
+  }
+
+  const { data, error } = await admin
+    .from("cash_movements")
+    .insert({
+      organization_id: organization.id,
+      account_id: account.id,
+      direction: "in",
+      amount: v.amount,
+      currency: booking.currency,
+      category: "extra_charge",
+      ref_type: "booking",
+      ref_id: booking.id,
+      unit_id: booking.unit_id,
+      owner_id: ownerId,
+      billable_to: v.billable_to,
+      description: `Cobro extra: ${v.concept}`,
+      occurred_at: v.occurred_at ?? new Date().toISOString(),
+      created_by: session.userId,
+    })
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${v.booking_id}`);
+  revalidatePath("/dashboard/caja");
+  revalidatePath(`/dashboard/caja/${account.id}`);
+  revalidatePath("/dashboard");
+  return data as CashMovement;
 }
 
 export async function changeBookingStatus(

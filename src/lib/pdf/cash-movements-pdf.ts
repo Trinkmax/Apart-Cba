@@ -18,6 +18,7 @@ const CATEGORY_LABELS: Record<MovementCategory, string> = {
   supplies: "Insumos",
   commission: "Comisión",
   refund: "Reintegro",
+  extra_charge: "Cobro extra",
   other: "Otro",
 };
 

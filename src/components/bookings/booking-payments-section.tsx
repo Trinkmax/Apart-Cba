@@ -19,6 +19,7 @@ import type { CashMovementAuditEntry, EnrichedMovement } from "@/lib/actions/cas
 const CATEGORY_LABELS: Record<string, string> = {
   booking_payment: "Cobro",
   refund: "Devolución",
+  extra_charge: "Cobro extra",
   other: "Otro",
   adjustment: "Ajuste",
 };

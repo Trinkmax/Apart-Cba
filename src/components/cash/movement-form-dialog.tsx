@@ -53,6 +53,7 @@ const CATEGORY_LABELS: Record<MovementInput["category"], string> = {
   supplies: "Insumos",
   commission: "Comisión",
   refund: "Devolución",
+  extra_charge: "Cobro extra (reserva)",
   other: "Otro",
 };
 
