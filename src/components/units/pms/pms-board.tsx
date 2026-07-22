@@ -550,13 +550,19 @@ export function PmsBoard({
   const pendingMutateIds = useRef<Set<string>>(new Set());
 
   // Long-press en mobile: el drag arranca recién después de mantener apretado
-  // 600ms sin moverse. Mientras tanto, el scroll horizontal/vertical funciona
+  // sin moverse. Mientras tanto, el scroll horizontal/vertical funciona
   // libremente porque NO hicimos preventDefault. Si el usuario mueve antes de
   // que dispare el timer, cancelamos y el browser hace pan natural.
-  const LONG_PRESS_MS = 600;
-  const LONG_PRESS_TOLERANCE_PX = 8;
+  // 400ms: suficiente para no robarle el gesto a quien quiere scrollear, corto
+  // para que "levantar" una reserva se sienta inmediato. La barra se hunde
+  // (scale 0.955) desde el primer instante, así el usuario *ve* que el press
+  // está corriendo y aprende el gesto sin tener que explicárselo.
+  const LONG_PRESS_MS = 400;
+  const LONG_PRESS_TOLERANCE_PX = 10;
   // Mínimo de pixels que debe moverse el puntero para considerarse drag (no tap).
   const DRAG_THRESHOLD_PX = 5;
+  // Escala del "lift" mientras se arrastra (la barra flota sobre la grilla).
+  const DRAG_LIFT_SCALE = 1.04;
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressArmRef = useRef<{
     pointerId: number;
@@ -586,6 +592,80 @@ export function PmsBoard({
   // en vez de px/frame — independiente del refresh-rate del display: 60Hz vs
   // 120Hz daban velocidades distintas con la implementación anterior).
   const autoScrollLastTsRef = useRef<number>(0);
+  // Última posición de scroll observada por el rAF — sirve para re-sincronizar
+  // la barra si el contenedor se movió por cualquier motivo (no sólo por
+  // nuestro auto-scroll).
+  const autoScrollLastScrollRef = useRef<{ left: number; top: number }>({ left: 0, top: 0 });
+
+  // ── Bloqueo REAL del scroll táctil durante el drag ────────────────────────
+  // Éste era EL bug de mobile: `touch-action` sólo se evalúa cuando el dedo
+  // toca la pantalla, así que cambiarlo a mitad del gesto (lo que hace
+  // `lockGridScroll`) no tiene ningún efecto sobre el gesto en curso; y
+  // `preventDefault()` sobre un `pointermove` táctil no cancela el scroll en
+  // iOS Safari (ni confiablemente en Chrome Android). Resultado: al arrancar
+  // el drag la pantalla seguía paneando debajo del dedo.
+  //
+  // La única forma de frenar el pan con el dedo ya apoyado es interceptar
+  // `touchmove` con un listener NO pasivo y llamar `preventDefault()`. React
+  // registra sus listeners de touch como pasivos, por eso va nativo sobre
+  // `window`. Se registra en el `pointerdown` (antes de que el browser
+  // resuelva el gesto y lo mande al compositor) y sólo cancela el default
+  // cuando el long-press YA disparó — mientras tanto el scroll sobre las
+  // barras sigue siendo 100% nativo.
+  const touchGuardRef = useRef<((e: TouchEvent) => void) | null>(null);
+  const bindTouchScrollGuard = useCallback(() => {
+    if (touchGuardRef.current) return;
+    const handler = (ev: TouchEvent) => {
+      if (!dragRef.current) return;
+      // `cancelable === false` ⇒ el browser ya committeó un scroll; no hay
+      // nada que prevenir (y llamar preventDefault ensucia la consola).
+      if (ev.cancelable) ev.preventDefault();
+    };
+    touchGuardRef.current = handler;
+    window.addEventListener("touchmove", handler, { passive: false, capture: true });
+  }, []);
+  const unbindTouchScrollGuard = useCallback(() => {
+    const handler = touchGuardRef.current;
+    if (!handler) return;
+    touchGuardRef.current = null;
+    window.removeEventListener("touchmove", handler, { capture: true });
+  }, []);
+
+  // ── Feedback de "press en curso" ──────────────────────────────────────────
+  // Desde el instante en que el dedo toca la barra, ésta se hunde suavemente
+  // durante LONG_PRESS_MS. Si el usuario suelta o scrollea, vuelve. Si aguanta,
+  // el hundimiento termina justo cuando dispara el drag y la barra "salta"
+  // hacia arriba (lift + háptica). Es el mismo lenguaje que el drag nativo de
+  // iOS: el gesto se explica solo.
+  const primedNodeRef = useRef<HTMLElement | null>(null);
+  const primeBar = useCallback((el: HTMLElement) => {
+    const bar = el.closest("[data-bar-root]") as HTMLElement | null;
+    if (!bar) return;
+    primedNodeRef.current = bar;
+    // Promovemos a capa propia ANTES de animar: evita el micro-tirón del
+    // primer frame en teléfonos de gama media.
+    bar.style.willChange = "transform";
+    // Curva ease-in: la barra se hunde despacio al principio y acelera hacia
+    // el final, tocando fondo justo cuando dispara el long-press. Comunica
+    // "seguí apretando" mucho mejor que un ease-out (que llega enseguida al
+    // estado final y después parece congelado).
+    bar.style.transition = `transform ${LONG_PRESS_MS}ms cubic-bezier(0.55,0,0.85,0.35)`;
+    bar.style.transform = "scale(0.955)";
+  }, [LONG_PRESS_MS]);
+  /** `keep` = el drag tomó el control del transform; no lo pisamos. */
+  const unprimeBar = useCallback((keep = false) => {
+    const bar = primedNodeRef.current;
+    primedNodeRef.current = null;
+    if (!bar || keep) return;
+    bar.style.transition = "transform 180ms cubic-bezier(0.22,1,0.36,1)";
+    bar.style.transform = "";
+    window.setTimeout(() => {
+      if (primedNodeRef.current === bar) return; // se volvió a primear
+      bar.style.transition = "";
+      bar.style.willChange = "";
+    }, 200);
+  }, []);
+
   const lockGridScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || scrollLockRef.current) return;
@@ -605,6 +685,7 @@ export function PmsBoard({
   // setBookings) y la transición inline anima desde "donde quedó el dedo"
   // hasta la posición autoritativa.
   const unlockGridScroll = useCallback((commitToOrigin: boolean = true) => {
+    unbindTouchScrollGuard();
     if (autoScrollRafRef.current !== null) {
       cancelAnimationFrame(autoScrollRafRef.current);
       autoScrollRafRef.current = null;
@@ -634,6 +715,7 @@ export function PmsBoard({
       window.setTimeout(() => {
         target.style.transition = "";
         target.style.transform = "";
+        target.style.willChange = "";
       }, 280);
     }
     dragNodeRef.current = null;
@@ -645,14 +727,19 @@ export function PmsBoard({
     el.style.touchAction = scrollLockRef.current.touchAction;
     el.style.overscrollBehavior = scrollLockRef.current.overscrollBehavior;
     scrollLockRef.current = null;
-  }, []);
+  }, [unbindTouchScrollGuard]);
   const cancelLongPress = useCallback(() => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
     longPressArmRef.current = null;
-  }, []);
+    unprimeBar();
+    // Sólo desmontamos el guard si NO hay un drag activo: cuando el long-press
+    // dispara, el arm se limpia sin pasar por acá, pero un `cancelLongPress`
+    // posterior (p.ej. desde pointercancel) no debe dejar al drag sin guard.
+    if (!dragRef.current) unbindTouchScrollGuard();
+  }, [unprimeBar, unbindTouchScrollGuard]);
 
   const updateDrag = useCallback((next: DragState | null) => {
     dragRef.current = next;
@@ -728,11 +815,35 @@ export function PmsBoard({
   useEffect(() => {
     if (zenPhase !== "expanded") return;
     function onKey(e: KeyboardEvent) {
+      // Si hay un drag en curso, Escape lo aborta (lo maneja el handler de
+      // atajos del board) — no debe además salir de pantalla completa.
+      if (dragRef.current) return;
       if (e.key === "Escape") exitZen();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [zenPhase, exitZen]);
+
+  // Red de seguridad: si la barra que se está arrastrando se desmonta a mitad
+  // del gesto (realtime la borra, cambia un filtro, se navega la ventana), su
+  // handler de pointerup nunca corre y el drag queda "trabado" — y con el
+  // guard de multi-touch, eso bloquearía cualquier drag futuro. Estos listeners
+  // de window corren DESPUÉS de los de React, así que sólo actúan si nadie
+  // limpió el estado.
+  useEffect(() => {
+    function release() {
+      if (!dragRef.current && !longPressArmRef.current) return;
+      cancelLongPress();
+      updateDrag(null);
+      unlockGridScroll();
+    }
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+    };
+  }, [cancelLongPress, updateDrag, unlockGridScroll]);
 
   // Limpia el timer del long-press y restaura el scroll del grid al desmontar
   useEffect(() => {
@@ -1201,10 +1312,17 @@ export function PmsBoard({
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if (t.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      // No interferir mientras hay un drag activo (los handlers del bar
-      // pueden necesitar el evento, y el usuario no debería navegar a la
-      // vez que mueve una reserva).
-      if (dragRef.current) return;
+      // Durante un drag activo el teclado sólo sirve para abortarlo: Escape
+      // devuelve la barra a su lugar sin tocar nada. Navegar con las flechas
+      // mientras se arrastra no tiene sentido.
+      if (dragRef.current) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          updateDrag(null);
+          unlockGridScroll(true);
+        }
+        return;
+      }
 
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -1221,7 +1339,7 @@ export function PmsBoard({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [shiftDays, scrollByDays, jumpToday]);
+  }, [shiftDays, scrollByDays, jumpToday, updateDrag, unlockGridScroll]);
 
   // ── drag handlers
   // Helper: arranca el drag activo (con captura de puntero)
@@ -1251,16 +1369,26 @@ export function PmsBoard({
       const width = parseFloat(barNode.style.width) || 0;
       const top = parseFloat(barNode.style.top) || 0;
       dragOriginRef.current = { left, width, top };
-      // Apagamos transiciones CSS durante el drag para que cada escritura DOM
-      // sea instantánea. Al soltar, restauramos (vacío = default del className)
-      // y la transición animará el snap final.
-      barNode.style.transition = "none";
+      // "Pop" de agarre: la barra pasa del estado hundido (priming del
+      // long-press) al estado levantado con un pequeño overshoot. Es la única
+      // transición que dejamos viva al arrancar; `syncDragFromPointer` la
+      // apaga en la primera escritura real para que el seguimiento del dedo
+      // sea 1:1 sin lag.
+      barNode.style.willChange = "transform";
+      barNode.style.transition = "transform 200ms cubic-bezier(0.2,0.9,0.28,1.35)";
+      barNode.style.transform = `translate3d(0,0,0) scale(${DRAG_LIFT_SCALE})`;
+      // El drag ya es dueño del transform: que `unprimeBar` no lo pise.
+      unprimeBar(true);
     }
     // Capturamos el scroll del grid en este instante: cuando el auto-scroll
     // mueva el contenedor, el delta de scroll se sumará al delta del puntero
     // para mantener la barra pegada al dedo y abrir paso a más días/unidades.
     if (scrollRef.current) {
       dragInitialScrollRef.current = {
+        left: scrollRef.current.scrollLeft,
+        top: scrollRef.current.scrollTop,
+      };
+      autoScrollLastScrollRef.current = {
         left: scrollRef.current.scrollLeft,
         top: scrollRef.current.scrollTop,
       };
@@ -1313,20 +1441,23 @@ export function PmsBoard({
     const node = dragNodeRef.current;
     const orig = dragOriginRef.current;
     if (node && orig) {
+      // Primera escritura real: el dedo tomó el control, así que matamos la
+      // transición del "pop" inicial. A partir de acá cada frame es 1:1.
+      if (!d.moved) node.style.transition = "none";
       if (d.mode === "move") {
-        node.style.transform = `translate3d(${rawDx}px, ${rawDy}px, 0) scale(1.02)`;
+        node.style.transform = `translate3d(${rawDx}px, ${rawDy}px, 0) scale(${DRAG_LIFT_SCALE})`;
       } else if (d.mode === "resize-left") {
         // resize-left: el lado derecho queda fijo. Trasladamos la barra y
         // achicamos el ancho proporcionalmente. minWidth = 1 día.
         const minWidth = CELL - 4;
         const dx = Math.min(rawDx, orig.width - minWidth);
-        node.style.transform = `translate3d(${dx}px, 0, 0) scale(1.02)`;
+        node.style.transform = `translate3d(${dx}px, 0, 0) scale(${DRAG_LIFT_SCALE})`;
         node.style.width = `${orig.width - dx}px`;
       } else if (d.mode === "resize-right") {
         // resize-right: lado izquierdo fijo, sólo crece/decrece el ancho.
         const minWidth = CELL - 4;
         const dx = Math.max(rawDx, minWidth - orig.width);
-        node.style.transform = `scale(1.02)`;
+        node.style.transform = `scale(${DRAG_LIFT_SCALE})`;
         node.style.width = `${orig.width + dx}px`;
       }
     }
@@ -1369,8 +1500,6 @@ export function PmsBoard({
   function startAutoScroll() {
     if (autoScrollRafRef.current !== null) return;
     autoScrollLastTsRef.current = 0;
-    const EDGE_X = 80; // px de banda en horizontal donde arranca el auto-scroll
-    const EDGE_Y = 56; // banda más angosta en vertical (la lista no es tan larga)
     const MAX_SPEED_PX_PER_SEC = 1400; // ≈ 23 px/frame a 60Hz, 11.5 a 120Hz
     const tick = (now: number) => {
       const el = scrollRef.current;
@@ -1380,6 +1509,11 @@ export function PmsBoard({
         autoScrollLastTsRef.current = 0;
         return;
       }
+      // Bandas de auto-scroll proporcionales al ancho real del contenedor: en
+      // un iPhone de 390px una banda fija de 80px por lado dejaba una zona
+      // neutra ridícula (el grid arrancaba a auto-scrollear casi siempre).
+      const EDGE_X = Math.max(40, Math.min(80, el.clientWidth * 0.16));
+      const EDGE_Y = Math.max(32, Math.min(56, el.clientHeight * 0.12));
       // Δt en segundos desde el frame anterior. En el primer frame, asumimos
       // 16ms (≈ un frame a 60Hz) para evitar saltos cuando arranca.
       const dt = autoScrollLastTsRef.current
@@ -1404,14 +1538,18 @@ export function PmsBoard({
         vy = MAX_SPEED_PX_PER_SEC * t * t;
       }
       if (vx !== 0 || vy !== 0) {
-        const before = { left: el.scrollLeft, top: el.scrollTop };
         el.scrollLeft += vx * dt;
         el.scrollTop += vy * dt;
-        // Si el contenedor llegó al límite, no recalculamos (evita acumular
-        // delta fantasma cuando ya no se mueve).
-        if (el.scrollLeft !== before.left || el.scrollTop !== before.top) {
-          syncDragFromPointer();
-        }
+      }
+      // Re-sincronizamos si el contenedor se movió por CUALQUIER motivo: el
+      // auto-scroll de arriba, un scroll programático externo, o un pan nativo
+      // que se haya colado. Así la barra nunca se despega del dedo. Si el
+      // scroll llegó al límite no hay cambio → no recalculamos (evita acumular
+      // delta fantasma).
+      const last = autoScrollLastScrollRef.current;
+      if (el.scrollLeft !== last.left || el.scrollTop !== last.top) {
+        autoScrollLastScrollRef.current = { left: el.scrollLeft, top: el.scrollTop };
+        syncDragFromPointer();
       }
       autoScrollRafRef.current = requestAnimationFrame(tick);
     };
@@ -1426,6 +1564,10 @@ export function PmsBoard({
     if (e.button !== 0) return;
     // no arrastrar canceladas/no-show
     if (booking.status === "cancelada" || booking.status === "no_show") return;
+    // Un segundo dedo (o la palma apoyada) durante un drag/long-press en curso
+    // pisaba el gesto original: nuevo pointer capture, nuevo timer y la barra
+    // quedaba siguiendo al dedo equivocado. El primer contacto manda.
+    if (dragRef.current || longPressArmRef.current) return;
 
     const isTouch = e.pointerType === "touch" || e.pointerType === "pen";
 
@@ -1440,6 +1582,23 @@ export function PmsBoard({
       const pointerId = e.pointerId;
       const clientX = e.clientX;
       const clientY = e.clientY;
+      // 1) Capturamos el puntero YA. Así los pointermove/up/cancel siguen
+      //    llegando a esta barra aunque el dedo se salga de ella (antes, si el
+      //    dedo se iba de la barra durante la espera, nunca llegaba el
+      //    pointermove que cancela el long-press). No frena el scroll nativo:
+      //    si el browser decide scrollear dispara pointercancel y abortamos,
+      //    que es exactamente lo que queremos.
+      try {
+        target.setPointerCapture(pointerId);
+      } catch {
+        // ignorable
+      }
+      // 2) Registramos el guard de touchmove ANTES de que el browser resuelva
+      //    el gesto. Todavía no previene nada (no hay drag activo); queda
+      //    armado para el momento en que el long-press dispare.
+      bindTouchScrollGuard();
+      // 3) Feedback inmediato: la barra se hunde mientras corre el press.
+      primeBar(target);
       longPressArmRef.current = {
         pointerId,
         startX: clientX,
@@ -1463,9 +1622,9 @@ export function PmsBoard({
         } catch {
           // best-effort, no rompe el drag
         }
-        // CRÍTICO en mobile: congelamos el scroll-x/y del grid antes de tomar
-        // el control. Si no, iOS sigue scrolleando con el dedo y la barra
-        // "viaja" con el contenedor en vez de seguir al puntero.
+        // Congelamos el scroll del grid. `touch-action` no afecta al gesto ya
+        // en curso (de eso se encarga el guard de touchmove), pero sí a un
+        // segundo dedo que aparezca a mitad del drag.
         lockGridScroll();
         // Usamos la última posición del dedo (lastX/lastY) como origen del drag,
         // no la posición original del touchstart, para que el dayDelta inicial
@@ -1501,12 +1660,9 @@ export function PmsBoard({
 
     const d = dragRef.current;
     if (!d) return;
-    // En mobile preventDefault dentro del move asegura que iOS no inicie un
-    // gesto de scroll/zoom paralelo aún con el contenedor lockeado. (e.button
-    // no aplica a touch; usamos pointerType.)
-    if (e.pointerType === "touch" || e.pointerType === "pen") {
-      e.preventDefault();
-    }
+    // OJO: no alcanza con `e.preventDefault()` acá — un `pointermove` táctil no
+    // cancela el scroll en iOS. Quien realmente frena el pan es el listener no
+    // pasivo de `touchmove` (`bindTouchScrollGuard`).
     // Guardamos el último puntero para que el rAF de auto-scroll lo lea, y
     // recalculamos los deltas considerando el scroll actual del grid.
     lastPointerRef.current = { x: e.clientX, y: e.clientY };
@@ -1533,11 +1689,9 @@ export function PmsBoard({
       unlockGridScroll();
       return;
     }
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignorable
-    }
+    // No liberamos el pointer capture a mano: el browser lo libera implícitamente
+    // en el pointerup. Hacerlo acá podía disparar `lostpointercapture` en medio
+    // de este handler (→ `onBarPointerCancel` re-entrante) y abortar el commit.
 
     // Click (no-drag) → abrir popover de reserva
     if (!d.moved) {
@@ -1552,10 +1706,13 @@ export function PmsBoard({
     // de modo que lo que el usuario ve durante el drag es exactamente lo que
     // se commitea al soltar.
     const operation: MoveOperation = d.mode;
+    // `filteredUnits` (no `units`): el rowDelta se cuenta sobre las filas que
+    // el usuario está VIENDO. Con filtros o búsqueda activos, indexar sobre la
+    // lista completa mandaba la reserva a una unidad distinta a la resaltada.
     const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
       d,
       booking,
-      units
+      filteredUnits
     );
 
     // Sin cambio real
@@ -1612,9 +1769,14 @@ export function PmsBoard({
   }
 
   // Cancela cualquier long-press pendiente y resetea el drag si el browser
-  // interrumpe (e.g. el scroll container toma el control en mobile).
+  // interrumpe (e.g. el scroll container toma el control en mobile, o llega
+  // una llamada / notificación). Antes faltaba limpiar `dragRef`: quedaba un
+  // drag "fantasma" vivo y el siguiente pointerup lo commiteaba como si el
+  // usuario hubiera soltado ahí.
   function onBarPointerCancel() {
+    const hadDrag = !!dragRef.current;
     cancelLongPress();
+    if (hadDrag) updateDrag(null);
     unlockGridScroll();
   }
 
@@ -2809,7 +2971,7 @@ export function PmsBoard({
               const { newCheckIn, newCheckOut, newUnitId } = computeDragTarget(
                 drag,
                 draggedBooking,
-                units
+                filteredUnits
               );
               const ciOff = dayOffset(windowStart, newCheckIn);
               const coOff = dayOffset(windowStart, newCheckOut);
@@ -2928,7 +3090,7 @@ export function PmsBoard({
             para no aparecer en taps. Posicionado fixed bottom-center; escala
             limpia tanto en mobile como en desktop. */}
         {drag && drag.moved && (
-          <DragChip drag={drag} bookings={bookings} units={units} />
+          <DragChip drag={drag} bookings={bookings} units={filteredUnits} />
         )}
 
         {/* FAB mobile: la toolbar mobile no tiene espacio para "Nueva reserva".
@@ -3417,7 +3579,10 @@ function BookingBar({
             // En mobile dejamos pasar el scroll del contenedor (touch-pan-x/y)
             // hasta que el long-press dispara y entramos en modo drag. En desktop
             // touch-none bloquea el pan para que el drag con puntero sea perfecto.
-            // Cuando isDragging=true forzamos touch-none también en mobile.
+            // OJO: el browser lee `touch-action` cuando el dedo TOCA, así que
+            // pasar a touch-none con isDragging no afecta al gesto en curso —
+            // sólo protege de un segundo dedo. Quien frena el pan del gesto
+            // activo es el guard no-pasivo de `touchmove` en el board.
             "absolute rounded-md border flex items-stretch overflow-hidden select-none",
             isDragging ? "touch-none" : "touch-pan-x touch-pan-y md:touch-none",
             "bg-gradient-to-r shadow-sm",
@@ -3448,6 +3613,10 @@ function BookingBar({
             borderBottomLeftRadius: leftOverflow ? 0 : undefined,
             borderTopRightRadius: rightOverflow ? 0 : undefined,
             borderBottomRightRadius: rightOverflow ? 0 : undefined,
+            // iOS: sin esto, el long-press sobre la barra abre el callout /
+            // lupa de selección y el gesto de drag muere antes de empezar.
+            WebkitTouchCallout: "none",
+            WebkitUserSelect: "none",
             ...(customGradientStyle ?? {}),
           }}
           role="button"
@@ -3467,12 +3636,18 @@ function BookingBar({
           onPointerUp={canEditThis ? (e) => onPointerUp(e, booking) : undefined}
           onPointerCancel={canEditThis ? onPointerCancel : undefined}
           onLostPointerCapture={canEditThis ? onPointerCancel : undefined}
+          // Android Chrome dispara `contextmenu` al mantener apretado, y eso
+          // cancela el puntero justo cuando arranca el drag. Lo bloqueamos.
+          onContextMenu={(e) => e.preventDefault()}
         >
-          {/* Resize handle izquierdo */}
+          {/* Resize handle izquierdo — sólo desktop. En touch un blanco de 6px
+              es una trampa: el usuario apunta a mover la reserva y termina
+              estirando el check-in. En mobile las fechas se cambian desde el
+              popover de la reserva, que tiene targets de tamaño real. */}
           {canEditThis && !leftOverflow && booking.status !== "cancelada" && (
             <div
               data-resize="left"
-              className="w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
+              className="hidden md:block w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
               onPointerDown={(e) => onPointerDown(e, booking, "resize-left")}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => onPointerUp(e, booking)}
@@ -3587,11 +3762,11 @@ function BookingBar({
             </div>
           </div>
 
-          {/* Resize handle derecho */}
+          {/* Resize handle derecho — sólo desktop (ver nota en el izquierdo) */}
           {canEditThis && !rightOverflow && booking.status !== "cancelada" && (
             <div
               data-resize="right"
-              className="w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
+              className="hidden md:block w-1.5 cursor-ew-resize hover:bg-white/30 active:bg-white/40 transition-colors shrink-0 group/handle"
               onPointerDown={(e) => onPointerDown(e, booking, "resize-right")}
               onPointerMove={onPointerMove}
               onPointerUp={(e) => onPointerUp(e, booking)}
@@ -3863,13 +4038,17 @@ function DragChip({
       role="status"
       aria-live="polite"
       className={cn(
-        "fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] pointer-events-none select-none",
+        "fixed left-1/2 -translate-x-1/2 z-[100] pointer-events-none select-none",
+        // Mobile: arriba. Abajo quedaba tapado por la mano justo cuando más se
+        // necesita leerlo. Desktop: abajo, fuera del área de trabajo del mouse.
+        "top-[calc(env(safe-area-inset-top,0px)+0.75rem)]",
+        "md:top-auto md:bottom-6",
         "rounded-2xl border bg-card/95 backdrop-blur-md shadow-2xl",
         "px-4 py-2 sm:py-2.5 flex items-center gap-3 sm:gap-4",
         "ring-1 max-w-[calc(100vw-32px)]",
         noChange ? "ring-muted-foreground/20 opacity-80" : "ring-primary/40",
         // micro-animation: aparece con un pequeño zoom/fade
-        "animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-2 duration-150"
+        "animate-in fade-in-0 zoom-in-95 slide-in-from-top-2 md:slide-in-from-bottom-2 duration-150"
       )}
     >
       <div className="flex flex-col items-start min-w-0">
