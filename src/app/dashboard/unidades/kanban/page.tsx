@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { listUnitsEnriched } from "@/lib/actions/units";
-import { listBookingsInRange } from "@/lib/actions/bookings";
+import { listBookingsInRange, listBookingsNeedingGuest } from "@/lib/actions/bookings";
 import { listAccounts } from "@/lib/actions/cash";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
@@ -9,7 +9,12 @@ import { can } from "@/lib/permissions";
 import { PmsBoard } from "@/components/units/pms/pms-board";
 import { isoAddDays } from "@/components/units/pms/pms-constants";
 
-export default async function PmsGridPage() {
+export default async function PmsGridPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ completar?: string }>;
+}) {
+  const sp = await searchParams;
   const { organization, role } = await getCurrentOrg();
   // El calendario muestra reservas como bloques en el grid; roles sin
   // acceso a reservas (mantenimiento / limpieza) van a la lista plana.
@@ -36,12 +41,13 @@ export default async function PmsGridPage() {
   const canViewMoney = can(role, "payments", "view");
   const canRegisterExpense = can(role, "cash", "create");
   const canEditBookings = can(role, "bookings", "update");
-  const [units, bookings, accounts, schedule, dateMarks] = await Promise.all([
+  const [units, bookings, accounts, schedule, dateMarks, needsGuest] = await Promise.all([
     listUnitsEnriched(),
     listBookingsInRange(startISO, bookingsEndISO),
     canViewMoney || canRegisterExpense ? listAccounts() : Promise.resolve([]),
     listScheduleInRange(startISO, endISO).catch(() => []),
     listDateMarksInRange(startISO, endISO).catch(() => []),
+    canEditBookings ? listBookingsNeedingGuest().catch(() => []) : Promise.resolve([]),
   ]);
   const expenseDefaultId = accounts.find((a) => a.is_expense_default)?.id ?? null;
 
@@ -57,6 +63,8 @@ export default async function PmsGridPage() {
       canViewMoney={canViewMoney}
       canRegisterExpense={canRegisterExpense}
       expenseDefaultId={expenseDefaultId}
+      initialNeedsGuest={needsGuest}
+      openNeedsGuestOnMount={sp.completar === "1"}
       organizationId={organization.id}
       startISO={startISO}
       days={90}

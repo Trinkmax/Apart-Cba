@@ -22,6 +22,7 @@ import {
   Plus,
   StickyNote,
   Pencil as PencilIcon,
+  UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +82,11 @@ interface PmsBookingPopoverProps {
     field: "check_in_date" | "check_out_date",
     newDateISO: string
   ) => void;
+  /**
+   * Abre el form rápido "Completar datos del huésped" (reservas de canal sin
+   * huésped). Si no se pasa, el CTA no se muestra.
+   */
+  onCompleteGuest?: () => void;
 }
 
 export function PmsBookingPopoverContent({
@@ -94,6 +100,7 @@ export function PmsBookingPopoverContent({
   canViewMoney = true,
   canEditBooking = true,
   onRequestDateChange,
+  onCompleteGuest,
 }: PmsBookingPopoverProps) {
   const [pending, startTransition] = useTransition();
   const statusMeta = BOOKING_STATUS_META[booking.status];
@@ -266,6 +273,22 @@ export function PmsBookingPopoverContent({
             </div>
           </div>
         </div>
+
+        {/* Reserva de canal sin huésped → CTA de completado rápido */}
+        {!booking.is_block &&
+          !booking.guest &&
+          (booking.source === "airbnb" || booking.source === "booking") &&
+          canEditBooking &&
+          onCompleteGuest && (
+            <Button
+              size="sm"
+              onClick={onCompleteGuest}
+              className="mt-2.5 h-8 w-full gap-1.5 bg-amber-500 hover:bg-amber-600 text-amber-950 font-semibold"
+            >
+              <UserPlus size={13} />
+              Completar datos del huésped
+            </Button>
+          )}
       </div>
 
       {/* Unit + stay */}

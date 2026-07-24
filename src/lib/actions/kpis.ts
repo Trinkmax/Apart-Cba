@@ -16,6 +16,8 @@ export interface DashboardKPIs {
     today_check_ins: number;
     today_check_outs: number;
     nights_30d: number;
+    /** Reservas de canal (Airbnb/Booking) sin huésped asignado — "Completar datos". */
+    pending_guest_data: number;
   };
   finance: {
     revenue_30d_by_currency: Record<string, number>;
@@ -71,6 +73,7 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
     { count: urgentTicketsCount },
     { count: cleaningPendingCount },
     { count: conciergePendingCount },
+    { count: pendingGuestCount },
   ] = await Promise.all([
     admin.from("units").select("id, status").eq("organization_id", organization.id).eq("active", true),
     admin
@@ -110,6 +113,14 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
       .in("status", ["pendiente", "en_progreso"]),
+    admin
+      .from("bookings")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization.id)
+      .is("guest_id", null)
+      .eq("is_block", false)
+      .in("source", ["airbnb", "booking"])
+      .in("status", ["pendiente", "confirmada", "check_in", "check_out"]),
   ]);
 
   const totals = {
@@ -197,6 +208,7 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       today_check_ins: todayCheckIns,
       today_check_outs: todayCheckOuts,
       nights_30d: nights30,
+      pending_guest_data: pendingGuestCount ?? 0,
     },
     finance: {
       revenue_30d_by_currency: revenueByCurrency,

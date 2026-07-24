@@ -21,6 +21,11 @@ import type {
   BookingStatus,
   CashMovement,
 } from "@/lib/types/database";
+import {
+  isGenericGuestName,
+  normalizeEmail,
+  normalizePhoneE164,
+} from "@/lib/channels/guest";
 import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
 import { buildBookingContext, buildOwnerConfirmationDraft } from "@/lib/email/booking-templates";
@@ -2334,4 +2339,206 @@ export async function splitBookingIntoSegments(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   revalidatePath("/dashboard/alertas");
+}
+
+// ─── Reservas de canal sin huésped ("Completar datos") ──────────────────────
+// Las reservas que entran por iCal de Airbnb/Booking se proyectan sin huésped
+// (guest_id null) hasta que llega el email de la OTA o alguien las completa a
+// mano. Este par de acciones alimenta el flujo rápido de completado del PMS.
+
+/** Reservas entradas por canal (Airbnb/Booking) sin huésped asignado. */
+export async function listBookingsNeedingGuest(): Promise<BookingWithRelations[]> {
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("bookings")
+    .select(`*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`)
+    .eq("organization_id", organization.id)
+    .is("guest_id", null)
+    .eq("is_block", false)
+    .in("source", ["airbnb", "booking"])
+    .in("status", ["pendiente", "confirmada", "check_in", "check_out"])
+    .order("check_in_date", { ascending: true });
+  if (error) throw new Error(error.message);
+  return (data as BookingWithRelations[]) ?? [];
+}
+
+const completeGuestSchema = z.object({
+  booking_id: z.string().uuid(),
+  full_name: z.string().trim().min(2, "Ingresá el nombre del huésped"),
+  phone: z.string().trim().optional().nullable(),
+  email: z.string().trim().email("Email inválido").optional().nullable(),
+  guests_count: z.coerce.number().int().min(1).max(30).optional(),
+});
+
+/**
+ * Completa el huésped de una reserva entrada por canal: crea (o reutiliza por
+ * email/teléfono exacto) el registro en `guests`, lo asigna al booking con
+ * guard contra carreras (el email de la OTA pudo llegar en el medio), refleja
+ * los datos en `channel_reservations.guest` (sólo claves vacías, igual que el
+ * merge del canal) y descarta la alerta "Nueva reserva" de la campanita.
+ */
+export async function completeChannelGuest(input: {
+  booking_id: string;
+  full_name: string;
+  phone?: string | null;
+  email?: string | null;
+  guests_count?: number;
+}): Promise<{ guest: { id: string; full_name: string; phone: string | null; email: string | null } }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update")) {
+    throw new Error("No tenés permiso para editar reservas");
+  }
+  const validated = completeGuestSchema.parse({
+    ...input,
+    phone: input.phone || null,
+    email: input.email || null,
+  });
+  const admin = createAdminClient();
+
+  const { data: booking, error: bookingErr } = await admin
+    .from("bookings")
+    .select("id, guest_id, is_block, source, status")
+    .eq("id", validated.booking_id)
+    .eq("organization_id", organization.id)
+    .single();
+  if (bookingErr || !booking) throw new Error("Reserva no encontrada");
+  if (booking.is_block) throw new Error("Un bloqueo importado no lleva huésped");
+  if (booking.source !== "airbnb" && booking.source !== "booking") {
+    throw new Error("Este atajo es sólo para reservas de canal (Airbnb/Booking)");
+  }
+  if (booking.status === "cancelada" || booking.status === "no_show") {
+    throw new Error("La reserva está cancelada — no corresponde completar huésped");
+  }
+  if (booking.guest_id) {
+    throw new Error("La reserva ya tiene un huésped asignado — actualizá la página");
+  }
+
+  // Normalización idéntica al pipeline de canales: email lowercase; teléfono a
+  // E.164 sólo si es inequívoco (con "+" o "00"). El crudo tipeado NO se pierde:
+  // si no se puede normalizar, se guarda tal cual en guests.phone (mismo
+  // comportamiento que la carga manual de huéspedes).
+  const email = normalizeEmail(validated.email) ?? validated.email ?? null;
+  const phoneE164 = normalizePhoneE164(validated.phone);
+  const phoneToStore = phoneE164 ?? validated.phone ?? null;
+
+  type GuestLite = { id: string; full_name: string; phone: string | null; email: string | null };
+  let guest: GuestLite | null = null;
+  const findBy = async (column: "email" | "phone", value: string) => {
+    const { data } = await admin
+      .from("guests")
+      .select("id, full_name, phone, email")
+      .eq("organization_id", organization.id)
+      .eq(column, value)
+      .limit(1)
+      .maybeSingle();
+    return (data as GuestLite | null) ?? null;
+  };
+  if (email) guest = await findBy("email", email);
+  if (!guest && phoneE164) guest = await findBy("phone", phoneE164);
+  if (!guest && validated.phone) guest = await findBy("phone", validated.phone);
+
+  let createdGuestId: string | null = null;
+  if (guest) {
+    // Huésped existente: enriquecer sólo campos vacíos (y reemplazar nombres
+    // genéricos tipo "Huésped Airbnb" por el nombre real tipeado) — nunca pisar.
+    const fill: Record<string, string> = {};
+    if (!guest.phone && phoneToStore) fill.phone = phoneToStore;
+    if (!guest.email && email) fill.email = email;
+    if (isGenericGuestName(guest.full_name)) fill.full_name = validated.full_name;
+    if (Object.keys(fill).length > 0) {
+      await admin
+        .from("guests")
+        .update(fill)
+        .eq("id", guest.id)
+        .eq("organization_id", organization.id);
+      guest = { ...guest, ...fill };
+    }
+  } else {
+    const { data, error } = await admin
+      .from("guests")
+      .insert({
+        organization_id: organization.id,
+        full_name: validated.full_name,
+        phone: phoneToStore,
+        email,
+      })
+      .select("id, full_name, phone, email")
+      .single();
+    if (error) throw new Error(error.message);
+    guest = data as GuestLite;
+    createdGuestId = guest.id;
+  }
+
+  const { data: updated, error: updateErr } = await admin
+    .from("bookings")
+    .update({
+      guest_id: guest.id,
+      ...(validated.guests_count ? { guests_count: validated.guests_count } : {}),
+    })
+    .eq("id", booking.id)
+    .eq("organization_id", organization.id)
+    .is("guest_id", null)
+    .select("id")
+    .maybeSingle();
+  if (updateErr) throw new Error(updateErr.message);
+  if (!updated) {
+    // Perdimos la carrera contra el email de la OTA (u otro staff). Si el
+    // huésped se creó recién para esta asignación, lo limpiamos para no dejar
+    // registros huérfanos duplicados.
+    if (createdGuestId) {
+      await admin
+        .from("guests")
+        .delete()
+        .eq("id", createdGuestId)
+        .eq("organization_id", organization.id);
+    }
+    throw new Error("La reserva ya tiene huésped (se completó por otro lado)");
+  }
+
+  // Reflejar en la reserva externa para que Canales deje de contarla como
+  // "esperando datos" — mismo criterio fill-missing que mergeGuest del canal.
+  const { data: channelResvs } = await admin
+    .from("channel_reservations")
+    .select("id, guest")
+    .eq("organization_id", organization.id)
+    .eq("booking_id", booking.id);
+  for (const cr of channelResvs ?? []) {
+    const current = (cr.guest ?? {}) as Record<string, string>;
+    const merged = { ...current };
+    let changed = false;
+    const fillKey = (key: string, value: string | null | undefined) => {
+      if (value && !merged[key]) {
+        merged[key] = value;
+        changed = true;
+      }
+    };
+    fillKey("name", validated.full_name);
+    fillKey("phone", phoneE164);
+    if (!phoneE164) fillKey("phone_raw", validated.phone);
+    fillKey("email", email);
+    if (changed) {
+      await admin.from("channel_reservations").update({ guest: merged }).eq("id", cr.id);
+    }
+  }
+
+  // La alerta "Nueva reserva de Airbnb/Booking" ya no requiere acción.
+  await admin
+    .from("notifications")
+    .update({ dismissed_at: new Date().toISOString() })
+    .eq("organization_id", organization.id)
+    .eq("type", "inbound_booking_pending")
+    .eq("ref_type", "booking")
+    .eq("ref_id", booking.id)
+    .is("dismissed_at", null);
+
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${booking.id}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/canales");
+  revalidatePath("/dashboard/alertas");
+  revalidatePath("/dashboard/huespedes");
+  return { guest };
 }

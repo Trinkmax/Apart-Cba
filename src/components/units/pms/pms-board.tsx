@@ -41,11 +41,13 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  UserPlus,
   Wallet,
   X,
   ZoomIn,
 } from "lucide-react";
 import { toast } from "sonner";
+import { todayYmdInTz } from "@/lib/dates";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import {
@@ -166,6 +168,87 @@ const MoveConfirmDialog = dynamic(
   { ssr: false }
 );
 
+const CompleteGuestDialog = dynamic(
+  () => import("@/components/bookings/complete-guest-dialog").then((m) => m.CompleteGuestDialog),
+  { ssr: false }
+);
+
+// Identidad estable para el default de initialNeedsGuest — un `= []` inline
+// crearía un array nuevo por render y dispararía el prop-sync en loop.
+const EMPTY_NEEDS_GUEST: BookingWithRelations[] = [];
+
+/**
+ * Lista de reservas de canal sin huésped — contenido compartido por el chip
+ * de la toolbar desktop y el botón de la toolbar mobile. Orden: huésped en
+ * casa primero, después futuras por fecha, al final las pasadas.
+ */
+function NeedsGuestPanel({
+  items,
+  onPick,
+}: {
+  items: BookingWithRelations[];
+  onPick: (b: BookingWithRelations) => void;
+}) {
+  const todayIso = todayYmdInTz();
+  const rank = (x: BookingWithRelations) =>
+    x.status === "check_in" ? 0 : x.check_out_date >= todayIso ? 1 : 2;
+  const sorted = [...items].sort(
+    (a, b) => rank(a) - rank(b) || a.check_in_date.localeCompare(b.check_in_date)
+  );
+  return (
+    <>
+      <div className="px-3 py-2.5 border-b">
+        <div className="text-sm font-semibold">Reservas por completar</div>
+        <p className="text-[11px] text-muted-foreground mt-0.5">
+          Entraron por el calendario de la OTA sin datos del huésped. Los datos
+          están en el mail o la app de Airbnb/Booking.
+        </p>
+      </div>
+      {sorted.length === 0 ? (
+        <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+          No queda ninguna — todo al día 🎉
+        </div>
+      ) : (
+        <ul className="max-h-80 overflow-y-auto py-1">
+          {sorted.map((b) => (
+            <li key={b.id}>
+              <button
+                type="button"
+                onClick={() => onPick(b)}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-accent/40 transition-colors"
+              >
+                <span
+                  className="shrink-0 size-2 rounded-full"
+                  style={{ backgroundColor: SOURCE_ACCENT[b.source] ?? "#94a3b8" }}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold truncate">
+                    {b.unit?.code ?? "—"}
+                    <span className="font-normal text-muted-foreground">
+                      {" "}· {b.unit?.name ?? ""}
+                    </span>
+                  </span>
+                  <span className="block text-[11px] text-muted-foreground tabular-nums">
+                    {format(parseISO(b.check_in_date), "d MMM", { locale: es })}
+                    {" → "}
+                    {format(parseISO(b.check_out_date), "d MMM", { locale: es })}
+                    {b.status === "check_in" && (
+                      <span className="ml-1.5 text-sky-600 dark:text-sky-400 font-medium">
+                        en casa
+                      </span>
+                    )}
+                  </span>
+                </span>
+                <UserPlus size={14} className="shrink-0 text-amber-600 dark:text-amber-400" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
 interface PmsBoardProps {
   initialUnits: UnitWithRelations[];
   initialBookings: BookingWithRelations[];
@@ -185,6 +268,10 @@ interface PmsBoardProps {
   canRegisterExpense?: boolean;
   /** Cuenta de gastos corrientes por defecto para "Registrar gasto". */
   expenseDefaultId?: string | null;
+  /** Reservas de canal (Airbnb/Booking) sin huésped — flujo "Completar datos". */
+  initialNeedsGuest?: BookingWithRelations[];
+  /** Abre el popover "Por completar" al montar (deep-link ?completar=1 del dashboard). */
+  openNeedsGuestOnMount?: boolean;
   organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
@@ -308,6 +395,8 @@ export function PmsBoard({
   canViewMoney = true,
   canRegisterExpense = false,
   expenseDefaultId = null,
+  initialNeedsGuest = EMPTY_NEEDS_GUEST,
+  openNeedsGuestOnMount = false,
   organizationId,
   startISO,
   days,
@@ -512,6 +601,36 @@ export function PmsBoard({
   const [openBookingId, setOpenBookingId] = useState<string | null>(null);
   const [openUnitId, setOpenUnitId] = useState<string | null>(null);
   const [editBooking, setEditBooking] = useState<BookingWithRelations | null>(null);
+
+  // ── "Completar datos" — reservas de canal sin huésped
+  // Mismo patrón prev/state que initialBookings: tras un router.refresh la
+  // prop nueva pisa el estado local (identidad estable garantizada por
+  // EMPTY_NEEDS_GUEST cuando el parent no pasa la prop).
+  const [needsGuestList, setNeedsGuestList] = useState(initialNeedsGuest);
+  const [prevInitialNeedsGuest, setPrevInitialNeedsGuest] = useState(initialNeedsGuest);
+  if (prevInitialNeedsGuest !== initialNeedsGuest) {
+    setPrevInitialNeedsGuest(initialNeedsGuest);
+    setNeedsGuestList(initialNeedsGuest);
+  }
+  // Dos popovers (toolbar desktop / mobile) con estado propio; `hideWhenDetached`
+  // evita que el deep-link ?completar=1 muestre un panel anclado a un trigger
+  // display:none del breakpoint que no corresponde.
+  const [needsGuestOpen, setNeedsGuestOpen] = useState(openNeedsGuestOnMount);
+  const [needsGuestOpenM, setNeedsGuestOpenM] = useState(openNeedsGuestOnMount);
+  const [completeGuestBooking, setCompleteGuestBooking] =
+    useState<BookingWithRelations | null>(null);
+  const handleGuestCompleted = useCallback(
+    (
+      bookingId: string,
+      guest: { id: string; full_name: string; phone: string | null; email: string | null }
+    ) => {
+      setNeedsGuestList((prev) => prev.filter((x) => x.id !== bookingId));
+      setBookings((prev) =>
+        prev.map((x) => (x.id === bookingId ? { ...x, guest_id: guest.id, guest } : x))
+      );
+    },
+    []
+  );
 
   // Si había un popover abierto (reserva/unidad/marca/búsqueda) cuando arrancó
   // el gesto, el click en celda vacía sólo debe cerrarlo — NO abrir el quick-add.
@@ -1152,6 +1271,7 @@ export function PmsBoard({
 
           if (payload.eventType === "DELETE") {
             setBookings((prev) => prev.filter((x) => x.id !== id));
+            setNeedsGuestList((prev) => prev.filter((x) => x.id !== id));
             return;
           }
 
@@ -1164,6 +1284,7 @@ export function PmsBoard({
           // el merge de prop-sync no conserve una copia vieja "activa".
           if (full.status === "cancelada" || full.status === "no_show") {
             setBookings((prev) => prev.filter((x) => x.id !== id));
+            setNeedsGuestList((prev) => prev.filter((x) => x.id !== id));
             return;
           }
 
@@ -1173,6 +1294,24 @@ export function PmsBoard({
             const next = prev.slice();
             next[idx] = full;
             return next;
+          });
+
+          // Mantener la lista "Completar datos" al día: si el email de la OTA
+          // trajo el huésped (o entró una reserva de canal nueva sin huésped),
+          // el contador de la toolbar se ajusta sin recargar.
+          setNeedsGuestList((prev) => {
+            const needs =
+              !full.is_block &&
+              !full.guest_id &&
+              (full.source === "airbnb" || full.source === "booking");
+            const idx = prev.findIndex((x) => x.id === id);
+            if (needs) {
+              if (idx === -1) return [...prev, full];
+              const next = prev.slice();
+              next[idx] = full;
+              return next;
+            }
+            return idx === -1 ? prev : prev.filter((x) => x.id !== id);
           });
         }
       )
@@ -1980,6 +2119,32 @@ export function PmsBoard({
                 </button>
               )}
             </div>
+            {canEditBookings && needsGuestList.length > 0 && (
+              <Popover open={needsGuestOpenM} onOpenChange={setNeedsGuestOpenM}>
+                <PopoverTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    className="size-9 shrink-0 tap relative text-amber-600 dark:text-amber-400 border-amber-300/60 dark:border-amber-800/50"
+                    aria-label={`${needsGuestList.length} reservas por completar`}
+                  >
+                    <UserPlus size={16} />
+                    <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold tabular-nums">
+                      {needsGuestList.length}
+                    </span>
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent align="end" className="w-[min(92vw,340px)] p-0" hideWhenDetached>
+                  <NeedsGuestPanel
+                    items={needsGuestList}
+                    onPick={(b) => {
+                      setNeedsGuestOpenM(false);
+                      setCompleteGuestBooking(b);
+                    }}
+                  />
+                </PopoverContent>
+              </Popover>
+            )}
             {canRegisterExpense && (
               <QuickExpenseDialog
                 accounts={accounts}
@@ -2255,6 +2420,42 @@ export function PmsBoard({
                     : `${bookingsWithOverdue.size} reserva${bookingsWithOverdue.size === 1 ? "" : "s"} con cuota vencida`}
                 </TooltipContent>
               </Tooltip>
+
+              {/* Reservas de canal sin huésped: contador + lista → form rápido */}
+              {canEditBookings && (
+                <Popover open={needsGuestOpen} onOpenChange={setNeedsGuestOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className={cn(
+                        "h-8 gap-1 text-xs",
+                        needsGuestList.length > 0 &&
+                          "border-amber-300/70 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                      )}
+                      aria-label={`${needsGuestList.length} reservas por completar`}
+                    >
+                      <UserPlus size={12} />
+                      Completar
+                      {needsGuestList.length > 0 && (
+                        <span className="ml-0.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold tabular-nums">
+                          {needsGuestList.length}
+                        </span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="end" className="w-[340px] p-0" hideWhenDetached>
+                    <NeedsGuestPanel
+                      items={needsGuestList}
+                      onPick={(b) => {
+                        setNeedsGuestOpen(false);
+                        setCompleteGuestBooking(b);
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+              )}
 
               {/* Buscar deptos: filtros por disponibilidad/cap/precio */}
               <Popover>
@@ -2944,6 +3145,10 @@ export function PmsBoard({
                         onPointerUp={onBarPointerUp}
                         onPointerCancel={onBarPointerCancel}
                         onRequestDateChange={requestDateChangeFromPopover}
+                        onCompleteGuest={() => {
+                          setOpenBookingId(null);
+                          setCompleteGuestBooking(b);
+                        }}
                         unitCode={unit.code}
                         unitName={unit.name}
                         customStatusHex={
@@ -3058,6 +3263,19 @@ export function PmsBoard({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* Completar datos del huésped (reservas de canal sin huésped) */}
+        {completeGuestBooking && (
+          <CompleteGuestDialog
+            key={completeGuestBooking.id}
+            booking={completeGuestBooking}
+            open
+            onOpenChange={(o) => {
+              if (!o) setCompleteGuestBooking(null);
+            }}
+            onCompleted={handleGuestCompleted}
+          />
+        )}
 
         {/* Edit dialog (portal controlado) */}
         {editBooking && (
@@ -3488,6 +3706,8 @@ interface BookingBarProps {
   ) => void;
   /** Cancela el long-press si el browser interrumpe (scroll, touch-cancel) */
   onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => void;
+  /** Abre el form rápido de completado de huésped (reservas de canal). */
+  onCompleteGuest: () => void;
   onRequestDateChange: (
     booking: BookingWithRelations,
     field: "check_in_date" | "check_out_date",
@@ -3519,6 +3739,7 @@ function BookingBar({
   onPointerUp,
   onPointerCancel,
   onRequestDateChange,
+  onCompleteGuest,
   unitCode,
   unitName,
   customStatusHex,
@@ -3708,7 +3929,19 @@ function BookingBar({
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <span className="truncate">{isBlock ? "Bloqueado" : (booking.guest?.full_name ?? "Sin huésped")}</span>
+                {!isBlock &&
+                !booking.guest &&
+                (booking.source === "airbnb" || booking.source === "booking") ? (
+                  <span className="flex items-center gap-1 min-w-0">
+                    <span
+                      className="shrink-0 size-1.5 rounded-full bg-amber-300 ring-1 ring-amber-500/60 animate-pulse"
+                      aria-hidden
+                    />
+                    <span className="truncate italic">Completar datos</span>
+                  </span>
+                ) : (
+                  <span className="truncate">{isBlock ? "Bloqueado" : (booking.guest?.full_name ?? "Sin huésped")}</span>
+                )}
                 {booking.internal_notes && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -3831,6 +4064,7 @@ function BookingBar({
             onOpenChange(false);
             onRequestDateChange(booking, field, iso);
           }}
+          onCompleteGuest={onCompleteGuest}
         />
       </PopoverContent>
     </Popover>

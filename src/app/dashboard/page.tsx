@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
   Wrench, Sparkles, TrendingUp,
-  LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet, ArrowUpFromLine,
+  LogIn, LogOut, ArrowRight, Bell, AlertTriangle, Wallet, ArrowUpFromLine, UserPlus,
 } from "lucide-react";
 import { getDashboardKPIs } from "@/lib/actions/kpis";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -22,6 +22,9 @@ export default async function DashboardHome() {
   const [kpis, { role }] = await Promise.all([getDashboardKPIs(), getCurrentOrg()]);
   const canViewMoney = can(role, "payments", "view");
   const canViewBookings = can(role, "bookings", "view");
+  // El flujo "completar datos" requiere editar reservas — sin esto la fila
+  // sería un deep-link muerto para owner_view (que sólo tiene bookings.view).
+  const canCompleteGuests = can(role, "bookings", "update");
   const canRegisterExpense = can(role, "cash", "create");
   const [expenseAccounts, expenseUnits] = canRegisterExpense
     ? await Promise.all([listAccounts(), listUnitsForBookingForm()])
@@ -131,6 +134,15 @@ export default async function DashboardHome() {
                   <span className="text-sm font-medium">Tickets urgentes</span>
                 </div>
                 <Badge className="bg-rose-500 text-white">{kpis.service.urgent_tickets}</Badge>
+              </Link>
+            )}
+            {canCompleteGuests && kpis.bookings.pending_guest_data > 0 && (
+              <Link href="/dashboard/unidades/kanban?completar=1" className="flex items-center justify-between p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 hover:border-amber-500/40 transition-colors">
+                <div className="flex items-center gap-2">
+                  <UserPlus size={16} className="text-amber-600 dark:text-amber-400" />
+                  <span className="text-sm font-medium">Reservas sin datos del huésped</span>
+                </div>
+                <Badge className="bg-amber-500 text-white">{kpis.bookings.pending_guest_data}</Badge>
               </Link>
             )}
             <Link href="/dashboard/mantenimiento" className="flex items-center justify-between p-3 rounded-lg hover:bg-accent/30 transition-colors">
