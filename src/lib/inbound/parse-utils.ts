@@ -78,3 +78,49 @@ export function parseAmount(raw: string | null | undefined): number | undefined 
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : undefined;
 }
+
+const ES_MONTH_PREFIX: Record<string, number> = {
+  ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6,
+  jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12,
+};
+
+/**
+ * Normaliza fechas es-AR "cortas" como las de los emails de host de Airbnb:
+ * "jue, 6 ago", "27 jul", "6 sept", con o sin año. Si falta el año lo infiere:
+ * el más cercano que no caiga antes de `notBefore` (por defecto, hoy-45 días —
+ * las notificaciones de reservas nunca refieren fechas más viejas que eso).
+ * También acepta los formatos completos de `normalizeDate`.
+ */
+export function normalizeEsDateLoose(
+  raw: string | null | undefined,
+  opts: { notBefore?: string } = {},
+): string | null {
+  if (!raw) return null;
+  // Sólo delegar en normalizeDate si hay un año explícito de 4 dígitos — su
+  // fallback Date.parse interpreta "27 jul 3:00 p.m." tomando la hora como
+  // año ("2001-07-27") y contaminaría la inferencia.
+  if (/\b\d{4}\b/.test(raw)) {
+    const full = normalizeDate(raw);
+    if (full) return full;
+  }
+
+  const m = raw
+    .toLowerCase()
+    .match(/(\d{1,2})\s*(?:de\s+)?([a-záéíóúñ]{3,12})\.?\s*(?:de\s+)?(\d{4})?/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10);
+  const month = ES_MONTH_PREFIX[m[2].slice(0, 3)];
+  if (!month || day < 1 || day > 31) return null;
+  if (m[3]) return `${m[3]}-${pad(month)}-${pad(day)}`;
+
+  const floorDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000);
+  const floor =
+    opts.notBefore ??
+    `${floorDate.getUTCFullYear()}-${pad(floorDate.getUTCMonth() + 1)}-${pad(floorDate.getUTCDate())}`;
+  const baseYear = parseInt(floor.slice(0, 4), 10);
+  for (const year of [baseYear, baseYear + 1]) {
+    const iso = `${year}-${pad(month)}-${pad(day)}`;
+    if (iso >= floor) return iso;
+  }
+  return null;
+}

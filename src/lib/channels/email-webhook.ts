@@ -96,14 +96,31 @@ export async function handleResendInbound(
   }
   const orgId = org.id as string;
 
-  // dedupe duro por provider message ID (los reintentos del webhook son no-op)
+  // dedupe por provider message ID. Excepción deliberada: un evento que quedó
+  // en needs_review (email no parseado) SÍ se reprocesa — permite que un
+  // "Replay" desde Resend re-parse emails viejos después de mejorar los
+  // parsers/el clasificador. El evento viejo se elimina y su incidencia se
+  // resuelve automáticamente.
   const { data: dup } = await admin
     .from("channel_events")
     .select("id, status")
     .eq("organization_id", orgId)
     .eq("dedupe_key", `email:${emailId}`)
     .maybeSingle();
-  if (dup && dup.status !== "error") {
+  if (dup && dup.status === "needs_review") {
+    await admin.from("channel_events").delete().eq("id", dup.id);
+    await admin
+      .from("channel_issues")
+      .update({
+        status: "resolved",
+        resolution: "Reprocesado automáticamente con el parser/clasificador actualizado.",
+        resolved_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("organization_id", orgId)
+      .eq("dedupe_key", `email_unparsed:${emailId}`)
+      .eq("status", "open");
+  } else if (dup && dup.status !== "error") {
     return { ok: true, status: "duplicate", httpStatus: 200 };
   }
 
@@ -145,6 +162,30 @@ export async function handleResendInbound(
   });
 
   if (!normalized.event) {
+    // Ruido conocido (reseñas, avisos de seguridad, consultas, facturación…):
+    // evento durable para auditoría pero SIN incidencia — el panel de Canales
+    // es para cosas accionables, no para el inbox completo de las OTAs.
+    const noise = classifyIgnorable(email.from, email.subject ?? "");
+    if (noise) {
+      const { error: evErr } = await admin.from("channel_events").insert({
+        organization_id: orgId,
+        transport: "email",
+        event_type: "email_unparsed",
+        dedupe_key: `email:${emailId}`,
+        content_hash: normalized.contentHash,
+        payload: {
+          subject: (email.subject || "").slice(0, 150),
+          from_domain: email.from.split("@").pop()?.slice(0, 60) ?? null,
+          ignored: noise,
+        },
+        status: "processed",
+      });
+      if (evErr && evErr.code !== "23505") {
+        console.error("[channels/email] event insert falló", evErr.message);
+      }
+      return { ok: true, status: `ignored_${noise}`, httpStatus: 200 };
+    }
+
     // email no interpretable: evento durable + incidencia con extracto redactado
     const { error: evErr } = await admin.from("channel_events").insert({
       organization_id: orgId,
@@ -179,6 +220,43 @@ export async function handleResendInbound(
     status: result.outcome,
     httpStatus: result.outcome === "error" ? 500 : 200,
   };
+}
+
+/**
+ * Emails de OTA que NO son eventos de reserva y no deben abrir incidencias.
+ * Sólo corre cuando el parseo falló — un email que sí parsea como reserva o
+ * cancelación jamás pasa por acá. Devuelve la razón (para auditoría) o null.
+ */
+function classifyIgnorable(from: string, subject: string): string | null {
+  // Confirmaciones de reenvío de Gmail y avisos de Google
+  if (/@google\.com$|@google\.com>/i.test(from.trim()) || /forwarding-noreply@/i.test(from)) {
+    return "reenvio_gmail";
+  }
+  const s = subject;
+  if (/rese[ñn]a|review/i.test(s)) return "resena";
+  if (/sign.?in|inicio de sesi[oó]n|new device|nuevo dispositivo/i.test(s)) return "seguridad";
+  if (/c[oó]digo de verificaci[oó]n|verification code|c[oó]digo de acceso/i.test(s)) return "seguridad";
+  if (/consulta sobre/i.test(s)) return "consulta";
+  if (/recordatorio.*solicitud|solicitud de reservaci[oó]n|reservation request/i.test(s)) {
+    return "solicitud_pendiente";
+  }
+  if (/pregunta sobre tu alojamiento|nueva pregunta|new question/i.test(s)) return "pregunta";
+  if (/pagos pendientes|saldes los pagos|factura|invoice|comisi[oó]n|payout|extracto/i.test(s)) {
+    return "facturacion";
+  }
+  if (/te envi[oó] un mensaje|nuevo mensaje|new message|hemos recibido este mensaje/i.test(s)) {
+    return "mensaje";
+  }
+  // Aviso "¡Nueva reserva!" de Booking: el email del partner no trae datos de
+  // la reserva (ni huésped ni fechas completas) — la reserva entra por iCal.
+  if (/@booking\.com/i.test(from) && /nueva reserva|new booking/i.test(s)) {
+    return "aviso_reserva_booking";
+  }
+  // Marketing/engagement genérico de Airbnb
+  if (/est[áa]n esperando tu|completa tu|aumenta tus reservas|consejos para/i.test(s)) {
+    return "marketing";
+  }
+  return null;
 }
 
 interface ReceivedEmail {

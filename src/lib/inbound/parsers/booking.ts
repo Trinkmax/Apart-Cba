@@ -20,16 +20,17 @@ export const bookingParser: InboundEmailParser = {
     const subject = email.subject ?? "";
     const body = htmlToText(email.html) || email.text || "";
 
-    // Cancelación
+    // Cancelación — el subject de Booking trae el número: "¡Reserva
+    // cancelada! (6017858947, martes, 21 de julio de 2026)".
     if (/cancel(led|lation|ada|aci[oó]n)/i.test(subject)) {
-      const id = reservationNumber(body);
+      const id = reservationNumber(body) ?? subjectNumber(subject);
       return id ? { type: "cancellation", source: "booking", externalId: id } : null;
     }
 
     // Reserva nueva
     if (!/new booking|confirmation|nueva reserva|reserva confirmada/i.test(subject)) return null;
 
-    const externalId = reservationNumber(body);
+    const externalId = reservationNumber(body) ?? subjectNumber(subject);
     if (!externalId) return null;
 
     const checkIn = matchDate(body, "check.?in|llegada|arrival|entrada");
@@ -84,6 +85,11 @@ export const bookingParser: InboundEmailParser = {
  * exige que el número largo aparezca cerca de la palabra "reserva"/"booking"
  * para no agarrar un teléfono o un precio.
  */
+/** Número de reserva desde el subject: "¡Nueva reserva! (6542082162, sábado, ...)" */
+function subjectNumber(subject: string): string | null {
+  return subject.match(/\((\d{8,14})\s*[,)]/)?.[1] ?? null;
+}
+
 function reservationNumber(body: string): string | null {
   const labeled = body.match(
     /(?:booking number|n[uú]mero de reserva|reservation (?:id|number)|confirmation number)[:\s#]*(\d{8,14})/i,
