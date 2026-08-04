@@ -7,8 +7,9 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg, getOrganizationBranding } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatDate } from "@/lib/format";
 import {
+  describeAuditChange,
   EDITABLE_STATUSES,
   MAX_PERIOD_CYCLE,
   MAX_PERIOD_NOTE_LENGTH,
@@ -825,6 +826,22 @@ export async function generateSettlement(
     };
   }
 
+  // Regenerar reescribe TODAS las líneas: es la acción más destructiva del
+  // documento y hasta ahora no dejaba rastro en el historial. Fotografiamos el
+  // estado previo (si la liquidación ya existía) para poder deshacerla.
+  const { data: existing } = await admin
+    .from("owner_settlements")
+    .select("id, status")
+    .eq("organization_id", organization.id)
+    .eq("owner_id", ownerId)
+    .eq("period_year", year)
+    .eq("period_month", month)
+    .eq("currency", BASE_CURRENCY)
+    .maybeSingle();
+  const priorSnapshot = existing
+    ? await captureSettlementSnapshot(admin, existing.id)
+    : null;
+
   let res: { settlement: OwnerSettlement; lineCount: number };
   try {
     res = await generateOne({
@@ -865,6 +882,28 @@ export async function generateSettlement(
     .select("*")
     .eq("settlement_id", res.settlement.id)
     .order("display_order");
+
+  // Sólo auditamos la REgeneración de un documento preexistente: crear una
+  // liquidación nueva no tiene estado anterior que restaurar.
+  if (priorSnapshot && existing?.id === res.settlement.id) {
+    await admin.from("settlement_audit").insert({
+      organization_id: organization.id,
+      settlement_id: res.settlement.id,
+      action: "regenerate",
+      actor_user_id: session.userId,
+      actor_name: actorNameOf(session),
+      changes: {
+        kind: "regenerate",
+        lineas: {
+          from: priorSnapshot.lines.length,
+          to: (linesData ?? []).length,
+        },
+      },
+      side_effects: [],
+      snapshot: priorSnapshot,
+    });
+    await dropRedoStack(admin, res.settlement.id);
+  }
 
   revalidateSettlement(res.settlement.id);
   return {
@@ -913,6 +952,24 @@ export async function generateSettlementsForPeriod(
         year,
         month,
       });
+
+      // Mismo tratamiento que la regeneración individual: si la liquidación ya
+      // existía, esto la REescribe. Sin snapshot ni entrada de auditoría, el
+      // siguiente "Deshacer" saltaría por encima de la regeneración y
+      // restauraría un estado anterior a ella sin avisar.
+      const { data: prior } = await admin
+        .from("owner_settlements")
+        .select("id")
+        .eq("organization_id", organization.id)
+        .eq("owner_id", o.id)
+        .eq("period_year", year)
+        .eq("period_month", month)
+        .eq("currency", BASE_CURRENCY)
+        .maybeSingle();
+      const priorSnapshot = prior
+        ? await captureSettlementSnapshot(admin, prior.id)
+        : null;
+
       const r = await persistSettlement({
         admin,
         organizationId: organization.id,
@@ -924,6 +981,25 @@ export async function generateSettlementsForPeriod(
         autoLines,
         ticketIds,
       });
+
+      if (priorSnapshot && prior?.id === r.settlement.id) {
+        await admin.from("settlement_audit").insert({
+          organization_id: organization.id,
+          settlement_id: r.settlement.id,
+          action: "regenerate",
+          actor_user_id: session.userId,
+          actor_name: actorNameOf(session),
+          changes: {
+            kind: "regenerate",
+            lote: true,
+            lineas: { from: priorSnapshot.lines.length, to: r.lineCount },
+          },
+          side_effects: [],
+          snapshot: priorSnapshot,
+        });
+        await dropRedoStack(admin, r.settlement.id);
+      }
+
       return {
         owner_id: o.id,
         owner_name: o.full_name,
@@ -984,7 +1060,102 @@ type EditableSettlement = {
   currency: string;
   net_payable: number;
   paid_movement_id: string | null;
+  /** Estado del documento ANTES de la mutación en curso (migración 047). */
+  snapshot: SettlementSnapshot;
 };
+
+// ════════════════════════════════════════════════════════════════════════════
+// Deshacer / Rehacer — snapshots del documento (migración 047)
+//
+// Cada mutación guarda en su entrada de `settlement_audit` el estado COMPLETO
+// del documento previo al cambio. Deshacer restaura ese estado vía el RPC
+// `settlement_restore_snapshot` (atómico). Ver el encabezado de la migración
+// para el modelo completo.
+//
+// Los totales NO se snapshotean: son derivados y los recalcula
+// `reconcileAfterEdit` a partir de las líneas restauradas.
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface SettlementSnapshot {
+  v: 1;
+  header: {
+    unit_order: unknown;
+    exchange_rates: unknown;
+    period_index: number | null;
+    period_cycle: number | null;
+    period_note: string | null;
+  };
+  lines: Record<string, unknown>[];
+  /**
+   * Tickets de mantenimiento cobrados a esta liquidación. Generar los marca y
+   * borrar la liquidación los libera: sin esto, deshacer una regeneración
+   * dejaría tickets marcados como "ya cobrados" sin línea que los cobre — no
+   * volverían a aparecer en ninguna liquidación futura.
+   */
+  tickets: { id: string; charged_to_owner_at: string | null }[];
+}
+
+/**
+ * Fotografía restaurable de la liquidación. Se toma ANTES de mutar, desde los
+ * dos puntos por los que pasan todas las acciones de edición
+ * (`loadEditableSettlement` / `loadEditableSettlementMinimal`), así ninguna
+ * acción nueva puede olvidarse de registrarla.
+ */
+async function captureSettlementSnapshot(
+  admin: Admin,
+  settlementId: string,
+): Promise<SettlementSnapshot> {
+  const [{ data: lines }, { data: header }, { data: tickets }] =
+    await Promise.all([
+      admin
+        .from("settlement_lines")
+        .select("*")
+        .eq("settlement_id", settlementId)
+        .order("display_order", { ascending: true }),
+      admin
+        .from("owner_settlements")
+        .select(
+          "unit_order, exchange_rates, period_index, period_cycle, period_note",
+        )
+        .eq("id", settlementId)
+        .maybeSingle(),
+      admin
+        .from("maintenance_tickets")
+        .select("id, charged_to_owner_at")
+        .eq("charged_to_settlement_id", settlementId),
+    ]);
+
+  return {
+    v: 1,
+    header: {
+      unit_order: header?.unit_order ?? [],
+      exchange_rates: header?.exchange_rates ?? {},
+      period_index: header?.period_index ?? null,
+      period_cycle: header?.period_cycle ?? null,
+      period_note: header?.period_note ?? null,
+    },
+    lines: (lines ?? []) as Record<string, unknown>[],
+    tickets: (tickets ?? []) as {
+      id: string;
+      charged_to_owner_at: string | null;
+    }[],
+  };
+}
+
+/**
+ * Una edición nueva descarta la pila de rehacer (comportamiento clásico de
+ * undo/redo: si deshacés y después editás, la rama deshecha se abandona).
+ * `undone_at` se conserva — el historial es inmutable y tiene que seguir
+ * mostrando que ese cambio existió y se deshizo.
+ */
+async function dropRedoStack(admin: Admin, settlementId: string) {
+  await admin
+    .from("settlement_audit")
+    .update({ redo_snapshot: null })
+    .eq("settlement_id", settlementId)
+    .not("undone_at", "is", null)
+    .not("redo_snapshot", "is", null);
+}
 
 async function recomputeSettlementTotals(admin: Admin, settlementId: string) {
   // Multi-moneda: leemos también `currency` de cada línea + `currency`
@@ -1038,7 +1209,12 @@ async function loadEditableSettlement(
       `La liquidación está ${s.status}: anulá o regenerá antes de editar`,
     );
   }
-  return { ...s, net_payable: Number(s.net_payable) } as EditableSettlement;
+  const snapshot = await captureSettlementSnapshot(admin, settlementId);
+  return {
+    ...s,
+    net_payable: Number(s.net_payable),
+    snapshot,
+  } as EditableSettlement;
 }
 
 function actorNameOf(
@@ -1068,6 +1244,13 @@ async function reconcileAfterEdit(opts: {
    * pagada (el egreso original queda intacto). Default true.
    */
   impactCaja?: boolean;
+  /**
+   * false = la entrada NO entra en la pila de deshacer y no descarta la rama
+   * de rehacer. Lo usan `undoSettlementEdit` / `redoSettlementEdit`: quedan
+   * registradas en el historial, pero no son ellas mismas deshacibles (para eso
+   * está el botón contrario). Default true.
+   */
+  undoable?: boolean;
 }): Promise<{
   netBefore: number;
   netAfter: number;
@@ -1167,7 +1350,14 @@ async function reconcileAfterEdit(opts: {
     actor_name: actorName,
     changes: { ...changes, caja: impactCaja ? "impacto" : "solo_visual" },
     side_effects: sideEffects,
+    // `undoable: false` → deshacer/rehacer, que no se apilan sobre sí mismos.
+    snapshot: opts.undoable === false ? null : before.snapshot,
   });
+
+  // Una edición normal abandona la rama deshecha; deshacer/rehacer la conservan.
+  if (opts.undoable !== false) {
+    await dropRedoStack(admin, before.id);
+  }
 
   revalidateSettlement(before.id);
   if (adjustmentId) {
@@ -1874,7 +2064,12 @@ async function loadEditableSettlementMinimal(
   admin: Admin,
   organizationId: string,
   settlementId: string,
-): Promise<{ id: string; status: string; organization_id: string }> {
+): Promise<{
+  id: string;
+  status: string;
+  organization_id: string;
+  snapshot: SettlementSnapshot;
+}> {
   const { data: s } = await admin
     .from("owner_settlements")
     .select("id, status, organization_id")
@@ -1887,7 +2082,15 @@ async function loadEditableSettlementMinimal(
       `La liquidación está ${s.status}: anulá o regenerá antes de editar`,
     );
   }
-  return s as { id: string; status: string; organization_id: string };
+  // Los reordenamientos también son deshacibles: sin snapshot, un drag&drop
+  // desafortunado sobre un documento largo no tendría vuelta atrás.
+  const snapshot = await captureSettlementSnapshot(admin, settlementId);
+  return { ...s, snapshot } as {
+    id: string;
+    status: string;
+    organization_id: string;
+    snapshot: SettlementSnapshot;
+  };
 }
 
 async function sealOrderEdit(
@@ -1898,6 +2101,7 @@ async function sealOrderEdit(
   actorName: string,
   action: SettlementAuditEntry["action"],
   changes: Record<string, unknown>,
+  snapshot: SettlementSnapshot | null = null,
 ) {
   const now = new Date().toISOString();
   await admin
@@ -1912,7 +2116,9 @@ async function sealOrderEdit(
     actor_name: actorName,
     changes,
     side_effects: [],
+    snapshot,
   });
+  if (snapshot) await dropRedoStack(admin, settlementId);
   revalidateSettlement(settlementId);
 }
 
@@ -1988,6 +2194,7 @@ export async function reorderSettlementLines(
     actorNameOf(session),
     "line_update",
     { kind: "reorder_lines", count: v.ordered_line_ids.length },
+    s.snapshot,
   );
 
   return { ok: true as const };
@@ -2094,6 +2301,7 @@ export async function reorderSettlementBookings(
       unit_id: v.unit_id,
       count: v.ordered_ref_ids.length,
     },
+    s.snapshot,
   );
 
   return { ok: true as const };
@@ -2145,7 +2353,9 @@ export async function reorderSettlementUnits(
     actor_name: actorNameOf(session),
     changes: { kind: "reorder_units", count: v.ordered_unit_ids.length },
     side_effects: [],
+    snapshot: s.snapshot,
   });
+  await dropRedoStack(admin, s.id);
   revalidateSettlement(s.id);
 
   return { ok: true as const };
@@ -2250,6 +2460,7 @@ export async function moveSettlementBookingRow(
         to: destUnit.code,
       },
     },
+    s.snapshot,
   );
 
   return { ok: true as const };
@@ -2436,7 +2647,9 @@ export async function setSettlementPeriodCycle(
       note: { from: prev?.period_note ?? null, to: nextNote },
     },
     side_effects: [],
+    snapshot: s.snapshot,
   });
+  await dropRedoStack(admin, s.id);
   revalidateSettlement(s.id);
 
   return { ok: true as const, label: to };
@@ -2504,6 +2717,289 @@ export async function suggestSettlementPeriodCycle(
   };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Deshacer / Rehacer
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Entrada de la pila, sin el snapshot (que puede pesar y no va al cliente). */
+type UndoCandidate = {
+  id: string;
+  action: string;
+  changes: Record<string, unknown> | null;
+  occurred_at: string;
+  actor_name: string | null;
+};
+
+const UNDO_SELECT = "id, action, changes, occurred_at, actor_name";
+
+/** Tope de la pila de deshacer: la aplicada más reciente CON snapshot. */
+async function findUndoTarget(
+  admin: Admin,
+  organizationId: string,
+  settlementId: string,
+) {
+  const { data } = await admin
+    .from("settlement_audit")
+    .select(`${UNDO_SELECT}, snapshot`)
+    .eq("organization_id", organizationId)
+    .eq("settlement_id", settlementId)
+    .not("snapshot", "is", null)
+    .is("undone_at", null)
+    .order("occurred_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data as (UndoCandidate & { snapshot: SettlementSnapshot }) | null;
+}
+
+/**
+ * Próxima a rehacer: la deshecha MÁS ANTIGUA que conserve su redo_snapshot.
+ * Por la invariante de sufijo contiguo (ver migración 047), deshacer dos veces
+ * y rehacer una tiene que re-aplicar la penúltima, no la última.
+ */
+async function findRedoTarget(
+  admin: Admin,
+  organizationId: string,
+  settlementId: string,
+) {
+  const { data } = await admin
+    .from("settlement_audit")
+    .select(`${UNDO_SELECT}, redo_snapshot`)
+    .eq("organization_id", organizationId)
+    .eq("settlement_id", settlementId)
+    .not("redo_snapshot", "is", null)
+    .not("undone_at", "is", null)
+    .order("occurred_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return data as (UndoCandidate & { redo_snapshot: SettlementSnapshot }) | null;
+}
+
+/**
+ * Estado de los botones. Devuelve además la etiqueta de QUÉ se va a deshacer o
+ * rehacer, para que el usuario no tenga que adivinar antes de tocar.
+ */
+export async function getSettlementUndoState(settlementId: string): Promise<{
+  canUndo: boolean;
+  undoLabel: string | null;
+  canRedo: boolean;
+  redoLabel: string | null;
+}> {
+  const { organization, role } = await getCurrentOrg();
+  const empty = {
+    canUndo: false,
+    undoLabel: null,
+    canRedo: false,
+    redoLabel: null,
+  };
+  if (!can(role, "settlements", "update")) return empty;
+  const parsed = z.string().uuid().safeParse(settlementId);
+  if (!parsed.success) return empty;
+  const admin = createAdminClient();
+
+  const [undo, redo] = await Promise.all([
+    findUndoTarget(admin, organization.id, parsed.data),
+    findRedoTarget(admin, organization.id, parsed.data),
+  ]);
+
+  return {
+    canUndo: !!undo,
+    undoLabel: undo ? describeAuditChange(undo.action, undo.changes) : null,
+    canRedo: !!redo,
+    redoLabel: redo ? describeAuditChange(redo.action, redo.changes) : null,
+  };
+}
+
+const undoInputSchema = z.object({
+  settlement_id: z.string().uuid(),
+  /**
+   * Sólo pesa si la liquidación ya está pagada: true postea el asiento de
+   * ajuste en Caja por la diferencia de neto; false deja el egreso intacto.
+   */
+  impact_caja: z.boolean().default(true),
+});
+
+/**
+ * Restaura el documento al estado previo al último cambio deshacible.
+ *
+ * No borra la entrada del historial: la marca como deshecha y guarda el estado
+ * actual en `redo_snapshot`. Los totales se recalculan de las líneas
+ * restauradas y, si la liquidación está pagada, `reconcileAfterEdit` postea el
+ * asiento de ajuste correspondiente (nunca reescribe el egreso original).
+ */
+export async function undoSettlementEdit(
+  input: z.input<typeof undoInputSchema>,
+) {
+  return applyUndoRedo(input, "undo");
+}
+
+/** Vuelve a aplicar el último cambio deshecho. Simétrico de `undoSettlementEdit`. */
+export async function redoSettlementEdit(
+  input: z.input<typeof undoInputSchema>,
+) {
+  return applyUndoRedo(input, "redo");
+}
+
+async function applyUndoRedo(
+  input: z.input<typeof undoInputSchema>,
+  mode: "undo" | "redo",
+) {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    throw new Error("No tenés permisos para editar liquidaciones");
+  }
+  const v = undoInputSchema.parse(input);
+  const admin = createAdminClient();
+
+  // Valida org + estado editable y fotografía el estado actual, que es
+  // exactamente lo que hay que guardar para poder volver.
+  const before = await loadEditableSettlement(
+    admin,
+    organization.id,
+    v.settlement_id,
+  );
+
+  const target =
+    mode === "undo"
+      ? await findUndoTarget(admin, organization.id, v.settlement_id)
+      : await findRedoTarget(admin, organization.id, v.settlement_id);
+
+  if (!target) {
+    throw new Error(
+      mode === "undo"
+        ? "No hay cambios para deshacer en esta liquidación"
+        : "No hay cambios para rehacer",
+    );
+  }
+
+  const restoreTo =
+    mode === "undo"
+      ? (target as { snapshot: SettlementSnapshot }).snapshot
+      : (target as { redo_snapshot: SettlementSnapshot }).redo_snapshot;
+
+  // La política de Caja se HEREDA del cambio original. Si aquella edición fue
+  // "solo visual" (movió el neto del documento sin tocar Caja), revertirla no
+  // puede postear un asiento: estaría inventando un movimiento por plata que
+  // nunca se movió. Y sin este candado, el ciclo deshacer(visual) →
+  // rehacer(impacta) acumularía ajustes que nunca se cancelan entre sí.
+  const originalWasVisualOnly =
+    (target.changes as { caja?: unknown } | null)?.caja === "solo_visual";
+  const impactCaja = originalWasVisualOnly ? false : v.impact_caja;
+
+  // ── 1) RECLAMAR el cursor (compare-and-swap) ──────────────────────────────
+  // El orden importa y es al revés de lo intuitivo: primero se gana la carrera,
+  // recién después se toca el documento.
+  //
+  // Si se restaurara primero, dos "deshacer" simultáneos mutarían AMBOS el
+  // documento y el perdedor tendría que compensar restaurando su `before` —
+  // pisando la restauración del ganador, que ya siguió de largo y posteó su
+  // asiento en Caja. Quedaría el estado imposible: historial diciendo
+  // "deshecho", líneas diciendo "aplicado" y un ajuste sin contrapartida.
+  //
+  // Reclamando primero, el perdedor aborta sin haber mutado nada y no hay qué
+  // compensar. La fila de auditoría hace de candado.
+  const now = new Date().toISOString();
+  let cursorQuery = admin
+    .from("settlement_audit")
+    .update(
+      mode === "undo"
+        ? {
+            undone_at: now,
+            undone_by: session.userId,
+            // El estado que estamos por dejar atrás es lo que rehará el botón
+            // contrario.
+            redo_snapshot: before.snapshot,
+          }
+        : { undone_at: null, undone_by: null, redo_snapshot: null },
+    )
+    .eq("id", target.id)
+    .eq("organization_id", organization.id);
+  // La condición repite el filtro con el que se eligió el target: si otra
+  // pestaña ya lo tomó, este UPDATE afecta 0 filas.
+  cursorQuery =
+    mode === "undo"
+      ? cursorQuery.is("undone_at", null)
+      : cursorQuery.not("undone_at", "is", null);
+
+  const { data: moved, error: cursorError } = await cursorQuery.select("id");
+
+  if (cursorError || !moved || moved.length === 0) {
+    // Todavía no se tocó el documento: se aborta sin compensar nada.
+    throw new Error(
+      cursorError
+        ? `No se pudo actualizar el historial: ${cursorError.message}`
+        : "Otro usuario acaba de deshacer o rehacer este cambio. Recargá y volvé a intentar.",
+    );
+  }
+
+  /** Devuelve el cursor a donde estaba. Sólo se usa si algo falla después. */
+  const releaseCursor = () =>
+    admin
+      .from("settlement_audit")
+      .update(
+        mode === "undo"
+          ? { undone_at: null, undone_by: null, redo_snapshot: null }
+          : {
+              undone_at: now,
+              undone_by: session.userId,
+              redo_snapshot: restoreTo,
+            },
+      )
+      .eq("id", target.id)
+      .eq("organization_id", organization.id);
+
+  // ── 2) Restaurar el documento ─────────────────────────────────────────────
+  const { error: rpcError } = await admin.rpc("settlement_restore_snapshot", {
+    p_settlement_id: v.settlement_id,
+    p_organization_id: organization.id,
+    p_snapshot: restoreTo as unknown as Record<string, unknown>,
+  });
+  if (rpcError) {
+    await releaseCursor();
+    throw new Error(`No se pudo restaurar el documento: ${rpcError.message}`);
+  }
+
+  const label = describeAuditChange(target.action, target.changes);
+
+  try {
+    const r = await reconcileAfterEdit({
+      admin,
+      before,
+      userId: session.userId,
+      actorName: actorNameOf(session),
+      action: mode,
+      changes: {
+        kind: mode,
+        cambio: label,
+        del: formatDate(target.occurred_at, "dd/MM HH:mm"),
+      },
+      reason: mode === "undo" ? `deshizo ${label}` : `rehizo ${label}`,
+      impactCaja,
+      // Deshacer/rehacer no se apilan sobre sí mismos ni descartan la otra rama.
+      undoable: false,
+    });
+    return { ...r, ok: true as const, mode, label, visualOnly: r.visualOnly };
+  } catch (e) {
+    // Reconciliar falla, en la práctica, cuando no se puede postear el asiento
+    // en Caja. Dejar el documento restaurado y el cursor movido sería lo peor
+    // de ambos mundos: el usuario ve un error pero el cambio quedó aplicado a
+    // medias. Revertimos las tres cosas y propagamos.
+    await admin.rpc("settlement_restore_snapshot", {
+      p_settlement_id: v.settlement_id,
+      p_organization_id: organization.id,
+      p_snapshot: before.snapshot as unknown as Record<string, unknown>,
+    });
+    // OJO: `reconcileAfterEdit` recalcula los totales ANTES de postear en Caja,
+    // así que si falló en el asiento, `net_payable` ya quedó con el valor del
+    // estado deshecho. Volver las líneas sin recalcular dejaría el neto
+    // mintiendo respecto de las líneas.
+    await recomputeSettlementTotals(admin, v.settlement_id);
+    await releaseCursor();
+    revalidateSettlement(v.settlement_id);
+    throw e;
+  }
+}
+
 /** Historial de cambios de la liquidación (más recientes primero). */
 export async function listSettlementAudit(
   settlementId: string,
@@ -2525,7 +3021,7 @@ export async function listSettlementAudit(
   const { data, error } = await admin
     .from("settlement_audit")
     .select(
-      "id, settlement_id, action, actor_user_id, actor_name, changes, side_effects, occurred_at",
+      "id, settlement_id, action, actor_user_id, actor_name, changes, side_effects, occurred_at, undone_at",
     )
     .eq("organization_id", organization.id)
     .eq("settlement_id", id)

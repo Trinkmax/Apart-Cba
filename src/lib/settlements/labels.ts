@@ -99,6 +99,52 @@ export const SETTLEMENT_STATUS_META: Record<
   anulada:   { label: "Anulada",   color: "#ef4444", description: "Liquidación sin efecto." },
 };
 
+/**
+ * Etiquetas del historial. Varias acciones comparten un `action` genérico
+ * (`row_update`, `line_update`) y se distinguen por `changes.kind`: cuando el
+ * kind existe, gana él — si no, el historial decía "Reserva editada" al mover
+ * un tipo de cambio o el período.
+ *
+ * Fuente única: la usa el panel de historial y también el tooltip de los
+ * botones Deshacer / Rehacer, que tienen que nombrar el MISMO cambio.
+ */
+export const AUDIT_ACTION_LABEL: Record<string, string> = {
+  line_add: "Cargo agregado",
+  row_add: "Reserva agregada",
+  line_update: "Cargo editado",
+  line_delete: "Cargo eliminado",
+  row_update: "Reserva editada",
+  status_change: "Cambio de estado",
+  payment: "Pago registrado",
+  regenerate: "Regenerada",
+  undo: "Cambio deshecho",
+  redo: "Cambio rehecho",
+};
+
+export const AUDIT_KIND_LABEL: Record<string, string> = {
+  period_cycle: "Período actualizado",
+  exchange_rate: "Tipo de cambio",
+  reorder_lines: "Cargos reordenados",
+  reorder_bookings: "Reservas reordenadas",
+  reorder_units: "Unidades reordenadas",
+  move_booking_unit: "Reserva movida de unidad",
+  regenerate: "Regenerada",
+  undo: "Cambio deshecho",
+  redo: "Cambio rehecho",
+};
+
+/** "Cargo eliminado" / "Tipo de cambio" — el kind manda sobre el action. */
+export function describeAuditChange(
+  action: string,
+  changes?: Record<string, unknown> | null,
+): string {
+  const kind = changes?.kind;
+  if (typeof kind === "string" && AUDIT_KIND_LABEL[kind]) {
+    return AUDIT_KIND_LABEL[kind];
+  }
+  return AUDIT_ACTION_LABEL[action] ?? action;
+}
+
 export const SETTLEMENT_LINE_META: Record<
   SettlementLine["line_type"],
   { label: string; color: string }

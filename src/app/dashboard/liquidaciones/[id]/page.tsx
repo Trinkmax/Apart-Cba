@@ -8,6 +8,7 @@ import {
   listSettlementMergedSiblings,
   listOwnerUnits,
   suggestSettlementPeriodCycle,
+  getSettlementUndoState,
 } from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
@@ -57,6 +58,7 @@ export default async function SettlementDetailPage({
     mergedSiblings,
     ownerUnits,
     periodSuggestion,
+    undoState,
   ] = await Promise.all([
     getOrganizationBranding(),
     listAccounts(),
@@ -68,6 +70,7 @@ export default async function SettlementDetailPage({
     settlement.period_index == null
       ? suggestSettlementPeriodCycle(id)
       : Promise.resolve(null),
+    getSettlementUndoState(id),
   ]);
 
   const canCreate = can(role, "settlements", "create");
@@ -283,6 +286,7 @@ export default async function SettlementDetailPage({
           units={ownerUnits}
           audit={audit}
           periodSuggestion={periodSuggestion}
+          undoState={undoState}
         />
       ) : (
         <SettlementStatement model={model} />

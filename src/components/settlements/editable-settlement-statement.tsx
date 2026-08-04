@@ -82,7 +82,10 @@ import {
 import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { formatMoney, formatDate, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { SETTLEMENT_LINE_META } from "@/lib/settlements/labels";
+import {
+  SETTLEMENT_LINE_META,
+  describeAuditChange,
+} from "@/lib/settlements/labels";
 import {
   updateSettlementBookingRow,
   removeSettlementBookingRow,
@@ -102,6 +105,7 @@ import {
   PeriodCycleEditor,
   type PeriodCycleSuggestion,
 } from "./period-cycle-editor";
+import { UndoRedoButtons, type UndoState } from "./undo-redo-buttons";
 
 type LineType = SettlementLine["line_type"];
 type Unit = { id: string; code: string; name: string };
@@ -113,31 +117,6 @@ type Unit = { id: string; code: string; name: string };
  * `add-booking-row-dialog.tsx`.
  */
 const LINE_CURRENCIES = ["ARS", "USD", "EUR", "USDT"] as const;
-
-/**
- * Varios cambios comparten `action` genéricos (`row_update`, `line_update`) y
- * se distinguen por `changes.kind`. Cuando el kind es más específico, gana él
- * — si no, el historial decía "Reserva editada" al mover un TC o el período.
- */
-const CHANGE_KIND_LABEL: Record<string, string> = {
-  period_cycle: "Período actualizado",
-  exchange_rate: "Tipo de cambio",
-  reorder_lines: "Cargos reordenados",
-  reorder_bookings: "Reservas reordenadas",
-  reorder_units: "Unidades reordenadas",
-  move_booking_unit: "Reserva movida de unidad",
-};
-
-const ACTION_LABEL: Record<SettlementAuditEntry["action"], string> = {
-  line_add: "Cargo agregado",
-  row_add: "Reserva agregada",
-  line_update: "Cargo editado",
-  line_delete: "Cargo eliminado",
-  row_update: "Reserva editada",
-  status_change: "Cambio de estado",
-  payment: "Pago registrado",
-  regenerate: "Regenerada",
-};
 
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (s: string) => {
@@ -1473,18 +1452,26 @@ function AuditSheet({
             </p>
           )}
           {audit.map((a) => {
-            const kind = (a.changes as { kind?: unknown } | null)?.kind;
-            const label =
-              (typeof kind === "string" ? CHANGE_KIND_LABEL[kind] : null) ??
-              ACTION_LABEL[a.action] ??
-              a.action;
+            const label = describeAuditChange(
+              a.action,
+              a.changes as Record<string, unknown> | null,
+            );
+            const undone = !!a.undone_at;
             return (
             <div
               key={a.id}
-              className="rounded-lg border p-3 text-sm space-y-1.5"
+              className={cn(
+                "rounded-lg border p-3 text-sm space-y-1.5",
+                // Deshecho: sigue en el historial (es inmutable) pero atenuado
+                // para que se lea de un vistazo que ya no está aplicado.
+                undone && "opacity-60 border-dashed",
+              )}
             >
               <div className="flex items-center justify-between gap-2">
-                <Badge variant="secondary" className="font-normal">
+                <Badge
+                  variant="secondary"
+                  className={cn("font-normal", undone && "line-through")}
+                >
                   {label}
                 </Badge>
                 <span className="text-[11px] text-muted-foreground flex items-center gap-1">
@@ -1494,6 +1481,9 @@ function AuditSheet({
               </div>
               <div className="text-muted-foreground">
                 por <span className="text-foreground">{a.actor_name}</span>
+                {undone && (
+                  <span className="ml-1.5 text-[11px] italic">· deshecho</span>
+                )}
               </div>
               {a.changes && typeof a.changes === "object" && (
                 <ul className="text-xs text-muted-foreground space-y-0.5">
@@ -1565,6 +1555,7 @@ export function EditableSettlementStatement({
   units,
   audit,
   periodSuggestion = null,
+  undoState,
 }: {
   model: StatementModel;
   settlementId: string;
@@ -1575,6 +1566,8 @@ export function EditableSettlementStatement({
   audit: SettlementAuditEntry[];
   /** Continuación del ciclo de ajuste sugerida a partir del mes anterior. */
   periodSuggestion?: PeriodCycleSuggestion | null;
+  /** Qué hay para deshacer / rehacer en este documento (migración 047). */
+  undoState: UndoState;
 }) {
   const c = currency;
   const [editingRow, setEditingRow] = useState<
@@ -1852,19 +1845,31 @@ export function EditableSettlementStatement({
               </>
             )}
           </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            className="h-7 gap-1.5 bg-white/15 hover:bg-white/25 text-white border-0"
-            onClick={() => setHistoryOpen(true)}
-          >
-            <History size={13} /> Historial
-            {audit.length > 0 && (
-              <span className="ml-0.5 text-[10px] opacity-80">
-                ({audit.length})
-              </span>
+          <div className="flex items-center gap-2">
+            {editable && (
+              <UndoRedoButtons
+                settlementId={settlementId}
+                state={undoState}
+                paid={paid}
+                // `pending` cubre cualquier otra mutación del documento en
+                // curso: sin esto, Ctrl+Z podía dispararse en el medio.
+                disabled={pending}
+              />
             )}
-          </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="h-7 gap-1.5 bg-white/15 hover:bg-white/25 text-white border-0"
+              onClick={() => setHistoryOpen(true)}
+            >
+              <History size={13} /> Historial
+              {audit.length > 0 && (
+                <span className="ml-0.5 text-[10px] opacity-80">
+                  ({audit.length})
+                </span>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
 

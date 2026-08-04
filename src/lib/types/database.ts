@@ -722,12 +722,20 @@ export interface SettlementAuditEntry {
     | "row_update"
     | "status_change"
     | "payment"
-    | "regenerate";
+    | "regenerate"
+    | "undo"
+    | "redo";
   actor_user_id: string | null;
   actor_name: string;
   changes: Record<string, { from: unknown; to: unknown } | unknown>;
   side_effects: string[];
   occurred_at: string;
+  /**
+   * Cuándo se deshizo este cambio (migración 047). `null` = aplicado.
+   * El historial es inmutable: una entrada deshecha se muestra tachada, no
+   * se borra.
+   */
+  undone_at?: string | null;
 }
 
 /**
