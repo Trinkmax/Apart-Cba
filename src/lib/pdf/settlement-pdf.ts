@@ -118,6 +118,16 @@ export async function buildSettlementDoc(
   doc.text(pdfSafe(model.periodLabel), PAGE_W - MARGIN_X, 24, {
     align: "right",
   });
+  // Período del ciclo de ajuste (1/3, 2/3…): el propietario tiene que verlo
+  // apenas abre el PDF, no enterrado en el cuerpo.
+  if (model.periodCycleLabel) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.text(pdfSafe(model.periodCycleLabel), PAGE_W - MARGIN_X, 29.5, {
+      align: "right",
+    });
+    doc.setFont("helvetica", "normal");
+  }
 
   // Bloque de datos
   doc.setTextColor(INK[0], INK[1], INK[2]);
@@ -141,7 +151,33 @@ export async function buildSettlementDoc(
   doc.setFillColor(sc[0], sc[1], sc[2]);
   doc.circle(MARGIN_X + 96 + 34 + 1.5, y - 1, 1.5, "F");
   field("Estado", model.statusLabel, MARGIN_X + 96 + 34 + 6, y);
-  y += 14;
+
+  // "Período 1/3" va como sub-línea del campo Período: no entra en la misma
+  // línea sin pisar el campo Estado (34mm de ancho disponible).
+  if (model.periodCycleLabel) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(brand[0], brand[1], brand[2]);
+    doc.text(pdfSafe(model.periodCycleLabel), MARGIN_X + 96, y + 9.5);
+    doc.setTextColor(INK[0], INK[1], INK[2]);
+    doc.setFont("helvetica", "normal");
+  }
+  y += model.periodCycleLabel ? 18 : 14;
+
+  // Aclaración del período, a todo el ancho (puede ser larga).
+  if (model.periodNote) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
+    const noteLines = doc.splitTextToSize(
+      pdfSafe(model.periodNote),
+      PAGE_W - MARGIN_X * 2,
+    ) as string[];
+    doc.text(noteLines, MARGIN_X, y);
+    doc.setTextColor(INK[0], INK[1], INK[2]);
+    doc.setFont("helvetica", "normal");
+    y += noteLines.length * 4 + 3;
+  }
 
   // Aviso global: cargos/reservas en moneda sin TC → no suman al neto.
   if (model.missingRates.length > 0) {

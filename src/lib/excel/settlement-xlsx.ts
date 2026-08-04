@@ -73,8 +73,12 @@ export function buildSettlementWorkbook(
   wb.creator = branding.name;
   wb.created = new Date();
 
+  // El encabezado ocupa 3 filas + 1 spacer; la aclaración del período agrega
+  // una cuarta, así que el panel congelado se corre con ella.
+  const headerRows = model.periodNote ? 5 : 4;
+
   const ws = wb.addWorksheet("Liquidación", {
-    views: [{ state: "frozen", ySplit: 4, showGridLines: false }],
+    views: [{ state: "frozen", ySplit: headerRows, showGridLines: false }],
     pageSetup: { fitToPage: true, fitToWidth: 1, orientation: "portrait", margins: {
       left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2,
     } },
@@ -104,7 +108,7 @@ export function buildSettlementWorkbook(
     alignment: { vertical: "middle", horizontal: "left", indent: 1 },
     height: 30,
   });
-  mergeRow(`LIQUIDACIÓN A PROPIETARIO · ${model.periodLabel}`, {
+  mergeRow(`LIQUIDACIÓN A PROPIETARIO · ${model.periodFullLabel}`, {
     font: { bold: true, size: 11, color: { argb: INK } },
     height: 20,
   });
@@ -112,7 +116,18 @@ export function buildSettlementWorkbook(
     `${model.number}   ·   Propietario: ${model.owner.full_name}   ·   Estado: ${model.statusLabel}`,
     { font: { size: 10, color: { argb: MUTED } }, height: 18 },
   );
-  r++; // spacer (fila 4, límite del freeze)
+  // Aclaración del período (si la cargaron): va pegada al encabezado para que
+  // se lea junto con el "Período 1/3" y no se pierda entre las tablas.
+  if (model.periodNote) {
+    // wrapText + alto para dos líneas: la nota admite hasta 160 caracteres y el
+    // ancho combinado de las 8 columnas no alcanza para tantos en una sola.
+    mergeRow(model.periodNote, {
+      font: { size: 10, italic: true, color: { argb: MUTED } },
+      alignment: { vertical: "middle", horizontal: "left", wrapText: true },
+      height: 30,
+    });
+  }
+  r++; // spacer (límite del freeze)
 
   const headers = [
     "Ingreso",

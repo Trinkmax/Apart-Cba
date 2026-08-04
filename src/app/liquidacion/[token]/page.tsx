@@ -43,6 +43,9 @@ export default async function PublicSettlementPage({
     id: string;
     period_year: number;
     period_month: number;
+    period_index: number | null;
+    period_cycle: number | null;
+    period_note: string | null;
     status: string;
     currency: string;
     gross_revenue: number;
@@ -66,6 +69,9 @@ export default async function PublicSettlementPage({
     id: s.id,
     period_year: s.period_year,
     period_month: s.period_month,
+    period_index: s.period_index,
+    period_cycle: s.period_cycle,
+    period_note: s.period_note,
     status: s.status,
     currency: s.currency,
     gross_revenue: Number(s.gross_revenue),
@@ -116,7 +122,7 @@ export default async function PublicSettlementPage({
               {branding.name}
             </div>
             <h1 className="text-lg sm:text-xl font-semibold tracking-tight">
-              Liquidación · {model.periodLabel}
+              Liquidación · {model.periodFullLabel}
             </h1>
           </div>
           <div className="flex items-center gap-2">

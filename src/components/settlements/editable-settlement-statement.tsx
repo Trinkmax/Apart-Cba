@@ -98,6 +98,10 @@ import {
 import type { StatementModel } from "@/lib/settlements/statement-model";
 import type { SettlementLine, SettlementAuditEntry } from "@/lib/types/database";
 import { AddBookingRowDialog } from "./add-booking-row-dialog";
+import {
+  PeriodCycleEditor,
+  type PeriodCycleSuggestion,
+} from "./period-cycle-editor";
 
 type LineType = SettlementLine["line_type"];
 type Unit = { id: string; code: string; name: string };
@@ -109,6 +113,20 @@ type Unit = { id: string; code: string; name: string };
  * `add-booking-row-dialog.tsx`.
  */
 const LINE_CURRENCIES = ["ARS", "USD", "EUR", "USDT"] as const;
+
+/**
+ * Varios cambios comparten `action` genéricos (`row_update`, `line_update`) y
+ * se distinguen por `changes.kind`. Cuando el kind es más específico, gana él
+ * — si no, el historial decía "Reserva editada" al mover un TC o el período.
+ */
+const CHANGE_KIND_LABEL: Record<string, string> = {
+  period_cycle: "Período actualizado",
+  exchange_rate: "Tipo de cambio",
+  reorder_lines: "Cargos reordenados",
+  reorder_bookings: "Reservas reordenadas",
+  reorder_units: "Unidades reordenadas",
+  move_booking_unit: "Reserva movida de unidad",
+};
 
 const ACTION_LABEL: Record<SettlementAuditEntry["action"], string> = {
   line_add: "Cargo agregado",
@@ -1454,14 +1472,20 @@ function AuditSheet({
               Sin cambios registrados todavía.
             </p>
           )}
-          {audit.map((a) => (
+          {audit.map((a) => {
+            const kind = (a.changes as { kind?: unknown } | null)?.kind;
+            const label =
+              (typeof kind === "string" ? CHANGE_KIND_LABEL[kind] : null) ??
+              ACTION_LABEL[a.action] ??
+              a.action;
+            return (
             <div
               key={a.id}
               className="rounded-lg border p-3 text-sm space-y-1.5"
             >
               <div className="flex items-center justify-between gap-2">
                 <Badge variant="secondary" className="font-normal">
-                  {ACTION_LABEL[a.action] ?? a.action}
+                  {label}
                 </Badge>
                 <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                   <Clock size={11} />
@@ -1473,9 +1497,10 @@ function AuditSheet({
               </div>
               {a.changes && typeof a.changes === "object" && (
                 <ul className="text-xs text-muted-foreground space-y-0.5">
-                  {Object.entries(
-                    a.changes as Record<string, unknown>,
-                  ).map(([k, val]) => {
+                  {Object.entries(a.changes as Record<string, unknown>)
+                    // `kind` ya se muestra como badge arriba: no lo repetimos.
+                    .filter(([k]) => k !== "kind")
+                    .map(([k, val]) => {
                     const fromTo = val as
                       | { from?: unknown; to?: unknown }
                       | unknown;
@@ -1518,7 +1543,8 @@ function AuditSheet({
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
           <p className="text-[11px] text-muted-foreground text-center pt-2">
             Importes en {currency}.
           </p>
@@ -1538,6 +1564,7 @@ export function EditableSettlementStatement({
   paid,
   units,
   audit,
+  periodSuggestion = null,
 }: {
   model: StatementModel;
   settlementId: string;
@@ -1546,6 +1573,8 @@ export function EditableSettlementStatement({
   paid: boolean;
   units: Unit[];
   audit: SettlementAuditEntry[];
+  /** Continuación del ciclo de ajuste sugerida a partir del mes anterior. */
+  periodSuggestion?: PeriodCycleSuggestion | null;
 }) {
   const c = currency;
   const [editingRow, setEditingRow] = useState<
@@ -1784,15 +1813,25 @@ export function EditableSettlementStatement({
             <div className="text-base sm:text-lg font-semibold">
               {model.periodLabel}
             </div>
-            <div
-              className="inline-flex items-center gap-1.5 text-[11px] font-medium mt-1 px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: "oklch(1 0 0 / 0.16)" }}
-            >
-              <span
-                className="size-1.5 rounded-full"
-                style={{ backgroundColor: model.statusColor }}
-              />
-              {model.statusLabel}
+            <div className="flex items-center justify-end gap-1.5 flex-wrap mt-1">
+              {model.periodCycleLabel && (
+                <span
+                  className="inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ backgroundColor: "oklch(1 0 0 / 0.22)" }}
+                >
+                  {model.periodCycleLabel}
+                </span>
+              )}
+              <div
+                className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full"
+                style={{ backgroundColor: "oklch(1 0 0 / 0.16)" }}
+              >
+                <span
+                  className="size-1.5 rounded-full"
+                  style={{ backgroundColor: model.statusColor }}
+                />
+                {model.statusLabel}
+              </div>
             </div>
           </div>
         </div>
@@ -1829,21 +1868,34 @@ export function EditableSettlementStatement({
         </div>
       </div>
 
-      {/* Datos */}
+      {/* Datos — "Período" es editable en el lugar (ciclo de ajuste IPC) */}
       <dl className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border">
-        {[
-          ["Propietario", model.owner.full_name],
-          ["Período", model.periodLabel],
-          ["Moneda", model.currency],
-          ["Generada", formatDate(model.generated_at, "dd/MM/yyyy HH:mm")],
-        ].map(([k, v]) => (
-          <div key={k} className="bg-card px-4 py-3">
-            <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {k}
-            </dt>
-            <dd className="text-sm font-medium mt-0.5 truncate">{v}</dd>
+        <DataCell label="Propietario">
+          <div className="text-sm font-medium mt-0.5 truncate">
+            {model.owner.full_name}
           </div>
-        ))}
+        </DataCell>
+        <DataCell label="Período">
+          <PeriodCycleEditor
+            settlementId={settlementId}
+            periodLabel={model.periodLabel}
+            periodIndex={model.periodIndex}
+            periodCycle={model.periodCycle}
+            periodNote={model.periodNote}
+            suggestion={periodSuggestion}
+            editable={editable}
+          />
+        </DataCell>
+        <DataCell label="Moneda">
+          <div className="text-sm font-medium mt-0.5 truncate">
+            {model.currency}
+          </div>
+        </DataCell>
+        <DataCell label="Generada">
+          <div className="text-sm font-medium mt-0.5 truncate">
+            {formatDate(model.generated_at, "dd/MM/yyyy HH:mm")}
+          </div>
+        </DataCell>
       </dl>
 
       {/* KPIs */}
@@ -2214,6 +2266,25 @@ export function EditableSettlementStatement({
         </AlertDialogContent>
       </AlertDialog>
     </Card>
+  );
+}
+
+/** Celda del bloque "Datos" del encabezado. `children` para que "Período"
+ *  pueda alojar el editor interactivo sin romper la grilla. */
+function DataCell({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="bg-card px-4 py-3 min-w-0">
+      <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="min-w-0">{children}</dd>
+    </div>
   );
 }
 

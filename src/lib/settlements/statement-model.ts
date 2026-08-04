@@ -1,5 +1,11 @@
 import type { SettlementLine, SettlementLineMeta } from "@/lib/types/database";
-import { formatPeriod, settlementNumber, SETTLEMENT_STATUS_META } from "./labels";
+import {
+  formatPeriod,
+  formatPeriodCycle,
+  formatPeriodFull,
+  settlementNumber,
+  SETTLEMENT_STATUS_META,
+} from "./labels";
 
 /**
  * Pivotea las settlement_lines planas a la "planilla clásica por unidad":
@@ -45,6 +51,12 @@ export interface StatementInput {
   id: string;
   period_year: number;
   period_month: number;
+  /** Posición dentro del ciclo de ajuste por IPC (migración 046). */
+  period_index?: number | null;
+  /** Largo del ciclo de ajuste en meses (3 = trimestral). */
+  period_cycle?: number | null;
+  /** Aclaración corta del período, impresa en el documento. */
+  period_note?: string | null;
   status: string;
   /** Moneda BASE del documento (ARS por default). */
   currency: string;
@@ -135,7 +147,17 @@ export interface StatementOtherRow {
 
 export interface StatementModel {
   number: string;
+  /** "Julio 2026" — el mes calendario liquidado. */
   periodLabel: string;
+  /** "Período 1/3" — posición en el ciclo de ajuste. `null` si no se cargó. */
+  periodCycleLabel: string | null;
+  /** Valores crudos, para el editor del encabezado. */
+  periodIndex: number | null;
+  periodCycle: number | null;
+  /** "Julio 2026 · Período 1/3" — lo que va en títulos, asunto de email, etc. */
+  periodFullLabel: string;
+  /** Aclaración corta opcional del período. */
+  periodNote: string | null;
   /** Moneda base del documento (en la que se totaliza). */
   currency: string;
   status: string;
@@ -405,6 +427,16 @@ export function buildStatementModel(s: StatementInput): StatementModel {
   return {
     number: settlementNumber(s.id, s.period_year, s.period_month),
     periodLabel: formatPeriod(s.period_year, s.period_month),
+    periodCycleLabel: formatPeriodCycle(s.period_index, s.period_cycle),
+    periodIndex: s.period_index ?? null,
+    periodCycle: s.period_cycle ?? null,
+    periodFullLabel: formatPeriodFull(
+      s.period_year,
+      s.period_month,
+      s.period_index,
+      s.period_cycle,
+    ),
+    periodNote: s.period_note?.trim() ? s.period_note.trim() : null,
     currency: baseCurrency,
     status: s.status,
     statusLabel: statusMeta.label,

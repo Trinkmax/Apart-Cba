@@ -7,6 +7,7 @@ import {
   listSettlementSiblings,
   listSettlementMergedSiblings,
   listOwnerUnits,
+  suggestSettlementPeriodCycle,
 } from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
@@ -48,15 +49,26 @@ export default async function SettlementDetailPage({
   )) as unknown as SettlementDetail | null;
   if (!settlement) notFound();
 
-  const [branding, accounts, audit, siblings, mergedSiblings, ownerUnits] =
-    await Promise.all([
-      getOrganizationBranding(),
-      listAccounts(),
-      listSettlementAudit(id),
-      listSettlementSiblings(id),
-      listSettlementMergedSiblings(id),
-      listOwnerUnits(settlement.owner_id),
-    ]);
+  const [
+    branding,
+    accounts,
+    audit,
+    siblings,
+    mergedSiblings,
+    ownerUnits,
+    periodSuggestion,
+  ] = await Promise.all([
+    getOrganizationBranding(),
+    listAccounts(),
+    listSettlementAudit(id),
+    listSettlementSiblings(id),
+    listSettlementMergedSiblings(id),
+    listOwnerUnits(settlement.owner_id),
+    // Sólo tiene sentido ofrecer "seguir el ciclo" si todavía no se cargó.
+    settlement.period_index == null
+      ? suggestSettlementPeriodCycle(id)
+      : Promise.resolve(null),
+  ]);
 
   const canCreate = can(role, "settlements", "create");
   const canUpdate = can(role, "settlements", "update");
@@ -67,6 +79,9 @@ export default async function SettlementDetailPage({
     id: settlement.id,
     period_year: settlement.period_year,
     period_month: settlement.period_month,
+    period_index: settlement.period_index,
+    period_cycle: settlement.period_cycle,
+    period_note: settlement.period_note,
     status: settlement.status,
     currency: settlement.currency,
     gross_revenue: Number(settlement.gross_revenue),
@@ -129,7 +144,7 @@ export default async function SettlementDetailPage({
         statementInput={statementInput}
         branding={branding}
         accounts={accounts}
-        periodLabel={model.periodLabel}
+        periodLabel={model.periodFullLabel}
         canCreate={canCreate}
         canUpdate={canUpdate}
       />
@@ -267,6 +282,7 @@ export default async function SettlementDetailPage({
           paid={paid}
           units={ownerUnits}
           audit={audit}
+          periodSuggestion={periodSuggestion}
         />
       ) : (
         <SettlementStatement model={model} />

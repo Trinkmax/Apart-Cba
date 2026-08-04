@@ -9,7 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SettlementDeleteButton } from "@/components/settlements/settlement-delete-button";
 import { formatMoney, getInitials } from "@/lib/format";
-import { formatPeriod, SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
+import {
+  formatPeriod,
+  formatPeriodCycle,
+  formatPeriodFull,
+  SETTLEMENT_STATUS_META,
+} from "@/lib/settlements/labels";
 import { cn } from "@/lib/utils";
 import type {
   OwnerSettlement,
@@ -75,6 +80,9 @@ export function SettlementsListClient({ settlements }: Props) {
       if (statusFilter !== "all" && s.status !== statusFilter) return false;
       if (!q) return true;
       const period = formatPeriod(s.period_year, s.period_month).toLowerCase();
+      // Permite buscar "período 2" o "2/3" además del mes.
+      const cycle =
+        formatPeriodCycle(s.period_index, s.period_cycle)?.toLowerCase() ?? "";
       const status =
         SETTLEMENT_STATUS_META[
           s.status as keyof typeof SETTLEMENT_STATUS_META
@@ -82,6 +90,7 @@ export function SettlementsListClient({ settlements }: Props) {
       return (
         s.owner.full_name.toLowerCase().includes(q) ||
         period.includes(q) ||
+        cycle.includes(q) ||
         String(s.period_year).includes(q) ||
         status.includes(q)
       );
@@ -286,6 +295,9 @@ function MonthSection({
 function SettlementRow({ s }: { s: SettlementWithOwner }) {
   const meta =
     SETTLEMENT_STATUS_META[s.status as keyof typeof SETTLEMENT_STATUS_META];
+  // Las filas ya están agrupadas por mes, así que acá alcanza con el período
+  // del ciclo de ajuste ("Período 1/3") para distinguir de un vistazo.
+  const cycleLabel = formatPeriodCycle(s.period_index, s.period_cycle);
   return (
     <div className="flex items-center group hover:bg-accent/30 transition-colors">
       <Link
@@ -301,20 +313,35 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
           <div className="font-medium text-sm truncate">
             {s.owner.full_name}
           </div>
-          <Badge
-            className="font-normal gap-1.5 mt-1 sm:hidden text-[10px] h-4 px-1.5"
-            style={{
-              color: meta.color,
-              backgroundColor: meta.color + "15",
-              borderColor: meta.color + "30",
-            }}
+          {/* El badge de estado es sm:hidden: sin período cargado el wrapper
+              quedaría vacío en desktop, así que el margen sólo aplica cuando
+              hay algo que mostrar en ese breakpoint. */}
+          <div
+            className={cn(
+              "flex items-center gap-1.5 flex-wrap mt-1",
+              !cycleLabel && "sm:mt-0",
+            )}
           >
-            <span
-              className="status-dot"
-              style={{ backgroundColor: meta.color }}
-            />
-            {meta.label}
-          </Badge>
+            <Badge
+              className="font-normal gap-1.5 sm:hidden text-[10px] h-4 px-1.5"
+              style={{
+                color: meta.color,
+                backgroundColor: meta.color + "15",
+                borderColor: meta.color + "30",
+              }}
+            >
+              <span
+                className="status-dot"
+                style={{ backgroundColor: meta.color }}
+              />
+              {meta.label}
+            </Badge>
+            {cycleLabel && (
+              <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                {cycleLabel}
+              </span>
+            )}
+          </div>
         </div>
         <div className="text-right shrink-0">
           <div className="text-[10px] sm:text-xs text-muted-foreground">
@@ -351,7 +378,12 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
         <SettlementDeleteButton
           id={s.id}
           ownerName={s.owner.full_name}
-          period={formatPeriod(s.period_year, s.period_month)}
+          period={formatPeriodFull(
+            s.period_year,
+            s.period_month,
+            s.period_index,
+            s.period_cycle,
+          )}
           paid={s.status === "pagada" || !!s.paid_movement_id}
         />
       </div>

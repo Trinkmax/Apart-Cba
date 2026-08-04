@@ -16,6 +16,68 @@ export function formatPeriod(year: number, month: number): string {
 }
 
 /**
+ * Ciclo de ajuste por IPC (migración 046). En AR el alquiler se actualiza cada
+ * N meses; cada mes del ciclo es un "período" y el propietario necesita ver
+ * cuál se le está pagando (después del último, el precio cambia).
+ *
+ *   (1, 3) → "Período 1/3"     (2, null) → "Período 2"     (null, _) → null
+ */
+export function formatPeriodCycle(
+  index?: number | null,
+  cycle?: number | null,
+): string | null {
+  if (!index || index < 1) return null;
+  return cycle && cycle > 0 ? `Período ${index}/${cycle}` : `Período ${index}`;
+}
+
+/** "Julio 2026 · Período 1/3" — cae a "Julio 2026" si no hay período cargado. */
+export function formatPeriodFull(
+  year: number,
+  month: number,
+  index?: number | null,
+  cycle?: number | null,
+): string {
+  const base = formatPeriod(year, month);
+  const suffix = formatPeriodCycle(index, cycle);
+  return suffix ? `${base} · ${suffix}` : base;
+}
+
+/**
+ * Ciclo por defecto al cargar un período por primera vez: la Ley de Alquileres
+ * y la práctica de mercado ajustan trimestralmente.
+ */
+export const DEFAULT_PERIOD_CYCLE = 3;
+
+/** Largos de ciclo ofrecidos como atajo en la UI (además de "otro"). */
+export const PERIOD_CYCLE_PRESETS = [3, 4, 6, 12] as const;
+
+/** Tope duro del ciclo — espejo del CHECK `owner_settlements_period_cycle_valid`. */
+export const MAX_PERIOD_CYCLE = 36;
+
+/** Tope de la nota — espejo del CHECK `owner_settlements_period_note_len`. */
+export const MAX_PERIOD_NOTE_LENGTH = 160;
+
+/**
+ * Período que corresponde `steps` meses después de `index`. Al pasar el último
+ * del ciclo vuelve a 1, porque ahí se aplica el ajuste por IPC y arranca un
+ * ciclo nuevo.
+ *
+ * `steps` importa: si el propietario no tuvo liquidación en agosto, la de
+ * septiembre no es la que sigue a julio sino la de dos meses después.
+ * Sin ciclo cargado no hay vuelta posible, así que sólo suma.
+ */
+export function nextPeriodInCycle(
+  index: number,
+  cycle: number | null,
+  steps = 1,
+): number {
+  const jump = Math.max(1, Math.trunc(steps));
+  if (!cycle || cycle < 1) return index + jump;
+  // 0-based para que el módulo cierre el ciclo, y de vuelta a 1-based.
+  return ((index - 1 + jump) % cycle) + 1;
+}
+
+/**
  * Número de liquidación legible y determinístico: LIQ-2026-05-AB12CD.
  * Mismo criterio que el comprobante de Caja (REC-…) para consistencia.
  */

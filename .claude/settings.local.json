@@ -266,7 +266,12 @@
       "Bash(rg -n \"members\" src/components/tickets/*.tsx)",
       "Bash(rg -n \"TicketMember\" src/components/tickets/*.tsx src/lib/**/*.ts)",
       "Bash(rg -n \"export function getInitials|export function formatTimeAgo|export function formatDate\" src/lib/format.ts src/lib/*.ts)",
-      "Bash(echo \"=== LINT EXIT: $? ===\")"
+      "Bash(echo \"=== LINT EXIT: $? ===\")",
+      "Bash(npx vercel *)",
+      "Bash(npx vitest *)",
+      "Bash(RUN_DB_TESTS=1 npx vitest run src/lib/channels/__tests__/pipeline-db.test.ts)",
+      "Bash(npx playwright *)",
+      "Bash(pkill -f \"next-server\")"
     ]
   },
   "enableAllProjectMcpServers": true,

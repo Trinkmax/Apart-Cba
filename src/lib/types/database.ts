@@ -661,6 +661,17 @@ export interface OwnerSettlement {
   owner_id: string;
   period_year: number;
   period_month: number;
+  /**
+   * Posición del mes liquidado dentro del ciclo de ajuste por IPC (1-based).
+   * Los alquileres se actualizan cada N meses; el propietario necesita saber
+   * si este pago es el 1º, 2º o 3º del ciclo. `null` = sin período cargado.
+   * Ver migración 046.
+   */
+  period_index: number | null;
+  /** Meses que dura el ciclo de ajuste (3 = trimestral). `null` → "Período N". */
+  period_cycle: number | null;
+  /** Aclaración corta opcional del período, impresa en el documento (≤160). */
+  period_note: string | null;
   status: SettlementStatus;
   currency: string;
   gross_revenue: number;

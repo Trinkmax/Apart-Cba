@@ -47,15 +47,25 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
             <div className="text-base sm:text-lg font-semibold">
               {model.periodLabel}
             </div>
-            <div
-              className="inline-flex items-center gap-1.5 text-[11px] font-medium mt-1 px-2 py-0.5 rounded-full"
-              style={{ backgroundColor: "oklch(1 0 0 / 0.16)" }}
-            >
-              <span
-                className="size-1.5 rounded-full"
-                style={{ backgroundColor: model.statusColor }}
-              />
-              {model.statusLabel}
+            <div className="flex items-center justify-end gap-1.5 flex-wrap mt-1">
+              {model.periodCycleLabel && (
+                <span
+                  className="inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full"
+                  style={{ backgroundColor: "oklch(1 0 0 / 0.22)" }}
+                >
+                  {model.periodCycleLabel}
+                </span>
+              )}
+              <div
+                className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full"
+                style={{ backgroundColor: "oklch(1 0 0 / 0.16)" }}
+              >
+                <span
+                  className="size-1.5 rounded-full"
+                  style={{ backgroundColor: model.statusColor }}
+                />
+                {model.statusLabel}
+              </div>
             </div>
           </div>
         </div>
@@ -63,17 +73,34 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
 
       {/* Datos */}
       <dl className="grid grid-cols-2 gap-px bg-border">
-        {[
-          ["Propietario", model.owner.full_name],
-          ["Período", model.periodLabel],
-        ].map(([k, v]) => (
-          <div key={k} className="bg-card px-4 py-3">
-            <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              {k}
-            </dt>
-            <dd className="text-sm font-medium mt-0.5 truncate">{v}</dd>
-          </div>
-        ))}
+        <div className="bg-card px-4 py-3 min-w-0">
+          <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Propietario
+          </dt>
+          <dd className="text-sm font-medium mt-0.5 truncate">
+            {model.owner.full_name}
+          </dd>
+        </div>
+        <div className="bg-card px-4 py-3 min-w-0">
+          <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Período
+          </dt>
+          <dd className="text-sm font-medium mt-0.5 truncate">
+            {model.periodLabel}
+          </dd>
+          {model.periodCycleLabel && (
+            <dd className="mt-1">
+              <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                {model.periodCycleLabel}
+              </span>
+            </dd>
+          )}
+          {model.periodNote && (
+            <dd className="text-[11px] text-muted-foreground mt-1 leading-snug">
+              {model.periodNote}
+            </dd>
+          )}
+        </div>
       </dl>
 
       {/* KPIs */}

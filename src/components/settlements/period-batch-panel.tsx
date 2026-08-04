@@ -26,7 +26,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { generateSettlementsForPeriod } from "@/lib/actions/settlements";
-import { MONTHS, SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
+import {
+  MONTHS,
+  SETTLEMENT_STATUS_META,
+  formatPeriodCycle,
+} from "@/lib/settlements/labels";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -35,6 +39,9 @@ type PeriodSettlement = {
   status: string;
   net_payable: number;
   currency: string;
+  /** Período del ciclo de ajuste por IPC (migración 046). */
+  period_index?: number | null;
+  period_cycle?: number | null;
 };
 
 type Row = {
@@ -278,6 +285,16 @@ export function PeriodBatchPanel({
                 <TableRow key={st ? st.id : `${d.owner.id}-none-${i}`} className="text-sm">
                   <TableCell className="font-medium">
                     {d.owner.full_name}
+                    {(() => {
+                      const cycleLabel = st
+                        ? formatPeriodCycle(st.period_index, st.period_cycle)
+                        : null;
+                      return cycleLabel ? (
+                        <span className="ml-2 inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary align-middle">
+                          {cycleLabel}
+                        </span>
+                      ) : null;
+                    })()}
                   </TableCell>
                   <TableCell className="text-center tabular-nums text-muted-foreground">
                     {d.units}
