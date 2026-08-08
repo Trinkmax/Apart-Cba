@@ -180,9 +180,9 @@ export function TopBar({
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
-            <Link href="/dashboard/configuracion/organizacion" className="cursor-pointer">
+            <Link href="/dashboard/configuracion" className="cursor-pointer">
               <Building2 size={14} />
-              Configuración de organización
+              Configuración
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />

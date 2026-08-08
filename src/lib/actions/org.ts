@@ -305,7 +305,9 @@ export async function removeOrganizationLogo(): Promise<void> {
 // ════════════════════════════════════════════════════════════════════════
 
 const orgIdentitySchema = z.object({
-  name: z.string().min(2).max(120),
+  // El nombre comercial se edita en updateOrganizationProfile (mismo módulo de
+  // Configuración). Acá es opcional para que el form de contacto no lo pise.
+  name: z.string().min(2).max(120).optional(),
   description: z.string().max(2000).optional().nullable(),
   address: z.string().max(500).optional().nullable(),
   contact_phone: z.string().max(40).optional().nullable(),
@@ -327,7 +329,7 @@ export async function updateOrgIdentity(
   const { error } = await admin
     .from("organizations")
     .update({
-      name: parsed.data.name,
+      ...(parsed.data.name ? { name: parsed.data.name } : {}),
       description: parsed.data.description ?? null,
       address: parsed.data.address ?? null,
       contact_phone: parsed.data.contact_phone ?? null,
@@ -336,7 +338,7 @@ export async function updateOrgIdentity(
     .eq("id", organization.id);
   if (error) return { ok: false, error: error.message };
 
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion");
   revalidatePath("/dashboard", "layout");
   return { ok: true };
 }
@@ -398,7 +400,7 @@ export async function uploadOrgLogo(
     .eq("id", organization.id);
   if (updateError) return { ok: false, error: updateError.message };
 
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion");
   revalidatePath("/dashboard", "layout");
   return { ok: true, url: publicUrl };
 }
@@ -419,7 +421,7 @@ export async function deleteOrgLogo(): Promise<{ ok: true } | { ok: false; error
   }
   await admin.from("organizations").update({ logo_url: null }).eq("id", organization.id);
 
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion");
   revalidatePath("/dashboard", "layout");
   return { ok: true };
 }
@@ -506,7 +508,7 @@ export async function createOrgDomain(
     .eq("id", organization.id);
   if (updateError) return { ok: false, error: updateError.message };
 
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion/comunicaciones");
   return { ok: true, dns_records: dnsRecords };
 }
 
@@ -540,7 +542,7 @@ export async function verifyOrgDomain(): Promise<
       .update({ email_domain_verified_at: new Date().toISOString() })
       .eq("id", organization.id);
   }
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion/comunicaciones");
   return { ok: true, verified };
 }
 
@@ -577,7 +579,7 @@ export async function deleteOrgDomain(): Promise<{ ok: true } | { ok: false; err
     })
     .eq("id", organization.id);
 
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion/comunicaciones");
   return { ok: true };
 }
 
@@ -633,6 +635,6 @@ export async function updateOrgTemplate(
     .eq("id", parsed.data.id);
   if (updateError) return { ok: false, error: updateError.message };
 
-  revalidatePath("/dashboard/configuracion/organizacion");
+  revalidatePath("/dashboard/configuracion/comunicaciones");
   return { ok: true };
 }

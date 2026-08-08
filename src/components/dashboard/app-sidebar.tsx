@@ -13,11 +13,9 @@ import {
   Wallet,
   FileText,
   Cable,
-  Boxes,
   ListTodo,
   Settings,
   ShieldCheck,
-  MessageSquareText,
   ScrollText,
   Inbox,
 } from "lucide-react";
@@ -54,12 +52,6 @@ interface NavGroup {
 
 const NAV: NavGroup[] = [
   {
-    label: "Mensajería",
-    items: [
-      { label: "Mensajería", href: "/dashboard/crm", icon: MessageSquareText, resource: "crm_inbox" },
-    ],
-  },
-  {
     label: "Operación",
     items: [
       { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, resource: "*" },
@@ -77,7 +69,6 @@ const NAV: NavGroup[] = [
       { label: "Mantenimiento", href: "/dashboard/mantenimiento", icon: Wrench, resource: "tickets" },
       { label: "Limpieza", href: "/dashboard/limpieza", icon: Sparkles, resource: "cleaning" },
       { label: "Tareas", href: "/dashboard/tareas", icon: ListTodo, resource: "concierge" },
-      { label: "Inventario", href: "/dashboard/inventario", icon: Boxes, resource: "amenities" },
     ],
   },
   {
@@ -173,38 +164,15 @@ export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
         })}
 
         {isAdmin && (() => {
-          const onOrganizacion =
-            pathname === "/dashboard/configuracion/organizacion" ||
-            pathname.startsWith("/dashboard/configuracion/organizacion/");
-          const onEquipo =
-            pathname === "/dashboard/configuracion/equipo" ||
-            pathname.startsWith("/dashboard/configuracion/equipo/");
+          // Un único módulo de Configuración: identidad, equipo, colores,
+          // comunicaciones y mensajería viven dentro de /dashboard/configuracion.
           const onConfig =
-            !onOrganizacion &&
-            !onEquipo &&
-            (pathname === "/dashboard/configuracion" ||
-              pathname.startsWith("/dashboard/configuracion/"));
+            pathname === "/dashboard/configuracion" ||
+            pathname.startsWith("/dashboard/configuracion/");
           return (
             <SidebarGroup>
-              <SidebarGroupLabel>Configuración</SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild tooltip="Organización" isActive={onOrganizacion}>
-                      <Link href="/dashboard/configuracion/organizacion">
-                        <Building2 size={18} className={cn("transition-colors", onOrganizacion && "text-sidebar-primary")} />
-                        <span>Organización</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild tooltip="Equipo y permisos" isActive={onEquipo}>
-                      <Link href="/dashboard/configuracion/equipo">
-                        <Users size={18} className={cn("transition-colors", onEquipo && "text-sidebar-primary")} />
-                        <span>Equipo y permisos</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild tooltip="Configuración" isActive={onConfig}>
                       <Link href="/dashboard/configuracion">

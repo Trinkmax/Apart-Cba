@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Settings as SettingsIcon, Palette, MessageSquareText } from "lucide-react";
+import { Building2, Users, Palette, Mail, MessageSquareText } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type SettingsNavItem = {
@@ -13,8 +13,10 @@ type SettingsNavItem = {
 };
 
 const ITEMS: SettingsNavItem[] = [
-  { label: "General", href: "/dashboard/configuracion", icon: SettingsIcon, exact: true },
+  { label: "Organización", href: "/dashboard/configuracion", icon: Building2, exact: true },
+  { label: "Equipo y permisos", href: "/dashboard/configuracion/equipo", icon: Users },
   { label: "Colores", href: "/dashboard/configuracion/colores", icon: Palette },
+  { label: "Comunicaciones", href: "/dashboard/configuracion/comunicaciones", icon: Mail },
   { label: "Mensajería", href: "/dashboard/configuracion/mensajeria", icon: MessageSquareText },
 ];
 

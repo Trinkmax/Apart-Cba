@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { UserPlus, Users } from "lucide-react";
+import { UserPlus } from "lucide-react";
 import { listTeamMembers } from "@/lib/actions/team";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { isAdminLevel } from "@/lib/permissions";
@@ -21,21 +21,20 @@ export default async function EquipoPage() {
   const members = await listTeamMembers();
 
   return (
-    <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-5xl mx-auto">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+    <section className="space-y-5">
+      <header className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Users className="size-5 text-primary" />
+          <h2 className="text-lg sm:text-xl font-semibold tracking-tight">
             Equipo y permisos
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          </h2>
+          <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             {members.length} {members.length === 1 ? "miembro" : "miembros"} en esta organización
           </p>
         </div>
         <InviteDialog>
           <Button className="gap-2"><UserPlus size={16} /> Invitar usuario</Button>
         </InviteDialog>
-      </div>
+      </header>
 
       <Card className="overflow-hidden">
         <div className="divide-y">
@@ -75,6 +74,6 @@ export default async function EquipoPage() {
           })}
         </div>
       </Card>
-    </div>
+    </section>
   );
 }

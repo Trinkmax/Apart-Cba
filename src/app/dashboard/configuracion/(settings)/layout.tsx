@@ -18,7 +18,7 @@ export default async function SettingsLayout({ children }: { children: React.Rea
           </h1>
         </header>
 
-        <div className="grid gap-6 md:grid-cols-[200px_1fr] md:gap-8">
+        <div className="grid gap-6 md:grid-cols-[210px_1fr] md:gap-8">
           <SettingsNav />
           <main className="min-w-0">{children}</main>
         </div>
