@@ -4,6 +4,7 @@ import { getCurrentOrg } from "@/lib/actions/org";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/dashboard/app-sidebar";
 import { TopBar } from "@/components/dashboard/top-bar";
+import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { BookingStatusColorsProvider } from "@/lib/booking-status-colors";
 
 export default async function DashboardLayout({
@@ -39,6 +40,9 @@ export default async function DashboardLayout({
             notifications={notifications}
             unreadCount={unreadCount}
           />
+          {organization.is_trial && organization.demo_data_seeded_at && (
+            <TrialBanner canPurge={role === "admin"} />
+          )}
           <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 safe-bottom">
             {children}
           </main>

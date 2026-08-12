@@ -166,6 +166,11 @@ export interface Organization {
   email_domain_dns_records: ResendDnsRecord[] | null;
   inbound_email_token: string;
   active: boolean;
+  /** La org nació de un alta self-serve desde la landing de rentOS. */
+  is_trial: boolean;
+  /** NOT NULL mientras conserve los datos de ejemplo del alta. NULL una vez vaciados. */
+  demo_data_seeded_at: string | null;
+  trial_expires_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -21,6 +21,8 @@ export default function robots(): MetadataRoute.Robots {
         "/ingresar",
         "/registrarse",
         "/reset-password",
+        // El alta de rentOS no aporta nada al índice y compite con la landing.
+        "/rentos/probar",
       ],
     },
     sitemap: `${base}/sitemap.xml`,

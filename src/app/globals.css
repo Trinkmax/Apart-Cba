@@ -1,7 +1,16 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-@custom-variant dark (&:is(.dark *));
+/*
+ * `dark:` aplica dentro de un `.dark`, salvo que haya un `.light` más cerca.
+ * La excepción hace posible una isla clara adentro de una página oscura: la
+ * superficie comercial (`src/app/(marketing)`) se fija en claro con la clase
+ * `light` aunque el usuario tenga el panel en oscuro, y sin este `:not` los
+ * componentes compartidos igual pintarían sus variantes `dark:`.
+ * En el resto de la app no cambia nada: cuando `<html>` está en dark no hay
+ * ningún `.light` en el camino, y cuando está en light el `dark:` no aplicaba.
+ */
+@custom-variant dark (&:is(.dark *):not(:is(.light, .light *)));
 
 @theme inline {
   --color-background: var(--background);
@@ -59,7 +68,10 @@
 }
 
 /* ─────────── Tema claro (default) — sage hospitality, marca Apart Cba ─────────── */
-:root {
+/* `.light` es el espejo de `.dark`: permite forzar el tema claro en un subárbol
+   (lo usa el route group (marketing)) sin depender de la clase de <html>. */
+:root,
+.light {
   --radius: 0.75rem;
 
   --background: oklch(0.99 0.005 145);

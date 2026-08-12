@@ -20,6 +20,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: "daily",
       priority: 0.9,
     },
+    // Landing comercial de rentOS (el PMS). No es parte del marketplace, pero
+    // vive en el mismo dominio y sí queremos que indexe.
+    {
+      url: `${base}/rentos`,
+      changeFrequency: "weekly",
+      priority: 0.9,
+    },
   ];
 
   try {
