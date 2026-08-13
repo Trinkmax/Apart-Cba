@@ -47,7 +47,12 @@ export function Reveal({
     const io = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting) {
+          // `entry.boundingClientRect.top < 0` = el bloque quedó ARRIBA del
+          // viewport. Pasa al recargar con la página ya scrolleada o al entrar
+          // con un #hash: el observer se engancha cuando ese contenido ya pasó,
+          // nunca intersecta y sin esto se quedaba en opacity 0 para siempre
+          // (un hueco blanco en el medio de la página).
+          if (entry.isIntersecting || entry.boundingClientRect.top < 0) {
             entry.target.setAttribute("data-reveal", "in");
             if (once) io.unobserve(entry.target);
           } else if (!once) {

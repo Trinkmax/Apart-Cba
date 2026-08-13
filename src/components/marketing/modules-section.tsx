@@ -1,131 +1,66 @@
-import {
-  Cable,
-  CalendarDays,
-  FileText,
-  MessageSquare,
-  ScrollText,
-  Sparkles,
-  Wallet,
-} from "lucide-react";
-import { Reveal } from "@/components/marketplace/reveal";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
 import { BOOKING_BAR_STYLE } from "@/components/units/pms/pms-constants";
 import { OtaLogo } from "@/components/marketing/ota-logo";
+import { ModulesCarousel, type ModuleSlide } from "@/components/marketing/modules-carousel";
+import { MODULE_PHOTOS } from "@/lib/marketing/module-photos";
 import { cn } from "@/lib/utils";
 
 /**
- * Los seis módulos del panel, en una grilla de 3x2 sin celdas vacías.
+ * Sección de módulos. Server Component: arma los slides; el carrusel en sí es
+ * cliente porque necesita el scroll y los indicadores.
  *
- * Cada tarjeta lleva una muestra chica de datos reales del producto. El
- * calendario NO se dibuja acá: ya está arriba, con el componente que replica la
- * grilla del PMS. Repetirlo en chiquito daba una versión desfigurada de algo que
- * el visitante acaba de ver bien.
+ * Cada slide combina las dos cosas que hay que decir: la foto muestra la escena
+ * de la que habla el módulo (el cobro, la limpieza, la liquidación con el dueño)
+ * y la muestra de datos de abajo prueba qué hace el sistema con eso.
  */
 
-export function ModulesBento() {
-  return (
-    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-      <Cell
-        icon={CalendarDays}
-        title="Calendario"
-        body="Arrastrás una reserva para cambiarle la fecha o pasarla de departamento. Antes de soltarla te muestra qué toca: solapamientos, la limpieza agendada y el saldo del huésped."
-        tint="from-emerald-500/[0.07]"
-        delay={0}
-      >
-        <StatusLegend />
-      </Cell>
+const SLIDES: ModuleSlide[] = [
+  {
+    key: "calendario",
+    title: "Calendario",
+    image: MODULE_PHOTOS.calendario,
+    body: "Arrastrás una reserva para cambiarle la fecha o pasarla de departamento. Antes de soltarla te muestra qué toca: solapamientos, la limpieza agendada y el saldo del huésped.",
+    sample: <StatusLegend />,
+  },
+  {
+    key: "canales",
+    title: "Canales de venta",
+    image: MODULE_PHOTOS.canales,
+    body: "Airbnb y Booking sincronizados por iCal, más las confirmaciones que reenviás por mail.",
+    sample: <ChannelsSample />,
+  },
+  {
+    key: "caja",
+    title: "Caja",
+    image: MODULE_PHOTOS.caja,
+    body: "Ingresos y gastos por cuenta y por moneda, cada uno atado a su reserva, su ticket o su liquidación.",
+    sample: <CashSample />,
+  },
+  {
+    key: "liquidaciones",
+    title: "Liquidaciones",
+    image: MODULE_PHOTOS.liquidaciones,
+    body: "El detalle mensual de cada propietario, listo para mandar en PDF, Excel o link.",
+    sample: <SettlementSample />,
+  },
+  {
+    key: "servicio",
+    title: "Limpieza y mantenimiento",
+    image: MODULE_PHOTOS.servicio,
+    body: "Tareas asignadas al equipo, con fotos cargadas desde el celular del que las hace.",
+    sample: <TasksSample />,
+  },
+  {
+    key: "parte",
+    title: "Parte diario",
+    image: MODULE_PHOTOS.parte,
+    body: "El resumen de entradas, salidas y pendientes del día, listo cada noche.",
+    sample: <ReportSample />,
+  },
+];
 
-      <Cell
-        icon={Cable}
-        title="Canales de venta"
-        body="Airbnb y Booking sincronizados por iCal, más las confirmaciones que reenviás por mail."
-        tint="from-rose-500/[0.07]"
-        delay={60}
-      >
-        <ChannelsSample />
-      </Cell>
-
-      <Cell
-        icon={Wallet}
-        title="Caja"
-        body="Ingresos y gastos por cuenta y por moneda, cada uno atado a su reserva, su ticket o su liquidación."
-        tint="from-teal-500/[0.06]"
-        delay={120}
-      >
-        <CashSample />
-      </Cell>
-
-      <Cell
-        icon={FileText}
-        title="Liquidaciones"
-        body="El detalle mensual de cada propietario, en PDF, Excel o link."
-        delay={180}
-      >
-        <SettlementSample />
-      </Cell>
-
-      <Cell
-        icon={Sparkles}
-        title="Limpieza y mantenimiento"
-        body="Tareas asignadas, con fotos desde el celular del que las hace."
-        delay={240}
-      >
-        <TasksSample />
-      </Cell>
-
-      <Cell
-        icon={ScrollText}
-        title="Parte diario"
-        body="El resumen de entradas, salidas y pendientes, listo cada noche."
-        delay={300}
-      >
-        <ReportSample />
-      </Cell>
-    </div>
-  );
-}
-
-function Cell({
-  icon: Icon,
-  title,
-  body,
-  children,
-  tint,
-  delay,
-}: {
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  title: string;
-  body: string;
-  children: React.ReactNode;
-  tint?: string;
-  delay: number;
-}) {
-  return (
-    <Reveal as="article" delay={delay}>
-      <Card className="group relative h-full gap-0 overflow-hidden p-5 transition-colors duration-200 hover:border-foreground/20">
-        {tint && (
-          <div
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-0 bg-gradient-to-br to-transparent",
-              tint
-            )}
-          />
-        )}
-        <div className="relative flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
-            <Icon size={16} />
-          </span>
-          <h3 className="font-semibold tracking-tight">{title}</h3>
-        </div>
-        <p className="relative mt-2.5 text-sm leading-relaxed text-muted-foreground">{body}</p>
-        {/* La muestra se ancla abajo: las tarjetas de una fila comparten alto y
-            el aire queda entre el texto y el dato, no colgando al final. */}
-        <div className="relative mt-auto pt-6">{children}</div>
-      </Card>
-    </Reveal>
-  );
+export function ModulesSection() {
+  return <ModulesCarousel slides={SLIDES} />;
 }
 
 // ─────────────────────────── Muestras de datos ───────────────────────────
@@ -177,11 +112,6 @@ function ChannelsSample() {
         <OtaLogo brand="booking" size={18} />
         <span className="text-[13px] font-medium">Booking.com</span>
         <span className="ml-auto text-xs text-muted-foreground">9 unidades</span>
-      </SampleSurface>
-      <SampleSurface className="flex items-center gap-2.5 px-3 py-2.5">
-        <MessageSquare size={18} className="shrink-0 text-primary" />
-        <span className="text-[13px] font-medium">Reserva directa</span>
-        <span className="ml-auto text-xs text-muted-foreground">web y WhatsApp</span>
       </SampleSurface>
     </div>
   );

@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { MarketingHeader } from "@/components/marketing/marketing-header";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { PmsPreview } from "@/components/marketing/pms-preview";
-import { ModulesBento } from "@/components/marketing/modules-bento";
+import { ModulesSection } from "@/components/marketing/modules-section";
 import { SettlementShowcase } from "@/components/marketing/settlement-showcase";
 import { ChannelsFlow } from "@/components/marketing/channels-flow";
 import { TrialForm } from "@/components/marketing/trial-form";
@@ -110,7 +110,7 @@ export default function RentosLandingPage() {
             </Reveal>
 
             <div className="mt-10">
-              <ModulesBento />
+              <ModulesSection />
             </div>
           </div>
         </section>

@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { Reveal } from "@/components/marketplace/reveal";
+import { StatementPreview } from "@/components/marketing/statement-preview";
 import { SettlementStatement } from "@/components/settlements/settlement-statement";
 import {
   buildStatementModel,
@@ -200,8 +201,10 @@ export function SettlementShowcase() {
         </ul>
       </Reveal>
 
-      <Reveal delay={120} className="mt-12">
-        <SettlementStatement model={model} />
+      <Reveal delay={120} className="mt-10 md:mt-12">
+        <StatementPreview>
+          <SettlementStatement model={model} />
+        </StatementPreview>
       </Reveal>
     </div>
   );
