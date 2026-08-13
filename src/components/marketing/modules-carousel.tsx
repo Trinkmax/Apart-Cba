@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,8 +22,12 @@ export type ModuleSlide = {
   key: string;
   title: string;
   body: string;
-  /** Escena que representa al módulo (ver `lib/marketing/module-photos.ts`). */
-  image: { url: string; alt: string };
+  /**
+   * La imagen de la tarjeta: la foto de la escena que representa al módulo o,
+   * en Calendario, la grilla del panel. La arma `modules-section.tsx`; acá sólo
+   * se monta dentro del marco 16/10 con el degradé y el título encima.
+   */
+  media: React.ReactNode;
   sample: React.ReactNode;
 };
 
@@ -94,17 +97,14 @@ export function ModulesCarousel({ slides }: { slides: ModuleSlide[] }) {
           >
             <Card className="h-full gap-0 overflow-hidden p-0">
               <div className="relative aspect-[16/10] w-full overflow-hidden bg-secondary">
-                <Image
-                  src={slide.image.url}
-                  alt={slide.image.alt}
-                  fill
-                  sizes="(max-width: 768px) 84vw, (max-width: 1024px) 50vw, 33vw"
-                  loading={i === 0 ? "eager" : "lazy"}
-                  className="object-cover"
-                />
+                {slide.media}
+                {/* El degradé es una banda al pie, no una capa sobre toda la
+                    imagen: alcanza para sostener el título en blanco y deja
+                    limpia la foto —y sobre todo la grilla del Calendario, que es
+                    clara y se apagaba entera. */}
                 <div
                   aria-hidden
-                  className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-black/5"
+                  className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/85 via-black/35 to-transparent"
                 />
                 <h3 className="absolute bottom-3 left-4 right-4 text-[17px] font-semibold text-white drop-shadow-sm">
                   {slide.title}

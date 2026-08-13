@@ -1,59 +1,65 @@
+import Image from "next/image";
 import { Badge } from "@/components/ui/badge";
 import { BOOKING_BAR_STYLE } from "@/components/units/pms/pms-constants";
 import { OtaLogo } from "@/components/marketing/ota-logo";
+import { CalendarVisual } from "@/components/marketing/calendar-visual";
 import { ModulesCarousel, type ModuleSlide } from "@/components/marketing/modules-carousel";
-import { MODULE_PHOTOS } from "@/lib/marketing/module-photos";
+import { MODULE_PHOTOS, type ModulePhoto } from "@/lib/marketing/module-photos";
 import { cn } from "@/lib/utils";
 
 /**
  * Sección de módulos. Server Component: arma los slides; el carrusel en sí es
  * cliente porque necesita el scroll y los indicadores.
  *
- * Cada slide combina las dos cosas que hay que decir: la foto muestra la escena
- * de la que habla el módulo (el cobro, la limpieza, la liquidación con el dueño)
- * y la muestra de datos de abajo prueba qué hace el sistema con eso.
+ * Cada slide combina las dos cosas que hay que decir: arriba, la escena de la
+ * que habla el módulo (el cobro, la limpieza, la liquidación con el dueño) y
+ * abajo, una muestra de datos que prueba qué hace el sistema con eso.
+ *
+ * Calendario es la excepción: en vez de una foto va la grilla misma del panel
+ * (`CalendarVisual`), que es la pantalla que vende el producto. La leyenda de
+ * estados que lleva abajo sirve justo para leerla.
  */
 
 const SLIDES: ModuleSlide[] = [
   {
     key: "calendario",
     title: "Calendario",
-    image: MODULE_PHOTOS.calendario,
+    media: <CalendarVisual />,
     body: "Arrastrás una reserva para cambiarle la fecha o pasarla de departamento. Antes de soltarla te muestra qué toca: solapamientos, la limpieza agendada y el saldo del huésped.",
     sample: <StatusLegend />,
   },
   {
     key: "canales",
     title: "Canales de venta",
-    image: MODULE_PHOTOS.canales,
+    media: <Photo photo={MODULE_PHOTOS.canales} />,
     body: "Airbnb y Booking sincronizados por iCal, más las confirmaciones que reenviás por mail.",
     sample: <ChannelsSample />,
   },
   {
     key: "caja",
     title: "Caja",
-    image: MODULE_PHOTOS.caja,
+    media: <Photo photo={MODULE_PHOTOS.caja} />,
     body: "Ingresos y gastos por cuenta y por moneda, cada uno atado a su reserva, su ticket o su liquidación.",
     sample: <CashSample />,
   },
   {
     key: "liquidaciones",
     title: "Liquidaciones",
-    image: MODULE_PHOTOS.liquidaciones,
+    media: <Photo photo={MODULE_PHOTOS.liquidaciones} />,
     body: "El detalle mensual de cada propietario, listo para mandar en PDF, Excel o link.",
     sample: <SettlementSample />,
   },
   {
     key: "servicio",
     title: "Limpieza y mantenimiento",
-    image: MODULE_PHOTOS.servicio,
+    media: <Photo photo={MODULE_PHOTOS.servicio} />,
     body: "Tareas asignadas al equipo, con fotos cargadas desde el celular del que las hace.",
     sample: <TasksSample />,
   },
   {
     key: "parte",
     title: "Parte diario",
-    image: MODULE_PHOTOS.parte,
+    media: <Photo photo={MODULE_PHOTOS.parte} />,
     body: "El resumen de entradas, salidas y pendientes del día, listo cada noche.",
     sample: <ReportSample />,
   },
@@ -61,6 +67,18 @@ const SLIDES: ModuleSlide[] = [
 
 export function ModulesSection() {
   return <ModulesCarousel slides={SLIDES} />;
+}
+
+function Photo({ photo }: { photo: ModulePhoto }) {
+  return (
+    <Image
+      src={photo.url}
+      alt={photo.alt}
+      fill
+      sizes="(max-width: 768px) 84vw, (max-width: 1024px) 50vw, 33vw"
+      className="object-cover"
+    />
+  );
 }
 
 // ─────────────────────────── Muestras de datos ───────────────────────────

@@ -21,12 +21,11 @@ const BASE = `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/m
 
 export type ModulePhoto = { url: string; alt: string };
 
+/**
+ * Calendario no está acá: esa tarjeta muestra la grilla del panel
+ * (`components/marketing/calendar-visual.tsx`), no una foto.
+ */
 export const MODULE_PHOTOS = {
-  // pexels 6170652
-  calendario: {
-    url: `${BASE}/calendario.jpg`,
-    alt: "Anotando las fechas de las reservas en un calendario",
-  },
   // unsplash X7n9AVM71Z8 (licencia libre)
   canales: {
     url: `${BASE}/canales.jpg`,
