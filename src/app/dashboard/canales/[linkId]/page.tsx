@@ -138,13 +138,17 @@ function ReservationRow({ r }: { r: ChannelReservationRow }) {
   const stateLabel =
     r.external_status === "cancelled"
       ? { text: "Cancelada", cls: "text-muted-foreground" }
-      : r.missing_since
-        ? { text: "Verificando cancelación", cls: "text-amber-700 dark:text-amber-400" }
-        : !r.booking_id
-          ? { text: "Sin proyectar (revisar)", cls: "text-rose-700 dark:text-rose-400" }
-          : Object.keys(r.guest ?? {}).length === 0
-            ? { text: "Esperando datos de la OTA", cls: "text-sky-700 dark:text-sky-400" }
-            : { text: "Completa", cls: "text-emerald-700 dark:text-emerald-400" };
+      : r.external_status === "ignored"
+        ? { text: "Liberada por el equipo", cls: "text-muted-foreground" }
+        : r.missing_since
+          ? { text: "Verificando cancelación", cls: "text-amber-700 dark:text-amber-400" }
+          : !r.booking_id
+            ? { text: "Sin proyectar (revisar)", cls: "text-rose-700 dark:text-rose-400" }
+            : r.is_block
+              ? { text: "Ocupación sin datos de reserva", cls: "text-slate-600 dark:text-slate-300" }
+              : Object.keys(r.guest ?? {}).length === 0
+                ? { text: "Esperando datos de la OTA", cls: "text-sky-700 dark:text-sky-400" }
+                : { text: "Completa", cls: "text-emerald-700 dark:text-emerald-400" };
   return (
     <li className="py-2.5 first:pt-0 last:pb-0 flex items-center gap-3 text-sm">
       <span className="font-mono text-xs text-muted-foreground w-32 truncate shrink-0">

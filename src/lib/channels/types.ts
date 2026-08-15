@@ -102,16 +102,28 @@ export interface ChannelReservationRow {
   unit_id: string | null;
   channel: Channel;
   booking_id: string | null;
-  external_status: "active" | "cancelled";
+  /**
+   * active    → vigente en la OTA
+   * cancelled → la OTA la sacó del calendario
+   * ignored   → el operador la liberó a mano desde el PMS. NO se re-proyecta
+   *             aunque el VEVENT siga vivo en el feed (decisión humana, no un
+   *             hecho de la OTA). Solo un email de reserva real la reactiva.
+   */
+  external_status: "active" | "cancelled" | "ignored";
   check_in: string | null;
   check_out: string | null;
   ical_uid: string | null;
   confirmation_code: string | null;
+  /** Ocupación sin datos de reserva — ver ReservationEvent.isBlock. */
+  is_block: boolean;
   guest: { name?: string; email?: string; phone?: string; phone_raw?: string };
   amounts: { total?: number; currency?: string };
   missing_since: string | null;
   missing_runs: number;
   last_seen_at: string | null;
+  ignored_at: string | null;
+  ignored_by: string | null;
+  ignored_reason: string | null;
   created_at: string;
   updated_at: string;
 }

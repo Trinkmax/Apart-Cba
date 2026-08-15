@@ -18,6 +18,7 @@ import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { GuestMessageCard } from "@/components/bookings/guest-message-card";
 import { BookingChannelStatus } from "@/components/bookings/booking-channel-status";
+import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
@@ -88,7 +89,11 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           </p>
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
-          <BookingActions booking={b} role={role} canEditBooking={canEditBooking} canViewMoney={canViewMoney} />
+          {/* Un bloqueo no se opera como una reserva: sin check-in / check-out.
+              El panel de abajo tiene las acciones que sí aplican. */}
+          {!b.is_block && (
+            <BookingActions booking={b} role={role} canEditBooking={canEditBooking} canViewMoney={canViewMoney} />
+          )}
           {canEditBooking && (
             <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
               <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
@@ -96,6 +101,15 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           )}
         </div>
       </div>
+
+      {b.is_block && (
+        <ChannelBlockPanel
+          booking={b}
+          unitCode={b.unit.code}
+          unitName={b.unit.name}
+          variant="card"
+        />
+      )}
 
       <div className={canViewMoney ? "grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-5 md:gap-6" : "grid grid-cols-1 gap-4 sm:gap-5 md:gap-6"}>
         <Card className={canViewMoney ? "p-4 sm:p-5 lg:col-span-2 space-y-4 sm:space-y-5" : "p-4 sm:p-5 space-y-4 sm:space-y-5"}>

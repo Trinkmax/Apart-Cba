@@ -41,6 +41,14 @@ const SUCCESS_INTERVAL_MIN = 5;
 const MAX_BACKOFF_MIN = 60;
 const MISSING_RUNS_TO_CANCEL = 3;
 const MISSING_MIN_WINDOW_MS = 30 * 60 * 1000;
+// Fuera del horizonte publicado (o con el feed vacío) la ausencia es mucho
+// menos concluyente: puede ser la OTA recortando su ventana de calendario. Ahí
+// pedimos MUCHA más evidencia — pero nunca "jamás". Excluir esos casos del
+// barrido, como se hacía antes, dejaba bloqueos fantasma imposibles de sacar:
+// el evento más lejano del feed ES el horizonte, así que al desaparecer siempre
+// queda "más allá del horizonte" y nunca se cancelaba.
+const MISSING_RUNS_TO_CANCEL_WEAK = 12;
+const MISSING_MIN_WINDOW_WEAK_MS = 6 * 60 * 60 * 1000;
 
 export interface DispatchSummary {
   runId: string | null;
@@ -283,12 +291,21 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
       .in("id", staleSeenIds);
   }
 
-  // desapariciones — SOLO con lectura completa y no anómala
+  // desapariciones. Un feed vacío teniendo reservas activas sigue siendo
+  // sospechoso (glitch típico de la OTA), pero ya no cancela el barrido: pasa
+  // por la vía lenta (12 lecturas / 6 h). Saltearlo del todo era una trampa —
+  // una conexión cuyo único evento era un bloqueo quedaba bloqueada para
+  // siempre, porque al sacar ese bloqueo el feed queda vacío por definición.
   const anomalousEmpty =
     events.length === 0 && known.some((r) => r.external_status === "active");
-  if (!anomalousEmpty) {
-    result.cancelled += await handleDisappearances(admin, link, known, seenUids, outcome.horizon ?? null);
-  }
+  result.cancelled += await handleDisappearances(
+    admin,
+    link,
+    known,
+    seenUids,
+    outcome.horizon ?? null,
+    events.length === 0,
+  );
 
   await markLinkSuccess(admin, link, {
     events: events.length,
@@ -303,10 +320,16 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
 /**
  * Cancelación defensiva por desaparición del VEVENT:
  *   - advertencia desde la primera ausencia
- *   - cancela recién con ≥3 lecturas completas donde falte Y ≥30 min entre la
- *     primera y la última
- *   - solo reservas futuras observadas antes, dentro del horizonte del feed
- *   - feeds vacíos/anómalos nunca llegan acá (guard del caller)
+ *   - vía normal (dentro del horizonte del feed): cancela con ≥3 lecturas
+ *     completas donde falte Y ≥30 min entre la primera y la última
+ *   - vía lenta (más allá del horizonte, o feed vacío): ≥12 lecturas Y ≥6 h.
+ *     La ausencia ahí es ambigua — la OTA puede haber recortado su ventana de
+ *     calendario — pero tiene que converger igual: si nunca cancelamos, el
+ *     bloqueo queda pegado para siempre y el operador no tiene forma de sacarlo.
+ *   - reservas observadas antes y todavía vigentes. Las reservas ya empezadas
+ *     no se barren (el huésped está adentro); los bloqueos sí, porque no tienen
+ *     huésped ni plata y un bloqueo pegado sobre fechas de hoy es justamente el
+ *     caso que rompe la operación.
  */
 export async function handleDisappearances(
   admin: AdminClient,
@@ -314,6 +337,7 @@ export async function handleDisappearances(
   known: ChannelReservationRow[],
   seenUids: Set<string>,
   horizon: string | null,
+  feedEmpty = false,
 ): Promise<number> {
   const today = new Date().toISOString().slice(0, 10);
   let cancelled = 0;
@@ -325,16 +349,23 @@ export async function handleDisappearances(
       !seenUids.has(r.ical_uid) &&
       r.last_seen_at !== null && // observada previamente
       r.check_in !== null &&
-      r.check_in >= today && // solo futuras
-      (horizon === null || (r.check_out !== null && r.check_out <= horizon)), // dentro del horizonte
+      r.check_out !== null &&
+      (r.check_in >= today || (r.is_block && r.check_out > today)),
   );
 
   for (const r of candidates) {
+    // "Más allá del horizonte" = el feed no publica tan lejos, así que su
+    // silencio no prueba nada. Ojo: el evento MÁS lejano define el horizonte,
+    // por lo que al desaparecer siempre cae acá — de ahí la vía lenta.
+    const beyondHorizon = feedEmpty || horizon === null || r.check_out! > horizon;
+    const runsNeeded = beyondHorizon ? MISSING_RUNS_TO_CANCEL_WEAK : MISSING_RUNS_TO_CANCEL;
+    const windowNeeded = beyondHorizon ? MISSING_MIN_WINDOW_WEAK_MS : MISSING_MIN_WINDOW_MS;
+
     const runs = r.missing_runs + 1;
     const missingSince = r.missing_since ?? new Date().toISOString();
-    const windowElapsed = Date.now() - Date.parse(missingSince) >= MISSING_MIN_WINDOW_MS;
+    const windowElapsed = Date.now() - Date.parse(missingSince) >= windowNeeded;
 
-    if (runs >= MISSING_RUNS_TO_CANCEL && windowElapsed && r.missing_since) {
+    if (runs >= runsNeeded && windowElapsed && r.missing_since) {
       // confirmado: cancelar
       let bookingCancelled = false;
       if (r.booking_id) {
@@ -349,7 +380,7 @@ export async function handleDisappearances(
             .update({
               status: "cancelada",
               cancelled_at: new Date().toISOString(),
-              cancelled_reason: `Cancelada en ${channelLabel(link.channel)} (desapareció del calendario y se confirmó en 3 lecturas)`,
+              cancelled_reason: `Cancelada en ${channelLabel(link.channel)} (desapareció del calendario y se confirmó en ${runsNeeded} lecturas)`,
             })
             .eq("id", r.booking_id);
           bookingCancelled = !error;
@@ -415,7 +446,7 @@ export async function handleDisappearances(
           issueType: "cancellation_review",
           severity: "warning",
           title: `Una reserva de ${channelLabel(link.channel)} desapareció del calendario`,
-          detail: `La reserva ${r.confirmation_code ?? r.ical_uid} (${r.check_in} → ${r.check_out}) no apareció en la última lectura. Si desaparece en 3 lecturas durante 30+ minutos se cancelará automáticamente. Puede ser una cancelación de la OTA en curso.`,
+          detail: `La reserva ${r.confirmation_code ?? r.ical_uid} (${r.check_in} → ${r.check_out}) no apareció en la última lectura. Si sigue ausente en ${runsNeeded} lecturas durante ${beyondHorizon ? "6+ horas" : "30+ minutos"} se cancelará automáticamente. Puede ser una cancelación de la OTA en curso.`,
           dedupeKey: `missing:${r.id}`,
         });
       }

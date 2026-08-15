@@ -152,6 +152,7 @@ import {
 } from "./pms-constants";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
+import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
 import { DateMarkPopover } from "./date-mark-popover";
 
@@ -4051,21 +4052,34 @@ function BookingBar({
         sideOffset={6}
         collisionPadding={12}
       >
-        <PmsBookingPopoverContent
-          booking={booking}
-          unitCode={unitCode}
-          unitName={unitName}
-          accounts={accounts}
-          onEdit={onEdit}
-          canEditBooking={canEditThis}
-          canViewMoney={canViewMoney}
-          onStatusChanged={() => onOpenChange(false)}
-          onRequestDateChange={(field, iso) => {
-            onOpenChange(false);
-            onRequestDateChange(booking, field, iso);
-          }}
-          onCompleteGuest={onCompleteGuest}
-        />
+        {/* Un bloqueo no es una reserva: el popover de reserva le dejaba todo
+            deshabilitado y el operador se quedaba sin forma de sacarlo. */}
+        {isBlock ? (
+          <ChannelBlockPanel
+            booking={booking}
+            unitCode={unitCode}
+            unitName={unitName}
+            variant="popover"
+            onEdit={onEdit}
+            onDone={() => onOpenChange(false)}
+          />
+        ) : (
+          <PmsBookingPopoverContent
+            booking={booking}
+            unitCode={unitCode}
+            unitName={unitName}
+            accounts={accounts}
+            onEdit={onEdit}
+            canEditBooking={canEditThis}
+            canViewMoney={canViewMoney}
+            onStatusChanged={() => onOpenChange(false)}
+            onRequestDateChange={(field, iso) => {
+              onOpenChange(false);
+              onRequestDateChange(booking, field, iso);
+            }}
+            onCompleteGuest={onCompleteGuest}
+          />
+        )}
       </PopoverContent>
     </Popover>
   );

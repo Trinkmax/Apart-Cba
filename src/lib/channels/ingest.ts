@@ -178,6 +178,7 @@ async function processUpsert(
         check_out: ev.checkOut ?? null,
         ical_uid: ev.icalUid ?? null,
         confirmation_code: ev.confirmationCode ?? null,
+        is_block: ev.isBlock ?? false,
         guest: sanitizeGuest(ev),
         amounts: ev.amounts ?? {},
         last_seen_at: ev.transport === "ical" ? new Date().toISOString() : null,
@@ -220,6 +221,27 @@ async function processUpsert(
     patch.missing_since = null;
     patch.missing_runs = 0;
   }
+  // Ascenso a reserva real (llegó el email con datos): la block-ness vive acá
+  // además de en el booking, para que reprojectReservation() no la pierda.
+  if (reservation.is_block && ev.isBlock === false) patch.is_block = false;
+
+  // ── Bloqueo liberado a mano por el operador ───────────────────────────────
+  // 'ignored' es una decisión humana, no un hecho de la OTA: mientras el evento
+  // siga siendo un bloqueo (Booking sin datos de reserva) NO se re-proyecta,
+  // aunque el VEVENT siga vivo en el feed. Sin ruido: ni incidencia ni retry.
+  // Un email posterior (isBlock=false) demuestra que era una reserva real y
+  // reactiva la fila — esa es la única salida del estado 'ignored'.
+  if (reservation.external_status === "ignored") {
+    if (ev.isBlock !== false) {
+      return { outcome: "duplicate", reservationId: reservation.id };
+    }
+    patch.external_status = "active";
+    patch.ignored_at = null;
+    patch.ignored_by = null;
+    patch.ignored_reason = null;
+    patch.is_block = false;
+  }
+
   if (reservation.external_status === "cancelled" && ev.transport === "ical") {
     // reapareció en el feed después de cancelada → reactivar es riesgoso;
     // lo dejamos a revisión manual
@@ -267,6 +289,11 @@ export async function reprojectReservation(
     .maybeSingle();
   if (!data) return { outcome: "error", error: "reserva externa no encontrada" };
   const reservation = data as ChannelReservationRow;
+  // Un bloqueo liberado a mano no se re-proyecta: el reconciliador diario no
+  // puede revertir una decisión del operador.
+  if (reservation.external_status === "ignored") {
+    return { outcome: "duplicate", reservationId: reservation.id };
+  }
   const syntheticEv: ReservationEvent = {
     transport: "email",
     channel: reservation.channel,
@@ -278,7 +305,10 @@ export async function reprojectReservation(
     confirmationCode: reservation.confirmation_code ?? undefined,
     checkIn: reservation.check_in ?? undefined,
     checkOut: reservation.check_out ?? undefined,
-    isBlock: false,
+    // La block-ness es un atributo de la reserva externa, no del transporte:
+    // hardcodear false acá hacía renacer los bloqueos disfrazados de reserva
+    // real (con notificación "Nueva reserva de Booking" incluida).
+    isBlock: reservation.is_block,
     dedupeKey: `reproject:${reservationId}`,
   };
   return projectToBooking(admin, null, syntheticEv, reservation);
@@ -514,6 +544,15 @@ async function updateProjectedBooking(
     patch.is_block = false;
     patch.notes = `Importada de ${channelLabel(ev.channel)} (email + calendario)`;
     outcome = "updated";
+    // Un bloqueo que el operador liberó a mano y que la OTA termina
+    // confirmando como reserva real vuelve a la vida: lo descartó por
+    // ambigüedad, el dato nuevo la resuelve. Conserva el UUID; si las fechas
+    // ya se vendieron, el bookings_no_overlap de abajo abre la incidencia.
+    if (booking.status === "cancelada") {
+      patch.status = "confirmada";
+      patch.cancelled_at = null;
+      patch.cancelled_reason = null;
+    }
   }
 
   if (Object.keys(patch).length > 0) {

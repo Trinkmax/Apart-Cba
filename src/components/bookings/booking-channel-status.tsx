@@ -34,13 +34,15 @@ export async function BookingChannelStatus({
   const guestProvided = Object.keys(r.guest ?? {}).length > 0;
   const guestState = hasGuest
     ? null
-    : r.external_status === "cancelled"
+    : r.external_status === "cancelled" || r.external_status === "ignored"
       ? null
-      : guestProvided
-        ? "La OTA envió datos pero no se pudo crear el huésped — revisá Canales de venta."
-        : r.confirmation_code
-          ? "La OTA no proporcionó contacto del huésped."
-          : "Esperando datos de la OTA (llegan por email de la reserva).";
+      : r.is_block
+        ? null // el panel del bloqueo ya explica por qué no hay huésped
+        : guestProvided
+          ? "La OTA envió datos pero no se pudo crear el huésped — revisá Canales de venta."
+          : r.confirmation_code
+            ? "La OTA no proporcionó contacto del huésped."
+            : "Esperando datos de la OTA (llegan por email de la reserva).";
 
   const freshness = r.link?.last_success_at
     ? `Calendario revisado ${formatDistanceToNow(new Date(r.link.last_success_at), { addSuffix: true, locale: es })}`
