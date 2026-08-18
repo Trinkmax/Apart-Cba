@@ -37,12 +37,16 @@ export async function BookingChannelStatus({
     : r.external_status === "cancelled" || r.external_status === "ignored"
       ? null
       : r.is_block
-        ? null // el panel del bloqueo ya explica por qué no hay huésped
+        ? null // el panel del cierre ya explica por qué no hay huésped
         : guestProvided
           ? "La OTA envió datos pero no se pudo crear el huésped — revisá Canales de venta."
           : r.confirmation_code
             ? "La OTA no proporcionó contacto del huésped."
-            : "Esperando datos de la OTA (llegan por email de la reserva).";
+            : r.channel === "booking"
+              // El iCal de Booking no lleva ni el nombre: sólo fechas. Decirle
+              // "esperá" al operador es mandarlo a esperar algo que no llega.
+              ? "El calendario de Booking sólo trae las fechas. Cargá el huésped a mano, o reenviá el email de confirmación a la casilla de la organización."
+              : "Esperando datos de la OTA (llegan por email de la reserva).";
 
   const freshness = r.link?.last_success_at
     ? `Calendario revisado ${formatDistanceToNow(new Date(r.link.last_success_at), { addSuffix: true, locale: es })}`

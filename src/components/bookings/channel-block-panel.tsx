@@ -229,18 +229,20 @@ export function ChannelBlockPanel({
               Las fechas están disponibles para vender y este bloqueo no se
               vuelve a importar, aunque {sourceMeta.label} lo siga publicando.
             </>
-          ) : booking.source === "booking" ? (
-            <>
-              Booking exporta las reservas y los cierres manuales con la misma
-              etiqueta (<span className="font-mono">CLOSED</span>), así que no
-              podemos saber cuál de las dos es. Ocupamos la fecha para no
-              vender dos veces, pero no la contamos como reserva.
-            </>
           ) : (
             <>
-              Es una fecha que el canal informa como ocupada, sin datos de
-              reserva. Ocupa el calendario para no vender dos veces, pero no
-              cuenta como reserva.
+              Estas fechas están marcadas como cierre: ocupan el calendario para
+              no vender dos veces, pero no cuentan como reserva — quedan fuera de
+              la lista de reservas, del parte diario, de las limpiezas
+              automáticas, de los KPIs y de la liquidación al propietario.
+              {booking.source === "booking" && (
+                <>
+                  {" "}
+                  Booking exporta las reservas y los cierres con la misma
+                  etiqueta (<span className="font-mono">CLOSED</span>), así que
+                  esto lo definió alguien del equipo, no el canal.
+                </>
+              )}
             </>
           )}
         </p>

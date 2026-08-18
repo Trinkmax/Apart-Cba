@@ -275,7 +275,8 @@
       "Bash(montage thumbs/eFK9tq5aLT8.jpg thumbs/ZHy7aSfjmdE.jpg thumbs/XpwD0sAzfEY.jpg thumbs/5kcfL-iPJJw.jpg thumbs/fcjZXfpCFwg.jpg thumbs/cvWfWVHRBe0.jpg -tile 3x2 -geometry 300x200+5+5 sheet-limpieza.jpg)",
       "Bash(montage thumbs/NF_IefVueGs.jpg thumbs/h8uuH7h17Ds.jpg thumbs/3YSDTzqnVtQ.jpg thumbs/MhqUBTxQ3Hw.jpg thumbs/8k5j5z6ZYT4.jpg thumbs/XjJmfN7QJj4.jpg thumbs/HJckKnwCXxQ.jpg thumbs/5p-5kJAcdaE.jpg -tile 3x3 -geometry 300x200+5+5 sheet-caja-liq.jpg)",
       "Bash(montage thumbs/X7n9AVM71Z8.jpg thumbs/FnfvMLhbOvc.jpg thumbs/iW532knnBqw.jpg thumbs/7abDBJ9bylA.jpg thumbs/ZlsJBrvcjT4.jpg thumbs/63CxK14_WsU.jpg thumbs/aHTjLgZF51M.jpg thumbs/8LvHpjYA0IA.jpg thumbs/ODjT0FbSA5U.jpg thumbs/WZSZNcE2l7U.jpg thumbs/tm5EA1KQRTA.jpg -tile 3x4 -geometry 300x200+5+5 sheet-otros.jpg)",
-      "Bash(NODE_OPTIONS=\"--max-old-space-size=8192\" npm run dev)"
+      "Bash(NODE_OPTIONS=\"--max-old-space-size=8192\" npm run dev)",
+      "Read(//Users/ignaciobaldovino/.claude/**)"
     ]
   },
   "enableAllProjectMcpServers": true,

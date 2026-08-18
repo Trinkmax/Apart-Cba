@@ -225,14 +225,18 @@ async function processUpsert(
   // además de en el booking, para que reprojectReservation() no la pierda.
   if (reservation.is_block && ev.isBlock === false) patch.is_block = false;
 
-  // ── Bloqueo liberado a mano por el operador ───────────────────────────────
-  // 'ignored' es una decisión humana, no un hecho de la OTA: mientras el evento
-  // siga siendo un bloqueo (Booking sin datos de reserva) NO se re-proyecta,
-  // aunque el VEVENT siga vivo en el feed. Sin ruido: ni incidencia ni retry.
-  // Un email posterior (isBlock=false) demuestra que era una reserva real y
-  // reactiva la fila — esa es la única salida del estado 'ignored'.
+  // ── Fechas liberadas a mano por el operador ───────────────────────────────
+  // 'ignored' es una decisión humana, no un hecho de la OTA: por más que el
+  // VEVENT siga vivo en el feed, NO se re-proyecta. Sin ruido: ni incidencia ni
+  // retry. La única salida es un EMAIL de confirmación — dato nuevo que prueba
+  // que había una reserva real detrás.
+  //
+  // El discriminante es el transporte, no `isBlock`: desde que el iCal de
+  // Booking entra como reserva, `isBlock === false` es el default del feed y ya
+  // no prueba nada. Mirarlo acá resucitaría, en el siguiente poll, cada fecha
+  // que el operador liberó a mano.
   if (reservation.external_status === "ignored") {
-    if (ev.isBlock !== false) {
+    if (ev.transport !== "email" || ev.isBlock === true) {
       return { outcome: "duplicate", reservationId: reservation.id };
     }
     patch.external_status = "active";
@@ -412,7 +416,7 @@ async function projectToBooking(
       total_amount: 0,
       guests_count: 1,
       notes: isBlock
-        ? `Ocupación importada de ${channelLabel(ev.channel)} (sin datos de reserva)`
+        ? `Cierre de fechas en ${channelLabel(ev.channel)}`
         : `Importada de ${channelLabel(ev.channel)} (${ev.transport === "email" ? "email" : "calendario"})`,
     })
     .select("id")
@@ -539,16 +543,21 @@ async function updateProjectedBooking(
     }
   }
 
-  // ascenso: ocupación → reserva real (llegó el email con datos)
+  // ascenso: ocupación → reserva real (llegó el email con datos, o el operador
+  // ya no quiere bloqueos de este canal y el feed la vuelve a informar)
   if (booking.is_block && ev.isBlock === false) {
     patch.is_block = false;
-    patch.notes = `Importada de ${channelLabel(ev.channel)} (email + calendario)`;
+    patch.notes = `Importada de ${channelLabel(ev.channel)} (${ev.transport === "email" ? "email + calendario" : "calendario"})`;
     outcome = "updated";
-    // Un bloqueo que el operador liberó a mano y que la OTA termina
-    // confirmando como reserva real vuelve a la vida: lo descartó por
-    // ambigüedad, el dato nuevo la resuelve. Conserva el UUID; si las fechas
-    // ya se vendieron, el bookings_no_overlap de abajo abre la incidencia.
-    if (booking.status === "cancelada") {
+    // Un bloqueo que el operador canceló a mano y que después la OTA confirma
+    // por email como reserva real vuelve a la vida: lo descartó por ambigüedad,
+    // el dato nuevo la resuelve. Conserva el UUID; si las fechas ya se
+    // vendieron, el bookings_no_overlap de abajo abre la incidencia.
+    //
+    // Sólo por email: una lectura de iCal no aporta ningún dato nuevo (todo
+    // VEVENT de Booking llega igual), así que descancelar desde ahí sería
+    // pisar la decisión del operador con información que ya tenía.
+    if (booking.status === "cancelada" && ev.transport === "email") {
       patch.status = "confirmada";
       patch.cancelled_at = null;
       patch.cancelled_reason = null;

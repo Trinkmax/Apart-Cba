@@ -2,9 +2,11 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   CalendarCheck2,
+  CalendarOff,
   CalendarX2,
   Moon,
   Users,
@@ -51,6 +53,7 @@ import {
   getUnitReadinessForCheckIn,
   type UnitReadiness,
 } from "@/lib/actions/bookings";
+import { markChannelBookingAsBlock } from "@/lib/actions/blocks";
 import { CheckInReadinessDialog } from "@/components/bookings/check-in-readiness-dialog";
 import type {
   BookingWithRelations,
@@ -115,6 +118,36 @@ export function PmsBookingPopoverContent({
   const [paying, startPaying] = useTransition();
   const [readinessOpen, setReadinessOpen] = useState(false);
   const [readiness, setReadiness] = useState<UnitReadiness | null>(null);
+  const [markingBlock, startMarkBlock] = useTransition();
+  const router = useRouter();
+
+  // Booking.com exporta las reservas y los cierres manuales del extranet con la
+  // misma etiqueta ("CLOSED - Not available") y ningún otro dato, así que las
+  // importamos como reserva y el único que puede desambiguar es el operador.
+  // El atajo aparece sólo mientras la reserva sigue siendo "cruda": sin huésped
+  // cargado y sin un peso cobrado.
+  const canMarkAsBlock =
+    canEditBooking &&
+    !booking.is_block &&
+    !booking.guest_id &&
+    booking.source === "booking" &&
+    Number(booking.paid_amount ?? 0) === 0 &&
+    booking.status !== "cancelada" &&
+    booking.status !== "check_out";
+
+  function markAsBlock() {
+    startMarkBlock(async () => {
+      const result = await markChannelBookingAsBlock({ booking_id: booking.id });
+      if (!result.ok) {
+        toast.error("No se pudo marcar como cierre", { description: result.error });
+        return;
+      }
+      toast.success("Marcada como cierre de fechas", {
+        description: `${unitCode} sigue ocupado del ${formatDate(booking.check_in_date, "d MMM")} al ${formatDate(booking.check_out_date, "d MMM")}, pero ya no cuenta como reserva.`,
+      });
+      router.refresh();
+    });
+  }
 
   function performCheckIn() {
     startTransition(async () => {
@@ -289,6 +322,25 @@ export function PmsBookingPopoverContent({
               Completar datos del huésped
             </Button>
           )}
+
+        {/* Salida para el caso inverso: las fechas las cerró el operador en el
+            extranet de Booking y no son una reserva. Deliberadamente discreto
+            (el caso frecuente es el de arriba) pero siempre a la vista. */}
+        {canMarkAsBlock && (
+          <button
+            type="button"
+            disabled={markingBlock}
+            onClick={markAsBlock}
+            className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md py-1 text-[10.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+          >
+            {markingBlock ? (
+              <Loader2 size={11} className="animate-spin" />
+            ) : (
+              <CalendarOff size={11} />
+            )}
+            No es una reserva, es un cierre de fechas
+          </button>
+        )}
       </div>
 
       {/* Unit + stay */}

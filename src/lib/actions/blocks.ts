@@ -9,23 +9,23 @@ import { can } from "@/lib/permissions";
 import type { Channel } from "@/lib/channels/types";
 
 /**
- * Bloqueos de calendario importados de una OTA (`bookings.is_block = true`).
+ * Ocupación importada de una OTA que el PMS no puede clasificar solo.
  *
  * Por qué existe este archivo: Booking.com exporta TODO su calendario como
  * `SUMMARY:CLOSED - Not available` — no distingue una reserva real de un cierre
- * manual del anfitrión. El adapter no puede adivinar, así que las importa como
- * "ocupación" (`is_block`), que el PMS dibuja como una barra gris sin acciones.
- * Eso dejaba al operador sin salida: fechas ocupadas que no podía liberar por
- * ningún camino visible, ni siquiera cuando el bloqueo era un artefacto del
- * feed. Estas dos acciones resuelven la ambigüedad del lado humano:
+ * manual del anfitrión, y no manda ningún otro campo. El adapter no puede
+ * adivinar; importa todo como reserva (ver `ical-adapter.ts`: el error visible
+ * es preferible al invisible). Estas tres acciones son las que resuelven la
+ * ambigüedad del lado humano, que es el único lado donde se puede resolver:
  *
- *   releaseChannelBlock  → "esto no es una reserva, liberá las fechas"
- *   promoteBlockToBooking → "esto SÍ es una reserva, dejame cargarle los datos"
+ *   markChannelBookingAsBlock → "no es una reserva, es un cierre mío"
+ *   promoteBlockToBooking     → "sí es una reserva, dejame cargarle los datos"
+ *   releaseChannelBlock       → "ni una cosa ni la otra: liberá las fechas"
  *
- * Ninguna de las dos borra filas: liberar cancela el booking (lo saca del
- * calendario y libera la fecha, porque `bookings_no_overlap` sólo cubre
- * pendiente/confirmada/check_in) y marca la reserva externa como `ignored`,
- * que es lo que impide que el próximo sync la vuelva a proyectar.
+ * Ninguna borra filas: liberar cancela el booking (lo saca del calendario y
+ * libera la fecha, porque `bookings_no_overlap` sólo cubre pendiente/
+ * confirmada/check_in) y marca la reserva externa como `ignored`, que es lo que
+ * impide que el próximo sync la vuelva a proyectar.
  */
 
 const bookingIdSchema = z.object({
@@ -339,10 +339,100 @@ export async function promoteBlockToBooking(
   return { ok: true };
 }
 
+/**
+ * "Esto no es una reserva, es un cierre de fechas": el inverso exacto de
+ * `promoteBlockToBooking`.
+ *
+ * Booking.com exporta las reservas y los cierres manuales del extranet con la
+ * misma etiqueta (`CLOSED - Not available`, sin un solo campo que los separe).
+ * Como no se puede adivinar, el adapter importa todo como reserva — el error
+ * visible es preferible al invisible (ver `ical-adapter.ts`). Este es el camino
+ * de vuelta para el caso minoritario: el operador cerró esas fechas él mismo y
+ * no quiere que figuren como una reserva de $0 en listas, KPIs y liquidaciones.
+ *
+ * Las fechas siguen ocupadas — cerrar no es liberar. Para liberarlas está
+ * `releaseChannelBlock`.
+ */
+export async function markChannelBookingAsBlock(
+  input: z.infer<typeof bookingIdSchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update")) {
+    return { ok: false, error: "No tenés permiso para editar reservas" };
+  }
+  const parsed = bookingIdSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+
+  const admin = createAdminClient();
+  const { data: booking } = await admin
+    .from("bookings")
+    .select("id, is_block, source, status, paid_amount")
+    .eq("id", parsed.data.booking_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
+  if (!booking) return { ok: false, error: "No encontramos esa reserva" };
+  if (booking.is_block) return { ok: true }; // ya es un cierre
+  if (booking.source !== "booking" && booking.source !== "airbnb") {
+    return {
+      ok: false,
+      error: "Solo se puede hacer con reservas importadas de un canal de venta.",
+    };
+  }
+  // Un cierre queda fuera de caja y de liquidaciones: si ya se cobró algo, la
+  // plata desaparecería de los dos lados sin dejar rastro.
+  if (Number(booking.paid_amount ?? 0) > 0) {
+    return {
+      ok: false,
+      error:
+        "Esta reserva tiene cobros registrados. Anulá los pagos en Caja antes de marcarla como cierre.",
+    };
+  }
+
+  const label = booking.source === "airbnb" ? "Airbnb" : "Booking";
+  const reason = parsed.data.reason?.trim();
+  const { error } = await admin
+    .from("bookings")
+    .update({
+      is_block: true,
+      notes: reason
+        ? `Cierre de fechas en ${label} (marcado desde el calendario): ${reason}`
+        : `Cierre de fechas en ${label} (marcado desde el calendario)`,
+    })
+    .eq("id", booking.id)
+    .eq("organization_id", organization.id);
+  if (error) return { ok: false, error: error.message };
+
+  // La block-ness también vive en la reserva externa: sin esto el
+  // reconciliador diario la volvería a proyectar como reserva.
+  await admin
+    .from("channel_reservations")
+    .update({ is_block: true })
+    .eq("booking_id", booking.id)
+    .eq("organization_id", organization.id);
+
+  // Un cierre no genera limpieza. La que haya creado el cron mientras figuraba
+  // como reserva se cancela acá (el trigger de bookings sólo mira el status).
+  await admin
+    .from("cleaning_tasks")
+    .update({ status: "cancelada" })
+    .eq("organization_id", organization.id)
+    .eq("booking_out_id", booking.id)
+    .in("status", ["pendiente", "en_progreso"]);
+
+  revalidateBlockPaths(booking.id);
+  return { ok: true };
+}
+
 function revalidateBlockPaths(bookingId: string) {
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${bookingId}`);
+  revalidatePath("/dashboard/limpieza");
   revalidatePath("/dashboard/canales");
 }

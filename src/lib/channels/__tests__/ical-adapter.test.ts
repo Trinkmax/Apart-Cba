@@ -75,13 +75,18 @@ describe("parseIcs — Airbnb", () => {
 });
 
 describe("parseIcs — Booking.com", () => {
-  it("todo VEVENT ocupa calendario como isBlock=true (no distingue reserva de bloqueo)", () => {
+  // Booking manda el MISMO VEVENT para una reserva y para un cierre manual del
+  // extranet ("CLOSED - Not available", sin DESCRIPTION ni ningún otro campo).
+  // Como no se puede distinguir, entra como reserva: una reserva real tratada
+  // como bloqueo queda invisible (sin aviso, sin limpieza, sin liquidar); un
+  // cierre tratado como reserva se ve y se corrige en un click.
+  it("todo VEVENT entra como reserva (isBlock=false), no como bloqueo", () => {
     const events = parseIcs(
       ics([vevent("bkg1@booking.com", "20261001", "20261005", "CLOSED - Not available")]),
       "booking",
     );
     expect(events).toHaveLength(1);
-    expect(events[0].isBlock).toBe(true);
+    expect(events[0].isBlock).toBe(false);
   });
 });
 

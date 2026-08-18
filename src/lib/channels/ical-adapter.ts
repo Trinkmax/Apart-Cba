@@ -16,9 +16,24 @@ import type {
  *    la reserva con el código HM… y los últimos 4 dígitos del teléfono).
  *    "Airbnb (Not available)" = bloqueo/ventana — NO se importa (rota de UID
  *    todos los días y solo genera churn; decisión de negocio previa).
- *  - Booking.com: los VEVENT no distinguen reserva de bloqueo ("CLOSED - Not
- *    available" para ambos). Todos ocupan calendario → entran con isBlock=true
- *    y un email posterior los asciende a reserva real.
+ *  - Booking.com: los VEVENT no distinguen reserva de cierre manual ("CLOSED -
+ *    Not available" para ambos, sin DESCRIPTION ni nada más — verificado contra
+ *    los feeds de producción). Entran como RESERVA (isBlock=false) y el email de
+ *    confirmación, si llega, les agrega huésped e importe.
+ *
+ *    Por qué reserva y no bloqueo: la ambigüedad es inevitable, así que la
+ *    elección real es cuál de los dos errores preferimos. Importarlo como
+ *    bloqueo hace que una reserva real quede INVISIBLE — sin notificación, sin
+ *    aparecer en /dashboard/reservas, sin limpieza automática, fuera del parte
+ *    diario, de los KPIs y de la liquidación al propietario, y encima no
+ *    editable. Importarlo como reserva hace que un cierre manual aparezca como
+ *    una reserva de $0 sin huésped: visible, listada y a un click de volver a
+ *    ser un cierre ("No es una reserva" en el popover → markChannelBookingAsBlock).
+ *    El error visible es siempre preferible al invisible.
+ *
+ *    En producción el caso frecuente es el primero: de 10 filas de Booking, 9
+ *    eran reservas reales atrapadas como barras grises y CERO llegaron alguna
+ *    vez por email — el "ascenso por email" nunca se dispara solo.
  *
  * Un futuro proveedor oficial (p.ej. Channex) implementaría esta misma interfaz
  * (fetch → NormalizedIcalEvent[] / ReservationEvent[]) y el resto del pipeline
@@ -128,9 +143,10 @@ export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent
         phoneLast4,
       });
     } else {
-      // Booking.com: todo VEVENT ocupa calendario; sin datos no es una reserva
-      // "real" todavía (isBlock=true hasta que el email la enriquezca).
-      out.push({ uid, checkIn, checkOut, summary, isBlock: true });
+      // Booking.com: todo VEVENT ocupa calendario y entra como RESERVA, sin
+      // datos del huésped todavía (los trae el email de confirmación, si llega).
+      // Ver la nota de arriba sobre por qué acá no se puede adivinar más.
+      out.push({ uid, checkIn, checkOut, summary, isBlock: false });
     }
   }
   return out;

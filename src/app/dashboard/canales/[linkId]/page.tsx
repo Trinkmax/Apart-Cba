@@ -145,7 +145,7 @@ function ReservationRow({ r }: { r: ChannelReservationRow }) {
           : !r.booking_id
             ? { text: "Sin proyectar (revisar)", cls: "text-rose-700 dark:text-rose-400" }
             : r.is_block
-              ? { text: "Ocupación sin datos de reserva", cls: "text-slate-600 dark:text-slate-300" }
+              ? { text: "Cierre de fechas (no es reserva)", cls: "text-slate-600 dark:text-slate-300" }
               : Object.keys(r.guest ?? {}).length === 0
                 ? { text: "Esperando datos de la OTA", cls: "text-sky-700 dark:text-sky-400" }
                 : { text: "Completa", cls: "text-emerald-700 dark:text-emerald-400" };

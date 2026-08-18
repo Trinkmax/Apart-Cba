@@ -114,7 +114,7 @@ export interface ChannelReservationRow {
   check_out: string | null;
   ical_uid: string | null;
   confirmation_code: string | null;
-  /** Ocupación sin datos de reserva — ver ReservationEvent.isBlock. */
+  /** true = cierre de fechas, no una reserva — ver ReservationEvent.isBlock. */
   is_block: boolean;
   guest: { name?: string; email?: string; phone?: string; phone_raw?: string };
   amounts: { total?: number; currency?: string };
@@ -206,7 +206,8 @@ export interface NormalizedIcalEvent {
   checkIn: string;
   checkOut: string;
   summary: string;
-  /** true = bloqueo/ocupación sin datos de reserva. */
+  /** true = cierre de fechas, no una reserva. Hoy sólo lo marca el operador
+   *  desde el PMS: ningún feed lo informa (el de Booking no distingue). */
   isBlock: boolean;
   confirmationCode?: string;
   phoneLast4?: string;
