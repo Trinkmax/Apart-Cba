@@ -247,11 +247,16 @@ function classifyIgnorable(from: string, subject: string): string | null {
   if (/te envi[oó] un mensaje|nuevo mensaje|new message|hemos recibido este mensaje/i.test(s)) {
     return "mensaje";
   }
-  // Aviso "¡Nueva reserva!" de Booking: el email del partner no trae datos de
-  // la reserva (ni huésped ni fechas completas) — la reserva entra por iCal.
-  if (/@booking\.com/i.test(from) && /nueva reserva|new booking/i.test(s)) {
-    return "aviso_reserva_booking";
-  }
+  // OJO: el aviso "¡Nueva reserva!" de Booking NO se descarta acá.
+  // Se descartaba porque no trae la estadía completa (falta el check-out) y la
+  // reserva igual entra por iCal — pero su subject lleva el número de reserva
+  // junto a la fecha de llegada, y ese es el ÚNICO punto donde la identidad del
+  // email se cruza con la del iCal. Tirándolo, la reserva proyectada quedaba
+  // para siempre sin número y la cancelación por email —que llega con número y
+  // sin fechas— no encontraba nada que cancelar. Hoy el parser lo convierte en
+  // un evento `reference`; si algún día dejara de parsear, cae abajo como
+  // "email no reconocido", que es visible, en vez de desaparecer en silencio.
+
   // Marketing/engagement genérico de Airbnb
   if (/est[áa]n esperando tu|completa tu|aumenta tus reservas|consejos para/i.test(s)) {
     return "marketing";

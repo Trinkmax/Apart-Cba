@@ -20,22 +20,42 @@ export const bookingParser: InboundEmailParser = {
     const subject = email.subject ?? "";
     const body = htmlToText(email.html) || email.text || "";
 
-    // Cancelación — el subject de Booking trae el número: "¡Reserva
-    // cancelada! (6017858947, martes, 21 de julio de 2026)".
+    // Booking pone "(número, día, fecha de llegada)" en el subject de sus dos
+    // avisos de partner. Es poca información, pero es la ÚNICA que cruza la
+    // identidad del email (número de reserva) con la del iCal (fecha), así que
+    // se extrae siempre y se usa como fallback en las dos ramas.
+    const fromSubject = subjectRef(subject);
+
+    // Cancelación — "¡Reserva cancelada! (6017858947, martes, 21 de julio de 2026)"
     if (/cancel(led|lation|ada|aci[oó]n)/i.test(subject)) {
-      const id = reservationNumber(body) ?? subjectNumber(subject);
-      return id ? { type: "cancellation", source: "booking", externalId: id } : null;
+      const id = reservationNumber(body) ?? fromSubject?.code;
+      if (!id) return null;
+      return {
+        type: "cancellation",
+        source: "booking",
+        externalId: id,
+        checkIn: matchDate(body, "check.?in|llegada|arrival|entrada") ?? fromSubject?.checkIn,
+      };
     }
 
     // Reserva nueva
     if (!/new booking|confirmation|nueva reserva|reserva confirmada/i.test(subject)) return null;
 
-    const externalId = reservationNumber(body) ?? subjectNumber(subject);
+    const externalId = reservationNumber(body) ?? fromSubject?.code;
     if (!externalId) return null;
 
     const checkIn = matchDate(body, "check.?in|llegada|arrival|entrada");
     const checkOut = matchDate(body, "check.?out|salida|departure");
-    if (!checkIn || !checkOut) return null;
+    // El aviso "¡Nueva reserva!" del extranet no trae el detalle de la estadía:
+    // sin check-out no se puede proyectar una reserva. Pero número + llegada
+    // alcanzan para ponerle número a la que ya entró (o va a entrar) por iCal,
+    // y de ahí en más la cancelación la encuentra por referencia exacta.
+    if (!checkIn || !checkOut) {
+      const arrival = checkIn ?? fromSubject?.checkIn;
+      return arrival
+        ? { type: "reference", source: "booking", externalId, checkIn: arrival }
+        : null;
+    }
 
     const guestName =
       body
@@ -85,9 +105,19 @@ export const bookingParser: InboundEmailParser = {
  * exige que el número largo aparezca cerca de la palabra "reserva"/"booking"
  * para no agarrar un teléfono o un precio.
  */
-/** Número de reserva desde el subject: "¡Nueva reserva! (6542082162, sábado, ...)" */
-function subjectNumber(subject: string): string | null {
-  return subject.match(/\((\d{8,14})\s*[,)]/)?.[1] ?? null;
+/**
+ * Número de reserva + fecha de llegada desde el subject de Booking:
+ *   "Booking.com - ¡Nueva reserva! (5718506503, viernes, 4 de diciembre de 2026)"
+ *   "¡Reserva cancelada! (6017858947, martes, 21 de julio de 2026)"
+ * La fecha es opcional: los subjects en inglés a veces sólo traen el número.
+ */
+function subjectRef(subject: string): { code: string; checkIn?: string } | null {
+  const code = subject.match(/\((\d{8,14})\s*[,)]/)?.[1];
+  if (!code) return null;
+  // Tomamos la fecha del paréntesis, no de cualquier parte del subject.
+  const inParens = subject.match(/\(\d{8,14}\s*,([^)]*)\)/)?.[1] ?? "";
+  const raw = inParens.match(new RegExp(DATE))?.[1];
+  return { code, checkIn: normalizeDate(raw) ?? undefined };
 }
 
 function reservationNumber(body: string): string | null {

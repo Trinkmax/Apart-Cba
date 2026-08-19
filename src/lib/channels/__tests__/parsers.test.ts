@@ -82,6 +82,63 @@ describe("bookingParser", () => {
     expect(parsed.externalListingId).toBe("mi-departamento");
     expect(parsed.checkIn).toBe("2026-09-01");
   });
+
+  // Subjects reales del extranet (producción, ago/2026). El aviso "¡Nueva
+  // reserva!" no trae el detalle de la estadía, pero número y llegada viajan
+  // juntos en el subject — el único cruce posible con el iCal, que sólo tiene
+  // uid y fechas.
+  it("el aviso '¡Nueva reserva!' sin cuerpo cae en un evento de referencia", () => {
+    const parsed = bookingParser.parse({
+      from: "noreply@booking.com",
+      to: "ota-abc123@inbound.apartcba.com",
+      subject: "Booking.com - ¡Nueva reserva! (5718506503, viernes, 4 de diciembre de 2026)",
+      html: "",
+      text: "Tenés una reserva nueva. Entrá al extranet para ver el detalle.",
+    });
+    expect(parsed).not.toBeNull();
+    if (parsed?.type !== "reference") throw new Error("tipo inesperado");
+    expect(parsed.externalId).toBe("5718506503");
+    expect(parsed.checkIn).toBe("2026-12-04");
+  });
+
+  it("la cancelación extrae también la fecha de llegada del subject", () => {
+    const parsed = bookingParser.parse({
+      from: "noreply@booking.com",
+      to: "ota-abc123@inbound.apartcba.com",
+      subject: "¡Reserva cancelada! (6017858947, martes, 21 de julio de 2026)",
+      html: "",
+      text: "El huésped canceló su reserva.",
+    });
+    expect(parsed).not.toBeNull();
+    if (parsed?.type !== "cancellation") throw new Error("tipo inesperado");
+    expect(parsed.externalId).toBe("6017858947");
+    expect(parsed.checkIn).toBe("2026-07-21");
+  });
+
+  it("un email con la estadía completa sigue siendo reserva, no referencia", () => {
+    const parsed = bookingParser.parse({
+      from: "noreply@booking.com",
+      to: "ota-abc123@inbound.apartcba.com",
+      subject: "Booking.com - ¡Nueva reserva! (5718506503, viernes, 4 de diciembre de 2026)",
+      html: "",
+      text: ["Llegada: 4 de diciembre de 2026", "Salida: 7 de diciembre de 2026"].join("\n"),
+    });
+    if (parsed?.type !== "new_booking") throw new Error("tipo inesperado");
+    expect(parsed.checkIn).toBe("2026-12-04");
+    expect(parsed.checkOut).toBe("2026-12-07");
+  });
+
+  it("el día de la semana del subject no se confunde con la fecha", () => {
+    const parsed = bookingParser.parse({
+      from: "noreply@booking.com",
+      to: "ota-abc123@inbound.apartcba.com",
+      subject: "Booking.com - ¡Nueva reserva! (5908886743, sábado, 29 de agosto de 2026)",
+      html: "",
+      text: "sin detalle",
+    });
+    if (parsed?.type !== "reference") throw new Error("tipo inesperado");
+    expect(parsed.checkIn).toBe("2026-08-29");
+  });
 });
 
 describe("normalizeInboundEmail (adaptador email → ReservationEvent)", () => {
@@ -111,6 +168,24 @@ describe("normalizeInboundEmail (adaptador email → ReservationEvent)", () => {
     });
     expect(a.event?.dedupeKey).toBe(b.event?.dedupeKey);
     expect(a.contentHash).toBe(b.contentHash);
+  });
+
+  it("el aviso de Booking produce un evento reservation_reference", () => {
+    const n = normalizeInboundEmail({
+      organizationId: "org-1",
+      providerMessageId: "msg-777",
+      email: {
+        from: "noreply@booking.com",
+        to: "ota-abc123@inbound.apartcba.com",
+        subject: "Booking.com - ¡Nueva reserva! (6963230667, lunes, 9 de noviembre de 2026)",
+        html: "",
+        text: "sin detalle de la estadía",
+      },
+    });
+    expect(n.parserUsed).toBe("booking");
+    expect(n.event?.eventType).toBe("reservation_reference");
+    expect(n.event?.confirmationCode).toBe("6963230667");
+    expect(n.event?.checkIn).toBe("2026-11-09");
   });
 
   it("email irreconocible → sin evento, con hash para auditoría", () => {

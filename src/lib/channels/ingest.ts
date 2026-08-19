@@ -96,7 +96,9 @@ export async function processStoredEvent(
     result =
       ev.eventType === "reservation_cancelled"
         ? await processCancellation(admin, eventId, ev)
-        : await processUpsert(admin, eventId, ev);
+        : ev.eventType === "reservation_reference"
+          ? await processReference(admin, ev)
+          : await processUpsert(admin, eventId, ev);
   } catch (err) {
     result = { outcome: "error", error: (err as Error).message };
   }
@@ -275,7 +277,22 @@ async function processUpsert(
   }
 
   // ── 5. Proyección al booking (único punto que escribe bookings) ───────────
-  return projectToBooking(admin, eventId, ev, reservation);
+  const projected = await projectToBooking(admin, eventId, ev, reservation);
+
+  // ── 6. Número de reserva pendiente ────────────────────────────────────────
+  // El aviso por email suele llegar unos minutos ANTES que el iCal, así que
+  // acá es donde el número termina de pegarse a la reserva. Va después de la
+  // proyección para poder escribir también `bookings.external_id` y el ref.
+  // Nunca hace fallar la ingestión: es metadata, no disponibilidad.
+  if (ev.transport === "ical" && projected.outcome !== "error") {
+    try {
+      await applyPendingReference(admin, ev, reservation);
+    } catch (err) {
+      console.error("[channels/ingest] applyPendingReference falló", err);
+    }
+  }
+
+  return projected;
 }
 
 /**
@@ -607,6 +624,142 @@ async function updateProjectedBooking(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Referencia (aviso de la OTA que sólo aporta el número de reserva)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Le pone número de reserva a una reserva que entró por iCal.
+ *
+ * Existe por una asimetría de Booking.com: el iCal identifica cada reserva por
+ * `ical_uid` y NUNCA trae el número; los emails (aviso de reserva nueva y
+ * cancelación) traen el número y NUNCA el uid. Sin un cruce, las dos identidades
+ * son universos separados: la cancelación llegaba, no encontraba nada, abría una
+ * incidencia, y la reserva seguía vigente en el PMS hasta que el barrido del
+ * feed la diera por muerta (30 min a 6 h después, o nunca si ya había empezado).
+ *
+ * El cruce es `(número, fecha de llegada)`, que viajan juntos en el subject del
+ * aviso. La aplicación es determinista, nunca por aproximación: sólo si existe
+ * EXACTAMENTE UNA reserva vigente sin número que llegue ese día. Con dos
+ * candidatas no se elige ninguna.
+ */
+async function stampConfirmationCode(
+  admin: AdminClient,
+  input: { organizationId: string; channel: Channel; code: string; checkIn: string },
+): Promise<string | null> {
+  const value = normalizeRef(input.channel, input.code);
+
+  // Idempotencia: si el número ya está puesto, no hay nada que hacer.
+  const { data: taken } = await admin
+    .from("channel_reservations")
+    .select("id")
+    .eq("organization_id", input.organizationId)
+    .eq("channel", input.channel)
+    .eq("confirmation_code", value)
+    .limit(1)
+    .maybeSingle();
+  if (taken) return null;
+
+  const { data: candidates } = await admin
+    .from("channel_reservations")
+    .select("id, booking_id, link_id, ical_uid, check_in, check_out")
+    .eq("organization_id", input.organizationId)
+    .eq("channel", input.channel)
+    .eq("external_status", "active")
+    .eq("check_in", input.checkIn)
+    .is("confirmation_code", null);
+  const list = candidates ?? [];
+  if (list.length !== 1) return null;
+  const target = list[0];
+
+  const { error } = await admin
+    .from("channel_reservations")
+    .update({ confirmation_code: value })
+    .eq("id", target.id)
+    .is("confirmation_code", null); // guard contra carrera con otro procesador
+  if (error) return null;
+
+  if (target.booking_id) {
+    const { error: refErr } = await admin.from("booking_external_refs").insert({
+      organization_id: input.organizationId,
+      booking_id: target.booking_id,
+      channel: input.channel,
+      link_id: target.link_id,
+      ref_type: input.channel === "booking" ? "reservation_number" : "confirmation_code",
+      ref_value: value,
+    });
+    if (refErr && refErr.code !== "23505") {
+      console.error("[channels/ingest] ref insert falló", refErr.message);
+    }
+    // `external_id` se había llenado con el uid del iCal por no tener nada
+    // mejor; el número de reserva es el que el operador puede buscar en la OTA.
+    const { data: booking } = await admin
+      .from("bookings")
+      .select("id, external_id")
+      .eq("id", target.booking_id)
+      .maybeSingle();
+    if (booking && (!booking.external_id || booking.external_id === target.ical_uid)) {
+      await admin.from("bookings").update({ external_id: value }).eq("id", booking.id);
+    }
+  }
+
+  return target.id as string;
+}
+
+async function processReference(
+  admin: AdminClient,
+  ev: ReservationEvent,
+): Promise<IngestResult> {
+  if (!ev.confirmationCode || !ev.checkIn) return { outcome: "needs_review" };
+  const reservationId = await stampConfirmationCode(admin, {
+    organizationId: ev.organizationId,
+    channel: ev.channel,
+    code: ev.confirmationCode,
+    checkIn: ev.checkIn,
+  });
+  // El aviso llega ~5 min ANTES de que el iCal proyecte la reserva, así que
+  // "todavía no hay a quién ponerle el número" es el caso normal, no un fallo.
+  // El evento queda guardado y `processUpsert` lo levanta al crear la reserva
+  // (ver applyPendingReference). Sin incidencia: no hay nada que revisar.
+  return reservationId ? { outcome: "updated", reservationId } : { outcome: "duplicate" };
+}
+
+/**
+ * El lado iCal del cruce: al proyectar una reserva nueva sin número, busca un
+ * aviso ya recibido para esa misma llegada y se lo aplica. Es la mitad que hace
+ * que el orden de llegada no importe — y en la práctica es la que se usa, porque
+ * el email de Booking gana la carrera por unos minutos casi siempre.
+ */
+async function applyPendingReference(
+  admin: AdminClient,
+  ev: ReservationEvent,
+  reservation: ChannelReservationRow,
+): Promise<void> {
+  if (reservation.confirmation_code || !reservation.check_in) return;
+  const { data: events } = await admin
+    .from("channel_events")
+    .select("payload")
+    .eq("organization_id", ev.organizationId)
+    .eq("event_type", "reservation_reference")
+    .eq("payload->>channel", ev.channel)
+    .eq("payload->>check_in", reservation.check_in)
+    .order("created_at", { ascending: false })
+    .limit(2);
+  const codes = new Set(
+    (events ?? [])
+      .map((e) => (e.payload as Record<string, unknown>)?.confirmation_code)
+      .filter((c): c is string => typeof c === "string" && c.length > 0),
+  );
+  // Dos avisos distintos para la misma llegada = ambiguo: no adivinamos.
+  if (codes.size !== 1) return;
+  await stampConfirmationCode(admin, {
+    organizationId: ev.organizationId,
+    channel: ev.channel,
+    code: [...codes][0],
+    checkIn: reservation.check_in,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Cancelación (email con referencia exacta → inmediata)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -620,7 +773,7 @@ async function processCancellation(
   if (!ref) return { outcome: "needs_review" };
 
   // 1) reserva canónica
-  const reservation = await findReservation(admin, ev);
+  let reservation = await findReservation(admin, ev);
 
   // 2) referencia externa registrada
   let bookingId = reservation?.booking_id ?? null;
@@ -649,6 +802,38 @@ async function processCancellation(
     bookingId = legacy?.id ?? null;
   }
 
+  // 4) Por fecha de llegada — la salida para las reservas que entraron por iCal.
+  //    El iCal de Booking no lleva número de reserva y el email de cancelación
+  //    no lleva uid, así que los pasos 1-3 fallan siempre para esas reservas y
+  //    la cancelación moría en una incidencia mientras la reserva seguía
+  //    vigente. La fecha de llegada, que Booking sí pone en el subject, alcanza:
+  //    dos reservas no pueden empezar el mismo día en la misma unidad
+  //    (bookings_no_overlap) y entre unidades exigimos que haya UNA sola
+  //    candidata vigente. Con dos, no se cancela ninguna.
+  if (!bookingId && !reservation && ev.checkIn) {
+    const { data: candidates } = await admin
+      .from("channel_reservations")
+      .select("*")
+      .eq("organization_id", orgId)
+      .eq("channel", ev.channel)
+      .eq("external_status", "active")
+      .eq("check_in", ev.checkIn);
+    const list = (candidates ?? []) as ChannelReservationRow[];
+    if (list.length === 1) {
+      reservation = list[0];
+      bookingId = reservation.booking_id;
+      // De paso queda el número puesto: la próxima vez el match es exacto.
+      if (!reservation.confirmation_code && ev.confirmationCode) {
+        await stampConfirmationCode(admin, {
+          organizationId: orgId,
+          channel: ev.channel,
+          code: ev.confirmationCode,
+          checkIn: ev.checkIn,
+        });
+      }
+    }
+  }
+
   if (!bookingId && !reservation) {
     const issueId = await openIssue(admin, {
       organizationId: orgId,
@@ -656,7 +841,9 @@ async function processCancellation(
       issueType: "cancellation_review",
       severity: "warning",
       title: `Cancelación de ${channelLabel(ev.channel)} sin reserva local`,
-      detail: `Llegó una cancelación para la referencia ${ref} pero no existe una reserva local con esa referencia. Verificá si la reserva fue cargada con otro código.`,
+      detail: ev.checkIn
+        ? `Llegó una cancelación para la referencia ${ref} (llegada ${ev.checkIn}) pero no encontramos una sola reserva local que le corresponda. Verificá el estado real en la OTA.`
+        : `Llegó una cancelación para la referencia ${ref} pero no existe una reserva local con esa referencia. Verificá si la reserva fue cargada con otro código.`,
       dedupeKey: `cancel_unknown:${ev.channel}:${ref}`,
     });
     return { outcome: "needs_review", issueId };

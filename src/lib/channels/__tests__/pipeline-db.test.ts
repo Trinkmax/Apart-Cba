@@ -537,7 +537,11 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     ).toBe("cancelada");
   }, 90_000);
 
-  it("reserva fuera del horizonte del feed no entra al tracking de desaparición", async () => {
+  // Antes de la 050 este caso se EXCLUÍA del barrido, y por eso los bloqueos
+  // fantasma quedaban pegados para siempre: el evento más lejano del feed ES el
+  // horizonte, así que al desaparecer siempre cae "más allá". Hoy se sigue, pero
+  // con la vía lenta (12 lecturas / 6 h) en vez de las 3 lecturas / 30 min.
+  it("fuera del horizonte se sigue con la vía lenta, sin cancelar por una lectura", async () => {
     const { handleDisappearances } = await import("@/lib/channels/dispatch");
     const { data: linkRow } = await admin.from("channel_links").select("*").eq("id", link1).single();
     const { data: res } = await admin
@@ -560,10 +564,216 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     expect(cancelled).toBe(0);
     const { data: after } = await admin
       .from("channel_reservations")
-      .select("missing_runs, external_status")
+      .select("missing_runs, missing_since, external_status")
       .eq("id", res!.id)
       .single();
-    expect(after!.missing_runs).toBe(0);
+    // se empieza a contar…
+    expect(after!.missing_runs).toBe(1);
+    expect(after!.missing_since).not.toBeNull();
+    // …pero una sola ausencia no alcanza ni de lejos para cancelar
     expect(after!.external_status).toBe("active");
+
+    // ni siquiera con el umbral normal cumplido: fuera del horizonte hacen
+    // falta 12 lecturas Y 6 h.
+    await admin
+      .from("channel_reservations")
+      .update({
+        missing_runs: 3, // el umbral de la vía normal
+        missing_since: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+      })
+      .eq("id", res!.id);
+    const { data: reloaded } = await admin
+      .from("channel_reservations")
+      .select("*")
+      .eq("id", res!.id)
+      .single();
+    const again = await handleDisappearances(
+      admin,
+      linkRow!,
+      [reloaded!],
+      new Set(),
+      "2031-12-31",
+    );
+    expect(again).toBe(0);
+    const { data: still } = await admin
+      .from("channel_reservations")
+      .select("external_status")
+      .eq("id", res!.id)
+      .single();
+    expect(still!.external_status).toBe("active");
   }, 30_000);
+
+  // ── Cancelación de Booking: el circuito completo ──────────────────────────
+  // El iCal identifica por ical_uid y nunca trae número de reserva; el email de
+  // cancelación trae número y nunca uid. Sin cruce, la cancelación no encontraba
+  // nada y la reserva quedaba vigente en el PMS. Estos tres tests cubren las dos
+  // mitades del cruce y el fallback.
+
+  it("el aviso de Booking le pone el número a la reserva que entró por iCal", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+
+    // 1) el aviso llega PRIMERO (en producción gana por ~5 min): todavía no hay
+    //    a quién numerar, y eso no es un error.
+    const pre = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_reference",
+      organizationId: orgId,
+      confirmationCode: "9911223344",
+      checkIn: "2031-06-10",
+      dedupeKey: "test:booking:ref-early",
+    });
+    expect(pre.outcome).toBe("duplicate");
+
+    // 2) el iCal proyecta la reserva y levanta el aviso pendiente
+    const r = await ingestEvent(admin, {
+      transport: "ical",
+      channel: "booking",
+      eventType: "reservation_upsert",
+      organizationId: orgId,
+      linkId: link1,
+      unitId: unit1,
+      icalUid: "zzt-bkg-ref@booking.com",
+      checkIn: "2031-06-10",
+      checkOut: "2031-06-13",
+      isBlock: false,
+      dedupeKey: "test:booking:ical-ref",
+    });
+    expect(r.outcome).toBe("created");
+
+    const { data: res } = await admin
+      .from("channel_reservations")
+      .select("confirmation_code")
+      .eq("ical_uid", "zzt-bkg-ref@booking.com")
+      .single();
+    expect(res!.confirmation_code).toBe("9911223344");
+
+    // el número queda buscable y visible en la reserva
+    const { data: b } = await admin
+      .from("bookings")
+      .select("external_id")
+      .eq("id", r.bookingId!)
+      .single();
+    expect(b!.external_id).toBe("9911223344");
+    const { data: refs } = await admin
+      .from("booking_external_refs")
+      .select("ref_value")
+      .eq("booking_id", r.bookingId!)
+      .eq("ref_type", "reservation_number");
+    expect(refs).toHaveLength(1);
+  }, 60_000);
+
+  it("una cancelación de Booking por número cancela la reserva importada del iCal", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const { data: before } = await admin
+      .from("bookings")
+      .select("id, status")
+      .eq("external_id", "9911223344")
+      .single();
+    expect(before!.status).toBe("confirmada");
+
+    const c = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_cancelled",
+      organizationId: orgId,
+      confirmationCode: "9911223344",
+      checkIn: "2031-06-10",
+      dedupeKey: "test:booking:cancel-ref",
+    });
+    expect(c.outcome).toBe("cancelled");
+
+    const { data: after } = await admin
+      .from("bookings")
+      .select("status")
+      .eq("id", before!.id)
+      .single();
+    expect(after!.status).toBe("cancelada");
+  }, 60_000);
+
+  it("sin número previo, la cancelación encuentra la reserva por fecha de llegada", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const r = await ingestEvent(admin, {
+      transport: "ical",
+      channel: "booking",
+      eventType: "reservation_upsert",
+      organizationId: orgId,
+      linkId: link1,
+      unitId: unit1,
+      icalUid: "zzt-bkg-nodate@booking.com",
+      checkIn: "2031-07-05",
+      checkOut: "2031-07-08",
+      isBlock: false,
+      dedupeKey: "test:booking:ical-nodate",
+    });
+    expect(r.outcome).toBe("created");
+
+    // el número que trae el email NO existe en ninguna parte del PMS
+    const c = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_cancelled",
+      organizationId: orgId,
+      confirmationCode: "8877665544",
+      checkIn: "2031-07-05",
+      dedupeKey: "test:booking:cancel-bydate",
+    });
+    expect(c.outcome).toBe("cancelled");
+    expect(c.bookingId).toBe(r.bookingId);
+
+    const { data: after } = await admin
+      .from("bookings")
+      .select("status")
+      .eq("id", r.bookingId!)
+      .single();
+    expect(after!.status).toBe("cancelada");
+  }, 60_000);
+
+  it("con dos reservas que llegan el mismo día no se cancela ninguna a ciegas", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const a = await ingestEvent(admin, {
+      transport: "ical",
+      channel: "booking",
+      eventType: "reservation_upsert",
+      organizationId: orgId,
+      linkId: link1,
+      unitId: unit1,
+      icalUid: "zzt-bkg-dup-a@booking.com",
+      checkIn: "2031-08-01",
+      checkOut: "2031-08-03",
+      isBlock: false,
+      dedupeKey: "test:booking:dup-a",
+    });
+    const b = await ingestEvent(admin, {
+      transport: "ical",
+      channel: "booking",
+      eventType: "reservation_upsert",
+      organizationId: orgId,
+      linkId: link2,
+      unitId: unit2,
+      icalUid: "zzt-bkg-dup-b@booking.com",
+      checkIn: "2031-08-01",
+      checkOut: "2031-08-03",
+      isBlock: false,
+      dedupeKey: "test:booking:dup-b",
+    });
+    expect(a.outcome).toBe("created");
+    expect(b.outcome).toBe("created");
+
+    const c = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_cancelled",
+      organizationId: orgId,
+      confirmationCode: "7766554433",
+      checkIn: "2031-08-01",
+      dedupeKey: "test:booking:cancel-ambig",
+    });
+    expect(c.outcome).toBe("needs_review");
+
+    for (const id of [a.bookingId!, b.bookingId!]) {
+      const { data } = await admin.from("bookings").select("status").eq("id", id).single();
+      expect(data!.status).toBe("confirmada");
+    }
+  }, 60_000);
 });

@@ -17,6 +17,12 @@ export async function handleInboundEvent(
   if (event.type === "new_booking") {
     return handleNewBooking(admin, orgId, event);
   }
+  // `reference` sólo aporta el número de reserva de la OTA a una reserva que ya
+  // existe; eso lo resuelve el pipeline v2 (channels/ingest.ts::processReference),
+  // que es el único que tiene channel_reservations donde anotarlo.
+  if (event.type === "reference") {
+    return { action: "duplicate" };
+  }
   return handleCancellation(admin, orgId, event);
 }
 

@@ -654,7 +654,12 @@ export function reservationEventFromRow(row: {
   return {
     transport: (row.transport as "ical" | "email") ?? "ical",
     channel,
-    eventType: row.event_type === "reservation_cancelled" ? "reservation_cancelled" : "reservation_upsert",
+    eventType:
+      row.event_type === "reservation_cancelled"
+        ? "reservation_cancelled"
+        : row.event_type === "reservation_reference"
+          ? "reservation_reference"
+          : "reservation_upsert",
     organizationId: row.organization_id,
     linkId: (p.link_id as string) ?? undefined,
     unitId: (p.unit_id as string) ?? undefined,

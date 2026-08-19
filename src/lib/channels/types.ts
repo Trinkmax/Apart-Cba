@@ -20,7 +20,15 @@ export type ChannelEventStatus =
 export interface ReservationEvent {
   transport: ChannelTransport;
   channel: Channel;
-  eventType: "reservation_upsert" | "reservation_cancelled";
+  /**
+   * `reservation_reference` no crea ni cancela nada: sólo aporta el número de
+   * reserva de la OTA para una llegada conocida. Existe porque el aviso
+   * "¡Nueva reserva!" de Booking llega ~5 min ANTES que el iCal y es el único
+   * lugar donde el número y la fecha viajan juntos — sin él, una reserva
+   * proyectada por iCal nunca tiene número y la cancelación por email no la
+   * encuentra. Ver processReference en ingest.ts.
+   */
+  eventType: "reservation_upsert" | "reservation_cancelled" | "reservation_reference";
   organizationId: string;
   /** Conexión de origen — conocida para iCal, ausente para email. */
   linkId?: string;

@@ -55,6 +55,27 @@ export function normalizeInboundEmail(input: {
         eventType: "reservation_cancelled",
         organizationId: input.organizationId,
         confirmationCode: parsed.externalId,
+        // Sin fechas la cancelación sólo puede resolverse por número; con la
+        // llegada también alcanza para encontrar una reserva que entró por iCal.
+        checkIn: parsed.checkIn,
+        dedupeKey,
+        contentHash,
+      },
+    };
+  }
+
+  if (parsed.type === "reference") {
+    return {
+      parserUsed,
+      contentHash,
+      event: {
+        transport: "email",
+        channel: parsed.source,
+        eventType: "reservation_reference",
+        organizationId: input.organizationId,
+        confirmationCode: parsed.externalId,
+        checkIn: parsed.checkIn,
+        guest: parsed.guestName ? { name: parsed.guestName } : undefined,
         dedupeKey,
         contentHash,
       },
