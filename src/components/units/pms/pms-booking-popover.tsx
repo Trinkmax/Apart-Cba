@@ -54,6 +54,7 @@ import {
   type UnitReadiness,
 } from "@/lib/actions/bookings";
 import { markChannelBookingAsBlock } from "@/lib/actions/blocks";
+import { BookingStatusMenu } from "@/components/bookings/booking-status-menu";
 import { CheckInReadinessDialog } from "@/components/bookings/check-in-readiness-dialog";
 import type {
   BookingWithRelations,
@@ -266,15 +267,15 @@ export function PmsBookingPopoverContent({
         }}
       >
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span
-              className="size-2 rounded-full shadow-sm animate-pulse"
-              style={{ backgroundColor: statusMeta.color }}
-            />
-            <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: statusMeta.color }}>
-              {statusMeta.label}
-            </span>
-          </div>
+          {/* El estado es editable desde acá — incluye volver atrás. Sin esto
+              una reserva cancelada abría un popover sin una sola acción. */}
+          <BookingStatusMenu
+            bookingId={booking.id}
+            status={booking.status}
+            canEdit={canEditBooking}
+            variant="inline"
+            onChanged={(next) => onStatusChanged?.(next)}
+          />
           <Badge variant="outline" className="gap-1 text-[10px] font-normal">
             <span className="size-1.5 rounded-full" style={{ backgroundColor: sourceMeta.color }} />
             {sourceMeta.label}

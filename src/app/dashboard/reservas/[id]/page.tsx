@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { BookingFormDialog } from "@/components/bookings/booking-form-dialog";
+import { BookingStatusMenu } from "@/components/bookings/booking-status-menu";
 import { BookingActions } from "@/components/bookings/booking-actions";
 import { ExtensionHistory } from "@/components/bookings/extension-history";
 import { QuickPayCard } from "@/components/bookings/quick-pay-card";
@@ -19,7 +20,7 @@ import { BookingPaymentsSection } from "@/components/bookings/booking-payments-s
 import { GuestMessageCard } from "@/components/bookings/guest-message-card";
 import { BookingChannelStatus } from "@/components/bookings/booking-channel-status";
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
-import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
+import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
 
@@ -53,7 +54,6 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
       : Promise.resolve({}),
   ]);
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
-  const sm = BOOKING_STATUS_META[b.status];
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
 
@@ -73,10 +73,9 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Reserva</h1>
-            <Badge className="gap-1.5 font-normal" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
-              <span className="status-dot" style={{ backgroundColor: sm.color }} />
-              {sm.label}
-            </Badge>
+            {/* El estado se edita desde acá: es el único lugar donde se puede
+                volver atrás (des-cancelar, deshacer un check-out de más). */}
+            <BookingStatusMenu bookingId={b.id} status={b.status} canEdit={canEditBooking} />
             <Badge variant="outline" style={{ color: src.color, borderColor: src.color + "40" }}>
               {src.label}
             </Badge>

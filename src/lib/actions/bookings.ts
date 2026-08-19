@@ -21,6 +21,7 @@ import type {
   BookingStatus,
   CashMovement,
 } from "@/lib/types/database";
+import { BOOKING_STATUS_META } from "@/lib/constants";
 import {
   isGenericGuestName,
   normalizeEmail,
@@ -1374,15 +1375,41 @@ export async function changeBookingStatus(
   reason?: string,
   options?: { force_checkout?: boolean }
 ) {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
+  const admin = createAdminClient();
+
+  // Estado anterior: define qué permisos hacen falta y qué marcas hay que
+  // limpiar. Se lee antes de cualquier otra cosa porque "volver atrás" es una
+  // operación distinta de "avanzar", aunque el destino sea el mismo.
+  const { data: previous } = await admin
+    .from("bookings")
+    .select("status, internal_notes")
+    .eq("id", id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!previous) throw new Error("Reserva no encontrada");
+  const previousStatus = previous.status as BookingStatus;
+  if (previousStatus === newStatus) return; // idempotente
+
+  // Reactivar = sacarla de cancelada/no_show. Devuelve la reserva a caja,
+  // liquidaciones, KPIs, parte diario y limpieza automática, así que pesa lo
+  // mismo que cancelar y pide el mismo permiso.
+  const isReactivation = previousStatus === "cancelada" || previousStatus === "no_show";
+
   // Cancelar una reserva equivale a editarla — requiere bookings.update.
   // Los cambios operativos (check-in / check-out) los puede ejecutar cualquier
   // rol con `bookings.view` para no bloquear la operación diaria.
-  if (newStatus === "cancelada" && !can(role, "bookings", "update")) {
-    throw new Error("No tenés permisos para cancelar reservas");
+  if (
+    (newStatus === "cancelada" || newStatus === "no_show" || isReactivation) &&
+    !can(role, "bookings", "update")
+  ) {
+    throw new Error(
+      isReactivation
+        ? "No tenés permisos para reactivar reservas"
+        : "No tenés permisos para cancelar reservas",
+    );
   }
-  const admin = createAdminClient();
 
   // ── Bloqueo de check-out con saldo pendiente ──────────────────────────────
   // Regla de negocio: no se puede dar check_out sin antes haber cobrado todo.
@@ -1432,19 +1459,72 @@ export async function changeBookingStatus(
 
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "cancelada" && reason) update.cancelled_reason = reason;
-  if (newStatus === "check_in") update.checked_in_at = new Date().toISOString();
+
+  // Las marcas de tiempo tienen que quedar consistentes con el estado, no sólo
+  // avanzar. Si no se limpian, una reserva devuelta a "confirmada" sigue
+  // teniendo checked_out_at y aparece como check-out del día en el parte diario.
+  if (newStatus === "pendiente" || newStatus === "confirmada") {
+    update.checked_in_at = null;
+    update.checked_out_at = null;
+  }
+  if (newStatus === "check_in") {
+    update.checked_in_at = new Date().toISOString();
+    update.checked_out_at = null;
+  }
   if (newStatus === "check_out") update.checked_out_at = new Date().toISOString();
+  if (!(newStatus === "cancelada" || newStatus === "no_show")) {
+    update.cancelled_at = null;
+    update.cancelled_reason = null;
+  }
+
+  // Reactivar deja rastro: es un override manual sobre un estado que alguien
+  // (o la OTA) puso por algo. Sin esto no queda registro de quién la revivió.
+  if (isReactivation) {
+    const stamp = new Date().toISOString();
+    const note = `[${stamp}] Reserva reactivada a "${BOOKING_STATUS_META[newStatus].label}" desde "${BOOKING_STATUS_META[previousStatus].label}" por ${session.profile?.full_name ?? session.userId}.${reason ? ` Motivo: ${reason}` : ""}`;
+    update.internal_notes = previous.internal_notes
+      ? `${previous.internal_notes}\n${note}`
+      : note;
+  }
+
   const { error } = await admin
     .from("bookings")
     .update(update)
     .eq("id", id)
     .eq("organization_id", organization.id);
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Reactivar puede chocar: mientras estuvo cancelada las fechas quedaron
+    // libres y alguien pudo venderlas. El constraint sólo cubre
+    // pendiente/confirmada/check_in, así que el choque aparece justo acá.
+    if (error.message.includes("bookings_no_overlap")) {
+      throw new Error(
+        isReactivation
+          ? "No se puede reactivar: esas fechas ya están ocupadas por otra reserva en la misma unidad."
+          : "Esas fechas se superponen con otra reserva de la misma unidad.",
+      );
+    }
+    throw new Error(error.message);
+  }
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
+  // Un cambio de estado entra o saca la reserva de todo lo que filtra por
+  // status: plata, liquidación al propietario, operación del día y limpieza.
+  revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/liquidaciones");
+  revalidatePath("/dashboard/parte-diario");
+  revalidatePath("/dashboard/limpieza");
+  revalidatePath("/dashboard");
 
-  // CRM event publisher
+  // CRM event publisher.
+  //
+  // Una reactivación NO lo dispara: "booking.confirmed" es lo que engancha las
+  // automatizaciones que le escriben al huésped, y corregir el estado de una
+  // reserva en el PMS no es motivo para volver a mandarle una confirmación a
+  // alguien que quizás ya la recibió (o que canceló de verdad). Si el operador
+  // sí quiere avisarle, tiene el botón explícito "Reenviar confirmación".
   try {
     const { publishCrmEvent } = await import("@/lib/crm/events");
     const eventMap: Record<string, string> = {
@@ -1454,7 +1534,7 @@ export async function changeBookingStatus(
       cancelada: "booking.cancelled",
       no_show: "booking.cancelled",
     };
-    const eventType = eventMap[newStatus];
+    const eventType = isReactivation ? undefined : eventMap[newStatus];
     if (eventType) {
       const { data: bookingFull } = await admin
         .from("bookings")
