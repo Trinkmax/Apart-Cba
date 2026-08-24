@@ -2,9 +2,10 @@
 type AdminClient = import("@supabase/supabase-js").SupabaseClient<any, any, any>;
 import type { ParsedEvent, ParsedBookingEvent, ParsedCancellationEvent } from "./types";
 import { matchUnit, matchUnitByListingId, findOrCreateGuest } from "./matcher";
+import { openCancellationRequest } from "@/lib/channels/cancellation-requests";
 
 export interface HandleResult {
-  action: "created" | "cancelled" | "duplicate" | "error";
+  action: "created" | "cancelled" | "pending_review" | "duplicate" | "error";
   bookingId?: string;
   error?: string;
 }
@@ -169,33 +170,33 @@ async function handleCancellation(
     return { action: "duplicate", bookingId: booking.id };
   }
 
-  const { error } = await admin
-    .from("bookings")
-    .update({
-      status: "cancelada",
-      cancelled_at: new Date().toISOString(),
-      cancelled_reason: `Cancelación recibida por email de ${event.source}`,
-    })
-    .eq("id", booking.id);
-
-  if (error) {
-    return { action: "error", error: error.message };
-  }
+  // Ninguna reserva se cancela sola (migración 053). El email se parsea con
+  // heurísticas y el número de reserva puede señalar la fila equivocada: se
+  // propone, y una persona resuelve desde /dashboard/canales/cancelaciones.
+  await openCancellationRequest(admin, {
+    organizationId: orgId,
+    channel: event.source === "airbnb" ? "airbnb" : "booking",
+    bookingId: booking.id,
+    reasonCode: "ota_cancellation_email",
+    detail: `Llegó un email de ${event.source} informando la cancelación de la reserva ${event.externalId}.`,
+    evidence: { referencia: event.externalId, origen: "inbound_email_legacy" },
+  });
 
   await insertNotification(admin, {
     organization_id: orgId,
     type: "inbound_booking_cancelled",
     severity: "warning",
-    title: `Cancelación en ${event.source}`,
-    body: `La reserva ${event.externalId} (${booking.check_in_date} → ${booking.check_out_date}) fue cancelada en ${event.source}.`,
+    title: `Confirmá si se cancela una reserva de ${event.source}`,
+    body: `${event.source} avisó por email que se canceló la reserva ${event.externalId} (${booking.check_in_date} → ${booking.check_out_date}). Nadie la canceló todavía: decidí vos si se cancela o se mantiene.`,
     ref_type: "booking",
     ref_id: booking.id,
     target_role: "admin",
-    action_url: `/dashboard/reservas/${booking.id}`,
+    action_url: "/dashboard/canales/cancelaciones",
     dedup_key: `inbound_cancel:${event.source}:${event.externalId}`,
   });
 
-  return { action: "cancelled", bookingId: booking.id };
+  // La reserva NO se canceló: queda una propuesta esperando decisión humana.
+  return { action: "pending_review", bookingId: booking.id };
 }
 
 interface NotificationInsert {

@@ -1,4 +1,5 @@
 import { getSecret } from "@/lib/crm/encryption";
+import { openCancellationRequest } from "./cancellation-requests";
 import { fetchIcalFeed, toReservationEvent } from "./ical-adapter";
 import {
   channelLabel,
@@ -39,15 +40,16 @@ const FETCH_TIMEOUT_MS = 10_000;
 const TOTAL_BUDGET_MS = 45_000;
 const SUCCESS_INTERVAL_MIN = 5;
 const MAX_BACKOFF_MIN = 60;
-const MISSING_RUNS_TO_CANCEL = 3;
+// Cuánta evidencia juntamos antes de MOLESTAR a una persona con una decisión.
+// Ya no son umbrales de ejecución: nada se cancela al cumplirlos, sólo se abre
+// una propuesta. Por eso pueden ser generosos sin poner nada en riesgo.
+const MISSING_RUNS_TO_PROPOSE = 3;
 const MISSING_MIN_WINDOW_MS = 30 * 60 * 1000;
 // Fuera del horizonte publicado (o con el feed vacío) la ausencia es mucho
-// menos concluyente: puede ser la OTA recortando su ventana de calendario. Ahí
-// pedimos MUCHA más evidencia — pero nunca "jamás". Excluir esos casos del
-// barrido, como se hacía antes, dejaba bloqueos fantasma imposibles de sacar:
-// el evento más lejano del feed ES el horizonte, así que al desaparecer siempre
-// queda "más allá del horizonte" y nunca se cancelaba.
-const MISSING_RUNS_TO_CANCEL_WEAK = 12;
+// menos concluyente: puede ser la OTA recortando su ventana de calendario, o un
+// feed que vino vacío por error. Ahí pedimos MUCHA más evidencia antes de
+// preguntar, para no gastar la atención del operador en falsos positivos.
+const MISSING_RUNS_TO_PROPOSE_WEAK = 12;
 const MISSING_MIN_WINDOW_WEAK_MS = 6 * 60 * 60 * 1000;
 
 export interface DispatchSummary {
@@ -57,6 +59,8 @@ export interface DispatchSummary {
   imported: number;
   updated: number;
   cancelled: number;
+  /** Cancelaciones PROPUESTAS que esperan decisión humana. */
+  proposed: number;
   conflicts: number;
   errors: number;
   housekeeping?: Record<string, number>;
@@ -83,6 +87,7 @@ export async function runChannelDispatch(
     imported: 0,
     updated: 0,
     cancelled: 0,
+    proposed: 0,
     conflicts: 0,
     errors: 0,
   };
@@ -129,6 +134,7 @@ export async function runChannelDispatch(
         summary.imported += r.imported;
         summary.updated += r.updated;
         summary.cancelled += r.cancelled;
+        summary.proposed += r.proposed;
         summary.conflicts += r.conflicts;
         if (r.error) summary.errors++;
         if (r.imported > 0 || r.updated > 0) affectedOrgs.add(link.organization_id);
@@ -156,13 +162,22 @@ interface LinkSyncResult {
   imported: number;
   updated: number;
   cancelled: number;
+  /** Propuestas de cancelación abiertas para decisión humana. */
+  proposed: number;
   conflicts: number;
   skipped: number;
   error?: string;
 }
 
 async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkSyncResult> {
-  const result: LinkSyncResult = { imported: 0, updated: 0, cancelled: 0, conflicts: 0, skipped: 0 };
+  const result: LinkSyncResult = {
+    imported: 0,
+    updated: 0,
+    cancelled: 0,
+    proposed: 0,
+    conflicts: 0,
+    skipped: 0,
+  };
 
   let feedUrl: string | null = null;
   try {
@@ -298,7 +313,7 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
   // siempre, porque al sacar ese bloqueo el feed queda vacío por definición.
   const anomalousEmpty =
     events.length === 0 && known.some((r) => r.external_status === "active");
-  result.cancelled += await handleDisappearances(
+  result.proposed += await proposeDisappearances(
     admin,
     link,
     known,
@@ -318,20 +333,28 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
 }
 
 /**
- * Cancelación defensiva por desaparición del VEVENT:
- *   - advertencia desde la primera ausencia
- *   - vía normal (dentro del horizonte del feed): cancela con ≥3 lecturas
- *     completas donde falte Y ≥30 min entre la primera y la última
- *   - vía lenta (más allá del horizonte, o feed vacío): ≥12 lecturas Y ≥6 h.
- *     La ausencia ahí es ambigua — la OTA puede haber recortado su ventana de
- *     calendario — pero tiene que converger igual: si nunca cancelamos, el
- *     bloqueo queda pegado para siempre y el operador no tiene forma de sacarlo.
- *   - reservas observadas antes y todavía vigentes. Las reservas ya empezadas
- *     no se barren (el huésped está adentro); los bloqueos sí, porque no tienen
- *     huésped ni plata y un bloqueo pegado sobre fechas de hoy es justamente el
- *     caso que rompe la operación.
+ * Desaparición del VEVENT → PROPUESTA de cancelación. Nunca una cancelación.
+ *
+ * El 14/08/2026 este barrido canceló solo 26 reservas, tres de ellas reales:
+ * una con $80.000 de seña cobrada y confirmación ya enviada al huésped (que
+ * después se revendió a otra persona), y una con el huésped adentro del
+ * departamento. Todas por el mismo motivo: "el evento no aparece en el feed".
+ *
+ * Que un VEVENT desaparezca NO prueba que la reserva se canceló. Puede ser:
+ *   · el feed vino vacío o truncado por un error de la OTA
+ *   · la OTA rotó el UID del mismo evento (Booking lo hace a diario)
+ *   · la OTA recortó su ventana de calendario
+ *   · el eco de nuestro propio export volviendo con sello ajeno
+ *
+ * Ninguna de esas cosas se distingue de una cancelación real leyendo el feed.
+ * Así que el sistema junta evidencia y una persona decide: Cancelar / Mantener.
+ *
+ * Umbrales (sólo para decidir CUÁNDO vale la pena molestar a una persona, ya
+ * no para ejecutar nada):
+ *   · vía normal (dentro del horizonte publicado): ≥3 lecturas y ≥30 min
+ *   · vía lenta (más allá del horizonte, o feed vacío): ≥12 lecturas y ≥6 h
  */
-export async function handleDisappearances(
+export async function proposeDisappearances(
   admin: AdminClient,
   link: ChannelLinkRow,
   known: ChannelReservationRow[],
@@ -340,7 +363,7 @@ export async function handleDisappearances(
   feedEmpty = false,
 ): Promise<number> {
   const today = new Date().toISOString().slice(0, 10);
-  let cancelled = 0;
+  let proposed = 0;
 
   const candidates = known.filter(
     (r) =>
@@ -350,15 +373,38 @@ export async function handleDisappearances(
       r.last_seen_at !== null && // observada previamente
       r.check_in !== null &&
       r.check_out !== null &&
+      // Una persona ya miró esta ausencia y dijo "la reserva va". No se vuelve
+      // a preguntar por el mismo motivo.
+      !r.cancellation_locked_at &&
       (r.check_in >= today || (r.is_block && r.check_out > today)),
   );
+
+  // Un feed que devuelve CERO eventos teniendo reservas activas conocidas no es
+  // una lectura: es una lectura fallida disfrazada de éxito (una URL que venció,
+  // un token rotado, la OTA respondiendo 200 con un calendario vacío). Hoy 43 de
+  // las 70 conexiones activas devuelven cero eventos y el sistema las da por
+  // sanas. Tratar ese silencio como evidencia es exactamente cómo se cancelan
+  // todas las reservas de una unidad de una sola vez, así que no avanza nada:
+  // ni contadores ni propuestas. Queda una incidencia para que se revise el feed.
+  if (feedEmpty && candidates.length > 0) {
+    await openIssue(admin, {
+      organizationId: link.organization_id,
+      linkId: link.id,
+      issueType: "feed_error",
+      severity: "critical",
+      title: `El calendario de ${channelLabel(link.channel)} está viniendo vacío`,
+      detail: `La última lectura no trajo ningún evento, pero hay ${candidates.length} ${candidates.length === 1 ? "reserva activa" : "reservas activas"} de esta conexión. No tocamos nada: revisá que el enlace del calendario siga siendo válido.`,
+      dedupeKey: `empty_feed:${link.id}`,
+    });
+    return 0;
+  }
 
   for (const r of candidates) {
     // "Más allá del horizonte" = el feed no publica tan lejos, así que su
     // silencio no prueba nada. Ojo: el evento MÁS lejano define el horizonte,
     // por lo que al desaparecer siempre cae acá — de ahí la vía lenta.
     const beyondHorizon = feedEmpty || horizon === null || r.check_out! > horizon;
-    const runsNeeded = beyondHorizon ? MISSING_RUNS_TO_CANCEL_WEAK : MISSING_RUNS_TO_CANCEL;
+    const runsNeeded = beyondHorizon ? MISSING_RUNS_TO_PROPOSE_WEAK : MISSING_RUNS_TO_PROPOSE;
     const windowNeeded = beyondHorizon ? MISSING_MIN_WINDOW_WEAK_MS : MISSING_MIN_WINDOW_MS;
 
     const runs = r.missing_runs + 1;
@@ -366,71 +412,29 @@ export async function handleDisappearances(
     const windowElapsed = Date.now() - Date.parse(missingSince) >= windowNeeded;
 
     if (runs >= runsNeeded && windowElapsed && r.missing_since) {
-      // confirmado: cancelar
-      let bookingCancelled = false;
-      if (r.booking_id) {
-        const { data: booking } = await admin
-          .from("bookings")
-          .select("id, status")
-          .eq("id", r.booking_id)
-          .maybeSingle();
-        if (booking && (booking.status === "confirmada" || booking.status === "pendiente")) {
-          const { error } = await admin
-            .from("bookings")
-            .update({
-              status: "cancelada",
-              cancelled_at: new Date().toISOString(),
-              cancelled_reason: `Cancelada en ${channelLabel(link.channel)} (desapareció del calendario y se confirmó en ${runsNeeded} lecturas)`,
-            })
-            .eq("id", r.booking_id);
-          bookingCancelled = !error;
-        } else if (booking && booking.status === "check_in") {
-          await openIssue(admin, {
-            organizationId: link.organization_id,
-            linkId: link.id,
-            reservationId: r.id,
-            bookingId: r.booking_id,
-            issueType: "cancellation_review",
-            severity: "critical",
-            title: `Cancelación de ${channelLabel(link.channel)} con huésped en casa`,
-            detail: `La reserva ${r.confirmation_code ?? r.ical_uid} desapareció del calendario de la OTA pero el huésped ya hizo check-in. No se canceló automáticamente.`,
-            dedupeKey: `cancel_inhouse:${r.booking_id}`,
-          });
-          await admin
-            .from("channel_reservations")
-            .update({ missing_since: null, missing_runs: 0 })
-            .eq("id", r.id);
-          continue;
-        } else {
-          bookingCancelled = booking?.status === "cancelada";
-        }
-      }
-
+      // Evidencia suficiente para pedir una decisión humana.
+      const created = await openCancellationRequest(admin, {
+        organizationId: link.organization_id,
+        link,
+        channel: link.channel,
+        reservation: r,
+        reasonCode: "missing_from_feed",
+        detail: `Dejó de aparecer en el calendario de ${channelLabel(link.channel)}. Puede ser una cancelación real, o un problema de lectura del feed.`,
+        evidence: {
+          lecturas_sin_verla: runs,
+          ausente_desde: missingSince,
+          feed_vacio: feedEmpty,
+          horizonte_publicado: horizon,
+          mas_alla_del_horizonte: beyondHorizon,
+          ultima_vez_vista: r.last_seen_at,
+        },
+      });
+      if (created) proposed++;
+      // El contador se congela: la propuesta ya está abierta y esperando.
       await admin
         .from("channel_reservations")
-        .update({ external_status: "cancelled", missing_since: null, missing_runs: 0 })
+        .update({ missing_since: missingSince, missing_runs: runs })
         .eq("id", r.id);
-      await resolveIssuesByDedupe(
-        admin,
-        link.organization_id,
-        `missing:${r.id}`,
-        "Cancelación confirmada tras tres lecturas del calendario.",
-      );
-      if (bookingCancelled || !r.booking_id) {
-        cancelled++;
-        await admin.from("notifications").insert({
-          organization_id: link.organization_id,
-          type: "inbound_booking_cancelled",
-          severity: "warning",
-          title: `Cancelación en ${channelLabel(link.channel)}`,
-          body: `La reserva ${r.confirmation_code ?? "externa"} (${r.check_in} → ${r.check_out}) desapareció del calendario y se canceló localmente.`,
-          ref_type: r.booking_id ? "booking" : undefined,
-          ref_id: r.booking_id ?? undefined,
-          target_role: "admin",
-          action_url: r.booking_id ? `/dashboard/reservas/${r.booking_id}` : "/dashboard/canales",
-          dedup_key: `channel_gone:${r.id}`,
-        });
-      }
     } else {
       // advertencia + avanzar contador
       await admin
@@ -446,14 +450,15 @@ export async function handleDisappearances(
           issueType: "cancellation_review",
           severity: "warning",
           title: `Una reserva de ${channelLabel(link.channel)} desapareció del calendario`,
-          detail: `La reserva ${r.confirmation_code ?? r.ical_uid} (${r.check_in} → ${r.check_out}) no apareció en la última lectura. Si sigue ausente en ${runsNeeded} lecturas durante ${beyondHorizon ? "6+ horas" : "30+ minutos"} se cancelará automáticamente. Puede ser una cancelación de la OTA en curso.`,
+          detail: `La reserva ${r.confirmation_code ?? r.ical_uid} (${r.check_in} → ${r.check_out}) no apareció en la última lectura. Si sigue ausente en ${runsNeeded} lecturas durante ${beyondHorizon ? "6+ horas" : "30+ minutos"} te vamos a pedir que decidas si se cancela o se mantiene. Nadie la va a cancelar sin tu confirmación.`,
           dedupeKey: `missing:${r.id}`,
         });
       }
     }
   }
-  return cancelled;
+  return proposed;
 }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Health bookkeeping por conexión

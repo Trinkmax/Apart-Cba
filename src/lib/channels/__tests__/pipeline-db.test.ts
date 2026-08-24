@@ -452,8 +452,8 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     expect(b!.status).toBe("confirmada"); // intacta
   }, 30_000);
 
-  it("desaparición del VEVENT: 1ª y 2ª ausencia solo advierten; cancela recién con 3 lecturas + 30 min", async () => {
-    const { handleDisappearances } = await import("@/lib/channels/dispatch");
+  it("desaparición del VEVENT: nunca cancela sola; a las 3 lecturas + 30 min abre una PROPUESTA y la reserva queda intacta", async () => {
+    const { proposeDisappearances } = await import("@/lib/channels/dispatch");
     const { data: linkRow } = await admin
       .from("channel_links")
       .select("*")
@@ -503,46 +503,70 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     const seen = new Set<string>(); // el uid NO está en el feed
     const horizon = "2031-12-31";
 
-    // lectura 1 → advertencia, sin cancelar
-    let cancelled = await handleDisappearances(admin, linkRow!, [await load()], seen, horizon);
-    expect(cancelled).toBe(0);
+    const bookingStatus = async () =>
+      (await admin.from("bookings").select("status").eq("id", booking!.id).single()).data!.status;
+
+    // lectura 1 → advertencia, nada más
+    let proposed = await proposeDisappearances(admin, linkRow!, [await load()], seen, horizon);
+    expect(proposed).toBe(0);
     let cur = await load();
     expect(cur.missing_runs).toBe(1);
-    expect((await admin.from("bookings").select("status").eq("id", booking!.id).single()).data!.status).toBe("confirmada");
+    expect(await bookingStatus()).toBe("confirmada");
 
-    // lectura 2 → sigue sin cancelar
-    cancelled = await handleDisappearances(admin, linkRow!, [await load()], seen, horizon);
-    expect(cancelled).toBe(0);
+    // lectura 2 → sigue sin proponer
+    proposed = await proposeDisappearances(admin, linkRow!, [await load()], seen, horizon);
+    expect(proposed).toBe(0);
     cur = await load();
     expect(cur.missing_runs).toBe(2);
 
-    // lectura 3 pero SIN 30 min transcurridos → sigue sin cancelar
-    cancelled = await handleDisappearances(admin, linkRow!, [await load()], seen, horizon);
-    expect(cancelled).toBe(0);
+    // lectura 3 pero SIN 30 min transcurridos → todavía no
+    proposed = await proposeDisappearances(admin, linkRow!, [await load()], seen, horizon);
+    expect(proposed).toBe(0);
     cur = await load();
     expect(cur.missing_runs).toBe(3);
     expect(cur.external_status).toBe("active");
 
-    // backdate de missing_since a 31 min → la próxima lectura cancela
+    // backdate de missing_since a 31 min → la próxima lectura PROPONE
     await admin
       .from("channel_reservations")
       .update({ missing_since: new Date(Date.now() - 31 * 60_000).toISOString() })
       .eq("id", res!.id);
-    cancelled = await handleDisappearances(admin, linkRow!, [await load()], seen, horizon);
-    expect(cancelled).toBe(1);
+    proposed = await proposeDisappearances(admin, linkRow!, [await load()], seen, horizon);
+    expect(proposed).toBe(1);
+
+    // La invariante que costó tres reservas reales aprender: la propuesta NO
+    // toca la reserva. Sigue confirmada y sigue ocupando el calendario hasta
+    // que una persona decida.
     cur = await load();
-    expect(cur.external_status).toBe("cancelled");
-    expect(
-      (await admin.from("bookings").select("status").eq("id", booking!.id).single()).data!.status,
-    ).toBe("cancelada");
+    expect(cur.external_status).toBe("active");
+    expect(await bookingStatus()).toBe("confirmada");
+
+    const { data: request } = await admin
+      .from("channel_cancellation_requests")
+      .select("status, reason_code, booking_id, snapshot")
+      .eq("reservation_id", res!.id)
+      .single();
+    expect(request!.status).toBe("pending");
+    expect(request!.reason_code).toBe("missing_from_feed");
+    expect(request!.booking_id).toBe(booking!.id);
+
+    // Idempotencia: seguir leyendo no acumula propuestas duplicadas.
+    proposed = await proposeDisappearances(admin, linkRow!, [await load()], seen, horizon);
+    expect(proposed).toBe(0);
+    const { count } = await admin
+      .from("channel_cancellation_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("reservation_id", res!.id)
+      .eq("status", "pending");
+    expect(count).toBe(1);
   }, 90_000);
 
   // Antes de la 050 este caso se EXCLUÍA del barrido, y por eso los bloqueos
   // fantasma quedaban pegados para siempre: el evento más lejano del feed ES el
   // horizonte, así que al desaparecer siempre cae "más allá". Hoy se sigue, pero
   // con la vía lenta (12 lecturas / 6 h) en vez de las 3 lecturas / 30 min.
-  it("fuera del horizonte se sigue con la vía lenta, sin cancelar por una lectura", async () => {
-    const { handleDisappearances } = await import("@/lib/channels/dispatch");
+  it("fuera del horizonte se sigue con la vía lenta, sin proponer por una lectura", async () => {
+    const { proposeDisappearances } = await import("@/lib/channels/dispatch");
     const { data: linkRow } = await admin.from("channel_links").select("*").eq("id", link1).single();
     const { data: res } = await admin
       .from("channel_reservations")
@@ -560,8 +584,8 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .select("*")
       .single();
     // horizonte del feed termina ANTES del check_out de esta reserva
-    const cancelled = await handleDisappearances(admin, linkRow!, [res!], new Set(), "2031-12-31");
-    expect(cancelled).toBe(0);
+    const proposed = await proposeDisappearances(admin, linkRow!, [res!], new Set(), "2031-12-31");
+    expect(proposed).toBe(0);
     const { data: after } = await admin
       .from("channel_reservations")
       .select("missing_runs, missing_since, external_status")
@@ -587,7 +611,7 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .select("*")
       .eq("id", res!.id)
       .single();
-    const again = await handleDisappearances(
+    const again = await proposeDisappearances(
       admin,
       linkRow!,
       [reloaded!],

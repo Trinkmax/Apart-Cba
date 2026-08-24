@@ -2,6 +2,7 @@ import ICAL from "ical.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AdminClient = import("@supabase/supabase-js").SupabaseClient<any, any, any>;
 import type { BookingSource } from "@/lib/types/database";
+import { openCancellationRequest } from "@/lib/channels/cancellation-requests";
 
 export type TriggerSource = "cron" | "manual" | "create_feed";
 
@@ -199,17 +200,25 @@ export async function syncSingleFeed(
         (b) => b.external_id && !seenUids.has(b.external_id),
       );
 
-      if (toCancel.length > 0) {
-        const ids = toCancel.map((b) => b.id);
-        const { error: cancelErr } = await admin
-          .from("bookings")
-          .update({
-            status: "cancelada",
-            cancelled_at: new Date().toISOString(),
-            cancelled_reason: `Cancelada en ${feed.source} (detectada por sync iCal)`,
-          })
-          .in("id", ids);
-        if (!cancelErr) cancelled = ids.length;
+      // Ninguna reserva se cancela sola (ver migración 053 y
+      // channels/cancellation-requests.ts). Que un UID falte en el feed no
+      // prueba una cancelación: puede ser una lectura parcial, un UID rotado
+      // por la OTA o el eco de nuestro propio export. Se propone y decide una
+      // persona desde /dashboard/canales/cancelaciones.
+      for (const b of toCancel) {
+        const opened = await openCancellationRequest(admin, {
+          organizationId: feed.organization_id,
+          channel: feed.source === "airbnb" ? "airbnb" : "booking",
+          bookingId: b.id,
+          reasonCode: "missing_from_feed",
+          detail: `Dejó de aparecer en el calendario de ${feed.source} (sincronización iCal).`,
+          evidence: {
+            referencia: b.external_id,
+            eventos_en_la_lectura: events.length,
+            origen: "sync_ical_legacy",
+          },
+        });
+        if (opened) cancelled++;
       }
     }
 

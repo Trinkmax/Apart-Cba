@@ -81,8 +81,19 @@ export async function fetchIcalFeed(input: {
     };
   }
 
+  // Horizonte = hasta dónde el feed publica información CONFIABLE. Se usa para
+  // decidir si el silencio del feed sobre una fecha significa algo.
+  //
+  // No se calcula sobre el evento más lejano a secas: las OTAs publican
+  // marcadores de "fuera de la ventana de disponibilidad" — bloques de medio
+  // año que arrancan a 12 meses vista y a los que Booking le cambia el UID todos
+  // los días. Uno solo de esos empuja el horizonte dos años para adelante y hace
+  // que toda ausencia parezca concluyente, cuando no lo es. En la unidad BRASIL
+  // ese marcador llevaba el horizonte a 2028-02 y ponía cada reserva del año en
+  // la vía rápida.
   let horizon: string | null = null;
-  for (const e of events) {
+  const reales = events.filter((e) => nights(e.checkIn, e.checkOut) <= LONG_RANGE_BLOCK_NIGHTS);
+  for (const e of reales.length > 0 ? reales : events) {
     if (!horizon || e.checkOut > horizon) horizon = e.checkOut;
   }
 
@@ -150,6 +161,20 @@ export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent
     }
   }
   return out;
+}
+
+/**
+ * Un VEVENT más largo que esto no es una estadía: es un marcador de ventana de
+ * disponibilidad de la OTA. Sigue entrando al calendario (ocupa fechas), pero no
+ * define hasta dónde el feed publica información confiable.
+ */
+const LONG_RANGE_BLOCK_NIGHTS = 120;
+
+function nights(checkIn: string, checkOut: string): number {
+  const a = Date.parse(`${checkIn}T00:00:00Z`);
+  const b = Date.parse(`${checkOut}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.round((b - a) / 86_400_000);
 }
 
 function toYmd(t: ICAL.Time): string {

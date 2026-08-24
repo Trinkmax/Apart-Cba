@@ -1,4 +1,5 @@
 import { matchUnit } from "@/lib/inbound/matcher";
+import { openCancellationRequest } from "./cancellation-requests";
 import { normalizePhoneE164, resolveGuest } from "./guest";
 import type {
   Channel,
@@ -388,7 +389,32 @@ async function projectToBooking(
   // misma unidad con las mismas fechas (cargada a mano, sin referencia externa),
   // es la misma reserva física — se vincula en lugar de alertar conflicto.
   // (Dos reservas distintas no pueden ocupar las mismas fechas: bookings_no_overlap.)
-  const adoptable = await findAdoptableBooking(admin, ev, reservation);
+  const adoptionResult = await findAdoptableBooking(admin, ev, reservation);
+
+  // Hay una reserva local en esas fechas, pero el evento no tiene con qué
+  // reclamarla. No se vincula ni se inserta nada: decide una persona.
+  if (adoptionResult && "blocked" in adoptionResult) {
+    const issueId = await openIssue(admin, {
+      organizationId: orgId,
+      linkId: reservation.link_id,
+      eventId,
+      reservationId: reservation.id,
+      bookingId: adoptionResult.blocked.id,
+      issueType: "conflict",
+      severity: "critical",
+      title: `¿Es la misma reserva? — ${channelLabel(ev.channel)} informa fechas ya ocupadas`,
+      detail: `${adoptionResult.motivo} Fechas: ${reservation.check_in} → ${reservation.check_out}.`,
+      suggested: {
+        accion: "vincular_o_separar",
+        booking_id: adoptionResult.blocked.id,
+        reservation_id: reservation.id,
+      },
+      dedupeKey: `adopt_review:${reservation.id}`,
+    });
+    return { outcome: "needs_review", issueId, reservationId: reservation.id };
+  }
+
+  const adoptable = adoptionResult;
   if (adoptable) {
     await admin
       .from("channel_reservations")
@@ -874,27 +900,27 @@ async function processCancellation(
         });
         return { outcome: "needs_review", issueId, bookingId };
       } else {
-        const { error: cancelErr } = await admin
-          .from("bookings")
-          .update({
-            status: "cancelada",
-            cancelled_at: new Date().toISOString(),
-            cancelled_reason: `Cancelación recibida de ${channelLabel(ev.channel)} (referencia ${ref})`,
-          })
-          .eq("id", bookingId)
-          .eq("organization_id", orgId);
-        if (cancelErr) return { outcome: "error", error: cancelErr.message };
-        await notify(admin, {
-          organization_id: orgId,
-          type: "inbound_booking_cancelled",
-          severity: "warning",
-          title: `Cancelación en ${channelLabel(ev.channel)}`,
-          body: `La reserva ${ref} (${booking.check_in_date} → ${booking.check_out_date}) fue cancelada en la OTA.`,
-          ref_type: "booking",
-          ref_id: bookingId,
-          action_url: `/dashboard/reservas/${bookingId}`,
-          dedup_key: `channel_cancel:${bookingId}`,
+        // El email de la OTA es la señal MÁS fuerte que tenemos, pero sigue
+        // siendo una heurística: el asunto se parsea con regex y, cuando el
+        // número de reserva no matchea, el fallback busca por fecha de llegada
+        // — puede señalar la reserva equivocada. Con una reserva viva del otro
+        // lado, eso no se ejecuta solo: se propone y decide una persona.
+        await openCancellationRequest(admin, {
+          organizationId: orgId,
+          linkId: reservation?.link_id ?? null,
+          channel: ev.channel,
+          reservation,
+          bookingId,
+          reasonCode: "ota_cancellation_email",
+          detail: `Llegó un email de ${channelLabel(ev.channel)} informando la cancelación de la reserva ${ref}.`,
+          evidence: {
+            referencia: ref,
+            transporte: ev.transport,
+            llegada_informada: ev.checkIn ?? null,
+            matcheada_por: reservation ? "reserva externa" : "referencia",
+          },
         });
+        return { outcome: "needs_review", bookingId, reservationId: reservation?.id };
       }
     }
   }
@@ -1148,21 +1174,37 @@ interface AdoptableBooking {
   is_block: boolean;
   notes: string | null;
   external_id: string | null;
+  source: string | null;
+  paid_amount: number | string | null;
+  confirmation_sent_at: string | null;
 }
 
 /**
  * Única reserva local vigente con la MISMA unidad y fechas exactas, todavía no
  * vinculada a otra reserva externa. Si hay cero o más de una, no se adopta.
+ *
+ * Adoptar significa entregarle a la OTA el control de esa reserva: desde ese
+ * momento el feed puede moverle las fechas y su desaparición dispara una
+ * propuesta de cancelación. Es la operación más peligrosa del pipeline, así que
+ * exige que el evento entrante tenga IDENTIDAD suficiente para reclamarla.
+ *
+ * El 14/08/2026 no la exigía: un cierre de disponibilidad mudo de Booking
+ * (is_block, sin nombre ni código) se apropió de una reserva directa con
+ * huésped y $80.000 de seña cobrada, y el barrido terminó cancelándola.
+ * Devuelve `{ blocked: … }` cuando hay un candidato pero el evento no alcanza
+ * para reclamarlo: ahí decide una persona, no el cron.
  */
 async function findAdoptableBooking(
   admin: AdminClient,
   ev: ReservationEvent,
   reservation: ChannelReservationRow,
-): Promise<AdoptableBooking | null> {
+): Promise<AdoptableBooking | null | { blocked: AdoptableBooking; motivo: string }> {
   if (!reservation.unit_id || !reservation.check_in || !reservation.check_out) return null;
   const { data: candidates } = await admin
     .from("bookings")
-    .select("id, status, check_in_date, check_out_date, guest_id, is_block, notes, external_id")
+    .select(
+      "id, status, check_in_date, check_out_date, guest_id, is_block, notes, external_id, source, paid_amount, confirmation_sent_at",
+    )
     .eq("organization_id", ev.organizationId)
     .eq("unit_id", reservation.unit_id)
     .eq("check_in_date", reservation.check_in)
@@ -1180,6 +1222,33 @@ async function findAdoptableBooking(
     .limit(1)
     .maybeSingle();
   if (alreadyLinked) return null;
+
+  // ¿El evento entrante tiene con qué reclamar una reserva con dueño?
+  const tieneIdentidad = Boolean(reservation.confirmation_code) || Boolean(ev.guest?.name);
+  const esCierreMudo = ev.isBlock === true || reservation.is_block === true;
+  const conPlata = Number(candidate.paid_amount ?? 0) > 0;
+  const conHuesped = Boolean(candidate.guest_id);
+  const yaPrometida = Boolean(candidate.confirmation_sent_at);
+
+  // Un cierre de disponibilidad no es una reserva: nunca puede apropiarse de
+  // una que sí tiene huésped, plata o una promesa hecha.
+  if (esCierreMudo && (conHuesped || conPlata || yaPrometida)) {
+    return {
+      blocked: candidate,
+      motivo: `${channelLabel(ev.channel)} cerró estas fechas en su calendario, pero acá hay una reserva con ${conHuesped ? "huésped asignado" : conPlata ? "dinero cobrado" : "confirmación ya enviada"}. Un cierre de fechas no se vincula solo a una reserva real.`,
+    };
+  }
+
+  // Con dinero de por medio exigimos identidad explícita (código de la OTA o
+  // nombre del huésped). "Mismas fechas, misma unidad" no alcanza para tomar
+  // el control de una reserva que ya cobró.
+  if (conPlata && !tieneIdentidad) {
+    return {
+      blocked: candidate,
+      motivo: `${channelLabel(ev.channel)} informa estas fechas sin número de reserva ni nombre, y la reserva local ya tiene dinero cobrado. Confirmá si son la misma reserva antes de vincularlas.`,
+    };
+  }
+
   return candidate;
 }
 

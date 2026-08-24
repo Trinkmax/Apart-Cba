@@ -8,6 +8,7 @@ import {
   ShieldX,
   Clock,
   Stethoscope,
+  AlertTriangle,
 } from "lucide-react";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConnectionsTable } from "@/components/canales/connections-table";
 import { IssuesPanel } from "@/components/canales/issues-panel";
+import { listPendingCancellations } from "@/lib/actions/channel-cancellations";
 import { EmailSettingsCard } from "@/components/canales/email-settings-card";
 import { SyncNowButton } from "@/components/canales/sync-now-button";
 import { formatDistanceToNow } from "date-fns";
@@ -33,6 +35,9 @@ export default async function CanalesPage() {
 
   const overview = await getChannelsOverview();
   const { links, issues } = overview;
+  // Cancelaciones que una OTA propuso y todavía nadie resolvió. Mientras
+  // esperan, las reservas siguen vivas: el sistema no cancela solo.
+  const pendingCancellations = await listPendingCancellations();
 
   const active = links.filter((l) => l.status === "active");
   const airbnb = links.filter((l) => l.channel === "airbnb");
@@ -88,6 +93,30 @@ export default async function CanalesPage() {
           </Button>
         </div>
       </div>
+
+      {/* Lo primero: nada se cancela sin que una persona lo confirme, así que
+          lo que espera decisión va antes que cualquier otro estado. */}
+      {pendingCancellations.length > 0 && (
+        <Card className="p-4 border border-amber-500/30 bg-amber-500/10">
+          <div className="flex flex-wrap items-center gap-3">
+            <AlertTriangle className="size-5 shrink-0 text-amber-500" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                {pendingCancellations.length === 1
+                  ? "Una reserva espera tu decisión"
+                  : `${pendingCancellations.length} reservas esperan tu decisión`}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Dejaron de aparecer en el calendario de la OTA. Siguen ocupando fechas hasta que
+                confirmes si se cancelan o se mantienen.
+              </p>
+            </div>
+            <Button asChild variant="outline" className="shrink-0">
+              <Link href="/dashboard/canales/cancelaciones">Revisar</Link>
+            </Button>
+          </div>
+        </Card>
+      )}
 
       {/* Estado general de protección */}
       <Card className={`p-4 border ${overallClass}`}>

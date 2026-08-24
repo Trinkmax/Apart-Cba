@@ -6,6 +6,8 @@ import { AppSidebar } from "@/components/dashboard/app-sidebar";
 import { TopBar } from "@/components/dashboard/top-bar";
 import { TrialBanner } from "@/components/dashboard/trial-banner";
 import { BookingStatusColorsProvider } from "@/lib/booking-status-colors";
+import { CancellationDecisionDialog } from "@/components/channels/cancellation-decision-dialog";
+import { listPendingCancellations } from "@/lib/actions/channel-cancellations";
 
 export default async function DashboardLayout({
   children,
@@ -21,6 +23,10 @@ export default async function DashboardLayout({
 
   const { organization, role } = await getCurrentOrg();
   const { notifications, unreadCount } = session;
+
+  // Cancelaciones que una OTA propuso y todavía nadie resolvió. Ninguna reserva
+  // se cancela sola: hasta que alguien decida, siguen vivas y ocupando fechas.
+  const pendingCancellations = await listPendingCancellations();
 
   return (
     <BookingStatusColorsProvider override={organization.booking_status_colors}>
@@ -46,6 +52,7 @@ export default async function DashboardLayout({
           <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 safe-bottom">
             {children}
           </main>
+          <CancellationDecisionDialog pending={pendingCancellations} />
         </SidebarInset>
       </SidebarProvider>
     </BookingStatusColorsProvider>

@@ -132,6 +132,13 @@ export interface ChannelReservationRow {
   ignored_at: string | null;
   ignored_by: string | null;
   ignored_reason: string | null;
+  /**
+   * Una persona miró la ausencia en el feed y decidió MANTENER la reserva. El
+   * barrido no vuelve a proponer cancelarla por desaparición (una cancelación
+   * formal por email de la OTA sí sigue su camino).
+   */
+  cancellation_locked_at: string | null;
+  cancellation_locked_by: string | null;
   created_at: string;
   updated_at: string;
 }

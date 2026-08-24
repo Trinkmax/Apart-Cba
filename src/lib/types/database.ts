@@ -426,6 +426,14 @@ export interface Booking {
   checked_out_at: string | null;
   cancelled_at: string | null;
   cancelled_reason: string | null;
+  /** Quién la canceló, cuando la decidió una persona. */
+  cancelled_by: string | null;
+  /**
+   * Por qué camino se canceló: manual · channel_decision (una persona aprobó
+   * una propuesta de la OTA) · ota_email · system_legacy (cancelación
+   * automática, camino eliminado en la migración 053).
+   */
+  cancelled_source: string | null;
   confirmation_sent_at: string | null;
   created_at: string;
   updated_at: string;

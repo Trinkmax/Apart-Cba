@@ -86,6 +86,24 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             Creada el {formatDate(b.created_at, "dd 'de' MMM yyyy")}
           </p>
+          {/* Una reserva cancelada dejaba de verse en el calendario sin decir
+              por qué: el motivo se guardaba en la base y no se renderizaba en
+              ninguna pantalla. Cuando la cancelación la propuso una OTA, ésta
+              es la única explicación que el operador va a encontrar. */}
+          {b.status === "cancelada" && (b.cancelled_reason || b.cancelled_at) && (
+            <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+              <p className="font-medium text-destructive">Reserva cancelada</p>
+              {b.cancelled_reason && <p className="mt-0.5">{b.cancelled_reason}</p>}
+              {b.cancelled_at && (
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {formatDate(b.cancelled_at, "dd 'de' MMM yyyy 'a las' HH:mm")}
+                  {b.cancelled_source === "system_legacy" &&
+                    " · cancelación automática (mecanismo desactivado)"}
+                  {b.cancelled_source === "channel_decision" && " · confirmada desde el PMS"}
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 w-full sm:w-auto">
           {/* Un bloqueo no se opera como una reserva: sin check-in / check-out.
