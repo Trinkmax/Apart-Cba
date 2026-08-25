@@ -348,7 +348,7 @@ async function projectToBooking(
   if (reservation.booking_id) {
     const { data: booking } = await admin
       .from("bookings")
-      .select("id, status, check_in_date, check_out_date, guest_id, is_block, notes")
+      .select("id, status, check_in_date, check_out_date, guest_id, is_block, notes, created_by")
       .eq("id", reservation.booking_id)
       .eq("organization_id", orgId)
       .maybeSingle();
@@ -379,7 +379,7 @@ async function projectToBooking(
     reservation = { ...reservation, booking_id: legacyBookingId };
     const { data: booking } = await admin
       .from("bookings")
-      .select("id, status, check_in_date, check_out_date, guest_id, is_block, notes")
+      .select("id, status, check_in_date, check_out_date, guest_id, is_block, notes, created_by")
       .eq("id", legacyBookingId)
       .single();
     if (booking) return updateProjectedBooking(admin, eventId, ev, reservation, booking);
@@ -535,11 +535,21 @@ async function updateProjectedBooking(
     guest_id: string | null;
     is_block: boolean;
     notes: string | null;
+    created_by?: string | null;
   },
 ): Promise<IngestResult> {
   const orgId = ev.organizationId;
   const patch: Record<string, unknown> = {};
   let outcome: IngestResult["outcome"] = "duplicate";
+
+  // ── Reserva cargada por una persona ───────────────────────────────────────
+  // `created_by` es la firma de que alguien la escribió en el PMS: la cargó
+  // recepción, no la trajo el feed. Sobre esas filas el canal SOLO informa —
+  // no mueve fechas, no reescribe notas, no revive estados. Un VEVENT no puede
+  // pisar lo que decidió una persona: el iCal de Booking no trae número de
+  // reserva ni nombre, así que "coincide la unidad y las fechas" es todo lo
+  // que sabe, y con eso llegó a llevarse puesta una reserva con seña cobrada.
+  const laCargoUnaPersona = Boolean(booking.created_by);
 
   // modificación de fechas — conserva el UUID del booking
   const datesChanged =
@@ -547,6 +557,24 @@ async function updateProjectedBooking(
     reservation.check_out &&
     (booking.check_in_date !== reservation.check_in ||
       booking.check_out_date !== reservation.check_out);
+
+  if (datesChanged && laCargoUnaPersona) {
+    // La OTA informa otras fechas para una reserva que cargaron ustedes. No se
+    // toca: se avisa y decide una persona.
+    const issueId = await openIssue(admin, {
+      organizationId: orgId,
+      linkId: reservation.link_id,
+      eventId,
+      reservationId: reservation.id,
+      bookingId: booking.id,
+      issueType: "conflict",
+      severity: "warning",
+      title: `${channelLabel(ev.channel)} informa otras fechas para una reserva cargada en el sistema`,
+      detail: `En el PMS la reserva figura ${booking.check_in_date} → ${booking.check_out_date} y ${channelLabel(ev.channel)} la informa ${reservation.check_in} → ${reservation.check_out}. No cambiamos nada: revisá cuál es la correcta y ajustala a mano.`,
+      dedupeKey: `fechas_locales:${reservation.id}:${reservation.check_in}:${reservation.check_out}`,
+    });
+    return { outcome: "needs_review", issueId, bookingId: booking.id };
+  }
 
   if (datesChanged) {
     if (booking.status === "confirmada" || booking.status === "pendiente") {
@@ -590,7 +618,13 @@ async function updateProjectedBooking(
   // ya no quiere bloqueos de este canal y el feed la vuelve a informar)
   if (booking.is_block && ev.isBlock === false) {
     patch.is_block = false;
-    patch.notes = `Importada de ${channelLabel(ev.channel)} (${ev.transport === "email" ? "email + calendario" : "calendario"})`;
+    // La nota sólo se reescribe si la puso el propio canal. Si la fila la cargó
+    // una persona, lo que escribió es información del negocio ("BOOKING -
+    // REYNOSO", el detalle de la cochera, quién lo trajo) y pisarla es borrar
+    // datos que nadie puede recuperar.
+    if (!laCargoUnaPersona) {
+      patch.notes = `Importada de ${channelLabel(ev.channel)} (${ev.transport === "email" ? "email + calendario" : "calendario"})`;
+    }
     outcome = "updated";
     // Un bloqueo que el operador canceló a mano y que después la OTA confirma
     // por email como reserva real vuelve a la vida: lo descartó por ambigüedad,
@@ -600,7 +634,9 @@ async function updateProjectedBooking(
     // Sólo por email: una lectura de iCal no aporta ningún dato nuevo (todo
     // VEVENT de Booking llega igual), así que descancelar desde ahí sería
     // pisar la decisión del operador con información que ya tenía.
-    if (booking.status === "cancelada" && ev.transport === "email") {
+    // Descancelar es revertir una decisión: sólo sobre un cierre que trajo el
+    // canal, nunca sobre una fila que canceló una persona.
+    if (booking.status === "cancelada" && ev.transport === "email" && !laCargoUnaPersona) {
       patch.status = "confirmada";
       patch.cancelled_at = null;
       patch.cancelled_reason = null;
@@ -1177,6 +1213,7 @@ interface AdoptableBooking {
   source: string | null;
   paid_amount: number | string | null;
   confirmation_sent_at: string | null;
+  created_by: string | null;
 }
 
 /**
@@ -1203,7 +1240,7 @@ async function findAdoptableBooking(
   const { data: candidates } = await admin
     .from("bookings")
     .select(
-      "id, status, check_in_date, check_out_date, guest_id, is_block, notes, external_id, source, paid_amount, confirmation_sent_at",
+      "id, status, check_in_date, check_out_date, guest_id, is_block, notes, external_id, source, paid_amount, confirmation_sent_at, created_by",
     )
     .eq("organization_id", ev.organizationId)
     .eq("unit_id", reservation.unit_id)

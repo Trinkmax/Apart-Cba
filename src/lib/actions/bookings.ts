@@ -137,6 +137,42 @@ async function syncBookingPaymentToCash(params: {
 }
 
 /**
+ * Cuánto vale un tramo de un contrato mensual.
+ *
+ * En mensual el precio no es un total global que se reparte entre los períodos:
+ * es la renta prorrateada por los días del tramo (renta ÷ 30 × noches), la
+ * misma fórmula que muestra el formulario y la que tienen todos los períodos
+ * bien cargados en la base.
+ *
+ * Existe porque el prorrateo por participación arrastraba el cero: si el total
+ * llegaba vacío, cada tramo se guardaba en $0 — y al extender el contrato, los
+ * tramos nuevos heredaban ese cero. Así quedó el alquiler de BUENOS AIRES 570
+ * mostrando $0 con la renta cargada en $1.100.000.
+ */
+function montoDeTramoMensual(
+  monthlyRent: number | null | undefined,
+  nights: number,
+): number {
+  const renta = Number(monthlyRent ?? 0);
+  if (!(renta > 0) || nights <= 0) return 0;
+  return Math.round((renta / 30) * nights * 100) / 100;
+}
+
+/**
+ * Red de contención: una reserva mensual con renta cargada nunca puede
+ * guardarse en $0. Si el importe llega vacío, se deriva de la renta.
+ */
+function totalMensualSeguro(
+  mode: string,
+  total: number,
+  monthlyRent: number | null | undefined,
+  nights: number,
+): number {
+  if (total > 0 || mode !== "mensual") return total;
+  return montoDeTramoMensual(monthlyRent, nights);
+}
+
+/**
  * Si una reserva existente quedó con > MAX_BOOKING_NIGHTS (típicamente porque
  * se la extendió con moveBookingTransaction o updateBooking), la "materializa"
  * en N reservas back-to-back:
@@ -193,7 +229,12 @@ async function enforceLeaseSplitOnExisting(params: {
   // Segmento 0: UPDATE de la fila original (recorte + prorrateo).
   const seg0 = segments[0];
   const seg0Share = totalNights > 0 ? seg0.nights / totalNights : 0;
-  const seg0Amount = Math.round(totalAmount * seg0Share * 100) / 100;
+  const seg0Amount = totalMensualSeguro(
+    original.mode,
+    Math.round(totalAmount * seg0Share * 100) / 100,
+    original.monthly_rent,
+    seg0.nights,
+  );
   const seg0Commission =
     Math.round((seg0Amount * commissionPctValue) / 100 * 100) / 100;
   // Cleaning fee va al último segmento — la fila original deja de tenerlo
@@ -226,7 +267,12 @@ async function enforceLeaseSplitOnExisting(params: {
   for (let i = 1; i < segments.length; i++) {
     const seg = segments[i];
     const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
-    const segAmount = Math.round(totalAmount * segShare * 100) / 100;
+    const segAmount = totalMensualSeguro(
+      original.mode,
+      Math.round(totalAmount * segShare * 100) / 100,
+      original.monthly_rent,
+      seg.nights,
+    );
     const segCommission =
       Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
     const isLast = i === segments.length - 1;
@@ -873,6 +919,17 @@ export async function createBooking(
     );
   }
 
+  // Una reserva mensual con renta cargada no puede quedar en $0. Si el importe
+  // llegó vacío (el formulario no alcanzó a derivarlo, una edición lo dejó en
+  // blanco), lo calculamos acá: el servidor es el que garantiza el invariante,
+  // no la pantalla.
+  validated.total_amount = totalMensualSeguro(
+    validated.mode,
+    Number(validated.total_amount) || 0,
+    validated.monthly_rent,
+    nightsBetween(validated.check_in_date, validated.check_out_date),
+  );
+
   // Buscar comisión default de la unit si no fue dada
   if (validated.commission_pct === null || validated.commission_pct === undefined) {
     const admin = createAdminClient();
@@ -911,7 +968,12 @@ export async function createBooking(
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
-      const segAmount = Math.round(totalAmount * segShare * 100) / 100;
+      const segAmount = totalMensualSeguro(
+        validated.mode,
+        Math.round(totalAmount * segShare * 100) / 100,
+        validated.monthly_rent,
+        seg.nights,
+      );
       const segCommission = Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
       // El cobrado se aplica al primer período (representa la seña/anticipo).
       const segPaid = i === 0 ? Number(validated.paid_amount) || 0 : 0;
@@ -1029,6 +1091,11 @@ export async function createBooking(
     ) {
       throw new Error("Ya hay una reserva en esa unidad para esas fechas");
     }
+    if (error.message.includes("bookings_mensual_total_no_cero")) {
+      throw new Error(
+        "Un alquiler mensual no puede quedar en $0: cargá la Renta mensual o el importe del período.",
+      );
+    }
     if (
       error.code === "23514" ||
       error.message.includes("bookings_dates_valid")
@@ -1111,6 +1178,17 @@ export async function updateBooking(
     );
   }
 
+  // Una reserva mensual con renta cargada no puede quedar en $0. Si el importe
+  // llegó vacío (el formulario no alcanzó a derivarlo, una edición lo dejó en
+  // blanco), lo calculamos acá: el servidor es el que garantiza el invariante,
+  // no la pantalla.
+  validated.total_amount = totalMensualSeguro(
+    validated.mode,
+    Number(validated.total_amount) || 0,
+    validated.monthly_rent,
+    nightsBetween(validated.check_in_date, validated.check_out_date),
+  );
+
   const commission_amount =
     validated.commission_pct !== null && validated.commission_pct !== undefined
       ? validated.total_amount * (validated.commission_pct / 100)
@@ -1142,7 +1220,14 @@ export async function updateBooking(
     .eq("organization_id", organization.id)
     .select()
     .single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    if (error.message.includes("bookings_mensual_total_no_cero")) {
+      throw new Error(
+        "Un alquiler mensual no puede quedar en $0: cargá la Renta mensual o el importe del período.",
+      );
+    }
+    throw new Error(error.message);
+  }
 
   // Si el cobrado cambió, sincronizamos con caja (delta append-only)
   if (delta !== 0 && accountId) {
