@@ -195,6 +195,7 @@ export async function renameGuest(id: string, fullName: string): Promise<Guest> 
   revalidatePath(`/dashboard/huespedes/${id}`);
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   return data as Guest;
 }
 

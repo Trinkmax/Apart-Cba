@@ -37,9 +37,13 @@ export function SuciosSection({ date, rows, cleaners, canEdit }: SuciosSectionPr
   const [pending, startTransition] = useTransition();
   const [optimistic, setOptimistic] = useState(rows);
 
-  // Si el server-side change pisa nuestra optimistic state, sync.
-  if (rows !== optimistic && rows.length !== optimistic.length) {
-    // re-sync cuando cambia el set de rows desde el server (revalidate)
+  // Re-sync con el server ante CUALQUIER prop nueva, no sólo cuando cambia la
+  // cantidad de filas: si recepción reasigna una limpieza a otra persona, el
+  // set tiene el mismo tamaño y la pantalla se quedaba mostrando lo viejo —
+  // con el tiempo real conectado ese router.refresh era un no-op silencioso.
+  const [prevRows, setPrevRows] = useState(rows);
+  if (prevRows !== rows) {
+    setPrevRows(rows);
     setOptimistic(rows);
   }
 

@@ -19,6 +19,7 @@ import { TareasSection } from "@/components/parte-diario/tareas-section";
 import { CleanerLoadsBanner } from "@/components/parte-diario/cleaner-loads-banner";
 import { ActionBar } from "@/components/parte-diario/action-bar";
 import { DateNav } from "@/components/parte-diario/date-nav";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,14 @@ export default async function ParteDiarioPage({ searchParams }: PageProps) {
 
   return (
     <div className="flex flex-col min-h-[calc(100svh-4rem)]">
+      <LiveRefresh
+        tables={
+          can(role, "bookings", "view")
+            ? ["bookings", "cleaning_tasks", "maintenance_tickets"]
+            : ["cleaning_tasks", "maintenance_tickets"]
+        }
+        throttleMs={10_000}
+      />
       <div className="flex-1 px-4 sm:px-6 py-6 space-y-5">
         {/* Header */}
         <header className="flex flex-wrap items-start justify-between gap-4">

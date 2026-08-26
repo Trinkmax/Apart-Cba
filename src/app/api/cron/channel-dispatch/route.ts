@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import crypto from "crypto";
 import { createAdminClient } from "@/lib/supabase/server";
 import { runChannelDispatch } from "@/lib/channels/dispatch";
@@ -35,6 +36,24 @@ export async function POST(req: Request) {
 
   const admin = createAdminClient();
   const summary = await runChannelDispatch(admin, mode);
+
+  // Una reserva de OTA que entra por acá se proyecta a `bookings` sin pasar por
+  // ninguna server action, así que nadie invalidaba el cache de las pantallas
+  // que la muestran. La pestaña abierta se entera por Realtime; esto es para
+  // que NAVEGAR tampoco devuelva la foto anterior.
+  if (summary.imported > 0 || summary.updated > 0 || summary.cancelled > 0) {
+    for (const path of [
+      "/dashboard",
+      "/dashboard/reservas",
+      "/dashboard/unidades/kanban",
+      "/dashboard/unidades/calendario/mensual",
+      "/dashboard/canales",
+      "/dashboard/parte-diario",
+    ]) {
+      revalidatePath(path);
+    }
+  }
+
   return NextResponse.json({ ok: true, mode, ...summary });
 }
 

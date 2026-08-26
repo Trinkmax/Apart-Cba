@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { differenceInCalendarDays } from "date-fns";
 import { BadgeCheck, Building2, Calendar, CheckCircle2, Clock, Plus, Sparkles, TriangleAlert, X } from "lucide-react";
@@ -41,7 +43,16 @@ export function CleaningBoard({
   currentUserId,
   currentUserRole,
 }: Props) {
+  const router = useRouter();
   const [tasks, setTasks] = useState<CT[]>(initialTasks);
+  // Re-siembra desde el server. Sin esto el tablero quedaba clavado en la foto
+  // del primer render: ni el router.refresh() del re-sync ni un revalidatePath
+  // cambiaban nada, y el equipo concluía que "el tiempo real no anda".
+  const [prevInitial, setPrevInitial] = useState(initialTasks);
+  if (prevInitial !== initialTasks) {
+    setPrevInitial(initialTasks);
+    setTasks(initialTasks);
+  }
   const [openId, setOpenId] = useState<string | null>(null);
 
   // Visibilidad por fila: admin/recepción ven todo; limpieza solo lo asignado.
@@ -110,10 +121,28 @@ export function CleaningBoard({
   useRealtimeRows<CleaningTask>({
     table: "cleaning_tasks",
     organizationId,
+    // El filtro de visibilidad viaja al SERVER para el rol restringido: antes
+    // llegaba toda la operación de la organización por el cable y el descarte
+    // era cosmético, en el navegador. La RLS sigue acotando por organización.
+    filter: restrictToUserId ? `assigned_to=eq.${restrictToUserId}` : undefined,
     onInsert,
     onUpdate,
     onDelete,
+    // Volvimos de un corte: los eventos perdidos no se reenvían, así que la
+    // única forma de no quedar con un tablero de hace media hora es re-pedirlo.
+    onResync: () => router.refresh(),
   });
+
+  // El filtro por asignado no puede avisarle a quien PIERDE una fila (el
+  // evento ya no matchea su filtro). Un refresco corto tapa ese hueco sin
+  // volver a mandarle por el cable la operación entera.
+  useEffect(() => {
+    if (!restrictToUserId) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [restrictToUserId, router]);
 
   const open = openId ? tasks.find((t) => t.id === openId) ?? null : null;
 

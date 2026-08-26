@@ -2,6 +2,7 @@
 
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
+import { addDaysYmd, todayYmdInTz, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 
 export interface DashboardKPIs {
   totals: {
@@ -53,14 +54,14 @@ export interface DashboardKPIs {
 export async function getDashboardKPIs(): Promise<DashboardKPIs> {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
-  const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
-  const in30 = new Date(today);
-  in30.setDate(today.getDate() + 30);
-  const back30 = new Date(today);
-  back30.setDate(today.getDate() - 30);
-  const in30Str = in30.toISOString().slice(0, 10);
-  const back30Str = back30.toISOString().slice(0, 10);
+  // "Hoy" es el de la organización, no el del proceso. Vercel corre en UTC:
+  // desde las 21:00 en Argentina el UTC ya es mañana, así que "Próximos
+  // check-in" y la ocupación se corrían un día justo en la franja en que
+  // recepción está cargando reservas.
+  const tz = organization.timezone || DEFAULT_ORG_TIMEZONE;
+  const todayStr = todayYmdInTz(tz);
+  const in30Str = addDaysYmd(todayStr, 30);
+  const back30Str = addDaysYmd(todayStr, -30);
 
   const bookingFields =
     "id, status, currency, total_amount, paid_amount, check_in_date, check_in_time, check_out_date, check_out_time, guests_count, unit:units(code, name), guest:guests(full_name)";
@@ -165,9 +166,7 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
   // Daily series para chart (solo ARS para no mezclar)
   const dailySeries: Array<{ date: string; amount: number; currency: string }> = [];
   for (let i = 29; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(today.getDate() - i);
-    const k = d.toISOString().slice(0, 10);
+    const k = addDaysYmd(todayStr, -i);
     const items = dailyRevenue.get(k) ?? [];
     const arsTotal = items.filter((x) => x.currency === "ARS").reduce((a, b) => a + b.amount, 0);
     dailySeries.push({ date: k, amount: arsTotal, currency: "ARS" });

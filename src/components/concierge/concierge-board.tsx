@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+
 import { useCallback, useMemo, useState } from "react";
 import {
   Bell,
@@ -76,7 +78,14 @@ interface Props {
 }
 
 export function ConciergeBoard({ organizationId, initialRequests, units, members = [] }: Props) {
+  const router = useRouter();
   const [requests, setRequests] = useState<CR[]>(initialRequests);
+  // Re-siembra desde el server: ver cleaning-board para el porqué.
+  const [prevInitial, setPrevInitial] = useState(initialRequests);
+  if (prevInitial !== initialRequests) {
+    setPrevInitial(initialRequests);
+    setRequests(initialRequests);
+  }
   const [openId, setOpenId] = useState<string | null>(null);
 
   const unitsById = useMemo(() => {
@@ -144,6 +153,7 @@ export function ConciergeBoard({ organizationId, initialRequests, units, members
     onInsert,
     onUpdate,
     onDelete,
+    onResync: () => router.refresh(),
   });
 
   const open = openId ? requests.find((r) => r.id === openId) ?? null : null;

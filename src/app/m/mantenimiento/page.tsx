@@ -12,6 +12,7 @@ import { TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { MaintenanceTicket, Unit } from "@/lib/types/database";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 type T = MaintenanceTicket & { unit: Pick<Unit, "id" | "code" | "name"> };
 
@@ -44,6 +45,7 @@ export default async function MobileTicketsPage({
 
   return (
     <div className="p-4 space-y-4">
+      <LiveRefresh tables={["maintenance_tickets"]} assigneeScoped label="ticket" labelPlural="tickets" />
       <div className="flex items-center gap-2">
         <Wrench className="size-5 text-orange-500" />
         <h1 className="text-xl font-semibold">Mantenimiento</h1>

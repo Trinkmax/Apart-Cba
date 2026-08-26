@@ -229,6 +229,7 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
 
   revalidatePath("/dashboard/unidades");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   return data as Unit;
 }
 
@@ -249,6 +250,7 @@ export async function updateUnit(id: string, input: UnitInput): Promise<Unit> {
   revalidatePath("/dashboard/unidades");
   revalidatePath(`/dashboard/unidades/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   return data as Unit;
 }
 
@@ -292,6 +294,7 @@ export async function archiveUnit(id: string) {
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/unidades");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
 }
 
 /**
@@ -342,6 +345,7 @@ export async function changeUnitStatus(
   }
 
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/unidades");
 }
 
@@ -366,6 +370,7 @@ export async function reorderUnits(
   );
 
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
 }
 
 /**
@@ -389,6 +394,7 @@ export async function reorderUnitsGlobal(orderedIds: string[]): Promise<void> {
 
   revalidatePath("/dashboard/unidades");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
 }
 
 export async function linkOwnerToUnit(

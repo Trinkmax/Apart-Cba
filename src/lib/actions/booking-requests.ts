@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import type { BookingRequestWithRelations } from "@/lib/types/database";
+import { can } from "@/lib/permissions";
 import {
   notifyGuestRequestApproved,
   notifyGuestRequestRejected,
@@ -175,6 +176,7 @@ export async function approveBookingRequest(
   revalidatePath("/dashboard/reservas-pendientes");
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/mi-cuenta");
 
   return { ok: true, booking_id: booking.id };
@@ -234,7 +236,12 @@ export async function rejectBookingRequest(
 }
 
 export async function countPendingRequestsForOrg(): Promise<number> {
-  const { organization } = await getCurrentOrg();
+  // Es callable desde el cliente (la usa el contador del sidebar) y corre con
+  // service_role: sin este gate, cualquier rol podía sondear el volumen de
+  // solicitudes de la organización.
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "view")) return 0;
   const admin = createAdminClient();
   const { count } = await admin
     .from("booking_requests")

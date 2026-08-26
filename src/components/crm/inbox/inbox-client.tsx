@@ -67,7 +67,14 @@ export function InboxClient({ initialConversations, tags, channels, organization
   };
 
   // Realtime: solo eventos de esta org (filtro server-side en la suscripción).
-  useInboxRealtime({ organizationId }, (event) => {
+  useInboxRealtime(
+    {
+      organizationId,
+      // Volvimos de un corte: los mensajes que entraron mientras el socket
+      // estuvo caído no se reenvían, así que hay que re-pedir el inbox.
+      onResync: () => startTransition(() => router.refresh()),
+    },
+    (event) => {
     if (event.kind === "conv_change") {
       // Upsert local de la conversación afectada (sube y reordena por fecha).
       const row = event.row as unknown as Partial<CrmConversationListItem>;
@@ -92,7 +99,8 @@ export function InboxClient({ initialConversations, tags, channels, organization
       // throttleado para actualizar preview/unread sin avalancha de renders.
       throttledRefresh();
     }
-  });
+    }
+  );
 
   const filteredConversations = useMemo(() => {
     return conversations.filter((c) => {

@@ -108,6 +108,7 @@ export async function createTicket(input: TicketInput) {
 
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
 
   try {
     const { publishCrmEvent } = await import("@/lib/crm/events");
@@ -173,6 +174,7 @@ export async function updateTicket(id: string, input: TicketInput) {
   revalidatePath("/dashboard/mantenimiento");
   revalidatePath(`/dashboard/mantenimiento/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   return data as MaintenanceTicket;
 }
 

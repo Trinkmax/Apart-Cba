@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
 import {
@@ -25,6 +25,9 @@ import {
 import { cn } from "@/lib/utils";
 import { BOOKING_MODE_META } from "@/lib/constants";
 import { CuotaBadge } from "@/components/payment-schedule/cuota-badge";
+import { useFlashIds, useLiveRefresh } from "@/lib/realtime/use-live";
+import { defaultRefreshGate } from "@/lib/realtime/gates";
+import { LiveUpdatesPill } from "@/components/realtime/live-updates-pill";
 import type { MonthlyViewCell } from "@/lib/actions/bookings";
 import type {
   BookingPaymentSchedule,
@@ -73,6 +76,26 @@ export function PmsMonthlyBoard({
 }: PmsMonthlyBoardProps) {
   const [query, setQuery] = useState("");
   const [overdueOnly, setOverdueOnly] = useState(false);
+
+  // ── En vivo ───────────────────────────────────────────────────────────────
+  // Esta vista es 100% derivada de props (la celda unidad×mes la agrega el
+  // server), así que no hay merge posible en el cliente: la única forma de
+  // tenerla fresca es volver a pedirla. Un contrato mensual invisible acá es
+  // una doble venta de 3 a 12 meses, no de dos noches.
+  const { flash, isFlashing } = useFlashIds(2_600);
+  const flashCell = useCallback(
+    (change: { new: Record<string, unknown> | null }) => {
+      const unitId = change.new?.unit_id;
+      if (typeof unitId === "string") flash(unitId);
+    },
+    [flash]
+  );
+  const live = useLiveRefresh({
+    tables: ["bookings", "booking_payment_schedule", "units"],
+    throttleMs: 3_000,
+    canRefresh: defaultRefreshGate,
+    onAccepted: flashCell,
+  });
 
   // Indexar cuotas por (booking_id, year-month) para overlay rápido en cells
   const scheduleByKey = useMemo(() => {
@@ -186,6 +209,11 @@ export function PmsMonthlyBoard({
 
   return (
     <TooltipProvider delayDuration={300}>
+      <LiveUpdatesPill
+        count={live.pending}
+        onApply={live.apply}
+        isRefreshing={live.isRefreshing}
+      />
       <div className="flex flex-col h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)] bg-background">
         {/* Toolbar */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
@@ -440,7 +468,10 @@ export function PmsMonthlyBoard({
                     return (
                       <td
                         key={`${u.unit_id}-${m.year}-${m.month}`}
-                        className="border-b border-r p-1.5 sm:p-2 align-top min-w-[140px] sm:min-w-[180px]"
+                        className={cn(
+                          "border-b border-r p-1.5 sm:p-2 align-top min-w-[140px] sm:min-w-[180px]",
+                          isFlashing(u.unit_id) && "live-flash live-flash-update"
+                        )}
                       >
                         <MonthCell
                           cell={cell}

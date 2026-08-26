@@ -23,6 +23,7 @@ import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 type BookingDetail = Booking & {
   unit: Unit;
@@ -65,6 +66,14 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
+      {/* Dos personas mirando la misma reserva ven lo mismo: un cobro, un
+          cambio de estado o una cancelación aparecen sin recargar. La compuerta
+          evita que un refresh borre un formulario a medio llenar. */}
+      <LiveRefresh
+        tables={["bookings", "booking_payment_schedule", "cash_movements"]}
+        label="cambio"
+        labelPlural="cambios"
+      />
       <Link href="/dashboard/reservas" className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft size={14} /> Volver
       </Link>

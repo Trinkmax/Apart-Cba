@@ -385,6 +385,7 @@ export async function changeCleaningStatus(id: string, status: CleaningStatus) {
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/m/limpieza");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/unidades");
 
   if (status === "completada" || status === "verificada") {
@@ -569,5 +570,6 @@ export async function deleteCleaningTask(id: string) {
 
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/unidades");
 }

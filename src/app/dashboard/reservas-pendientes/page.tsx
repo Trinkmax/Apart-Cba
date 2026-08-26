@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/format";
 import { TimeUntil } from "@/components/marketplace/time-until";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export const metadata = {
   title: "Solicitudes pendientes · rentOS",
@@ -30,6 +31,7 @@ export default async function ReservasPendientesPage() {
 
   return (
     <div className="page-x page-y max-w-6xl mx-auto space-y-5">
+      <LiveRefresh tables={["booking_requests", "bookings"]} label="solicitud" labelPlural="solicitudes" />
       <header className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">

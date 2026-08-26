@@ -60,6 +60,15 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "no-store, no-cache, must-revalidate" },
         ],
       },
+      // El equipo de campo vive en /m. Sin esto, el bfcache de iOS devuelve la
+      // pantalla tal como estaba al salir — una limpieza reasignada hace una
+      // hora sigue apareciendo como propia.
+      {
+        source: "/m/:path*",
+        headers: [
+          { key: "Cache-Control", value: "no-store, no-cache, must-revalidate" },
+        ],
+      },
       {
         source: "/login",
         headers: [

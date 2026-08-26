@@ -4,6 +4,7 @@ import { getCurrentOrg } from "@/lib/actions/org";
 import { listCleaningTasks } from "@/lib/actions/cleaning";
 import { MobileCleaningList } from "@/components/cleaning/mobile-cleaning-list";
 import type { CleaningTask, UnitRef } from "@/lib/types/database";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 type CT = CleaningTask & { unit: UnitRef };
 
@@ -18,6 +19,7 @@ export default async function MobileLimpiezaPage() {
 
   return (
     <div className="p-4 space-y-4">
+      <LiveRefresh tables={["cleaning_tasks"]} assigneeScoped label="limpieza" labelPlural="limpiezas" />
       <div className="flex items-center gap-2 mb-2">
         <Sparkles className="size-5 text-cyan-500" />
         <h1 className="text-xl font-semibold">Limpieza</h1>

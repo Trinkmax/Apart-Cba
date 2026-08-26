@@ -110,11 +110,16 @@ import {
   UNIT_STATUS_META,
 } from "@/lib/constants";
 import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
-import { reorderUnitsGlobal } from "@/lib/actions/units";
-import { searchBookingsGlobal, listBookingsInRange } from "@/lib/actions/bookings";
+import { reorderUnitsGlobal, listUnitsEnriched } from "@/lib/actions/units";
+import {
+  searchBookingsGlobal,
+  listBookingsInRange,
+  listBookingsNeedingGuest,
+} from "@/lib/actions/bookings";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
 import { useBookingStatusColors } from "@/lib/booking-status-colors";
+import { useFlashIds, useLiveTable } from "@/lib/realtime/use-live";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/format";
 import type {
@@ -273,7 +278,6 @@ interface PmsBoardProps {
   initialNeedsGuest?: BookingWithRelations[];
   /** Abre el popover "Por completar" al montar (deep-link ?completar=1 del dashboard). */
   openNeedsGuestOnMount?: boolean;
-  organizationId: string;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
   orgCurrency?: string;
@@ -398,7 +402,6 @@ export function PmsBoard({
   expenseDefaultId = null,
   initialNeedsGuest = EMPTY_NEEDS_GUEST,
   openNeedsGuestOnMount = false,
-  organizationId,
   startISO,
   days,
   orgCurrency = "ARS",
@@ -1236,91 +1239,314 @@ export function PmsBoard({
     return m;
   }, [visibleBookings, windowStart, windowDays]);
 
-  // ── realtime
+  // ── En vivo ────────────────────────────────────────────────────────────────
+  // El grid tiene estado cliente pesado (drag optimista, ventana lazy-cargada,
+  // orden en borrador): acá NO se puede hacer router.refresh sin romper el
+  // gesto en curso, así que el merge es quirúrgico. Tres reglas que antes
+  // faltaban y que son las que producían "unidades que parecen libres":
+  //   · las ráfagas se agrupan en UN solo fetch — un sync de iCal con 30
+  //     reservas disparaba 30 SELECT por cada pestaña abierta;
+  //   · cada fila recuerda cuándo la tocó el realtime, así una respuesta lenta
+  //     del lazy-load no puede resucitarla con un snapshot viejo;
+  //   · al reconectar se relee la ventana entera CON DESALOJO, porque los
+  //     eventos que ocurrieron con el socket caído no vuelven nunca solos.
+  const { flash, isFlashing } = useFlashIds(3_000);
+  /** Cuándo tocó el realtime cada fila — sella la carrera contra el lazy-load. */
+  const realtimeStamp = useRef(new Map<string, number>());
+  const inbox = useRef<Set<string>>(new Set());
+  const inboxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mutationTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const resyncRef = useRef<(() => Promise<void>) | null>(null);
+  /** Ventana de la última re-lectura autoritativa, para sellar el lazy-load. */
+  const lastResync = useRef<{ at: number; from: string; to: string } | null>(null);
+  /** Llegaron eventos de `units` mientras el operador reordenaba filas. */
+  const missedUnitEvents = useRef(false);
+  // Refs espejo: los handlers del canal corren fuera del ciclo de render.
+  const editModeRef = useRef(editMode);
+  const loadedFromRef = useRef(loadedFrom);
+  const loadedToRef = useRef(loadedTo);
   useEffect(() => {
-    const supabase = createBrowserSupabase();
+    editModeRef.current = editMode;
+    loadedFromRef.current = loadedFrom;
+    loadedToRef.current = loadedTo;
+  }, [editMode, loadedFrom, loadedTo]);
 
-    // Trae la reserva con sus relaciones (unit + guest) para que la fila del
-    // grid muestre el huésped y la unidad correctamente, no solo "Sin huésped".
-    async function fetchWithRelations(id: string): Promise<BookingWithRelations | null> {
-      const { data } = await supabase
+  /** Trae del server el estado autoritativo de un lote de reservas. */
+  const hydrateIds = useCallback(
+    async (ids: string[]) => {
+      if (ids.length === 0) return;
+      const supabase = createBrowserSupabase();
+      const { data, error } = await supabase
         .from("bookings")
         .select(
           "*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)"
         )
-        .eq("id", id)
-        .maybeSingle();
-      return (data as BookingWithRelations | null) ?? null;
+        .in("id", ids);
+      if (error) {
+        // El lote ya se vació de `inbox` y nadie va a reenviar esos eventos:
+        // pedimos la re-lectura autoritativa de la ventana.
+        resyncRef.current?.().catch(() => {});
+        return;
+      }
+      const rows = (data as BookingWithRelations[] | null) ?? [];
+      const found = new Set(rows.map((r) => r.id));
+      const now = Date.now();
+      const evicted = new Set<string>();
+      const alive: BookingWithRelations[] = [];
+      rows.forEach((r) => {
+        // Alineado con listBookingsInRange, que nunca las devuelve: una reserva
+        // cancelada se DESALOJA, no se deja "activa" con una copia vieja.
+        if (r.status === "cancelada" || r.status === "no_show") evicted.add(r.id);
+        else alive.push(r);
+      });
+      ids.forEach((id) => realtimeStamp.current.set(id, now));
+
+      // Si pedimos un id y no volvió, PODRÍA estar borrado — o podría ser un
+      // error parcial de la consulta. No lo sacamos de la grilla por las
+      // dudas: mostrar libre una unidad ocupada es el error caro, y es
+      // justamente el que estamos tratando de eliminar. Pedimos una re-lectura
+      // autoritativa de la ventana, que sí sabe desalojar bien.
+      if (ids.some((id) => !found.has(id))) resyncRef.current?.().catch(() => {});
+
+      setBookings((prev) => {
+        const m = new Map(prev.map((b) => [b.id, b]));
+        evicted.forEach((id) => m.delete(id));
+        alive.forEach((b) => m.set(b.id, b));
+        return Array.from(m.values());
+      });
+      // El panel "Completar datos" se mantiene al día sin recargar: si el email
+      // de la OTA trajo el huésped, la fila sale sola del contador.
+      setNeedsGuestList((prev) => {
+        const m = new Map(prev.map((b) => [b.id, b]));
+        evicted.forEach((id) => m.delete(id));
+        alive.forEach((b) => {
+          const needs =
+            !b.is_block &&
+            !b.guest_id &&
+            (b.source === "airbnb" || b.source === "booking");
+          if (needs) m.set(b.id, b);
+          else m.delete(b.id);
+        });
+        return Array.from(m.values());
+      });
+      alive.forEach((b) => flash(b.id));
+    },
+    [flash]
+  );
+
+  const scheduleHydrate = useCallback(
+    (id: string) => {
+      inbox.current.add(id);
+      if (inboxTimer.current) return;
+      inboxTimer.current = setTimeout(() => {
+        inboxTimer.current = null;
+        const ids = Array.from(inbox.current);
+        inbox.current.clear();
+        void hydrateIds(ids);
+      }, 250);
+    },
+    [hydrateIds]
+  );
+
+  /**
+   * Bloquea una reserva contra el realtime mientras hay una mutación optimista
+   * propia en vuelo. Con TTL: si el flujo se interrumpe (un error, la pestaña
+   * cerrada a mitad del diálogo), la fila no queda sorda para siempre.
+   */
+  const lockMutation = useCallback((id: string) => {
+    pendingMutateIds.current.add(id);
+    const prev = mutationTimers.current.get(id);
+    if (prev) clearTimeout(prev);
+    mutationTimers.current.set(
+      id,
+      setTimeout(() => {
+        pendingMutateIds.current.delete(id);
+        mutationTimers.current.delete(id);
+      }, 15_000)
+    );
+  }, []);
+
+  const unlockMutation = useCallback(
+    (id: string) => {
+      pendingMutateIds.current.delete(id);
+      const t = mutationTimers.current.get(id);
+      if (t) {
+        clearTimeout(t);
+        mutationTimers.current.delete(id);
+      }
+      // Al soltar el lock no confiamos en el snapshot local: preguntamos.
+      scheduleHydrate(id);
+    },
+    [scheduleHydrate]
+  );
+
+  /**
+   * Re-lectura autoritativa de la ventana cargada, con desalojo. Es la única
+   * forma de recuperar lo que pasó mientras el socket estuvo caído.
+   */
+  const resyncWindow = useCallback(async () => {
+    const from = loadedFromRef.current;
+    const to = loadedToRef.current;
+    const lastInclusive = isoAddDays(to, -1);
+    const startedAt = Date.now();
+    try {
+      // `null` = falló. NUNCA `[]`: una lista vacía alimenta un merge CON
+      // DESALOJO y borraría de pantalla todas las cuotas, todas las marcas y
+      // el panel "Completar datos" por un timeout de una sola consulta.
+      const [bs, sch, dm, needs, us] = await Promise.all([
+        listBookingsInRange(from, to),
+        listScheduleInRange(from, lastInclusive).catch(
+          () => null as BookingPaymentSchedule[] | null
+        ),
+        listDateMarksInRange(from, lastInclusive).catch(
+          () => null as OrgDateMark[] | null
+        ),
+        canEditBookings
+          ? listBookingsNeedingGuest().catch(() => null as BookingWithRelations[] | null)
+          : Promise.resolve(null),
+        listUnitsEnriched().catch(() => null),
+      ]);
+      const keep = (id: string) => pendingMutateIds.current.has(id);
+      setBookings((prev) =>
+        mergeWindowed(
+          prev,
+          bs,
+          // Mismo criterio que listBookingsInRange, para que el desalojo no se
+          // coma reservas que el server simplemente no pidió.
+          (b) => b.check_in_date < to && b.check_out_date > from,
+          keep
+        )
+      );
+      if (sch)
+        setSchedule((prev) =>
+          mergeWindowed(prev, sch, (x) => x.due_date >= from && x.due_date < to)
+        );
+      if (dm)
+        setDateMarks((prev) =>
+          mergeWindowed(prev, dm, (x) => x.date >= from && x.date < to)
+        );
+      if (needs) setNeedsGuestList(needs);
+      // Un reorden en borrador no se pisa: el operador lo está editando.
+      if (us && !editModeRef.current) setUnits(us);
+      missedUnitEvents.current = false;
+
+      // Sello de la re-lectura: cualquier respuesta de lazy-load que haya
+      // salido ANTES de este resync trae una foto vieja y no puede pisarlo.
+      lastResync.current = { at: startedAt, from, to };
+      realtimeStamp.current.clear();
+    } catch (err) {
+      console.error("PMS resync failed", err);
+      // Que el llamador (el bus de re-sync) sepa que NO releímos: el indicador
+      // tiene que quedarse en ámbar en vez de volver a verde.
+      throw err;
     }
+  }, [canEditBookings]);
 
-    const channel = supabase
-      .channel(`apartcba:bookings:${organizationId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "apartcba",
-          table: "bookings",
-          filter: `organization_id=eq.${organizationId}`,
-        },
-        async (payload) => {
-          const id =
-            (payload.new as { id?: string })?.id ??
-            (payload.old as { id?: string })?.id;
-          if (!id) return;
-          if (pendingMutateIds.current.has(id)) return;
+  useEffect(() => {
+    resyncRef.current = resyncWindow;
+  }, [resyncWindow]);
 
-          if (payload.eventType === "DELETE") {
-            setBookings((prev) => prev.filter((x) => x.id !== id));
-            setNeedsGuestList((prev) => prev.filter((x) => x.id !== id));
-            return;
-          }
+  // Al salir del modo "Reordenar" recuperamos lo que se descartó mientras el
+  // borrador estaba abierto (cambios de estado de unidad, altas, archivados).
+  useEffect(() => {
+    if (editMode || !missedUnitEvents.current) return;
+    missedUnitEvents.current = false;
+    resyncWindow().catch(() => {});
+  }, [editMode, resyncWindow]);
 
-          // INSERT / UPDATE → re-fetch con relaciones para no perder unit/guest.
-          const full = await fetchWithRelations(id);
-          if (!full) return;
+  useLiveTable({
+    table: "bookings",
+    onChange: (change) => {
+      const id = change.id;
+      if (!id) return;
+      // Mutación optimista propia en curso: no la pisamos.
+      if (pendingMutateIds.current.has(id)) return;
+      if (change.eventType === "DELETE") {
+        // Con REPLICA IDENTITY DEFAULT este evento casi nunca llega (el filtro
+        // por organization_id no se puede evaluar sobre un `old` que sólo trae
+        // la PK). Lo tratamos igual, y del resto se ocupa el resync.
+        realtimeStamp.current.set(id, Date.now());
+        setBookings((prev) => prev.filter((x) => x.id !== id));
+        setNeedsGuestList((prev) => prev.filter((x) => x.id !== id));
+        return;
+      }
+      scheduleHydrate(id);
+    },
+    // Devolvemos la promesa: si la re-lectura falla, el indicador se queda en
+    // ámbar en vez de mentir que está todo al día.
+    onResync: () => resyncWindow(),
+  });
 
-          // Una reserva que pasó a cancelada/no_show se DESALOJA: alineamos el
-          // estado con `listBookingsInRange` (que nunca las devuelve), para que
-          // el merge de prop-sync no conserve una copia vieja "activa".
-          if (full.status === "cancelada" || full.status === "no_show") {
-            setBookings((prev) => prev.filter((x) => x.id !== id));
-            setNeedsGuestList((prev) => prev.filter((x) => x.id !== id));
-            return;
-          }
+  // Cuotas: el punto ámbar de "vencida" mentía hasta recargar si otro cobraba.
+  useLiveTable({
+    table: "booking_payment_schedule",
+    onChange: (change) => {
+      if (change.eventType === "DELETE") {
+        if (change.id) setSchedule((prev) => prev.filter((x) => x.id !== change.id));
+        return;
+      }
+      const row = change.new as BookingPaymentSchedule | null;
+      if (!row?.id) return;
+      setSchedule((prev) => {
+        const idx = prev.findIndex((x) => x.id === row.id);
+        if (idx === -1) return [...prev, row];
+        const next = prev.slice();
+        next[idx] = row;
+        return next;
+      });
+      if (row.booking_id) flash(row.booking_id);
+    },
+  });
 
-          setBookings((prev) => {
-            const idx = prev.findIndex((x) => x.id === id);
-            if (idx === -1) return [...prev, full];
-            const next = prev.slice();
-            next[idx] = full;
-            return next;
-          });
-
-          // Mantener la lista "Completar datos" al día: si el email de la OTA
-          // trajo el huésped (o entró una reserva de canal nueva sin huésped),
-          // el contador de la toolbar se ajusta sin recargar.
-          setNeedsGuestList((prev) => {
-            const needs =
-              !full.is_block &&
-              !full.guest_id &&
-              (full.source === "airbnb" || full.source === "booking");
-            const idx = prev.findIndex((x) => x.id === id);
-            if (needs) {
-              if (idx === -1) return [...prev, full];
-              const next = prev.slice();
-              next[idx] = full;
-              return next;
-            }
-            return idx === -1 ? prev : prev.filter((x) => x.id !== id);
-          });
+  // Unidades: el overlay de limpieza / mantenimiento / bloqueado pintaba el
+  // estado del momento en que se cargó la página.
+  useLiveTable({
+    table: "units",
+    onChange: (change) => {
+      if (editModeRef.current) {
+        // Reordenando: no pisamos el borrador, pero anotamos que nos perdimos
+        // algo para releer al salir.
+        missedUnitEvents.current = true;
+        return;
+      }
+      if (change.eventType === "DELETE") {
+        if (change.id) setUnits((prev) => prev.filter((u) => u.id !== change.id));
+        return;
+      }
+      const row = change.new as (Partial<UnitWithRelations> & { id?: string }) | null;
+      if (!row?.id) return;
+      // Archivar una unidad es un UPDATE (active=false), no un DELETE:
+      // `listUnitsEnriched` filtra por active, así que si no la sacamos acá la
+      // fila fantasma se queda aceptando reservas.
+      if (row.active === false) {
+        setUnits((prev) => prev.filter((u) => u.id !== row.id));
+        return;
+      }
+      setUnits((prev) => {
+        const idx = prev.findIndex((u) => u.id === row.id);
+        // Una unidad nueva (o una que se re-activó) no trae los campos
+        // enriquecidos: la incorpora el resync, que sí llama a
+        // listUnitsEnriched.
+        if (idx === -1) {
+          missedUnitEvents.current = true;
+          return prev;
         }
-      )
-      .subscribe();
+        const next = prev.slice();
+        next[idx] = { ...next[idx], ...row };
+        return next;
+      });
+    },
+  });
+
+  useEffect(() => {
+    const timers = mutationTimers.current;
+    const pending = inboxTimer;
     return () => {
-      supabase.removeChannel(channel);
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+      if (pending.current) clearTimeout(pending.current);
     };
-  }, [organizationId]);
+  }, []);
 
   // ── Lazy-load de la ventana visible ────────────────────────────────────────
   // Cuando la navegación mueve la ventana visible fuera del rango ya traído de la
@@ -1337,6 +1563,7 @@ export function PmsBoard({
     const targetTo =
       visibleTo > loadedTo ? isoAddDays(visibleTo, PREFETCH_DAYS) : loadedTo;
     const seq = ++loadSeqRef.current;
+    const fetchStartedAt = Date.now();
     let cancelled = false;
     (async () => {
       // setState diferido dentro del callback async (no en el cuerpo del efecto)
@@ -1359,6 +1586,17 @@ export function PmsBoard({
           const m = new Map(prev.map((b) => [b.id, b]));
           for (const b of bs) {
             if (pending.has(b.id) && m.has(b.id)) continue;
+            // El realtime tocó esta fila DESPUÉS de que salió este fetch: el
+            // snapshot que trae la respuesta es viejo y resucitaría una reserva
+            // ya movida o cancelada. `loadSeqRef` sólo protege fetch-vs-fetch.
+            const stamp = realtimeStamp.current.get(b.id);
+            if (stamp && stamp > fetchStartedAt) continue;
+            // Y lo mismo con el resync: si una re-lectura autoritativa terminó
+            // después de que salió este fetch, su foto es la buena. Sin esto,
+            // una respuesta lenta resucita en su fecha vieja una reserva que
+            // el resync ya movió.
+            const lr = lastResync.current;
+            if (lr && lr.at > fetchStartedAt) continue;
             m.set(b.id, b);
           }
           return Array.from(m.values());
@@ -1388,7 +1626,7 @@ export function PmsBoard({
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const todayOff = dayOffset(windowStart, new Date().toISOString().slice(0, 10));
+    const todayOff = dayOffset(windowStart, todayYmdInTz());
     if (todayOff < 0 || todayOff >= windowDays) return;
     // hoy cerca del borde izquierdo (2 días de pasado visibles)
     const target = (todayOff - 2) * CELL;
@@ -1405,7 +1643,7 @@ export function PmsBoard({
     []
   );
   const jumpToday = useCallback(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayYmdInTz();
     const el = scrollRef.current;
     const todayOffCurrent = dayOffset(windowStart, today);
     // Si "hoy" ya cae dentro de la ventana → smooth-scroll horizontal sin
@@ -1889,7 +2127,7 @@ export function PmsBoard({
           : b
       )
     );
-    pendingMutateIds.current.add(booking.id);
+    lockMutation(booking.id);
     updateDrag(null);
     // commitToOrigin=false: React acaba de re-renderizar la barra en su nueva
     // posición (post setBookings). La transición inline animará suavemente
@@ -1925,8 +2163,9 @@ export function PmsBoard({
     if (!pendingMove) return;
     const id = pendingMove.booking.id;
     setPendingMove(null);
-    // Liberamos el lock un poco después para no pisar con realtime
-    setTimeout(() => pendingMutateIds.current.delete(id), 800);
+    // Liberamos el lock un poco después para no pisar con realtime; al
+    // soltarlo se re-lee la reserva del server en vez de confiar en el ghost.
+    setTimeout(() => unlockMutation(id), 800);
     // router.refresh para recoger cualquier dato derivado (totals, status)
     router.refresh();
   }
@@ -1948,7 +2187,9 @@ export function PmsBoard({
           : b
       )
     );
-    pendingMutateIds.current.delete(original.id);
+    // Rollback + verificación: si el server SÍ había aplicado el movimiento,
+    // el re-fetch corrige el ghost en vez de dejar una unidad falsamente libre.
+    unlockMutation(original.id);
     setPendingMove(null);
   }
 
@@ -1983,7 +2224,7 @@ export function PmsBoard({
           : b
       )
     );
-    pendingMutateIds.current.add(booking.id);
+    lockMutation(booking.id);
 
     setMoveDialogMounted(true);
     setPendingMove({
@@ -2010,7 +2251,20 @@ export function PmsBoard({
   );
 
   // ── render helpers
-  const todayISO = new Date().toISOString().slice(0, 10);
+  // "Hoy" en la zona de la organización, no en UTC: desde las 21:00 en
+  // Argentina el UTC ya es mañana y el resaltado del día se corría — justo en
+  // la franja en que recepción carga reservas. Además la pestaña que queda
+  // abierta toda la noche tiene que pasar de día sola.
+  const [todayISO, setTodayISO] = useState(() => todayYmdInTz());
+  useEffect(() => {
+    const id = setInterval(() => {
+      setTodayISO((prev) => {
+        const now = todayYmdInTz();
+        return now === prev ? prev : now;
+      });
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
   const todayOff = dayOffset(windowStart, todayISO);
   const gridWidth = windowDays * CELL;
 
@@ -3145,6 +3399,7 @@ export function PmsBoard({
                         onPointerMove={onBarPointerMove}
                         onPointerUp={onBarPointerUp}
                         onPointerCancel={onBarPointerCancel}
+                        justChanged={isFlashing(b.id)}
                         onRequestDateChange={requestDateChangeFromPopover}
                         onCompleteGuest={() => {
                           setOpenBookingId(null);
@@ -3707,6 +3962,8 @@ interface BookingBarProps {
   ) => void;
   /** Cancela el long-press si el browser interrumpe (scroll, touch-cancel) */
   onPointerCancel: (e: React.PointerEvent<HTMLDivElement>) => void;
+  /** La reserva cambió recién por un evento en vivo: se resalta unos segundos. */
+  justChanged?: boolean;
   /** Abre el form rápido de completado de huésped (reservas de canal). */
   onCompleteGuest: () => void;
   onRequestDateChange: (
@@ -3746,6 +4003,7 @@ function BookingBar({
   customStatusHex,
   canEditBookings,
   canViewMoney,
+  justChanged = false,
 }: BookingBarProps) {
   // Un bloqueo OTA (is_block) no es una reserva: se pinta gris "Bloqueado" y no
   // se puede arrastrar/redimensionar/editar (lo gestiona el sync de iCal).
@@ -3824,7 +4082,10 @@ function BookingBar({
             // colisiona con el inline transform.
             isDragging && "ring-2 ring-primary z-20 shadow-xl cursor-grabbing",
             !isDragging && "cursor-grab",
-            booking.status === "cancelada" && "opacity-55"
+            booking.status === "cancelada" && "opacity-55",
+            // Lo que cambió recién se ilumina y se apaga solo: si no se ve, el
+            // equipo no se entera de que algo se movió abajo del cursor.
+            justChanged && !isDragging && "live-flash live-flash-update z-10"
           )}
           style={{
             top: rowHeight * 0.14,

@@ -22,6 +22,7 @@ import { EmailSettingsCard } from "@/components/canales/email-settings-card";
 import { SyncNowButton } from "@/components/canales/sync-now-button";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export const dynamic = "force-dynamic";
 
@@ -72,6 +73,7 @@ export default async function CanalesPage() {
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 max-w-6xl mx-auto">
+      <LiveRefresh tables={["bookings", "notifications"]} throttleMs={6_000} />
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>

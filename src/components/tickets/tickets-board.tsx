@@ -1,6 +1,8 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Archive, Building2, CheckCircle2, Clock, Package, Plus, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,8 +44,15 @@ interface Props {
 }
 
 export function TicketsBoard({ organizationId, initialTickets, units, owners, members, occupancyByUnit, accounts, expenseDefaultId, canRegisterPayment, restrictToUserId }: Props) {
+  const router = useRouter();
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [tickets, setTickets] = useState<TicketWithUnit[]>(initialTickets);
+  // Re-siembra desde el server: ver cleaning-board para el porqué.
+  const [prevInitial, setPrevInitial] = useState(initialTickets);
+  if (prevInitial !== initialTickets) {
+    setPrevInitial(initialTickets);
+    setTickets(initialTickets);
+  }
 
   const unitsById = useMemo(() => {
     const m = new Map<string, UnitRef>();
@@ -100,10 +109,26 @@ export function TicketsBoard({ organizationId, initialTickets, units, owners, me
   useRealtimeRows<MaintenanceTicket>({
     table: "maintenance_tickets",
     organizationId,
+    // El filtro de visibilidad viaja al SERVER para el rol restringido: antes
+    // llegaba toda la operación de la organización por el cable y el descarte
+    // era cosmético, en el navegador. La RLS sigue acotando por organización.
+    filter: restrictToUserId ? `assigned_to=eq.${restrictToUserId}` : undefined,
     onInsert,
     onUpdate,
     onDelete,
+    onResync: () => router.refresh(),
   });
+
+  // El filtro por asignado no puede avisarle a quien PIERDE una fila (el
+  // evento ya no matchea su filtro). Un refresco corto tapa ese hueco sin
+  // volver a mandarle por el cable la operación entera.
+  useEffect(() => {
+    if (!restrictToUserId) return;
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [restrictToUserId, router]);
 
   const openTicket = openTicketId ? tickets.find((t) => t.id === openTicketId) ?? null : null;
 

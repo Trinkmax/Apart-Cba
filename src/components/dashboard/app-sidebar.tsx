@@ -36,6 +36,7 @@ import { OrgBrand } from "@/components/brand/org-brand";
 import { cn } from "@/lib/utils";
 import { can, isAdminLevel, type Resource } from "@/lib/permissions";
 import type { Organization, OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
+import { PendingRequestsBadge } from "@/components/dashboard/pending-requests-badge";
 
 interface NavItem {
   label: string;
@@ -92,9 +93,15 @@ interface AppSidebarProps {
   currentRole: UserRole;
   memberships: (OrganizationMember & { organization: Organization })[];
   profile: UserProfile;
+  /** Solicitudes del marketplace esperando respuesta (se mantiene en vivo). */
+  pendingRequests?: number;
 }
 
-export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
+export function AppSidebar({
+  currentOrg,
+  currentRole,
+  pendingRequests = 0,
+}: AppSidebarProps) {
   const pathname = usePathname();
   const isAdmin = isAdminLevel(currentRole);
 
@@ -152,6 +159,9 @@ export function AppSidebar({ currentOrg, currentRole }: AppSidebarProps) {
                               )}
                             />
                             <span>{item.label}</span>
+                            {item.href === "/dashboard/reservas-pendientes" && (
+                              <PendingRequestsBadge initialCount={pendingRequests} />
+                            )}
                           </Link>
                         </SidebarMenuButton>
                       </SidebarMenuItem>

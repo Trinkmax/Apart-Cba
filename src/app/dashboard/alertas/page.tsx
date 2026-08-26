@@ -6,6 +6,7 @@ import {
 import { listUpcomingSchedule } from "@/lib/actions/payment-schedule";
 import { listAccounts } from "@/lib/actions/cash";
 import { AlertsClient } from "@/components/notifications/alerts-client";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export default async function AlertasPage() {
   const [notifications, unread, upcoming, accounts] = await Promise.all([
@@ -17,6 +18,7 @@ export default async function AlertasPage() {
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1400px] mx-auto">
+      <LiveRefresh tables={["notifications"]} label="alerta" labelPlural="alertas" />
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <div className="size-12 rounded-2xl bg-gradient-to-br from-amber-500/20 to-rose-500/10 ring-1 ring-amber-500/20 flex items-center justify-center">

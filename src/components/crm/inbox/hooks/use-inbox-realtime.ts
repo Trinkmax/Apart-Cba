@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { subscribeResync, subscribeTable } from "@/lib/realtime/manager";
+import type { ResyncReason } from "@/lib/realtime/manager";
 
 export type InboxRealtimeEvent =
   | { kind: "message_insert"; row: Record<string, unknown> }
@@ -13,54 +14,68 @@ interface UseInboxRealtimeOptions {
   organizationId?: string;
   /** Vista chat: filtra los mensajes por conversación (y omite crm_conversations). */
   conversationId?: string;
+  /**
+   * Se llama cuando hubo un hueco de eventos (reconexión, vuelta del
+   * background). El inbox tiene que re-pedir: un mensaje entrante que llegó
+   * con el socket caído no se reenvía nunca.
+   */
+  onResync?: (reason: ResyncReason) => void;
 }
 
+/**
+ * Realtime del inbox de CRM. Delega en el manager compartido, así que hereda
+ * la reconexión con backoff, el estado de conexión y el bus de re-sync que
+ * antes no existían acá (el `.subscribe()` iba sin callback de estado).
+ */
 export function useInboxRealtime(
-  { organizationId, conversationId }: UseInboxRealtimeOptions,
+  { organizationId, conversationId, onResync }: UseInboxRealtimeOptions,
   onPayload: (e: InboxRealtimeEvent) => void,
 ) {
-  // Handler via ref para no re-suscribirse en cada render (mismo patrón que use-realtime-rows)
-  const handlerRef = useRef(onPayload);
+  const handlerRef = useRef({ onPayload, onResync });
   useEffect(() => {
-    handlerRef.current = onPayload;
-  }, [onPayload]);
+    handlerRef.current = { onPayload, onResync };
+  }, [onPayload, onResync]);
 
   useEffect(() => {
     if (!organizationId && !conversationId) return;
 
-    const supabase = createClient();
     const messagesFilter = conversationId
       ? `conversation_id=eq.${conversationId}`
       : `organization_id=eq.${organizationId}`;
 
-    const channel = supabase.channel(
-      conversationId ? `crm-inbox:conv:${conversationId}` : `crm-inbox:${organizationId}`,
-    );
+    const offs = [
+      subscribeTable({
+        table: "crm_messages",
+        filter: messagesFilter,
+        onChange: (change) => {
+          if (!change.new) return;
+          if (change.eventType === "INSERT") {
+            handlerRef.current.onPayload({ kind: "message_insert", row: change.new });
+          } else if (change.eventType === "UPDATE") {
+            handlerRef.current.onPayload({ kind: "message_update", row: change.new });
+          }
+        },
+      }),
+    ];
 
-    channel
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "apartcba", table: "crm_messages", filter: messagesFilter },
-        (p) => handlerRef.current({ kind: "message_insert", row: p.new as Record<string, unknown> }),
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "apartcba", table: "crm_messages", filter: messagesFilter },
-        (p) => handlerRef.current({ kind: "message_update", row: p.new as Record<string, unknown> }),
-      );
-
-    if (organizationId) {
-      channel.on(
-        "postgres_changes",
-        { event: "*", schema: "apartcba", table: "crm_conversations", filter: `organization_id=eq.${organizationId}` },
-        (p) => handlerRef.current({ kind: "conv_change", row: p.new as Record<string, unknown> }),
+    if (organizationId && !conversationId) {
+      offs.push(
+        subscribeTable({
+          table: "crm_conversations",
+          filter: `organization_id=eq.${organizationId}`,
+          onChange: (change) => {
+            if (!change.new) return;
+            handlerRef.current.onPayload({ kind: "conv_change", row: change.new });
+          },
+        }),
       );
     }
 
-    channel.subscribe();
+    const offResync = subscribeResync((reason) => handlerRef.current.onResync?.(reason));
 
     return () => {
-      supabase.removeChannel(channel);
+      offs.forEach((off) => off());
+      offResync();
     };
   }, [organizationId, conversationId]);
 }

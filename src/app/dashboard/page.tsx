@@ -17,6 +17,7 @@ import { DashboardGreeting } from "@/components/dashboard/dashboard-greeting";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export default async function DashboardHome() {
   const [kpis, { role }] = await Promise.all([getDashboardKPIs(), getCurrentOrg()]);
@@ -42,6 +43,10 @@ export default async function DashboardHome() {
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
+      <LiveRefresh
+        tables={["bookings", "units", "cleaning_tasks", "maintenance_tickets"]}
+        throttleMs={8_000}
+      />
       {/* Hero */}
       <div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
         <DashboardGreeting />

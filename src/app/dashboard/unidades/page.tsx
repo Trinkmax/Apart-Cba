@@ -6,6 +6,7 @@ import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { UnitFormDialog } from "@/components/units/unit-form-dialog";
 import { UnitsGrid } from "@/components/units/units-grid";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export default async function UnidadesPage() {
   const [units, { role }] = await Promise.all([
@@ -18,6 +19,7 @@ export default async function UnidadesPage() {
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
+      <LiveRefresh tables={["units", "bookings"]} throttleMs={5_000} />
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Unidades</h1>

@@ -13,6 +13,7 @@ import { TransferFormDialog } from "@/components/cash/transfer-form-dialog";
 import { RecentMovementsPanel } from "@/components/cash/recent-movements-panel";
 import { ExportMovementsDialog } from "@/components/cash/export-movements-dialog";
 import { formatMoney } from "@/lib/format";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export default async function CajaPage() {
   const { role } = await getCurrentOrg();
@@ -35,6 +36,7 @@ export default async function CajaPage() {
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1600px] mx-auto">
+      <LiveRefresh tables={["cash_movements", "bookings"]} label="movimiento" labelPlural="movimientos" throttleMs={5_000} />
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">

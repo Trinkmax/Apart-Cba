@@ -2271,6 +2271,7 @@ export async function confirmBookingWithMessages(
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${parsed.data.bookingId}`);
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/unidades", "layout");
 
   return { ok: true, channels_sent: channelsSent, channels_failed: channelsFailed };
@@ -2699,6 +2700,7 @@ export async function completeChannelGuest(input: {
     .is("dismissed_at", null);
 
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/reservas");
   revalidatePath(`/dashboard/reservas/${booking.id}`);
   revalidatePath("/dashboard");

@@ -42,6 +42,13 @@ export interface BudgetItem {
  */
 export function MobileBudgetList({ items }: { items: BudgetItem[] }) {
   const [rows, setRows] = useState<BudgetItem[]>(items);
+  // Re-sembrar desde el server: sin esto la lista quedaba con la foto del
+  // primer render y un trabajo terminado recién no aparecía nunca.
+  const [prevItems, setPrevItems] = useState(items);
+  if (prevItems !== items) {
+    setPrevItems(items);
+    setRows(items);
+  }
 
   if (rows.length === 0) {
     return (

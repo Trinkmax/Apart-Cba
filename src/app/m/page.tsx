@@ -10,6 +10,7 @@ import { listUnitTips } from "@/lib/actions/unit-tips";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { CleaningTask, MaintenanceTicket } from "@/lib/types/database";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export default async function MobileHome() {
   const session = await getSession();
@@ -39,6 +40,10 @@ export default async function MobileHome() {
 
   return (
     <div className="p-4 space-y-4 safe-x">
+      <LiveRefresh
+        tables={["cleaning_tasks", "maintenance_tickets", "concierge_requests"]}
+        assigneeScoped
+      />
       <div className="brand-gradient text-white rounded-2xl p-5 shadow-sm">
         <p className="text-sm opacity-80 truncate">{organization.name}</p>
         <h1 className="text-2xl font-semibold mt-1">¡Hola, {session.profile.full_name.split(" ")[0]}!</h1>

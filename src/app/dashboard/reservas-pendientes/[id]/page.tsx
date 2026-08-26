@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatMoney } from "@/lib/format";
 import { TimeUntil } from "@/components/marketplace/time-until";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 type Params = Promise<{ id: string }>;
 
@@ -33,6 +34,7 @@ export default async function BookingRequestDetailPage({ params }: { params: Par
 
   return (
     <div className="page-x page-y max-w-4xl mx-auto space-y-5">
+      <LiveRefresh tables={["booking_requests", "bookings"]} label="cambio" labelPlural="cambios" />
       <Link
         href="/dashboard/reservas-pendientes"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"

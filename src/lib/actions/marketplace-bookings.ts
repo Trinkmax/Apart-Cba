@@ -328,6 +328,7 @@ async function createMarketplaceBooking(params: {
 
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/mi-cuenta");
   revalidatePath(`/u/${params.unit.slug}`);
 

@@ -65,7 +65,6 @@ export default async function PmsGridPage({
       expenseDefaultId={expenseDefaultId}
       initialNeedsGuest={needsGuest}
       openNeedsGuestOnMount={sp.completar === "1"}
-      organizationId={organization.id}
       startISO={startISO}
       days={90}
       orgCurrency={organization.default_currency ?? "ARS"}

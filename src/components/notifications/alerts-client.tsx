@@ -56,6 +56,14 @@ export function AlertsClient({
   const router = useRouter();
   const [items, setItems] = useState(initialNotifications);
   const [unread, setUnread] = useState(initialUnreadCount);
+  // Sin esto, la lista quedaba clavada en el snapshot del primer render: una
+  // alerta nueva llegaba al server pero la pantalla no la mostraba nunca.
+  const [prevInitial, setPrevInitial] = useState(initialNotifications);
+  if (prevInitial !== initialNotifications) {
+    setPrevInitial(initialNotifications);
+    setItems(initialNotifications);
+    setUnread(initialUnreadCount);
+  }
   const [isPending, startTransition] = useTransition();
   const [tab, setTab] = useState<"unread" | "active" | "all">(
     initialUnreadCount > 0 ? "unread" : "active"

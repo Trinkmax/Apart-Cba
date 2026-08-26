@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { LiveProvider } from "@/lib/realtime/live-context";
+import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { signOut } from "@/lib/actions/auth";
 import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
@@ -58,16 +60,25 @@ const MOBILE_NAV: MobileNavItem[] = [
 export default async function MobileLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
-  const { role } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
 
   const visibleItems = MOBILE_NAV.filter((it) => !it.roles || it.roles.includes(role));
 
   return (
+    <LiveProvider
+      organizationId={organization.id}
+      userId={session.userId}
+      role={role}
+      timezone={organization.timezone}
+    >
     <div className="min-h-svh bg-background flex flex-col">
       {/* Top bar */}
       <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl border-b safe-top safe-x">
         <div className="px-4 py-3 flex items-center justify-between">
-          <Logo size="sm" />
+          <div className="flex items-center gap-2 min-w-0">
+            <Logo size="sm" />
+            <LiveIndicator />
+          </div>
           <div className="flex items-center gap-2">
             <Link href="/m/perfil" className="tap" aria-label="Mi perfil">
               <Avatar className="size-9">
@@ -117,5 +128,6 @@ export default async function MobileLayout({ children }: { children: React.React
         </div>
       </nav>
     </div>
+    </LiveProvider>
   );
 }

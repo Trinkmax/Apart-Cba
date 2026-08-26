@@ -3,6 +3,7 @@ import { listConciergeRequests } from "@/lib/actions/concierge";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatTimeAgo } from "@/lib/format";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 const STATUS_COLORS: Record<string, string> = {
   pendiente: "#94a3b8",
@@ -25,6 +26,7 @@ export default async function MobileTareasPage() {
 
   return (
     <div className="p-4 space-y-4">
+      <LiveRefresh tables={["concierge_requests"]} label="tarea" labelPlural="tareas" />
       <div className="flex items-center gap-2 mb-2">
         <ListTodo className="size-5 text-primary" />
         <h1 className="text-xl font-semibold">Tareas</h1>

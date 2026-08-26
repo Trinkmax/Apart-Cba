@@ -303,6 +303,51 @@
 .animate-scroll-cue { animation: scrollCue 2.4s ease-in-out infinite; }
 .animate-marquee    { animation: marquee 38s linear infinite; }
 
+/* ──────────────── Señales de "en vivo" ────────────────
+   El tiempo real sólo sirve si se ve. Tres señales, todas efímeras:
+   el latido del indicador, el resaltado de la fila que acaba de cambiar y
+   la píldora de novedades retenidas. */
+
+/* Un solo pulso por evento — nada de animación permanente, que no informa. */
+@keyframes livePing {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  80%  { transform: scale(2.6); opacity: 0; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+.animate-live-ping { animation: livePing 0.6s cubic-bezier(0, 0, 0.2, 1) forwards; }
+
+/* Resaltado de lo que cambió recién: un anillo que se desvanece solo. */
+@keyframes liveFlash {
+  0%   { box-shadow: 0 0 0 0 var(--live-flash-color, rgb(16 185 129 / 0.55)); }
+  25%  { box-shadow: 0 0 0 4px var(--live-flash-color, rgb(16 185 129 / 0.45)); }
+  100% { box-shadow: 0 0 0 0 rgb(16 185 129 / 0); }
+}
+.live-flash {
+  /* Sin `border-radius: inherit`: esta regla vive fuera de @layer y en
+     Tailwind v4 le ganaría al `rounded-md` de la barra del PMS, dejándola
+     cuadrada durante el resaltado. El radio lo pone quien la usa. */
+  animation: liveFlash 2.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.live-flash-new    { --live-flash-color: rgb(16 185 129 / 0.55); }
+.live-flash-update { --live-flash-color: rgb(245 158 11 / 0.55); }
+.live-flash-gone   { --live-flash-color: rgb(148 163 184 / 0.55); }
+
+/* Píldora "N novedades": entra desde arriba, no tapa contenido. */
+@keyframes livePillIn {
+  from { opacity: 0; transform: translate3d(-50%, -10px, 0); }
+  to   { opacity: 1; transform: translate3d(-50%, 0, 0); }
+}
+.animate-live-pill { animation: livePillIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-live-ping,
+  .animate-live-pill { animation: none; }
+  .live-flash {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--live-flash-color, rgb(16 185 129 / 0.55));
+  }
+}
+
 /* Reveal: paired with <Reveal> wrapper. Component sets data-reveal="in" when in view. */
 .reveal {
   opacity: 0;

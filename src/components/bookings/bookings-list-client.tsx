@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Search, CalendarDays, User, Wifi, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, CalendarDays, User, ChevronLeft, ChevronRight } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -11,15 +11,12 @@ import { Button } from "@/components/ui/button";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
-import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 import { formatDate, formatMoney, formatNights } from "@/lib/format";
+import { useFlashIds, useLiveRefresh } from "@/lib/realtime/use-live";
+import { defaultRefreshGate } from "@/lib/realtime/gates";
+import { LiveUpdatesPill } from "@/components/realtime/live-updates-pill";
 import { cn } from "@/lib/utils";
 import type { BookingStatus, BookingListRow } from "@/lib/types/database";
 
@@ -30,7 +27,6 @@ interface Props {
   pageSize: number;
   initialQuery: string;
   initialStatus: BookingStatus | "all";
-  organizationId: string;
   canViewMoney?: boolean;
 }
 
@@ -41,7 +37,6 @@ export function BookingsListClient({
   pageSize,
   initialQuery,
   initialStatus,
-  organizationId,
   canViewMoney = true,
 }: Props) {
   const router = useRouter();
@@ -49,7 +44,6 @@ export function BookingsListClient({
 
   // Input local (controlado) — el filtro real vive en la URL (server-side).
   const [query, setQuery] = useState(initialQuery);
-  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   // Empuja los filtros a la URL; el server re-renderiza la página filtrada.
   // Resetea a page 0 ante cualquier cambio de filtro.
@@ -76,49 +70,19 @@ export function BookingsListClient({
     }, 350);
   };
 
-  // Realtime — refresca la página cuando otros usuarios crean/editan reservas.
-  // Con paginación server-side un prepend local rompería el orden/ventana, así
-  // que refrescamos throttleado (máx 1 cada 4 s) y dejamos que el server
-  // recomponga la página vigente.
-  const lastRefreshRef = useRef(0);
-  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    const supabase = createBrowserSupabase();
-    const throttledRefresh = () => {
-      const REFRESH_MS = 4000;
-      const now = Date.now();
-      const elapsed = now - lastRefreshRef.current;
-      if (elapsed >= REFRESH_MS) {
-        lastRefreshRef.current = now;
-        router.refresh();
-      } else if (!refreshTimerRef.current) {
-        refreshTimerRef.current = setTimeout(() => {
-          refreshTimerRef.current = null;
-          lastRefreshRef.current = Date.now();
-          router.refresh();
-        }, REFRESH_MS - elapsed);
-      }
-    };
-
-    const channel = supabase
-      .channel(`apartcba:bookings-list:${organizationId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "apartcba",
-          table: "bookings",
-          filter: `organization_id=eq.${organizationId}`,
-        },
-        throttledRefresh
-      )
-      .subscribe((status) => setRealtimeConnected(status === "SUBSCRIBED"));
-
-    return () => {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      supabase.removeChannel(channel);
-    };
-  }, [organizationId, router]);
+  // ── En vivo ───────────────────────────────────────────────────────────────
+  // La lista es 100% server-rendered y paginada: un prepend local rompería el
+  // orden y la ventana, así que se vuelve a pedir la página vigente.
+  // Ojo con la paginación por offset: en página > 0, refrescar en silencio
+  // puede correr las filas bajo el dedo del operador (una reserva nueva ordena
+  // por encima). Ahí retenemos y ofrecemos la píldora en vez de saltar solos.
+  const { flash, isFlashing } = useFlashIds(3_000);
+  const live = useLiveRefresh({
+    tables: ["bookings"],
+    throttleMs: 3_000,
+    canRefresh: () => page === 0 && defaultRefreshGate(),
+    onAccepted: (change) => flash(change.id),
+  });
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const rangeStart = total === 0 ? 0 : page * pageSize + 1;
@@ -126,6 +90,13 @@ export function BookingsListClient({
 
   return (
     <TooltipProvider delayDuration={300}>
+      <LiveUpdatesPill
+        count={live.pending}
+        onApply={live.apply}
+        isRefreshing={live.isRefreshing}
+        label="cambio"
+        labelPlural="cambios"
+      />
       <div className="flex gap-2 sm:gap-3 flex-wrap items-center">
         <div className="relative flex-1 min-w-[200px] sm:max-w-md">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -146,31 +117,6 @@ export function BookingsListClient({
           </SelectContent>
         </Select>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className={cn(
-                "hidden sm:flex ml-auto items-center gap-1.5 text-[11px] font-medium px-2.5 h-8 rounded-md",
-                realtimeConnected
-                  ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                  : "bg-muted text-muted-foreground"
-              )}
-            >
-              <Wifi
-                size={12}
-                className={cn(realtimeConnected && "animate-pulse")}
-              />
-              <span className="hidden md:inline">
-                {realtimeConnected ? "En vivo" : "Sin conexión"}
-              </span>
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {realtimeConnected
-              ? "Las reservas se sincronizan en tiempo real"
-              : "Reconectando…"}
-          </TooltipContent>
-        </Tooltip>
       </div>
 
       {rows.length === 0 ? (
@@ -193,7 +139,10 @@ export function BookingsListClient({
                   <Link
                     key={b.id}
                     href={`/dashboard/reservas/${b.id}`}
-                    className="block hover:bg-accent/30 transition-colors group"
+                    className={cn(
+                      "block hover:bg-accent/30 transition-colors group",
+                      isFlashing(b.id) && "live-flash live-flash-update"
+                    )}
                   >
                     {/* MOBILE: tarjeta stackeada — info densa pero legible */}
                     <div className="md:hidden p-3 flex items-start gap-3">

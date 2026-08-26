@@ -20,7 +20,7 @@ type PageProps = {
 };
 
 export default async function ReservasPage({ searchParams }: PageProps) {
-  const { organization, role } = await getCurrentOrg();
+  const { role } = await getCurrentOrg();
   if (!can(role, "bookings", "view")) redirect("/dashboard");
   const canCreateBooking = can(role, "bookings", "create");
   const canViewMoney = can(role, "payments", "view");
@@ -66,7 +66,6 @@ export default async function ReservasPage({ searchParams }: PageProps) {
         pageSize={paged.pageSize}
         initialQuery={q ?? ""}
         initialStatus={status ?? "all"}
-        organizationId={organization.id}
         canViewMoney={canViewMoney}
       />
     </div>

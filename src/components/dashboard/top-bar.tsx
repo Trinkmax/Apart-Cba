@@ -23,6 +23,7 @@ import { ROLE_META } from "@/lib/constants";
 import { getInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
+import { LiveIndicator } from "@/components/realtime/live-indicator";
 import type {
   Notification,
   Organization,
@@ -123,6 +124,10 @@ export function TopBar({
       </Badge>
 
       <div className="flex-1" />
+
+      {/* Estado de la conexión en vivo. Único en toda la app: si esto no está
+          en verde, lo que se ve en pantalla puede estar viejo. */}
+      <LiveIndicator />
 
       {/* Notifications bell */}
       <NotificationsBell

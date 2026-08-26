@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,7 +28,14 @@ export function MobileChat({ conversationId, initial }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Filtro server-side por conversación: solo llegan mensajes de este chat.
-  useInboxRealtime({ conversationId }, (event) => {
+  const router = useRouter();
+  useInboxRealtime(
+    {
+      conversationId,
+      // Un mensaje que entró con la pestaña dormida no vuelve solo.
+      onResync: () => router.refresh(),
+    },
+    (event) => {
     if (event.kind === "message_insert") {
       // Append incremental de la fila entrante (idempotente por id) en vez de
       // re-fetchear todo el detalle (select * limit 500 + 3 queries) por mensaje.
@@ -44,7 +52,8 @@ export function MobileChat({ conversationId, initial }: Props) {
         prev.map((m) => (m.id === row.id ? { ...m, ...row } : m))
       );
     }
-  });
+    }
+  );
 
   useEffect(() => {
     if (scrollRef.current) {
