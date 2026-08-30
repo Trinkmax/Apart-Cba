@@ -13,8 +13,9 @@ export const maxDuration = 60;
 
 /**
  * Dispatcher de Canales de venta — lo dispara Supabase pg_cron:
- *   - apartcba_channel_dispatch_v2  (mode=dispatch; cada minuto, y cada 2 min
- *     una vez que el dispatcher agota las conexiones vencidas por corrida)
+ *   - apartcba_channel_dispatch_v2  (mode=dispatch; cada 2 min — la corrida
+ *     loopea hasta agotar las conexiones vencidas, así que la cadencia del
+ *     cron no limita la capacidad)
  *   - apartcba_channel_reconcile_v2 (diario 06:20 UTC, mode=reconcile)
  *
  * FAIL-CLOSED: sin PG_CRON_SECRET configurado el endpoint no ejecuta nada.
