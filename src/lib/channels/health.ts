@@ -29,8 +29,12 @@ export function computeLinkHealth(
   const lastOk = link.last_success_at ? Date.parse(link.last_success_at) : null;
   const minutesSinceOk = lastOk === null ? Infinity : (Date.now() - lastOk) / 60_000;
 
+  // Umbral de "degradada" = 15 min: cada conexión se sondea cada 5 min, pero el
+  // dispatcher corre cada 2 min (pg_cron) y una corrida puede saltearse. Con
+  // 10 min bastaba UN tick perdido para pintar toda la operación en ámbar sin
+  // que nada estuviera mal. 15 min sigue avisando mucho antes que "crítica" (30).
   if (failures >= 3 || minutesSinceOk > 30) return "critical";
-  if (failures >= 1 || minutesSinceOk > 10) return "degraded";
+  if (failures >= 1 || minutesSinceOk > 15) return "degraded";
   if (!link.last_export_access_at) return "verifying";
   return "healthy";
 }

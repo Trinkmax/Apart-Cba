@@ -7,6 +7,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+/** No re-escribir last_export_access_at si ya se registró hace menos de esto. */
+const EXPORT_ACCESS_MIN_INTERVAL_MS = 10 * 60 * 1000;
+
 /**
  * Calendario iCal SALIENTE por conexión — Airbnb/Booking lo importan para
  * bloquear fechas vendidas por otros canales.
@@ -48,11 +51,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ linkId: string 
     return new NextResponse("Not found", { status: 404 });
   }
 
-  // registrar acceso (salud del lado saliente) — nunca el token
-  await admin
-    .from("channel_links")
-    .update({ last_export_access_at: new Date().toISOString() })
-    .eq("id", link.id);
+  // registrar acceso (salud del lado saliente) — nunca el token. Las OTAs
+  // consultan ~cada hora; si el último acceso es de hace <10 min el UPDATE no
+  // aporta nada al health y sólo cuesta un round trip (~220 ms) a Supabase.
+  const lastAccess = link.last_export_access_at ? Date.parse(link.last_export_access_at) : NaN;
+  if (Number.isNaN(lastAccess) || Date.now() - lastAccess > EXPORT_ACCESS_MIN_INTERVAL_MS) {
+    await admin
+      .from("channel_links")
+      .update({ last_export_access_at: new Date().toISOString() })
+      .eq("id", link.id);
+  }
 
   const { ics, etag } = await buildUnitCalendar(admin, unit);
 

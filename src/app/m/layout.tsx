@@ -19,6 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { UserRole } from "@/lib/types/database";
 
+// Techo de wall-clock para todo /m/* (páginas y Server Actions; una page puede
+// pisarlo con un valor mayor). Acota cuánto tiempo queda reservada y facturando
+// una instancia Fluid si Supabase se cuelga (default Pro: 300 s). El timeout
+// por request vive en el fetch de src/lib/supabase/server.ts; esto es la red
+// de contención. No bajar de 60: la subida de fotos de mantenimiento (hasta
+// 15 MB) hacia Storage pasa por acá.
+export const maxDuration = 60;
+
 function getInitials(name: string | null | undefined): string {
   if (!name) return "U";
   const parts = name.trim().split(/\s+/);

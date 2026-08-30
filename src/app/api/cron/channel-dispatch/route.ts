@@ -6,11 +6,15 @@ import { runChannelDispatch } from "@/lib/channels/dispatch";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// El dispatcher se autolimita a 40 s (TOTAL_BUDGET_MS) y no arranca trabajo
+// que no pueda terminar antes; 60 s deja margen para cerrar la corrida.
+// Debe coincidir con vercel.json (functions[...channel-dispatch/route.ts]).
 export const maxDuration = 60;
 
 /**
  * Dispatcher de Canales de venta — lo dispara Supabase pg_cron:
- *   - apartcba_channel_dispatch_v2  (cada minuto, mode=dispatch)
+ *   - apartcba_channel_dispatch_v2  (mode=dispatch; cada minuto, y cada 2 min
+ *     una vez que el dispatcher agota las conexiones vencidas por corrida)
  *   - apartcba_channel_reconcile_v2 (diario 06:20 UTC, mode=reconcile)
  *
  * FAIL-CLOSED: sin PG_CRON_SECRET configurado el endpoint no ejecuta nada.
@@ -34,8 +38,15 @@ export async function POST(req: Request) {
     // sin body → dispatch
   }
 
+  const startedAt = Date.now();
   const admin = createAdminClient();
   const summary = await runChannelDispatch(admin, mode);
+
+  // Una sola línea por corrida: alcanza para correlacionar con channel_sync_runs
+  // sin inflar Observability Events (que también se cobra).
+  console.log(
+    `[cron/channel-dispatch] mode=${mode} batches=${summary.batches} claimed=${summary.claimed} processed=${summary.processed} released=${summary.released} imported=${summary.imported} updated=${summary.updated} proposed=${summary.proposed} errors=${summary.errors} ms=${Date.now() - startedAt}`,
+  );
 
   // Una reserva de OTA que entra por acá se proyecta a `bookings` sin pasar por
   // ninguna server action, así que nadie invalidaba el cache de las pantallas

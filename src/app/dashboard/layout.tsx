@@ -13,6 +13,15 @@ import { listPendingCancellations } from "@/lib/actions/channel-cancellations";
 import { countPendingRequestsForOrg } from "@/lib/actions/booking-requests";
 import { can } from "@/lib/permissions";
 
+// Techo de wall-clock para todo /dashboard/* (páginas y sus Server Actions;
+// una page puede pisarlo exportando un valor mayor). Sin esto, el default de
+// Fluid en Pro es 300 s: cuando Supabase se cuelga (incidente 2026-08-29) cada
+// instancia queda reservada y facturando Provisioned Memory hasta 5 minutos.
+// Esto solo acota el daño; el timeout por request lo pone el fetch de
+// src/lib/supabase/server.ts. No bajar de 60: acá viven actions legítimamente
+// largas (PDF de liquidación, purga de datos demo, fotos de hasta 15 MB).
+export const maxDuration = 60;
+
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {

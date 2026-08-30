@@ -14,6 +14,14 @@ import type {
 
 const DEFAULT_API_VERSION = "v22.0";
 
+/**
+ * Timeout del fetch de send(). Sin signal, undici espera hasta 300 s los
+ * headers → la función de from-pg (maxDuration 60 s) muere con la fila en
+ * 'sending'. p95 normal de graph.facebook.com < 2 s; 15 s es holgado. Si Meta
+ * acepta el mensaje pero tarda más, el outbox lo reintenta (posible duplicado).
+ */
+const SEND_TIMEOUT_MS = 15_000;
+
 export class MetaCloudProvider implements ChannelProvider {
   private readonly baseUrl: string;
   constructor(private readonly ctx: ChannelProviderContext) {
@@ -35,6 +43,8 @@ export class MetaCloudProvider implements ChannelProvider {
           Authorization: `Bearer ${this.ctx.accessToken}`,
         },
         body: JSON.stringify(payload),
+        // TimeoutError cae en el catch → errorCode 'network', isRetryable: true
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
     } catch (err) {
       return {

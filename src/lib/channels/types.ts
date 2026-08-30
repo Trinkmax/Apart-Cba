@@ -103,6 +103,14 @@ export interface ChannelLinkRow {
   updated_at: string;
 }
 
+/**
+ * Fila que devuelve el RPC `channels_claim_due_links_v2` (migración 056): la
+ * conexión reclamada MÁS la URL del feed ya desencriptada desde Vault, para no
+ * pagar un round trip a `crm_get_secret` por conexión. `feed_url` es null si la
+ * conexión no tiene secreto o el secreto no existe en Vault.
+ */
+export type ClaimedChannelLink = ChannelLinkRow & { feed_url: string | null };
+
 export interface ChannelReservationRow {
   id: string;
   organization_id: string;

@@ -62,7 +62,7 @@ export async function GET(req: Request) {
 }
 
 interface TickResult {
-  outbox: { processed: number; sent: number; failed: number };
+  outbox: { processed: number; sent: number; failed: number; recovered: number };
   runs_resumed: number;
   schedules_fired: number;
   broadcasts_progressed: number;
@@ -71,7 +71,8 @@ interface TickResult {
 async function runDispatcherTick(): Promise<TickResult> {
   const admin = createAdminClient();
 
-  // 1. Procesar outbox
+  // 1. Procesar outbox (solo 'pending' vencidas + 'sending' colgadas; las
+  //    'failed' son terminales y ya no se vuelven a tocar cada tick)
   const outbox = await processOutbox({ limit: 50 });
 
   // 2. Resume runs suspendidos con resume_at <= now

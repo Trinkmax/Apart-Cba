@@ -12,6 +12,7 @@ import type {
   Channel,
   ChannelLinkRow,
   ChannelReservationRow,
+  ClaimedChannelLink,
   ReservationEvent,
 } from "./types";
 
@@ -19,25 +20,52 @@ import type {
 type AdminClient = import("@supabase/supabase-js").SupabaseClient<any, any, any>;
 
 /**
- * Dispatcher de Canales de venta. Corre cada minuto vía pg_cron →
- * POST /api/cron/channel-dispatch.
+ * Dispatcher de Canales de venta. Lo dispara pg_cron → POST /api/cron/channel-dispatch.
  *
- *   - reclama hasta 12 conexiones vencidas (RPC transaccional con
- *     FOR UPDATE SKIP LOCKED — el lock por conexión vive en claimed_until)
- *   - máx. 4 fetches simultáneos, timeout individual de 10 s
- *   - presupuesto total < 45 s
+ * Qué cuesta acá y por qué el código tiene la forma que tiene:
+ *
+ *   · Vercel Fluid cobra WALL-CLOCK de la función, no CPU. Cada request a
+ *     Supabase desde gru1/pdx1 paga ~220 ms de ida y vuelta aunque la query
+ *     tarde 7 ms en Postgres. El dispatcher pasa el 100 % de su tiempo
+ *     esperando red (feed de la OTA o Supabase), así que la única palanca real
+ *     es HACER MENOS REQUESTS y hacer los que quedan EN PARALELO.
+ *   · Antes: 3 requests por conexión (secreto + reservas conocidas + PATCH) y
+ *     un solo batch de 12 por corrida con 4 fetches a la vez → 12 links/min de
+ *     capacidad contra 14/min de demanda (70 links cada 5 min). Cada link se
+ *     leía en realidad cada ~6 min y la función sumaba 2-3 h/día.
+ *   · Ahora: 1 request por conexión (el PATCH final). El RPC v2 devuelve la
+ *     URL del feed junto con el claim y las reservas conocidas se leen UNA vez
+ *     por batch. Y la corrida no se detiene tras un batch: reclama hasta agotar
+ *     las conexiones vencidas o hasta agotar el presupuesto, en todos los
+ *     modos, así el cron puede correr cada 2 min sin perder cadencia.
+ *
+ * Mecánica:
+ *   - claim transaccional (FOR UPDATE SKIP LOCKED; el lock por conexión vive en
+ *     claimed_until) de hasta CLAIM_BATCH conexiones vencidas
+ *   - CONCURRENCY fetches simultáneos, timeout individual de 10 s
+ *   - presupuesto total TOTAL_BUDGET_MS, con margen para el maxDuration de 60 s
  *   - éxito → próxima revisión en 5 min; error → backoff exponencial hasta 1 h
  *   - 3 fallos consecutivos → incidencia
  *
  * El modo `reconcile` (diario) además fuerza una pasada completa y hace
  * housekeeping (reintentos de eventos en error, incidencias obsoletas, links
- * estancados).
+ * estancados, retención de channel_sync_runs).
  */
 
-const CLAIM_BATCH = 12;
-const CONCURRENCY = 4;
+const CLAIM_BATCH = 20;
+// La concurrencia manda sobre el costo: el fetch del feed (~0,65 s p50) no toca
+// Supabase, y el pool de PostgREST (10 conexiones) apenas se ocupa unos ms por
+// request. 10 a la vez es seguro con una sola corrida del cron activa.
+const CONCURRENCY = 10;
 const FETCH_TIMEOUT_MS = 10_000;
-const TOTAL_BUDGET_MS = 45_000;
+// Tope duro por conexión (fetch + sus escrituras). Es la unidad con la que se
+// decide si todavía "entra" trabajo nuevo antes de agotar el presupuesto.
+const PER_LINK_HARD_TIMEOUT_MS = FETCH_TIMEOUT_MS + 5_000;
+// 40 s deja margen para finalizar (PATCH de la corrida, limpiezas) dentro del
+// maxDuration de 60 s de la ruta. Antes con 45 s + 30 s de tope por link, Vercel
+// mataba corridas a los 60 s y quedaban filas de sync_runs sin cerrar.
+const TOTAL_BUDGET_MS = 40_000;
+const CLAIM_LEASE_SECONDS = 120;
 const SUCCESS_INTERVAL_MIN = 5;
 const MAX_BACKOFF_MIN = 60;
 // Cuánta evidencia juntamos antes de MOLESTAR a una persona con una decisión.
@@ -51,6 +79,19 @@ const MISSING_MIN_WINDOW_MS = 30 * 60 * 1000;
 // preguntar, para no gastar la atención del operador en falsos positivos.
 const MISSING_RUNS_TO_PROPOSE_WEAK = 12;
 const MISSING_MIN_WINDOW_WEAK_MS = 6 * 60 * 60 * 1000;
+// Una reserva activa sin proyección (conflicto/ambigüedad) se reintenta como
+// mucho una vez por hora. Reintentarla en CADA lectura costaba 7-8 requests por
+// reserva cada 5 min (había un evento con 2.025 intentos) y nunca cambiaba nada:
+// lo que la destraba es una persona, o el reconcile diario.
+const UNPROJECTED_RETRY_MS = 60 * 60 * 1000;
+// Retención de la auditoría de corridas. Nadie la lee desde la UI; a 1 fila
+// por minuto crecía 31 MB en seis semanas.
+const SYNC_RUNS_RETENTION_DAYS = 14;
+const SYNC_RUNS_PURGE_BATCH = 5000;
+const SYNC_RUNS_PURGE_MAX_BATCHES = 4;
+// Si el RPC v2 no está (PGRST202), cada cuántas corridas volvemos a probarlo.
+const CLAIM_V2_REPROBE_RUNS = 30;
+const TIMEOUT_MESSAGE = "timeout de procesamiento";
 
 export interface DispatchSummary {
   runId: string | null;
@@ -63,7 +104,29 @@ export interface DispatchSummary {
   proposed: number;
   conflicts: number;
   errors: number;
+  /** Cuántos claims hizo la corrida (antes era siempre 1 en modo dispatch). */
+  batches: number;
+  /** Conexiones reclamadas que se liberaron sin procesar por falta de tiempo. */
+  released: number;
   housekeeping?: Record<string, number>;
+}
+
+/**
+ * Estado a nivel módulo: en Fluid el módulo sobrevive entre invocaciones, así
+ * que un PGRST202 transitorio (PostgREST recargando el schema cache justo
+ * después del CREATE FUNCTION) no debe dejar el fallback pegado para siempre.
+ * Por eso la decisión expira cada CLAIM_V2_REPROBE_RUNS corridas y en reconcile.
+ */
+const claimRpcState = { v2Available: true, runsSinceFallback: 0 };
+
+/** Medición por corrida: sin esto no se distingue si lo que queda es OTA o Supabase. */
+interface RunStats {
+  claimMs: number;
+  fetchMs: number[];
+  linkMs: number[];
+  feedErrors: number;
+  timeouts: number;
+  claimRpc: "v2" | "v1";
 }
 
 export async function runChannelDispatch(
@@ -72,16 +135,32 @@ export async function runChannelDispatch(
   opts: { organizationId?: string; linkIds?: string[] } = {},
 ): Promise<DispatchSummary> {
   const startedAt = Date.now();
+  // Después de este instante no se ARRANCA trabajo nuevo (ni claim ni link):
+  // lo que arranque antes termina, en el peor caso, dentro de TOTAL_BUDGET_MS.
+  const startDeadline = startedAt + TOTAL_BUDGET_MS - PER_LINK_HARD_TIMEOUT_MS;
 
-  const { data: run } = await admin
-    .from("channel_sync_runs")
-    .insert({ run_type: mode, organization_id: opts.organizationId ?? null })
-    .select("id")
-    .single();
-  const runId: string | null = run?.id ?? null;
+  maybeReprobeClaimV2(mode);
+
+  // La fila de auditoría se inserta en paralelo con todo lo demás: es el primer
+  // request de la invocación (paga el handshake TLS, ~0,5 s) y nadie necesita
+  // el id hasta finalizeRun.
+  // (async IIFE y no `.then()`: el builder de postgrest-js es un PromiseLike,
+  // no un Promise, y el tipo anotado exige Promise.)
+  const runIdPromise: Promise<string | null> = (async () => {
+    try {
+      const res = await admin
+        .from("channel_sync_runs")
+        .insert({ run_type: mode, organization_id: opts.organizationId ?? null })
+        .select("id")
+        .single();
+      return (res.data as { id: string } | null)?.id ?? null;
+    } catch {
+      return null;
+    }
+  })();
 
   const summary: DispatchSummary = {
-    runId,
+    runId: null,
     claimed: 0,
     processed: 0,
     imported: 0,
@@ -90,6 +169,16 @@ export async function runChannelDispatch(
     proposed: 0,
     conflicts: 0,
     errors: 0,
+    batches: 0,
+    released: 0,
+  };
+  const stats: RunStats = {
+    claimMs: 0,
+    fetchMs: [],
+    linkMs: [],
+    feedErrors: 0,
+    timeouts: 0,
+    claimRpc: claimRpcState.v2Available ? "v2" : "v1",
   };
 
   try {
@@ -104,7 +193,9 @@ export async function runChannelDispatch(
     }
 
     if (mode === "manual" && (opts.linkIds?.length || opts.organizationId)) {
-      // sync-ahora desde la UI: vence las conexiones pedidas y las procesa ya
+      // sync-ahora desde la UI: vence las conexiones pedidas y las procesa ya.
+      // Ojo: el claim de abajo no filtra por organización, así que después de
+      // las pedidas puede reclamar cualquier otra conexión vencida (pre-existente).
       let q = admin
         .from("channel_links")
         .update({ next_poll_at: new Date(Date.now() - 1000).toISOString(), claimed_until: null })
@@ -116,32 +207,71 @@ export async function runChannelDispatch(
 
     const affectedOrgs = new Set<string>();
 
+    // Loop en TODOS los modos: reclamar → procesar → repetir hasta que no queden
+    // conexiones vencidas o se agote el presupuesto. Cortar tras un batch (como
+    // antes en modo dispatch) dejaba capacidad fija de 12 links/min.
     for (;;) {
-      if (Date.now() - startedAt > TOTAL_BUDGET_MS) break;
+      if (Date.now() > startDeadline) break;
 
-      const { data: claimed, error: claimErr } = await admin.rpc("channels_claim_due_links", {
-        p_limit: CLAIM_BATCH,
-        p_lease_seconds: 120,
-      });
-      if (claimErr) throw new Error(`claim falló: ${claimErr.message}`);
-      const links = (claimed ?? []) as ChannelLinkRow[];
+      const claimStart = Date.now();
+      const links = await claimDueLinks(admin);
+      stats.claimMs += Date.now() - claimStart;
+      stats.claimRpc = claimRpcState.v2Available ? "v2" : "v1";
       if (links.length === 0) break;
       summary.claimed += links.length;
+      summary.batches++;
 
-      await withConcurrency(links, CONCURRENCY, async (link) => {
-        const r = await syncLink(admin, link);
-        summary.processed++;
-        summary.imported += r.imported;
-        summary.updated += r.updated;
-        summary.cancelled += r.cancelled;
-        summary.proposed += r.proposed;
-        summary.conflicts += r.conflicts;
-        if (r.error) summary.errors++;
-        if (r.imported > 0 || r.updated > 0) affectedOrgs.add(link.organization_id);
-      });
+      // UNA lectura de channel_reservations para todo el batch, disparada ya:
+      // corre en paralelo con los fetches de los feeds y cada link toma su
+      // parte cuando la necesita.
+      const knownPromise = loadKnownReservations(
+        admin,
+        links.map((l) => l.id),
+      );
+      const touches: BatchTouches = { reappearedIds: [], staleSeenIds: [] };
 
-      // dispatch normal: un solo batch por corrida (el cron corre cada minuto)
-      if (mode === "dispatch") break;
+      const leftovers = await withConcurrency(
+        links,
+        CONCURRENCY,
+        startDeadline,
+        async (link) => {
+          const t0 = Date.now();
+          const r = await syncLink(admin, link, knownPromise, touches, stats);
+          stats.linkMs.push(Date.now() - t0);
+          summary.processed++;
+          summary.imported += r.imported;
+          summary.updated += r.updated;
+          summary.cancelled += r.cancelled;
+          summary.proposed += r.proposed;
+          summary.conflicts += r.conflicts;
+          if (r.error) summary.errors++;
+          if (r.imported > 0 || r.updated > 0) affectedOrgs.add(link.organization_id);
+        },
+        () => {
+          stats.timeouts++;
+          summary.errors++;
+        },
+      );
+
+      // Lo que no llegó a arrancar por tiempo vuelve a estar disponible YA, en
+      // vez de esperar los 120 s del lease.
+      if (leftovers.length > 0) {
+        await admin
+          .from("channel_links")
+          .update({ claimed_until: null })
+          .in(
+            "id",
+            leftovers.map((l) => l.id),
+          );
+        summary.released += leftovers.length;
+      }
+
+      // Escrituras informativas acumuladas de todo el batch (2 requests en vez
+      // de 2 por conexión).
+      await flushBatchTouches(admin, touches);
+
+      // Un batch incompleto quiere decir que no hay más tiempo; no reclamamos otro.
+      if (leftovers.length > 0) break;
     }
 
     // limpiezas para check-outs cercanos de reservas recién importadas
@@ -149,14 +279,139 @@ export async function runChannelDispatch(
       await ensureCleaningSafely(orgId);
     }
 
-    await finalizeRun(admin, runId, summary, startedAt, null);
+    summary.runId = await runIdPromise;
+    await finalizeRun(admin, summary, stats, startedAt, null);
     return summary;
   } catch (err) {
     summary.errors++;
-    await finalizeRun(admin, runId, summary, startedAt, (err as Error).message);
+    summary.runId = await runIdPromise;
+    await finalizeRun(admin, summary, stats, startedAt, (err as Error).message);
     return summary;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Claim
+// ─────────────────────────────────────────────────────────────────────────────
+
+function maybeReprobeClaimV2(mode: "dispatch" | "reconcile" | "manual"): void {
+  if (claimRpcState.v2Available) return;
+  claimRpcState.runsSinceFallback++;
+  if (mode === "reconcile" || claimRpcState.runsSinceFallback >= CLAIM_V2_REPROBE_RUNS) {
+    claimRpcState.v2Available = true;
+    claimRpcState.runsSinceFallback = 0;
+  }
+}
+
+/**
+ * Reclama conexiones vencidas. Preferimos el RPC v2 (migración 056), que trae
+ * la URL del feed desencriptada en la misma respuesta: ahorra un round trip a
+ * Vault por conexión (~220 ms × 16k/día). Si el RPC no existe todavía (deploy
+ * antes de la migración, o PostgREST recargando el schema cache) caemos al RPC
+ * viejo + crm_get_secret por conexión, y lo recordamos a nivel módulo.
+ */
+async function claimDueLinks(admin: AdminClient): Promise<ClaimedChannelLink[]> {
+  if (claimRpcState.v2Available) {
+    const { data, error } = await admin.rpc("channels_claim_due_links_v2", {
+      p_limit: CLAIM_BATCH,
+      p_lease_seconds: CLAIM_LEASE_SECONDS,
+    });
+    if (!error) return ((data ?? []) as unknown[]).map(unwrapClaimedRow);
+    // PGRST202 = "no encuentro la función en el schema cache". También sale si
+    // los NOMBRES de los parámetros no coinciden, por eso logueamos el mensaje.
+    if (error.code !== "PGRST202") throw new Error(`claim falló: ${error.message}`);
+    claimRpcState.v2Available = false;
+    claimRpcState.runsSinceFallback = 0;
+    console.warn(
+      `[channels/dispatch] channels_claim_due_links_v2 no disponible (${error.code}: ${error.message}); fallback al RPC viejo + crm_get_secret por conexión`,
+    );
+  }
+
+  const { data, error } = await admin.rpc("channels_claim_due_links", {
+    p_limit: CLAIM_BATCH,
+    p_lease_seconds: CLAIM_LEASE_SECONDS,
+  });
+  if (error) throw new Error(`claim falló: ${error.message}`);
+  const links = (data ?? []) as ChannelLinkRow[];
+  // los secretos en paralelo: son ≤ CLAIM_BATCH requests independientes
+  return Promise.all(
+    links.map(async (link) => ({
+      ...link,
+      feed_url: await getSecret(link.feed_secret_id).catch(() => null),
+    })),
+  );
+}
+
+function unwrapClaimedRow(raw: unknown): ClaimedChannelLink {
+  // El RPC devuelve SETOF jsonb: PostgREST entrega cada valor tal cual. Por las
+  // dudas, si alguna versión lo envolviera en { channels_claim_due_links_v2: {…} }
+  // lo desenvolvemos en vez de romper el claim.
+  let row = (raw ?? {}) as Record<string, unknown>;
+  const wrapped = row.channels_claim_due_links_v2;
+  if (!("id" in row) && wrapped && typeof wrapped === "object") {
+    row = wrapped as Record<string, unknown>;
+  }
+  const feedUrl =
+    typeof row.feed_url === "string" && row.feed_url.length > 0 ? row.feed_url : null;
+  return { ...(row as unknown as ChannelLinkRow), feed_url: feedUrl };
+}
+
+/**
+ * Reservas canónicas conocidas de TODAS las conexiones del batch en una sola
+ * lectura, repartidas por link_id. Antes era un GET por conexión (16,9k/día).
+ * Si la lectura falla, cada link ve `[]` — el mismo comportamiento que tenía
+ * cuando fallaba su GET individual (todo parece nuevo → la ingesta lo
+ * deduplica; no se propone ninguna desaparición).
+ */
+async function loadKnownReservations(
+  admin: AdminClient,
+  linkIds: string[],
+): Promise<Map<string, ChannelReservationRow[]>> {
+  const byLink = new Map<string, ChannelReservationRow[]>();
+  const { data, error } = await admin
+    .from("channel_reservations")
+    .select("*")
+    .in("link_id", linkIds)
+    .not("ical_uid", "is", null);
+  if (error) {
+    console.error("[channels/dispatch] lectura de channel_reservations falló", error.message);
+    return byLink;
+  }
+  for (const row of (data ?? []) as ChannelReservationRow[]) {
+    if (!row.link_id) continue;
+    const list = byLink.get(row.link_id);
+    if (list) list.push(row);
+    else byLink.set(row.link_id, [row]);
+  }
+  return byLink;
+}
+
+interface BatchTouches {
+  /** reservas que volvieron a aparecer en el feed → limpiar tracking de desaparición */
+  reappearedIds: string[];
+  /** refresco liviano de last_seen_at (informativo; no participa del diff) */
+  staleSeenIds: string[];
+}
+
+async function flushBatchTouches(admin: AdminClient, touches: BatchTouches): Promise<void> {
+  const now = new Date().toISOString();
+  if (touches.reappearedIds.length > 0) {
+    await admin
+      .from("channel_reservations")
+      .update({ missing_since: null, missing_runs: 0, last_seen_at: now })
+      .in("id", touches.reappearedIds);
+  }
+  if (touches.staleSeenIds.length > 0) {
+    await admin
+      .from("channel_reservations")
+      .update({ last_seen_at: now })
+      .in("id", touches.staleSeenIds);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sync de una conexión
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface LinkSyncResult {
   imported: number;
@@ -169,7 +424,13 @@ interface LinkSyncResult {
   error?: string;
 }
 
-async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkSyncResult> {
+async function syncLink(
+  admin: AdminClient,
+  link: ClaimedChannelLink,
+  knownPromise: Promise<Map<string, ChannelReservationRow[]>>,
+  touches: BatchTouches,
+  stats: RunStats,
+): Promise<LinkSyncResult> {
   const result: LinkSyncResult = {
     imported: 0,
     updated: 0,
@@ -179,18 +440,14 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
     skipped: 0,
   };
 
-  let feedUrl: string | null = null;
-  try {
-    feedUrl = await getSecret(link.feed_secret_id);
-  } catch {
-    feedUrl = null;
-  }
+  const feedUrl = link.feed_url;
   if (!feedUrl) {
     await markLinkFailure(admin, link, "La conexión no tiene feed configurado", true);
     result.error = "sin feed";
     return result;
   }
 
+  const fetchStart = Date.now();
   const outcome = await fetchIcalFeed({
     feedUrl,
     channel: link.channel,
@@ -200,15 +457,19 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
     status: "http_error" as const,
     error: (err as Error).message?.slice(0, 200),
   }));
+  stats.fetchMs.push(Date.now() - fetchStart);
 
   if (outcome.status === "not_modified") {
     // lectura válida: el feed no cambió. Conservador: no avanza contadores de
-    // desaparición (no re-observamos el contenido).
+    // desaparición (no re-observamos el contenido). Nota: ninguna OTA manda
+    // validadores hoy (0 de 70 conexiones con etag), así que esta rama es
+    // prácticamente teórica.
     await markLinkSuccess(admin, link, { unchanged: true });
     return result;
   }
 
   if (outcome.status !== "ok" || !outcome.events) {
+    stats.feedErrors++;
     await markLinkFailure(
       admin,
       link,
@@ -221,13 +482,8 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
 
   const events = outcome.events;
 
-  // reservas canónicas conocidas de esta conexión
-  const { data: knownRows } = await admin
-    .from("channel_reservations")
-    .select("*")
-    .eq("link_id", link.id)
-    .not("ical_uid", "is", null);
-  const known = (knownRows ?? []) as ChannelReservationRow[];
+  // reservas canónicas conocidas de esta conexión (leídas una vez por batch)
+  const known = (await knownPromise).get(link.id) ?? [];
   const knownByUid = new Map(known.map((r) => [r.ical_uid as string, r]));
 
   const seenUids = new Set<string>();
@@ -240,8 +496,11 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
       existing.check_out !== ev.checkOut ||
       (ev.confirmationCode && !existing.confirmation_code) ||
       existing.external_status === "cancelled" ||
-      // sin proyección local (conflicto/ambigüedad pendiente) → reintentar
-      (existing.external_status === "active" && !existing.booking_id);
+      // sin proyección local (conflicto/ambigüedad pendiente) → reintentar,
+      // pero como mucho una vez por hora (ver UNPROJECTED_RETRY_MS)
+      (existing.external_status === "active" &&
+        !existing.booking_id &&
+        shouldRetryUnprojected(existing));
 
     if (changed) {
       const rev = toReservationEvent({
@@ -273,13 +532,10 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
     }
   }
 
-  // reapariciones: limpiar tracking de desaparición
+  // reapariciones: limpiar tracking de desaparición (la escritura va por batch)
   const reappeared = known.filter((r) => r.missing_since && seenUids.has(r.ical_uid as string));
   if (reappeared.length > 0) {
-    await admin
-      .from("channel_reservations")
-      .update({ missing_since: null, missing_runs: 0, last_seen_at: new Date().toISOString() })
-      .in("id", reappeared.map((r) => r.id));
+    touches.reappearedIds.push(...reappeared.map((r) => r.id));
     for (const r of reappeared) {
       await resolveIssuesByDedupe(
         admin,
@@ -291,19 +547,14 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
   }
 
   // refresco liviano de last_seen_at (informativo; no participa del diff)
-  const staleSeenIds = known
-    .filter(
-      (r) =>
-        seenUids.has(r.ical_uid as string) &&
-        !r.missing_since &&
-        (!r.last_seen_at || Date.now() - Date.parse(r.last_seen_at) > 60 * 60 * 1000),
-    )
-    .map((r) => r.id);
-  if (staleSeenIds.length > 0) {
-    await admin
-      .from("channel_reservations")
-      .update({ last_seen_at: new Date().toISOString() })
-      .in("id", staleSeenIds);
+  for (const r of known) {
+    if (
+      seenUids.has(r.ical_uid as string) &&
+      !r.missing_since &&
+      (!r.last_seen_at || Date.now() - Date.parse(r.last_seen_at) > 60 * 60 * 1000)
+    ) {
+      touches.staleSeenIds.push(r.id);
+    }
   }
 
   // desapariciones. Un feed vacío teniendo reservas activas sigue siendo
@@ -330,6 +581,15 @@ async function syncLink(admin: AdminClient, link: ChannelLinkRow): Promise<LinkS
     anomalousEmpty,
   });
   return result;
+}
+
+function shouldRetryUnprojected(existing: ChannelReservationRow): boolean {
+  // Sin unidad no hay nada que proyectar: la destraba una persona (no aplica a
+  // iCal, cuya conexión siempre tiene unidad, pero la fila puede venir de email).
+  if (!existing.unit_id) return false;
+  const updatedAt = Date.parse(existing.updated_at);
+  if (Number.isNaN(updatedAt)) return true;
+  return Date.now() - updatedAt > UNPROJECTED_RETRY_MS;
 }
 
 /**
@@ -387,31 +647,61 @@ export async function proposeDisappearances(
   // todas las reservas de una unidad de una sola vez, así que no avanza nada:
   // ni contadores ni propuestas. Queda una incidencia para que se revise el feed.
   if (feedEmpty && candidates.length > 0) {
-    await openIssue(admin, {
-      organizationId: link.organization_id,
-      linkId: link.id,
-      issueType: "feed_error",
-      severity: "critical",
-      title: `El calendario de ${channelLabel(link.channel)} está viniendo vacío`,
-      detail: `La última lectura no trajo ningún evento, pero hay ${candidates.length} ${candidates.length === 1 ? "reserva activa" : "reservas activas"} de esta conexión. No tocamos nada: revisá que el enlace del calendario siga siendo válido.`,
-      dedupeKey: `empty_feed:${link.id}`,
-    });
+    // Sólo en la TRANSICIÓN a vacío: el health de la conexión guarda si la
+    // lectura anterior ya venía vacía. Insistir en cada lectura era un POST
+    // que terminaba en 23505 cada 5 min por conexión (~1,2k/día).
+    if (!link.health?.anomalous_empty) {
+      await openIssue(admin, {
+        organizationId: link.organization_id,
+        linkId: link.id,
+        issueType: "feed_error",
+        severity: "critical",
+        title: `El calendario de ${channelLabel(link.channel)} está viniendo vacío`,
+        detail: `La última lectura no trajo ningún evento, pero hay ${candidates.length} ${candidates.length === 1 ? "reserva activa" : "reservas activas"} de esta conexión. No tocamos nada: revisá que el enlace del calendario siga siendo válido.`,
+        dedupeKey: `empty_feed:${link.id}`,
+      });
+    }
     return 0;
   }
 
-  for (const r of candidates) {
+  // Primero decidimos qué haría cada candidata; las que ya juntaron evidencia
+  // suficiente se cruzan con las propuestas pendientes en UNA lectura, para no
+  // volver a armar el snapshot (bookings + units + guests + POST que termina en
+  // 23505) en cada lectura mientras una persona todavía no decidió.
+  const decisions = candidates.map((r) => {
     // "Más allá del horizonte" = el feed no publica tan lejos, así que su
     // silencio no prueba nada. Ojo: el evento MÁS lejano define el horizonte,
     // por lo que al desaparecer siempre cae acá — de ahí la vía lenta.
     const beyondHorizon = feedEmpty || horizon === null || r.check_out! > horizon;
     const runsNeeded = beyondHorizon ? MISSING_RUNS_TO_PROPOSE_WEAK : MISSING_RUNS_TO_PROPOSE;
     const windowNeeded = beyondHorizon ? MISSING_MIN_WINDOW_WEAK_MS : MISSING_MIN_WINDOW_MS;
-
     const runs = r.missing_runs + 1;
     const missingSince = r.missing_since ?? new Date().toISOString();
     const windowElapsed = Date.now() - Date.parse(missingSince) >= windowNeeded;
+    const ready = runs >= runsNeeded && windowElapsed && Boolean(r.missing_since);
+    return { r, beyondHorizon, runsNeeded, runs, missingSince, ready };
+  });
 
-    if (runs >= runsNeeded && windowElapsed && r.missing_since) {
+  const alreadyPending = new Set<string>();
+  const readyIds = decisions.filter((d) => d.ready).map((d) => d.r.id);
+  if (readyIds.length > 0) {
+    const { data: pending } = await admin
+      .from("channel_cancellation_requests")
+      .select("reservation_id")
+      .eq("organization_id", link.organization_id)
+      .eq("status", "pending")
+      .in("reservation_id", readyIds);
+    for (const p of (pending ?? []) as { reservation_id: string | null }[]) {
+      if (p.reservation_id) alreadyPending.add(p.reservation_id);
+    }
+  }
+
+  for (const { r, beyondHorizon, runsNeeded, runs, missingSince, ready } of decisions) {
+    if (ready) {
+      // La propuesta ya está abierta y esperando: el contador queda congelado
+      // y no se escribe nada hasta que una persona decida.
+      if (alreadyPending.has(r.id)) continue;
+
       // Evidencia suficiente para pedir una decisión humana.
       const created = await openCancellationRequest(admin, {
         organizationId: link.organization_id,
@@ -430,7 +720,6 @@ export async function proposeDisappearances(
         },
       });
       if (created) proposed++;
-      // El contador se congela: la propuesta ya está abierta y esperando.
       await admin
         .from("channel_reservations")
         .update({ missing_since: missingSince, missing_runs: runs })
@@ -458,7 +747,6 @@ export async function proposeDisappearances(
   }
   return proposed;
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Health bookkeeping por conexión
@@ -641,7 +929,54 @@ async function runHousekeeping(admin: AdminClient): Promise<Record<string, numbe
     );
   }
 
+  // retención de la auditoría de corridas
+  counts.sync_runs_purged = await purgeOldSyncRuns(admin);
+
   return counts;
+}
+
+/**
+ * Borra channel_sync_runs más viejas que SYNC_RUNS_RETENTION_DAYS en lotes
+ * acotados. PostgREST corre con statement_timeout = 8 s y safeupdate, así que
+ * un DELETE masivo se cae; y un `.in('id', 5000 ids)` no entra en una URL. El
+ * lote se acota por FECHA: leemos la started_at de la fila N-ésima más vieja y
+ * borramos todo lo anterior a ella (usa el índice de started_at).
+ *
+ * La purga INICIAL (50k+ filas acumuladas) se hace por SQL en la migración 056;
+ * esto sólo mantiene la tabla chica de ahí en adelante (también hay un job
+ * pg_cron diario que hace lo mismo desde adentro de la base).
+ */
+async function purgeOldSyncRuns(admin: AdminClient): Promise<number> {
+  const cutoff = new Date(Date.now() - SYNC_RUNS_RETENTION_DAYS * 86_400_000).toISOString();
+  let purged = 0;
+  try {
+    for (let batch = 0; batch < SYNC_RUNS_PURGE_MAX_BATCHES; batch++) {
+      const { data: edge } = await admin
+        .from("channel_sync_runs")
+        .select("started_at")
+        .lt("started_at", cutoff)
+        .order("started_at", { ascending: true })
+        .range(SYNC_RUNS_PURGE_BATCH - 1, SYNC_RUNS_PURGE_BATCH - 1)
+        .maybeSingle();
+
+      // sin fila N-ésima → queda menos de un lote: borramos hasta el corte y listo
+      const upperBound: string = edge?.started_at ?? cutoff;
+      const { count, error } = await admin
+        .from("channel_sync_runs")
+        .delete({ count: "exact" })
+        .lte("started_at", upperBound)
+        .lt("started_at", cutoff);
+      if (error) {
+        console.warn("[channels/dispatch] purga de channel_sync_runs falló", error.message);
+        break;
+      }
+      purged += count ?? 0;
+      if (!edge || (count ?? 0) === 0) break;
+    }
+  } catch (err) {
+    console.warn("[channels/dispatch] purga de channel_sync_runs falló", (err as Error).message);
+  }
+  return purged;
 }
 
 /** Reconstruye el ReservationEvent desde una fila de channel_events. */
@@ -704,12 +1039,12 @@ async function ensureCleaningSafely(orgId: string): Promise<void> {
 
 async function finalizeRun(
   admin: AdminClient,
-  runId: string | null,
   summary: DispatchSummary,
+  stats: RunStats,
   startedAt: number,
   error: string | null,
 ): Promise<void> {
-  if (!runId) return;
+  if (!summary.runId) return;
   await admin
     .from("channel_sync_runs")
     .update({
@@ -719,42 +1054,77 @@ async function finalizeRun(
         imported: summary.imported,
         updated: summary.updated,
         cancelled: summary.cancelled,
+        proposed: summary.proposed,
         conflicts: summary.conflicts,
         errors: summary.errors,
         housekeeping: summary.housekeeping ?? null,
+        // desglose para saber si lo que queda es la OTA o Supabase
+        batches: summary.batches,
+        released: summary.released,
+        feed_errors: stats.feedErrors,
+        timeouts: stats.timeouts,
+        claim_rpc: stats.claimRpc,
+        claim_ms: stats.claimMs,
+        fetch_ms: percentiles(stats.fetchMs),
+        link_ms: percentiles(stats.linkMs),
       },
       error,
       finished_at: new Date().toISOString(),
       duration_ms: Date.now() - startedAt,
     })
-    .eq("id", runId);
+    .eq("id", summary.runId);
 }
 
+function percentiles(values: number[]): { n: number; p50: number; p95: number; max: number } | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
+  return { n: sorted.length, p50: at(0.5), p95: at(0.95), max: sorted[sorted.length - 1] };
+}
+
+/**
+ * Procesa `items` con `limit` workers. Un worker no ARRANCA un item nuevo
+ * pasado `startDeadline`; los que quedan sin arrancar se devuelven para que el
+ * llamador los libere. Se espera a todos los workers antes de volver.
+ */
 async function withConcurrency<T>(
   items: T[],
   limit: number,
+  startDeadline: number,
   fn: (item: T) => Promise<void>,
-): Promise<void> {
+  onTimeout?: () => void,
+): Promise<T[]> {
   const queue = [...items];
   const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
     for (;;) {
+      if (Date.now() > startDeadline) return;
       const item = queue.shift();
       if (item === undefined) return;
       try {
-        await withTimeout(fn(item), FETCH_TIMEOUT_MS + 20_000);
+        await withTimeout(fn(item), PER_LINK_HARD_TIMEOUT_MS);
       } catch (err) {
-        console.error("[channels/dispatch] worker error", (err as Error).message);
+        const msg = (err as Error).message;
+        if (msg === TIMEOUT_MESSAGE) onTimeout?.();
+        console.error("[channels/dispatch] worker error", msg);
       }
     }
   });
   await Promise.all(workers);
+  return queue;
 }
 
+/**
+ * Tope duro por item. El fetch del feed ya se aborta solo a los 10 s
+ * (AbortSignal.timeout en safeFetchFeed); esto cubre las escrituras posteriores.
+ * No cancela la promesa subyacente: un link que se pasa queda reclamado hasta
+ * que venza el lease (120 s) y se reintenta en la próxima corrida.
+ */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error("timeout de procesamiento")), ms),
-    ),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(TIMEOUT_MESSAGE)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }

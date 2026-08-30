@@ -14,6 +14,13 @@ import type {
 const DEFAULT_API_VERSION = "v22.0";
 
 /**
+ * Timeout del fetch de send(). Sin signal, undici espera hasta 300 s los
+ * headers → la función de from-pg (maxDuration 60 s) muere con la fila en
+ * 'sending'. 15 s es holgado para graph.facebook.com.
+ */
+const SEND_TIMEOUT_MS = 15_000;
+
+/**
  * Provider para Instagram Direct Messaging via Meta Messenger Platform.
  *
  * Diferencias vs WhatsApp Cloud:
@@ -50,6 +57,8 @@ export class InstagramProvider implements ChannelProvider {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
+        // TimeoutError cae en el catch → errorCode 'network', isRetryable: true
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
     } catch (err) {
       return {

@@ -11,6 +11,15 @@ import type { JWK } from "@supabase/supabase-js";
  */
 const JWKS_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Timeout del fetch al JWKS. Sano tarda ~260 ms; en el incidente 2026-08-29
+ * promedió 36-113 s y, como `inflight` deduplica, un solo fetch colgado
+ * bloqueaba a TODOS los requests concurrentes que esperaban el JWKS. Acá sí
+ * sirve `AbortSignal.timeout` (TimeoutError): no pasa por postgrest-js y el
+ * catch de abajo devuelve el cache viejo (stale-while-error).
+ */
+const JWKS_FETCH_TIMEOUT_MS = 3_000;
+
 let cached: { jwks: { keys: JWK[] }; fetchedAt: number } | null = null;
 let inflight: Promise<{ keys: JWK[] } | undefined> | null = null;
 
@@ -21,7 +30,7 @@ export async function getProjectJwks(): Promise<{ keys: JWK[] } | undefined> {
     try {
       const res = await fetch(
         `${process.env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/.well-known/jwks.json`,
-        { cache: "no-store" }
+        { cache: "no-store", signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS) }
       );
       if (!res.ok) return cached?.jwks;
       const jwks = (await res.json()) as { keys: JWK[] };
