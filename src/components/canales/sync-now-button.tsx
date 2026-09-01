@@ -18,7 +18,11 @@ export function SyncNowButton({ disabled }: { disabled?: boolean }) {
         toast.success(
           r.errors > 0
             ? `Sincronización con ${r.errors} ${r.errors === 1 ? "error" : "errores"} — revisá las incidencias`
-            : `Sincronizado: ${r.imported} nuevas, ${r.updated} actualizadas, ${r.conflicts} conflictos`,
+            : `Sincronizado: ${r.imported} nuevas, ${r.updated} actualizadas, ${r.conflicts} conflictos${
+                r.requested + r.promoted + r.discarded > 0
+                  ? ` · solicitudes: ${r.requested} nuevas, ${r.promoted} confirmadas, ${r.discarded} caídas`
+                  : ""
+              }`,
         );
         router.refresh();
       } catch (err) {

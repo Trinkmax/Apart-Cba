@@ -126,7 +126,11 @@ export type NotificationType =
   | "inbound_booking_pending"
   | "inbound_booking_cancelled"
   | "inbound_booking_unmatched_unit"
+  | "inbound_booking_conflict"
   | "channel_feed_error"
+  | "channel_cancellation_pending"
+  | "channel_request_pending"
+  | "channel_request_auto_confirmed"
   | "manual"
   | "other";
 

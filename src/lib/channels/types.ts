@@ -9,6 +9,29 @@
 
 export type Channel = "airbnb" | "booking";
 export type ChannelTransport = "ical" | "email";
+export type ChannelReservationStatus =
+  | "active"
+  | "pending"
+  | "cancelled"
+  | "ignored"
+  | "expired";
+/**
+ * De dónde salió la evidencia de que la solicitud era una reserva de verdad.
+ *   email          → llegó la confirmación de la OTA
+ *   email_backfill → la confirmación había llegado ANTES que el iCal (pasa
+ *                    seguido: el mail de Airbnb gana la carrera por 3-5 min)
+ *   manual         → alguien apretó "Es una reserva"
+ *   ttl            → seguía publicada pasado el umbral y el mail nunca llegó
+ *   gate_off       → se apagó la política y lo que quedó en vuelo se drenó a
+ *                    reserva (si no, quedaría colgado hasta 26 h justo cuando
+ *                    alguien apagó el gate porque algo estaba mal)
+ */
+export type ChannelPromotionSource =
+  | "email"
+  | "email_backfill"
+  | "manual"
+  | "ttl"
+  | "gate_off";
 export type ChannelLinkStatus = "draft" | "active" | "paused" | "error";
 export type ChannelEventStatus =
   | "received"
@@ -56,6 +79,20 @@ export interface ReservationEvent {
   listingId?: string;
   /** Texto libre del listing — SOLO para sugerencias, nunca auto-asigna. */
   listingHint?: string;
+  /**
+   * Evidencia POSITIVA de que la OTA confirmó la reserva. Lo setea únicamente
+   * el adaptador de email en la rama `new_booking` (email-adapter.ts).
+   *
+   * El iCal NUNCA lo pone: en el feed de Airbnb una solicitud pendiente y una
+   * reserva confirmada son el mismo VEVENT ("SUMMARY:Reserved" + código HM en
+   * la DESCRIPTION) — verificado descargando los .ics de producción.
+   *
+   * Tampoco puede usarse `transport === "email"` como discriminante:
+   * `reprojectReservation()` fabrica un evento sintético con transport "email",
+   * y lo disparan los botones "Reintentar" y "Asignar unidad" de una incidencia.
+   * Con ese atajo, un operador resolviendo una incidencia promovería un fantasma.
+   */
+  confirmed?: boolean;
   /** Clave de idempotencia dura (org-scoped). */
   dedupeKey: string;
   /** SHA-256 del contenido original, para auditoría sin guardar raw bodies. */
@@ -67,6 +104,8 @@ export interface IngestResult {
     | "created"
     | "updated"
     | "cancelled"
+    /** Solicitud registrada sin confirmar: NO se escribió nada en `bookings`. */
+    | "requested"
     | "duplicate"
     | "conflict"
     | "needs_review"
@@ -119,13 +158,22 @@ export interface ChannelReservationRow {
   channel: Channel;
   booking_id: string | null;
   /**
-   * active    → vigente en la OTA
+   * active    → vigente en la OTA y proyectada a `bookings`
+   * pending   → SOLICITUD sin confirmar. La fila existe y se ve, pero NO hay
+   *             fila en `bookings`: no ocupa calendario, no dispara limpiezas,
+   *             no entra a KPIs ni liquidaciones. En el feed de Airbnb una
+   *             solicitud y una reserva confirmada son el MISMO VEVENT, así que
+   *             el único ascenso posible es evidencia positiva externa
+   *             (`promoted_source`).
    * cancelled → la OTA la sacó del calendario
    * ignored   → el operador la liberó a mano desde el PMS. NO se re-proyecta
    *             aunque el VEVENT siga vivo en el feed (decisión humana, no un
    *             hecho de la OTA). Solo un email de reserva real la reactiva.
+   * expired   → solicitud que desapareció del feed sin confirmarse. Nunca fue
+   *             reserva, así que se descarta sola (no aplica la 053, que exige
+   *             humano para cancelar una RESERVA). Reversible desde la UI.
    */
-  external_status: "active" | "cancelled" | "ignored";
+  external_status: ChannelReservationStatus;
   check_in: string | null;
   check_out: string | null;
   ical_uid: string | null;
@@ -147,6 +195,19 @@ export interface ChannelReservationRow {
    */
   cancellation_locked_at: string | null;
   cancellation_locked_by: string | null;
+  /** Cuándo y por qué dejó de ser solicitud. Null mientras siga `pending`. */
+  promoted_at: string | null;
+  promoted_source: ChannelPromotionSource | null;
+  promoted_by: string | null;
+  expired_at: string | null;
+  /**
+   * Quién la descartó: el feed (automático, revive si el VEVENT vuelve) o una
+   * persona (no revive sola — mismo principio que `ignored`).
+   */
+  expired_source: "feed" | "manual" | null;
+  expired_by: string | null;
+  /** Último intento FALLIDO de proyectar la solicitud (throttle del reintento). */
+  projection_attempted_at: string | null;
   created_at: string;
   updated_at: string;
 }

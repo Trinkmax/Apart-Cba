@@ -46,17 +46,27 @@ export async function POST(req: Request) {
   // Una sola línea por corrida: alcanza para correlacionar con channel_sync_runs
   // sin inflar Observability Events (que también se cobra).
   console.log(
-    `[cron/channel-dispatch] mode=${mode} batches=${summary.batches} claimed=${summary.claimed} processed=${summary.processed} released=${summary.released} imported=${summary.imported} updated=${summary.updated} proposed=${summary.proposed} errors=${summary.errors} ms=${Date.now() - startedAt}`,
+    `[cron/channel-dispatch] mode=${mode} batches=${summary.batches} claimed=${summary.claimed} processed=${summary.processed} released=${summary.released} imported=${summary.imported} updated=${summary.updated} requested=${summary.requested} promoted=${summary.promoted} discarded=${summary.discarded} proposed=${summary.proposed} errors=${summary.errors} ms=${Date.now() - startedAt}`,
   );
 
   // Una reserva de OTA que entra por acá se proyecta a `bookings` sin pasar por
   // ninguna server action, así que nadie invalidaba el cache de las pantallas
   // que la muestran. La pestaña abierta se entera por Realtime; esto es para
   // que NAVEGAR tampoco devuelva la foto anterior.
-  if (summary.imported > 0 || summary.updated > 0 || summary.cancelled > 0) {
+  if (
+    summary.imported > 0 ||
+    summary.updated > 0 ||
+    summary.cancelled > 0 ||
+    // Una solicitud que entra, se confirma o se cae cambia lo que ve el
+    // operador (grilla, bandeja, badge del sidebar) aunque no toque `bookings`.
+    summary.requested > 0 ||
+    summary.promoted > 0 ||
+    summary.discarded > 0
+  ) {
     for (const path of [
       "/dashboard",
       "/dashboard/reservas",
+      "/dashboard/reservas-pendientes",
       "/dashboard/unidades/kanban",
       "/dashboard/unidades/calendario/mensual",
       "/dashboard/canales",

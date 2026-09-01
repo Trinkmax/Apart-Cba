@@ -54,10 +54,24 @@ interface OpenRequestInput {
  * Devuelve `false` si no había nada que proponer (la reserva ya no está viva) o
  * si ya hay una propuesta abierta para el mismo caso.
  */
+export type OpenCancellationOutcome =
+  | "created"
+  /** Ya hay una propuesta abierta para el mismo caso. */
+  | "duplicate"
+  /**
+   * La reserva local ya no está viva (la cancelaron a mano). No hay nada que
+   * proponer — y el que llama tiene que darla por cerrada en vez de volver a
+   * contarla: mientras devolvía un `false` indistinguible, el barrido seguía
+   * incrementando `missing_runs` cada 2 minutos sin estado terminal posible
+   * (había filas con 24 lecturas y subiendo).
+   */
+  | "booking_not_live"
+  | "failed";
+
 export async function openCancellationRequest(
   admin: AdminClient,
   input: OpenRequestInput,
-): Promise<boolean> {
+): Promise<OpenCancellationOutcome> {
   const r = input.reservation ?? null;
   const bookingId = input.bookingId ?? r?.booking_id ?? null;
   const linkId = input.linkId ?? input.link?.id ?? r?.link_id ?? null;
@@ -73,7 +87,7 @@ export async function openCancellationRequest(
   let risk: "normal" | "alto" = "normal";
 
   if (bookingId) {
-    const { data: booking } = await admin
+    const { data: booking, error: readErr } = await admin
       .from("bookings")
       .select(
         "id, status, source, is_block, check_in_date, check_out_date, currency, total_amount, paid_amount, created_by, confirmation_sent_at, guest_id, unit_id",
@@ -81,9 +95,17 @@ export async function openCancellationRequest(
       .eq("id", bookingId)
       .maybeSingle();
 
-    if (!booking) return false;
+    // "No pude leer" NO es "no existe". El llamador trata `booking_not_live`
+    // como terminal y cierra la fila externa; si un timeout de 10 s o un 5xx
+    // se colara por acá, una reserva viva y cobrada perdería para siempre su
+    // propuesta de cancelación, sin que nadie se entere.
+    if (readErr) {
+      console.error("[channels/cancel-request] no se pudo leer la reserva", readErr.message);
+      return "failed";
+    }
+    if (!booking) return "booking_not_live";
     // Ya no está viva: no hay nada que proponer.
-    if (!LIVE_STATUSES.includes(booking.status)) return false;
+    if (!LIVE_STATUSES.includes(booking.status)) return "booking_not_live";
 
     const [{ data: unit }, { data: guest }] = await Promise.all([
       booking.unit_id
@@ -141,11 +163,12 @@ export async function openCancellationRequest(
   if (error) {
     if (error.code !== "23505") {
       console.error("[channels/cancel-request] insert falló", error.message);
+      return "failed";
     }
-    return false;
+    return "duplicate";
   }
 
-  await admin.from("notifications").insert({
+  const { error: notifyError } = await admin.from("notifications").insert({
     organization_id: input.organizationId,
     type: "channel_cancellation_pending",
     severity: risk === "alto" ? "critical" : "warning",
@@ -160,8 +183,15 @@ export async function openCancellationRequest(
     action_url: "/dashboard/canales/cancelaciones",
     dedup_key: `cancel_request:${r?.id ?? bookingId}`,
   });
+  // Se venía tragando en silencio: `channel_cancellation_pending` no estaba en
+  // notifications_type_check (lo agrega la migración 057), así que TODAS las
+  // propuestas nacían sin aviso y nadie se enteraba. Un insert de notificación
+  // que falla no puede tumbar la propuesta, pero tampoco puede ser invisible.
+  if (notifyError && notifyError.code !== "23505") {
+    console.error("[channels/cancel-request] aviso falló", notifyError.message);
+  }
 
-  return true;
+  return "created";
 }
 
 /** Una línea que dice de quién y de cuánto estamos hablando. */

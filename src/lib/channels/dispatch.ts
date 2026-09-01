@@ -1,13 +1,17 @@
 import { getSecret } from "@/lib/crm/encryption";
+import { todayYmdInTz } from "@/lib/dates";
 import { openCancellationRequest } from "./cancellation-requests";
 import { fetchIcalFeed, toReservationEvent } from "./ical-adapter";
 import {
   channelLabel,
+  daysUntil,
   ingestEvent,
   openIssue,
   processStoredEvent,
+  reprojectReservation,
   resolveIssuesByDedupe,
 } from "./ingest";
+import { appliesToLink, readChannelRequestPolicies, ttlHoursFor } from "./request-policy";
 import type {
   Channel,
   ChannelLinkRow,
@@ -79,6 +83,13 @@ const MISSING_MIN_WINDOW_MS = 30 * 60 * 1000;
 // preguntar, para no gastar la atención del operador en falsos positivos.
 const MISSING_RUNS_TO_PROPOSE_WEAK = 12;
 const MISSING_MIN_WINDOW_WEAK_MS = 6 * 60 * 60 * 1000;
+// Una SOLICITUD que desaparece del feed no necesita decisión humana: nunca fue
+// una reserva, no hay nada que cancelar ni fechas que liberar (no ocupaba). La
+// 053 protege reservas, no solicitudes. Igual se le pide la misma calidad de
+// evidencia que a una propuesta, para no borrar la solicitud por una lectura
+// fallida disfrazada de éxito.
+const REQUEST_RUNS_TO_DISCARD = MISSING_RUNS_TO_PROPOSE;
+const REQUEST_MIN_WINDOW_MS = MISSING_MIN_WINDOW_MS;
 // Una reserva activa sin proyección (conflicto/ambigüedad) se reintenta como
 // mucho una vez por hora. Reintentarla en CADA lectura costaba 7-8 requests por
 // reserva cada 5 min (había un evento con 2.025 intentos) y nunca cambiaba nada:
@@ -102,6 +113,12 @@ export interface DispatchSummary {
   cancelled: number;
   /** Cancelaciones PROPUESTAS que esperan decisión humana. */
   proposed: number;
+  /** Solicitudes registradas sin confirmar (no escribieron nada en bookings). */
+  requested: number;
+  /** Solicitudes que pasaron a reserva real en esta corrida. */
+  promoted: number;
+  /** Solicitudes que desaparecieron del feed y se descartaron solas. */
+  discarded: number;
   conflicts: number;
   errors: number;
   /** Cuántos claims hizo la corrida (antes era siempre 1 en modo dispatch). */
@@ -167,6 +184,9 @@ export async function runChannelDispatch(
     updated: 0,
     cancelled: 0,
     proposed: 0,
+    requested: 0,
+    promoted: 0,
+    discarded: 0,
     conflicts: 0,
     errors: 0,
     batches: 0,
@@ -243,9 +263,16 @@ export async function runChannelDispatch(
           summary.updated += r.updated;
           summary.cancelled += r.cancelled;
           summary.proposed += r.proposed;
+          summary.requested += r.requested;
+          summary.promoted += r.promoted;
+          summary.discarded += r.discarded;
           summary.conflicts += r.conflicts;
           if (r.error) summary.errors++;
-          if (r.imported > 0 || r.updated > 0) affectedOrgs.add(link.organization_id);
+          // Una solicitud que entra, se confirma o se cae también cambia lo que
+          // ve el operador (grilla, bandeja, badge): sin esto la pantalla queda
+          // con la foto vieja hasta la próxima navegación.
+          if (r.imported > 0 || r.updated > 0 || r.requested > 0 || r.promoted > 0 || r.discarded > 0)
+            affectedOrgs.add(link.organization_id);
         },
         () => {
           stats.timeouts++;
@@ -419,6 +446,9 @@ interface LinkSyncResult {
   cancelled: number;
   /** Propuestas de cancelación abiertas para decisión humana. */
   proposed: number;
+  requested: number;
+  promoted: number;
+  discarded: number;
   conflicts: number;
   skipped: number;
   error?: string;
@@ -436,6 +466,9 @@ async function syncLink(
     updated: 0,
     cancelled: 0,
     proposed: 0,
+    requested: 0,
+    promoted: 0,
+    discarded: 0,
     conflicts: 0,
     skipped: 0,
   };
@@ -496,6 +529,8 @@ async function syncLink(
       existing.check_out !== ev.checkOut ||
       (ev.confirmationCode && !existing.confirmation_code) ||
       existing.external_status === "cancelled" ||
+      // una solicitud descartada cuyo VEVENT volvió al feed vuelve a pendiente
+      existing.external_status === "expired" ||
       // sin proyección local (conflicto/ambigüedad pendiente) → reintentar,
       // pero como mucho una vez por hora (ver UNPROJECTED_RETRY_MS)
       (existing.external_status === "active" &&
@@ -517,6 +552,9 @@ async function syncLink(
           break;
         case "updated":
           result.updated++;
+          break;
+        case "requested":
+          result.requested++;
           break;
         case "conflict":
           result.conflicts++;
@@ -563,7 +601,16 @@ async function syncLink(
   // una conexión cuyo único evento era un bloqueo quedaba bloqueada para
   // siempre, porque al sacar ese bloqueo el feed queda vacío por definición.
   const anomalousEmpty =
-    events.length === 0 && known.some((r) => r.external_status === "active");
+    events.length === 0 &&
+    known.some((r) => r.external_status === "active" || r.external_status === "pending");
+
+  // Las solicitudes se resuelven ANTES del barrido de reservas: si la que sigue
+  // publicada pasó el umbral, se promueve acá y ya no puede ser candidata a
+  // descarte en la misma corrida.
+  const requests = await resolveRequests(admin, link, known, seenUids, events.length === 0);
+  result.promoted += requests.promoted;
+  result.discarded += requests.discarded;
+
   result.proposed += await proposeDisappearances(
     admin,
     link,
@@ -590,6 +637,293 @@ function shouldRetryUnprojected(existing: ChannelReservationRow): boolean {
   const updatedAt = Date.parse(existing.updated_at);
   if (Number.isNaN(updatedAt)) return true;
   return Date.now() - updatedAt > UNPROJECTED_RETRY_MS;
+}
+
+/**
+ * Ciclo de vida de las SOLICITUDES, evaluado después de cada lectura exitosa
+ * del feed. Dos salidas, y las dos usan la lectura que acaba de hacerse como
+ * evidencia — que es la más fresca que vamos a tener:
+ *
+ *   · sigue publicada y pasó el TTL  → se da por aceptada (promoción)
+ *   · dejó de estar publicada        → se descarta sola (expired)
+ *
+ * Por qué existe el TTL y no alcanza con el email. Medido sobre 40 días de
+ * producción: de 22 reservas reales de Airbnb, 4 nunca recibieron el mail de
+ * confirmación. Sin red de seguridad esas 4 quedarían invisibles hasta que
+ * alguien las confirmara a mano — que es el modo de fallar más caro que existe
+ * (huésped en la puerta, sin limpieza, sin parte diario). Airbnb resuelve las
+ * solicitudes en 24 h y lo rechazado DESAPARECE del feed, así que lo que sigue
+ * publicado a las 26 h está aceptado.
+ *
+ * Por qué el descarte automático no viola la migración 053. La 053 prohíbe que
+ * un proceso automático escriba `status='cancelada'` en una RESERVA. Una
+ * solicitud no es una reserva: no tiene fila en `bookings`, no ocupa fechas, no
+ * tiene cobros ni confirmación enviada al huésped. No hay nada que cancelar. Y
+ * es reversible: el estado es `expired`, no un DELETE, y la UI lo revive.
+ */
+async function resolveRequests(
+  admin: AdminClient,
+  link: ChannelLinkRow,
+  known: ChannelReservationRow[],
+  seenUids: Set<string>,
+  feedEmpty: boolean,
+): Promise<{ promoted: number; discarded: number }> {
+  const pending = known.filter((r) => r.external_status === "pending");
+  // Una solicitud descartada cuyo VEVENT volvió a aparecer vuelve a pendiente.
+  // Tiene que resolverse ACÁ y no en ingest: si el VEVENT no cambió, su
+  // dedupe_key es idéntica y `ingestEvent` corta por duplicado antes de llegar
+  // a `processUpsert`. Una solicitud descartada por una lectura parcial del
+  // feed no se recuperaba nunca, aunque siguiera publicada todos los días.
+  const revivable = known.filter(
+    (r) =>
+      r.external_status === "expired" &&
+      // Un descarte del operador NO se revierte solo, aunque el VEVENT siga
+      // publicado — mismo principio que `ignored`. Con Booking sería
+      // sistemático: sus marcadores de ventana quedan publicados para siempre,
+      // así que cada "Se cayó" volvería en 2 minutos.
+      r.expired_source !== "manual" &&
+      r.ical_uid &&
+      seenUids.has(r.ical_uid) &&
+      !r.booking_id,
+  );
+  if (pending.length === 0 && revivable.length === 0) return { promoted: 0, discarded: 0 };
+
+  const { policies, failed } = await readChannelRequestPolicies(admin, link.organization_id);
+  // No pudimos leer la configuración: no se toca NADA. Tratar el fallo como
+  // "apagada" dispararía el drenaje y convertiría en reservas confirmadas todas
+  // las solicitudes en vuelo — incluidas las que la OTA ya rechazó.
+  if (failed) return { promoted: 0, discarded: 0 };
+  const policy = policies[link.channel];
+  const enabled = appliesToLink(policy, link.id);
+  const today = todayYmdInTz();
+  let promoted = 0;
+  let discarded = 0;
+
+  // Corre también con la política APAGADA: apagar el gate tiene que restituir
+  // el estado anterior, y una fila `expired` colgada no vuelve por ningún otro
+  // camino (el drenaje sólo recorre `pending`).
+  if (!feedEmpty) {
+    for (const r of revivable) {
+      await admin
+        .from("channel_reservations")
+        .update({
+          external_status: "pending",
+          // `expired_at` NO se limpia: es el piso del reloj del TTL. Ponerlo en
+          // null devolvía el ancla a `created_at` — viejo por definición — y la
+          // solicitud reactivada se auto-confirmaba en la corrida siguiente.
+          expired_at: new Date().toISOString(),
+          missing_since: null,
+          missing_runs: 0,
+          last_seen_at: new Date().toISOString(),
+        })
+        .eq("id", r.id)
+        .eq("external_status", "expired")
+        // El filtro de `expired_source` vive también en el CAS: el snapshot en
+        // memoria puede ser de hace unos segundos y no queremos revertir un
+        // "Se cayó" que alguien apretó mientras corría la sincronización.
+        .or("expired_source.is.null,expired_source.neq.manual")
+        .is("booking_id", null);
+    }
+  }
+
+  for (const r of pending) {
+    // Interruptor de emergencia. Con la política apagada NO se descarta nada y
+    // lo que quedó en vuelo se drena a reserva: si no, esas solicitudes
+    // quedarían huérfanas hasta el TTL (26 h) justo cuando alguien apagó el
+    // gate porque algo estaba mal.
+    if (!enabled) {
+      if (!r.unit_id || !r.check_in) continue;
+      // Sólo se drena lo que la OTA SIGUE publicando y todavía no terminó. Sin
+      // este filtro, apagar el gate un domingo convertía en reservas las
+      // solicitudes ya rechazadas que estaban a una corrida de expirar —
+      // justo los fantasmas que esta feature vino a eliminar.
+      if (feedEmpty) continue;
+      if (!r.ical_uid || !seenUids.has(r.ical_uid)) continue;
+      if ((r.check_out ?? r.check_in) < today) continue;
+      const { data: drained, error: drainErr } = await admin
+        .from("channel_reservations")
+        .update({
+          external_status: "active",
+          promoted_at: new Date().toISOString(),
+          // No es "ttl": no se verificó que siguiera publicada. Marcarla así
+          // inflaría la métrica "confirmadas sin mail de la OTA", que existe
+          // justamente para detectar que el pipeline de email está roto.
+          promoted_source: "gate_off",
+          missing_since: null,
+          missing_runs: 0,
+        })
+        .eq("id", r.id)
+        .eq("external_status", "pending")
+        .is("booking_id", null)
+        .select("id");
+      if (drainErr) {
+        console.error("[channels/dispatch] drenaje de solicitud falló", drainErr.message);
+        continue;
+      }
+      if (drained && drained.length > 0) {
+        const res = await reprojectReservation(admin, r.id);
+        if (res.outcome === "created" || res.outcome === "updated") {
+          promoted++;
+        } else if (res.outcome !== "duplicate") {
+          // Igual que en el TTL: `active` sin booking sale de la bandeja, de la
+          // grilla Y del iCal saliente. Las fechas quedarían libres sin reserva.
+          await admin
+            .from("channel_reservations")
+            .update({
+              external_status: "pending",
+              promoted_at: null,
+              promoted_source: null,
+              projection_attempted_at: new Date().toISOString(),
+            })
+            .eq("id", r.id)
+            .eq("external_status", "active")
+            .is("booking_id", null);
+        }
+      }
+      continue;
+    }
+
+    const stillPublished = Boolean(r.ical_uid) && seenUids.has(r.ical_uid as string);
+
+    // ── sigue publicada: ¿ya pasó el TTL? ────────────────────────────────────
+    if (stillPublished) {
+      if (!r.unit_id || !r.check_in) continue;
+      const days = daysUntil(r.check_in);
+      const ttlMs = ttlHoursFor(policy, days) * 3_600_000;
+      // El reloj arranca cuando la solicitud entró O cuando se la reactivó a
+      // mano, lo que sea más reciente: si alguien aprieta "Volver a activar"
+      // sobre una descartada de hace cinco días para mirarla, el TTL no puede
+      // confirmársela sola dos minutos después.
+      const since = Math.max(
+        Date.parse(r.created_at),
+        r.expired_at ? Date.parse(r.expired_at) : 0,
+      );
+      if (Date.now() - since < ttlMs) continue;
+      // La estadía ya terminó y nunca se confirmó: promoverla ahora sólo crea
+      // una reserva con fechas pasadas que ensucia KPIs y liquidaciones, y que
+      // encima no se ve en la bandeja (filtra por check_out >= hoy).
+      if ((r.check_out ?? r.check_in) < today) continue;
+      // Ya vencido pero la proyección viene fallando (conflicto, unidad sin
+      // resolver): reintentar como mucho una vez por hora. Sin esto la corrida
+      // de cada 2 min repetía CAS + insert fallido + incidencia + revert, para
+      // siempre. Marca propia y no `updated_at`, que lo pisa un trigger en cada
+      // UPDATE (incluido el refresco horario de last_seen_at).
+      if (
+        r.projection_attempted_at &&
+        Date.now() - Date.parse(r.projection_attempted_at) < UNPROJECTED_RETRY_MS
+      ) {
+        continue;
+      }
+
+      // CAS: si el mail o una persona la confirmaron entre medio, esto no aplica
+      // y gana esa vía (que además deja el promoted_source correcto).
+      const { data: locked } = await admin
+        .from("channel_reservations")
+        .update({
+          external_status: "active",
+          promoted_at: new Date().toISOString(),
+          promoted_source: "ttl",
+          expired_at: null,
+          expired_source: null,
+          missing_since: null,
+          missing_runs: 0,
+        })
+        .eq("id", r.id)
+        .eq("external_status", "pending")
+        .is("booking_id", null)
+        .select("id");
+      if (!locked || locked.length === 0) continue;
+
+      const res = await reprojectReservation(admin, r.id);
+      if (res.outcome === "created" || res.outcome === "updated") {
+        promoted++;
+        await notifyAutoConfirmed(admin, link, r);
+      } else if (res.outcome !== "duplicate") {
+        // No se creó nada (conflicto, unidad sin resolver, error). Dejarla
+        // `active` sin booking la saca de la bandeja Y del iCal saliente: las
+        // fechas quedarían libres sin que exista la reserva. Vuelve a pendiente.
+        await admin
+          .from("channel_reservations")
+          .update({
+            external_status: "pending",
+            promoted_at: null,
+            promoted_source: null,
+            projection_attempted_at: new Date().toISOString(),
+          })
+          .eq("id", r.id)
+          .eq("external_status", "active")
+          .is("booking_id", null);
+      }
+      continue;
+    }
+
+    // ── dejó de estar publicada: descarte automático ─────────────────────────
+    //
+    // Un feed que devuelve CERO eventos no es una lectura, es una lectura
+    // fallida disfrazada de éxito. Sin este guard, un 200 vacío borraría de un
+    // saque todas las solicitudes de la unidad.
+    if (feedEmpty) continue;
+    if (!r.last_seen_at) continue; // nunca la vimos: no hay ausencia que medir
+
+    // Si la llegada ya pasó y nunca se confirmó, está muerta con certeza: no
+    // tiene sentido seguir contando lecturas ni dejarla en la grilla.
+    const arrived = r.check_in !== null && r.check_in < today;
+
+    const runs = r.missing_runs + 1;
+    const missingSince = r.missing_since ?? new Date().toISOString();
+    const enoughRuns = runs >= REQUEST_RUNS_TO_DISCARD;
+    const enoughTime = Date.now() - Date.parse(missingSince) >= REQUEST_MIN_WINDOW_MS;
+
+    if (!arrived && !(enoughRuns && enoughTime && Boolean(r.missing_since))) {
+      await admin
+        .from("channel_reservations")
+        .update({ missing_since: missingSince, missing_runs: runs })
+        .eq("id", r.id);
+      continue;
+    }
+
+    const { data: gone } = await admin
+      .from("channel_reservations")
+      .update({
+        external_status: "expired",
+        expired_at: new Date().toISOString(),
+        expired_source: "feed",
+        missing_since: missingSince,
+        missing_runs: runs,
+      })
+      .eq("id", r.id)
+      .eq("external_status", "pending")
+      .is("booking_id", null) // carrera con la promoción
+      .select("id");
+    if (gone && gone.length > 0) discarded++;
+  }
+
+  return { promoted, discarded };
+}
+
+/**
+ * Aviso cuando la red de seguridad tuvo que actuar. Si esto aparece seguido, el
+ * pipeline de email de la OTA está roto y hay que enterarse — no descubrirlo
+ * meses después mirando una tabla.
+ */
+async function notifyAutoConfirmed(
+  admin: AdminClient,
+  link: ChannelLinkRow,
+  r: ChannelReservationRow,
+): Promise<void> {
+  const { error } = await admin.from("notifications").insert({
+    organization_id: link.organization_id,
+    type: "channel_request_auto_confirmed",
+    severity: "warning",
+    target_role: "admin",
+    title: `Reserva de ${channelLabel(link.channel)} dada por confirmada`,
+    body: `${r.check_in} → ${r.check_out}. Sigue publicada en la OTA pero nunca llegó el mail de confirmación. Verificá que sea real.`,
+    action_url: "/dashboard/canales",
+    dedup_key: `channel_auto_confirm:${r.id}`,
+  });
+  if (error && error.code !== "23505") {
+    console.error("[channels/dispatch] aviso de auto-confirmación falló", error.message);
+  }
 }
 
 /**
@@ -622,7 +956,10 @@ export async function proposeDisappearances(
   horizon: string | null,
   feedEmpty = false,
 ): Promise<number> {
-  const today = new Date().toISOString().slice(0, 10);
+  // Fecha local (America/Argentina/Cordoba, el default de src/lib/dates.ts) y
+  // no UTC: entre las 21:00 y las 00:00 de Córdoba "hoy" en UTC ya es mañana, y
+  // el guard `check_in >= today` empezaba a descartar llegadas del día en curso.
+  const today = todayYmdInTz();
   let proposed = 0;
 
   const candidates = known.filter(
@@ -683,16 +1020,42 @@ export async function proposeDisappearances(
   });
 
   const alreadyPending = new Set<string>();
-  const readyIds = decisions.filter((d) => d.ready).map((d) => d.r.id);
+  const readyDecisions = decisions.filter((d) => d.ready);
+  const readyIds = readyDecisions.map((d) => d.r.id);
+  // La unique de propuestas es por reservation_id Y por booking_id (053). Una
+  // propuesta abierta por email suele traer `reservation_id NULL`, así que
+  // buscar sólo por reserva externa no la encontraba: el insert chocaba 23505 y
+  // el contador de ausencias seguía subiendo cada 2 minutos, para siempre.
+  const readyBookingIds = readyDecisions
+    .map((d) => d.r.booking_id)
+    .filter((id): id is string => Boolean(id));
   if (readyIds.length > 0) {
-    const { data: pending } = await admin
-      .from("channel_cancellation_requests")
-      .select("reservation_id")
-      .eq("organization_id", link.organization_id)
-      .eq("status", "pending")
-      .in("reservation_id", readyIds);
-    for (const p of (pending ?? []) as { reservation_id: string | null }[]) {
+    const [byReservation, byBooking] = await Promise.all([
+      admin
+        .from("channel_cancellation_requests")
+        .select("reservation_id")
+        .eq("organization_id", link.organization_id)
+        .eq("status", "pending")
+        .in("reservation_id", readyIds),
+      readyBookingIds.length > 0
+        ? admin
+            .from("channel_cancellation_requests")
+            .select("booking_id")
+            .eq("organization_id", link.organization_id)
+            .eq("status", "pending")
+            .in("booking_id", readyBookingIds)
+        : Promise.resolve({ data: [] as { booking_id: string | null }[] }),
+    ]);
+    for (const p of (byReservation.data ?? []) as { reservation_id: string | null }[]) {
       if (p.reservation_id) alreadyPending.add(p.reservation_id);
+    }
+    const openBookings = new Set(
+      ((byBooking.data ?? []) as { booking_id: string | null }[])
+        .map((p) => p.booking_id)
+        .filter((id): id is string => Boolean(id)),
+    );
+    for (const d of readyDecisions) {
+      if (d.r.booking_id && openBookings.has(d.r.booking_id)) alreadyPending.add(d.r.id);
     }
   }
 
@@ -703,7 +1066,7 @@ export async function proposeDisappearances(
       if (alreadyPending.has(r.id)) continue;
 
       // Evidencia suficiente para pedir una decisión humana.
-      const created = await openCancellationRequest(admin, {
+      const outcome = await openCancellationRequest(admin, {
         organizationId: link.organization_id,
         link,
         channel: link.channel,
@@ -719,7 +1082,31 @@ export async function proposeDisappearances(
           ultima_vez_vista: r.last_seen_at,
         },
       });
-      if (created) proposed++;
+
+      // La reserva local ya no está viva: alguien la canceló a mano y no hay
+      // nada que proponer. Se cierra la fila externa en vez de seguir contando
+      // lecturas para siempre (había filas con missing_runs 24 y subiendo, 720
+      // escrituras por día que nunca podían llegar a ningún lado).
+      if (outcome === "booking_not_live") {
+        await admin
+          .from("channel_reservations")
+          .update({ external_status: "cancelled", missing_since: null, missing_runs: 0 })
+          .eq("id", r.id)
+          .eq("external_status", "active");
+        await resolveIssuesByDedupe(
+          admin,
+          link.organization_id,
+          `missing:${r.id}`,
+          "La reserva local ya estaba cancelada.",
+        );
+        continue;
+      }
+
+      // "duplicate" = ya hay una propuesta abierta para este caso (por la
+      // unique de booking_id). No se avanza el contador: no hay nada nuevo que
+      // medir hasta que una persona decida.
+      if (outcome === "duplicate") continue;
+      if (outcome === "created") proposed++;
       await admin
         .from("channel_reservations")
         .update({ missing_since: missingSince, missing_runs: runs })
@@ -1008,6 +1395,9 @@ export function reservationEventFromRow(row: {
     checkIn: (p.check_in as string) ?? undefined,
     checkOut: (p.check_out as string) ?? undefined,
     isBlock: Boolean(p.is_block),
+    // Sin esto, todo replay (botón "Reintentar", reintento del reconcile)
+    // pierde la única evidencia que autoriza a escribir en `bookings`.
+    confirmed: p.confirmed === true,
     listingId: (p.listing_id as string) ?? undefined,
     listingHint: (p.listing_hint as string) ?? undefined,
     guest: {
@@ -1055,6 +1445,9 @@ async function finalizeRun(
         updated: summary.updated,
         cancelled: summary.cancelled,
         proposed: summary.proposed,
+        requested: summary.requested,
+        promoted: summary.promoted,
+        discarded: summary.discarded,
         conflicts: summary.conflicts,
         errors: summary.errors,
         housekeeping: summary.housekeeping ?? null,

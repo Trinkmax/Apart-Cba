@@ -94,6 +94,10 @@ export function normalizeInboundEmail(input: {
       checkIn: parsed.checkIn,
       checkOut: parsed.checkOut,
       isBlock: false,
+      // ÚNICO lugar del sistema que afirma "la OTA confirmó esto". El feed iCal
+      // no puede: una solicitud pendiente de Airbnb y una reserva aceptada son
+      // el mismo VEVENT. Ver ReservationEvent.confirmed.
+      confirmed: true,
       guest: {
         name: parsed.guestName,
         email: parsed.guestEmail,

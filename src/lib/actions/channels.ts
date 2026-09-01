@@ -357,11 +357,18 @@ export async function syncChannelsNow(linkId?: string) {
   });
   revalidateCanales();
   revalidatePath("/dashboard/limpieza");
+  revalidatePath("/dashboard/reservas-pendientes");
   return {
     processed: summary.processed,
     imported: summary.imported,
     updated: summary.updated,
     cancelled: summary.cancelled,
+    // Sin estos tres, "Sincronizar ahora" reportaba "0 nuevas, 0 actualizadas"
+    // justo cuando lo que entró fue una solicitud — que es exactamente lo que
+    // alguien está mirando mientras verifica el gate.
+    requested: summary.requested,
+    promoted: summary.promoted,
+    discarded: summary.discarded,
     conflicts: summary.conflicts,
     errors: summary.errors,
   };

@@ -160,7 +160,10 @@ export function AppSidebar({
                             />
                             <span>{item.label}</span>
                             {item.href === "/dashboard/reservas-pendientes" && (
-                              <PendingRequestsBadge initialCount={pendingRequests} />
+                              <PendingRequestsBadge
+                                initialCount={pendingRequests}
+                                canViewChannels={can(currentRole, "channels", "view")}
+                              />
                             )}
                           </Link>
                         </SidebarMenuButton>

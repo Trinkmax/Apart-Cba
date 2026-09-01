@@ -191,7 +191,11 @@ function ConnectionRow({ link }: { link: ChannelLinkOverview }) {
         toast.success(
           r.errors > 0
             ? "La sincronización terminó con errores — mirá el detalle"
-            : `Sincronizado: ${r.imported} nuevas, ${r.updated} actualizadas`,
+            : `Sincronizado: ${r.imported} nuevas, ${r.updated} actualizadas${
+                r.requested + r.promoted + r.discarded > 0
+                  ? ` · solicitudes: ${r.requested}/${r.promoted}/${r.discarded}`
+                  : ""
+              }`,
         );
         router.refresh();
       } catch (err) {

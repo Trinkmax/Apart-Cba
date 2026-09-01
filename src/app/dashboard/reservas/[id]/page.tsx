@@ -5,6 +5,7 @@ import { getBooking, listBookings } from "@/lib/actions/bookings";
 import { listUnitsForBookingForm } from "@/lib/actions/units";
 import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { listChannelRequestsForOverlapCheck } from "@/lib/actions/channel-requests";
 import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -45,7 +46,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
-  const [unitBookings, latestAuditByMovement] = await Promise.all([
+  const [unitBookings, latestAuditByMovement, requestOverlaps] = await Promise.all([
     listBookings({ unitId: b.unit_id }),
     canViewMoney
       ? listLatestAuditByAccount(
@@ -53,6 +54,9 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           movements.map((m) => m.id)
         )
       : Promise.resolve({}),
+    // Solicitudes de OTA sin confirmar: advertencia blanda si se cambian las
+    // fechas de esta reserva encima de una.
+    listChannelRequestsForOverlapCheck().catch(() => []),
   ]);
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
   const src = BOOKING_SOURCE_META[b.source];
@@ -125,7 +129,8 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
             <BookingActions booking={b} role={role} canEditBooking={canEditBooking} canViewMoney={canViewMoney} />
           )}
           {canEditBooking && (
-            <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}>
+            <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}
+              channelRequests={requestOverlaps}>
               <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
             </BookingFormDialog>
           )}
@@ -271,6 +276,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                         units={units}
                         accounts={accounts}
                         existingBookings={unitBookings}
+              channelRequests={requestOverlaps}
                       >
                         <Button size="sm">Cargar precio</Button>
                       </BookingFormDialog>

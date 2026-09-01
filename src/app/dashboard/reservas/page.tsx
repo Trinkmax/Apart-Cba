@@ -4,6 +4,7 @@ import {
   listBookingsPaged,
   listBookingsForOverlapCheck,
 } from "@/lib/actions/bookings";
+import { listChannelRequestsForOverlapCheck } from "@/lib/actions/channel-requests";
 import { listUnitsForBookingForm } from "@/lib/actions/units";
 import { listAccounts } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -32,12 +33,18 @@ export default async function ReservasPage({ searchParams }: PageProps) {
 
   // La ventana por defecto (90 días + futuro, desactivada al buscar) la
   // resuelve listBookingsPaged internamente — ver su doc.
-  const [paged, units, accounts, overlapBookings] = await Promise.all([
+  const [paged, units, accounts, overlapBookings, requestOverlaps] = await Promise.all([
     listBookingsPaged({ page, pageSize: PAGE_SIZE, q, status }),
     listUnitsForBookingForm(),
     canViewMoney ? listAccounts() : Promise.resolve([]),
     canCreateBooking
       ? listBookingsForOverlapCheck()
+      : Promise.resolve([]),
+    // Solicitudes de OTA sin confirmar: advertencia blanda al crear una reserva
+    // encima. Cuando la política no retiene (Airbnb), es la única barrera —
+    // la solicitud no tiene fila en `bookings`, así que no hay constraint.
+    canCreateBooking
+      ? listChannelRequestsForOverlapCheck().catch(() => [])
       : Promise.resolve([]),
   ]);
 
@@ -52,7 +59,7 @@ export default async function ReservasPage({ searchParams }: PageProps) {
         </div>
         {canCreateBooking && (
           <div className="flex items-center gap-2">
-            <BookingFormDialog units={units} accounts={accounts} existingBookings={overlapBookings}>
+            <BookingFormDialog units={units} accounts={accounts} existingBookings={overlapBookings} channelRequests={requestOverlaps}>
               <Button className="gap-2"><Plus size={16} /> <span className="hidden sm:inline">Nueva reserva</span><span className="sm:hidden">Nueva</span></Button>
             </BookingFormDialog>
           </div>

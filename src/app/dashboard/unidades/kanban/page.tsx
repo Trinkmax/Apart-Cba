@@ -4,6 +4,7 @@ import { listBookingsInRange, listBookingsNeedingGuest } from "@/lib/actions/boo
 import { listAccounts } from "@/lib/actions/cash";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
+import { listChannelRequestsInRange } from "@/lib/actions/channel-requests";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import { PmsBoard } from "@/components/units/pms/pms-board";
@@ -41,13 +42,17 @@ export default async function PmsGridPage({
   const canViewMoney = can(role, "payments", "view");
   const canRegisterExpense = can(role, "cash", "create");
   const canEditBookings = can(role, "bookings", "update");
-  const [units, bookings, accounts, schedule, dateMarks, needsGuest] = await Promise.all([
+  const [units, bookings, accounts, schedule, dateMarks, needsGuest, requests] = await Promise.all([
     listUnitsEnriched(),
     listBookingsInRange(startISO, bookingsEndISO),
     canViewMoney || canRegisterExpense ? listAccounts() : Promise.resolve([]),
     listScheduleInRange(startISO, endISO).catch(() => []),
     listDateMarksInRange(startISO, endISO).catch(() => []),
     canEditBookings ? listBookingsNeedingGuest().catch(() => []) : Promise.resolve([]),
+    // Solicitudes de OTA sin confirmar: se pintan en la grilla pero no crean
+    // reserva. `null` (y no `[]`) si falla: el board lo usa para NO desalojar
+    // la capa que ya tenga cargada.
+    listChannelRequestsInRange(startISO, bookingsEndISO).catch(() => null),
   ]);
   const expenseDefaultId = accounts.find((a) => a.is_expense_default)?.id ?? null;
 
@@ -58,8 +63,10 @@ export default async function PmsGridPage({
       accounts={accounts}
       initialSchedule={schedule}
       initialDateMarks={dateMarks}
+      initialChannelRequests={requests}
       canEditDateMarks={can(role, "date_marks", "create")}
       canEditBookings={canEditBookings}
+      canViewChannels={can(role, "channels", "view")}
       canViewMoney={canViewMoney}
       canRegisterExpense={canRegisterExpense}
       expenseDefaultId={expenseDefaultId}

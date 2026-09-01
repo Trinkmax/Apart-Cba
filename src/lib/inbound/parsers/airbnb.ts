@@ -27,6 +27,27 @@ export const airbnbParser: InboundEmailParser = {
       return code ? { type: "cancellation", source: "airbnb", externalId: code } : null;
     }
 
+    // Guard negativo — va ANTES del gate de abajo a propósito.
+    //
+    // Una SOLICITUD no es una reserva: el anfitrión todavía tiene que aceptarla
+    // y Airbnb le da 24 h. Pero su asunto ("Recordatorio: solicitud de
+    // reservación en <anuncio> para las fechas …") contiene "reserv", así que
+    // el gate siguiente la deja pasar entera. Lo único que hoy la frena son dos
+    // `return null` accidentales más abajo (falta el código, faltan las fechas):
+    // el día que Airbnb agregue el código HM al cuerpo del recordatorio, este
+    // parser empieza a crear reservas confirmadas a partir de solicitudes.
+    //
+    // El filtro de ruido de email-webhook.ts corre DESPUÉS de esto, así que no
+    // sirve de red: el guard tiene que estar acá.
+    if (
+      /solicitud|recordatorio|reservation request|denegad|rechazad|no realizado|expirad/i.test(
+        subject,
+      ) &&
+      !/confirmad|confirmed/i.test(subject)
+    ) {
+      return null;
+    }
+
     // Reserva nueva (Reservation confirmed / Reservación confirmada / etc.)
     if (!/reserv|booking|confirm/i.test(subject)) return null;
 

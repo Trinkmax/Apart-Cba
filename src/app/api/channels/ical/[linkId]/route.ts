@@ -62,7 +62,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ linkId: string 
       .eq("id", link.id);
   }
 
-  const { ics, etag } = await buildUnitCalendar(admin, unit);
+  const { ics, etag } = await buildUnitCalendar(admin, unit, { excludeChannelLinkId: linkId });
 
   if (req.headers.get("if-none-match") === etag) {
     return new NextResponse(null, { status: 304, headers: { ETag: etag } });

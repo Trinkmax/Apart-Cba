@@ -1,8 +1,9 @@
 import crypto from "crypto";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { buildUnitCalendar } from "@/lib/channels/outbound-ics";
 import { verifySvixSignature } from "@/lib/channels/email-webhook";
 import { computeLinkHealth } from "@/lib/channels/health";
+import { invalidateChannelRequestPolicyCache } from "@/lib/channels/request-policy";
 
 // ─── fake supabase query builder (encadenable, thenable) ─────────────────────
 type Row = Record<string, unknown>;
@@ -10,9 +11,14 @@ function fakeAdmin(tables: Record<string, Row[]>) {
   function builder(data: Row[]) {
     const b: Record<string, unknown> = {};
     const chain = () => b;
-    for (const m of ["select", "eq", "in", "gte", "gt", "lt", "not", "order", "limit"]) {
+    for (const m of ["select", "eq", "in", "gte", "gt", "lt", "not", "or", "order", "limit"]) {
       b[m] = chain;
     }
+    // `maybeSingle` es el que usa la lectura de la política de solicitudes.
+    // Sin él, `getChannelRequestPolicies` tiraba TypeError, el catch devolvía
+    // "todo apagado" y estos tests nunca ejercitaban la rama nueva.
+    b.maybeSingle = async () => ({ data: data[0] ?? null, error: null });
+    b.single = async () => ({ data: data[0] ?? null, error: null });
     (b as { then: (cb: (r: { data: Row[] }) => unknown) => unknown }).then = (cb) =>
       Promise.resolve(cb({ data }));
     return b;
@@ -25,6 +31,9 @@ function fakeAdmin(tables: Record<string, Row[]>) {
 const UNIT = { id: "u1", code: "A101", name: "Depto céntrico", organization_id: "org1" };
 
 describe("buildUnitCalendar (export ICS)", () => {
+  // El cache de la política vive a nivel módulo y sobrevive entre tests.
+  beforeEach(() => invalidateChannelRequestPolicyCache());
+
   const bookings = [
     {
       id: "b1",
@@ -78,6 +87,57 @@ describe("buildUnitCalendar (export ICS)", () => {
       UNIT,
     );
     expect(c.etag).not.toBe(a.etag);
+  });
+
+  // ── Solicitudes de canal (migración 057) ──────────────────────────────────
+  const POLICY_ON = [
+    {
+      config: {
+        requests: {
+          // hold_availability false a propósito: el export NO depende de él.
+          airbnb: { enabled: true, hold_availability: false },
+          booking: { enabled: false, hold_availability: true },
+        },
+      },
+    },
+  ];
+  const otaRequests = [
+    {
+      id: "cr1",
+      check_in: "2026-11-10",
+      check_out: "2026-11-14",
+      created_at: "2026-07-04T10:00:00Z",
+      link_id: "link-airbnb",
+    },
+  ];
+
+  it("con la política apagada NO exporta solicitudes de canal", async () => {
+    const { ics } = await buildUnitCalendar(
+      fakeAdmin({ bookings, channel_reservations: otaRequests }),
+      UNIT,
+    );
+    expect(ics).not.toContain("otareq");
+  });
+
+  it("con la política encendida exporta la solicitud aunque hold_availability sea false", async () => {
+    // Es el punto del cambio: "no cierro MI calendario" no puede significar
+    // "dejo de bloquear a la otra OTA" — ahí termina en venta doble.
+    const { ics } = await buildUnitCalendar(
+      fakeAdmin({ bookings, channel_settings: POLICY_ON, channel_reservations: otaRequests }),
+      UNIT,
+    );
+    expect(ics).toContain("UID:apartcba-otareq-cr1@apartcba.app");
+    expect(ics).toContain("DTSTART;VALUE=DATE:20261110");
+    expect(ics).toContain("DTEND;VALUE=DATE:20261114");
+  });
+
+  it("no le devuelve a una OTA el bloqueo de su propia solicitud", async () => {
+    const { ics } = await buildUnitCalendar(
+      fakeAdmin({ bookings, channel_settings: POLICY_ON, channel_reservations: otaRequests }),
+      UNIT,
+      { excludeChannelLinkId: "link-airbnb" },
+    );
+    expect(ics).not.toContain("otareq");
   });
 
   it("calendario vacío sigue siendo un VCALENDAR válido", async () => {

@@ -587,7 +587,10 @@ let lastWatchdogAt = 0;
 let probeFailures = 0;
 const watermarks = new Map<string, number>();
 /** Tablas que el watchdog vigila. Sólo lo que puede costar una venta doble. */
-const WATCHED_TABLES = ["bookings", "booking_requests"] as const;
+// `channel_reservations` entra porque una solicitud nueva o caída cambia lo que
+// muestra la grilla sin pasar por `bookings`: sin vigilarla, el watchdog no
+// detecta divergencia y la capa ámbar queda vieja hasta navegar.
+const WATCHED_TABLES = ["bookings", "booking_requests", "channel_reservations"] as const;
 
 function noteWatermark(table: string, row: Record<string, unknown> | null) {
   const value = row?.updated_at;

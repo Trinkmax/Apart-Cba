@@ -6,6 +6,7 @@ import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import type { BookingRequestWithRelations } from "@/lib/types/database";
 import { can } from "@/lib/permissions";
+import { todayYmdInTz } from "@/lib/dates";
 import {
   notifyGuestRequestApproved,
   notifyGuestRequestRejected,
@@ -243,11 +244,29 @@ export async function countPendingRequestsForOrg(): Promise<number> {
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "bookings", "view")) return 0;
   const admin = createAdminClient();
-  const { count } = await admin
-    .from("booking_requests")
-    .select("id", { count: "exact", head: true })
-    .eq("organization_id", organization.id)
-    .eq("status", "pendiente")
-    .gt("expires_at", new Date().toISOString());
-  return count ?? 0;
+  // Las dos clases de solicitud viven en la misma pantalla, así que el badge
+  // tiene que contar las dos: las del marketplace y las de las OTAs (que
+  // tampoco ocupan el calendario hasta confirmarse).
+  const [own, ota] = await Promise.all([
+    admin
+      .from("booking_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organization.id)
+      .eq("status", "pendiente")
+      .gt("expires_at", new Date().toISOString()),
+    can(role, "channels", "view")
+      ? admin
+          .from("channel_reservations")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organization.id)
+          .eq("external_status", "pending")
+          // Vencidas y huérfanas afuera: sin esto sumaban al badge sin aparecer
+          // en ninguna pantalla, y no había forma de bajarlo. (La bandeja filtra
+          // por fecha pero no por `link_id`; una fila sin conexión es
+          // inalcanzable hoy, y si apareciera conviene verla ahí.)
+          .gte("check_out", todayYmdInTz())
+          .not("link_id", "is", null)
+      : Promise.resolve({ count: 0 }),
+  ]);
+  return (own.count ?? 0) + (ota.count ?? 0);
 }

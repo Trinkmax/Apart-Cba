@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useRef } from "react";
 import { CalendarRange, Loader2, Plus, UserPlus, Search, House, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import Link from "next/link";
@@ -124,6 +124,20 @@ type ExistingBookingForOverlap = {
   check_out_date: string;
 };
 
+/**
+ * Solicitud de OTA sin confirmar. NO bloquea el alta (a veces recepción sabe
+ * que la va a rechazar), pero avisa: como la solicitud no crea fila en
+ * `bookings`, no hay ningún constraint que atrape el solapamiento después.
+ */
+type ChannelRequestForOverlap = {
+  id: string;
+  unit_id: string;
+  check_in_date: string;
+  check_out_date: string;
+  channel: string;
+  confirmation_code: string | null;
+};
+
 interface BookingFormDialogProps {
   children?: React.ReactNode;
   booking?: Booking | BookingWithRelations;
@@ -132,6 +146,8 @@ interface BookingFormDialogProps {
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   /** Reservas ya existentes — usadas para detectar overlaps antes de enviar al server */
   existingBookings?: ExistingBookingForOverlap[];
+  /** Solicitudes de OTA sin confirmar — advertencia blanda, no bloqueo. */
+  channelRequests?: ChannelRequestForOverlap[];
   defaultUnitId?: string;
   defaultCheckIn?: string;
   defaultCheckOut?: string;
@@ -150,6 +166,7 @@ export function BookingFormDialog({
   units,
   accounts = [],
   existingBookings,
+  channelRequests,
   defaultUnitId,
   defaultCheckIn,
   defaultCheckOut,
@@ -166,6 +183,16 @@ export function BookingFormDialog({
     controlledOnOpenChange?.(o);
   };
   const [isPending, startTransition] = useTransition();
+  /**
+   * Solicitud de OTA ya advertida en ESTA apertura del diálogo. Se resetea al
+   * cerrar: `LazyNewBookingTrigger` deja el diálogo montado, así que sin esto
+   * ackear una solicitud y cerrar sin guardar dejaba la siguiente reserva sin
+   * ningún aviso.
+   */
+  const channelRequestAckRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) channelRequestAckRef.current = null;
+  }, [open]);
   const router = useRouter();
   const isEdit = !!booking;
 
@@ -542,6 +569,26 @@ export function BookingFormDialog({
         const u = units.find((x) => x.id === form.unit_id);
         toast.error("Ya existe una reserva en esa unidad", {
           description: `${u?.name ?? "La unidad"} está ocupada del ${conflict.check_in_date} al ${conflict.check_out_date}. Editá esa reserva en lugar de crear una nueva.`,
+        });
+        return;
+      }
+    }
+
+    // Advertencia blanda por solicitud de OTA sin confirmar. Se muestra UNA vez
+    // por solicitud: el segundo intento de guardar pasa derecho.
+    if (channelRequests && form.unit_id && form.check_in_date && form.check_out_date) {
+      const req = channelRequests.find(
+        (r) =>
+          r.unit_id === form.unit_id &&
+          r.check_in_date < form.check_out_date &&
+          r.check_out_date > form.check_in_date,
+      );
+      if (req && channelRequestAckRef.current !== req.id) {
+        channelRequestAckRef.current = req.id;
+        const canal = req.channel === "airbnb" ? "Airbnb" : "Booking";
+        toast.warning(`${canal} tiene una solicitud pendiente para esas fechas`, {
+          description: `${req.check_in_date} → ${req.check_out_date}${req.confirmation_code ? ` (${req.confirmation_code})` : ""}. Todavía no es una reserva, pero si la aceptan se superpone con esta. Guardá de nuevo para continuar igual.`,
+          duration: 10000,
         });
         return;
       }

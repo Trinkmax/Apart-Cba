@@ -118,6 +118,12 @@ import {
 } from "@/lib/actions/bookings";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
+import {
+  confirmChannelRequest,
+  discardChannelRequest,
+  listChannelRequestsInRange,
+  type ChannelRequestRow,
+} from "@/lib/actions/channel-requests";
 import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { useFlashIds, useLiveTable } from "@/lib/realtime/use-live";
 import { cn } from "@/lib/utils";
@@ -255,6 +261,16 @@ function NeedsGuestPanel({
   );
 }
 
+/** Forma mínima que el formulario de reservas necesita de una solicitud. */
+type RequestOverlap = {
+  id: string;
+  unit_id: string;
+  check_in_date: string;
+  check_out_date: string;
+  channel: string;
+  confirmation_code: string | null;
+};
+
 interface PmsBoardProps {
   initialUnits: UnitWithRelations[];
   initialBookings: BookingWithRelations[];
@@ -264,10 +280,22 @@ interface PmsBoardProps {
   initialSchedule?: BookingPaymentSchedule[];
   /** Marcas de color por fecha (feriados, puentes, eventos) en la ventana visible */
   initialDateMarks?: OrgDateMark[];
+  /**
+   * Solicitudes de OTA sin confirmar en la ventana visible. NO son reservas: no
+   * ocupan el calendario ni se pueden arrastrar. Se pintan igual para que nadie
+   * venda esas fechas sin saber que Airbnb las pidió.
+   */
+  initialChannelRequests?: ChannelRequestRow[] | null;
   /** Si true, el popover permite editar/quitar marcas. Si false, solo lectura. */
   canEditDateMarks?: boolean;
   /** Si false, el board es solo-lectura para reservas: sin drag, resize, edit ni cancel. */
   canEditBookings?: boolean;
+  /**
+   * Permiso de Canales de venta. Gobierna la suscripción realtime a
+   * `channel_reservations`: su RLS es por organización y no por rol, así que
+   * suscribirla manda la fila entera (con `guest` y `amounts`) por WebSocket.
+   */
+  canViewChannels?: boolean;
   /** Si false, esconde montos (total/cobrado/saldo/comisión) y "Registrar pago" en el popover. */
   canViewMoney?: boolean;
   /** Muestra el botón "Registrar gasto" en la toolbar del calendario. */
@@ -395,8 +423,10 @@ export function PmsBoard({
   accounts = [],
   initialSchedule = [],
   initialDateMarks = [],
+  initialChannelRequests = null,
   canEditDateMarks = false,
   canEditBookings = true,
+  canViewChannels = false,
   canViewMoney = true,
   canRegisterExpense = false,
   expenseDefaultId = null,
@@ -494,6 +524,32 @@ export function PmsBoard({
       ),
     );
   }
+  // Solicitudes de OTA — mismo patrón prev/state que dateMarks (tampoco vienen
+  // por el prop en el lazy-load; el resync y realtime las mantienen frescas).
+  const [prevInitialRequests, setPrevInitialRequests] = useState(initialChannelRequests);
+  const [channelRequests, setChannelRequests] = useState<ChannelRequestRow[]>(
+    initialChannelRequests ?? [],
+  );
+  if (prevInitialRequests !== initialChannelRequests) {
+    setPrevInitialRequests(initialChannelRequests);
+    // `null` = el server no pudo leerlas. NUNCA `[]`: alimenta un merge CON
+    // DESALOJO y borraría de la grilla todas las barras de solicitud — que son
+    // justo la señal de que esas fechas están comprometidas.
+    if (initialChannelRequests) {
+      const next = initialChannelRequests;
+      setChannelRequests((prev) =>
+        mergeWindowed(
+          prev,
+          next,
+          (r) =>
+            Boolean(r.check_in && r.check_out) &&
+            r.check_in! < initialWindowEnd &&
+            r.check_out! > startISO,
+        ),
+      );
+    }
+  }
+
   // Estado del dialog de confirmación obligatoria
   const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
   // Latch one-way: se vuelve true la primera vez que se abre el MoveConfirmDialog
@@ -1119,6 +1175,41 @@ export function PmsBoard({
     // pero ocultamos el popover. Si quiere descartar, tiene la X del input.
   }, []);
 
+  const requestsByUnit = useMemo(() => {
+    const m = new Map<string, ChannelRequestRow[]>();
+    channelRequests.forEach((r) => {
+      if (!r.unit_id || !r.check_in || !r.check_out) return;
+      // Mismo filtro de canal que las reservas: destildar "Airbnb" tiene que
+      // ocultar también sus solicitudes, o la grilla queda inconsistente.
+      if (sourceFilter.size > 0 && !sourceFilter.has(r.channel as BookingSource)) return;
+      const arr = m.get(r.unit_id) ?? [];
+      arr.push(r);
+      m.set(r.unit_id, arr);
+    });
+    return m;
+  }, [channelRequests, sourceFilter]);
+
+  /**
+   * Solicitudes de OTA en la forma que espera el formulario de reservas.
+   * Es la única barrera contra vender por WhatsApp las mismas fechas que la OTA
+   * ya pidió: cuando la política no retiene (Airbnb), no hay constraint que lo
+   * atrape porque la solicitud no tiene fila en `bookings`.
+   */
+  const requestOverlaps = useMemo(
+    () =>
+      channelRequests
+        .filter((r) => r.unit_id && r.check_in && r.check_out)
+        .map((r) => ({
+          id: r.id,
+          unit_id: r.unit_id as string,
+          check_in_date: r.check_in as string,
+          check_out_date: r.check_out as string,
+          channel: r.channel as string,
+          confirmation_code: r.confirmation_code,
+        })),
+    [channelRequests],
+  );
+
   const bookingsByUnit = useMemo(() => {
     const m = new Map<string, BookingWithRelations[]>();
     visibleBookings.forEach((b) => {
@@ -1393,7 +1484,7 @@ export function PmsBoard({
       // `null` = falló. NUNCA `[]`: una lista vacía alimenta un merge CON
       // DESALOJO y borraría de pantalla todas las cuotas, todas las marcas y
       // el panel "Completar datos" por un timeout de una sola consulta.
-      const [bs, sch, dm, needs, us] = await Promise.all([
+      const [bs, sch, dm, needs, us, reqs] = await Promise.all([
         listBookingsInRange(from, to),
         listScheduleInRange(from, lastInclusive).catch(
           () => null as BookingPaymentSchedule[] | null
@@ -1405,6 +1496,7 @@ export function PmsBoard({
           ? listBookingsNeedingGuest().catch(() => null as BookingWithRelations[] | null)
           : Promise.resolve(null),
         listUnitsEnriched().catch(() => null),
+        listChannelRequestsInRange(from, to).catch(() => null as ChannelRequestRow[] | null),
       ]);
       const keep = (id: string) => pendingMutateIds.current.has(id);
       setBookings((prev) =>
@@ -1424,6 +1516,14 @@ export function PmsBoard({
       if (dm)
         setDateMarks((prev) =>
           mergeWindowed(prev, dm, (x) => x.date >= from && x.date < to)
+        );
+      if (reqs)
+        setChannelRequests((prev) =>
+          mergeWindowed(
+            prev,
+            reqs,
+            (r) => Boolean(r.check_in && r.check_out) && r.check_in! < to && r.check_out! > from,
+          ),
         );
       if (needs) setNeedsGuestList(needs);
       // Un reorden en borrador no se pisa: el operador lo está editando.
@@ -1476,6 +1576,75 @@ export function PmsBoard({
     // ámbar en vez de mentir que está todo al día.
     onResync: () => resyncWindow(),
   });
+
+  // Relectura acotada de la capa de solicitudes. Se usa cuando llega por
+  // realtime una fila que todavía no está en el state (alta nueva): el payload
+  // del canal no trae la unidad enriquecida ni la URL de la OTA.
+  const channelRequestsRef = useRef<ChannelRequestRow[]>(channelRequests);
+  useEffect(() => {
+    channelRequestsRef.current = channelRequests;
+  }, [channelRequests]);
+  const requestsReloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRequestsReload = useCallback(() => {
+    if (requestsReloadTimer.current) return;
+    requestsReloadTimer.current = setTimeout(async () => {
+      requestsReloadTimer.current = null;
+      const from = loadedFromRef.current;
+      const to = loadedToRef.current;
+      try {
+        const reqs = await listChannelRequestsInRange(from, to);
+        // Aditivo (mergeById), NO mergeWindowed: acá no hay guard contra una
+        // respuesta que salió antes de un resync, y desalojar con una foto vieja
+        // borraría barras que siguen vivas. Las que dejan de ser solicitud las
+        // saca el propio handler de realtime.
+        setChannelRequests((prev) => mergeById(prev, reqs));
+      } catch {
+        // La capa se queda como está: el resync global la corrige después.
+      }
+    }, 1200);
+  }, []);
+
+  useEffect(() => {
+    const t = requestsReloadTimer;
+    return () => {
+      if (t.current) clearTimeout(t.current);
+    };
+  }, []);
+
+  const onChannelRequestChange = useCallback(
+    (change: { id?: string | null; eventType?: string; new?: unknown }) => {
+      const id = change.id;
+      if (!id) return;
+      if (change.eventType === "DELETE") {
+        setChannelRequests((prev) => prev.filter((x) => x.id !== id));
+        return;
+      }
+      const row = change.new as
+        | (Partial<ChannelRequestRow> & { id?: string; external_status?: string })
+        | null;
+      if (!row?.id) return;
+      // Deja de ser solicitud (se confirmó, se cayó, la canceló la OTA): sale de
+      // la capa. Si pasó a reserva, el canal de `bookings` la trae por su lado.
+      if (row.external_status !== "pending") {
+        setChannelRequests((prev) => prev.filter((x) => x.id !== row.id));
+        return;
+      }
+      setChannelRequests((prev) => {
+        const idx = prev.findIndex((x) => x.id === row.id);
+        // Una solicitud NUEVA llega sin la unidad enriquecida ni la URL de la
+        // OTA, así que hay que releerla por el server action. Sin esto el badge
+        // del sidebar diría "1 solicitud pendiente" con la fila de esa unidad
+        // vacía en el calendario hasta la próxima navegación.
+        if (idx === -1) return prev;
+        const next = prev.slice();
+        next[idx] = { ...next[idx], ...row } as ChannelRequestRow;
+        return next;
+      });
+      // Fuera del updater: `setState` no es el lugar para disparar un efecto.
+      if (!channelRequestsRef.current.some((x) => x.id === row.id)) scheduleRequestsReload();
+    },
+    [scheduleRequestsReload],
+  );
 
   // Cuotas: el punto ámbar de "vencida" mentía hasta recargar si otro cobraba.
   useLiveTable({
@@ -1571,13 +1740,18 @@ export function PmsBoard({
       setLoadingWindow(true);
       try {
         const lastInclusive = isoAddDays(targetTo, -1);
-        const [bs, sch, dm] = await Promise.all([
+        const [bs, sch, dm, reqs] = await Promise.all([
           listBookingsInRange(targetFrom, targetTo),
           listScheduleInRange(targetFrom, lastInclusive).catch(
             () => [] as BookingPaymentSchedule[]
           ),
           listDateMarksInRange(targetFrom, lastInclusive).catch(
             () => [] as OrgDateMark[]
+          ),
+          // Sin esto, navegar con las flechas dejaba el tramo nuevo sin barras
+          // de solicitud aunque `loadedFrom`/`loadedTo` ya lo dieran por cargado.
+          listChannelRequestsInRange(targetFrom, targetTo).catch(
+            () => [] as ChannelRequestRow[]
           ),
         ]);
         if (cancelled || seq !== loadSeqRef.current) return;
@@ -1603,6 +1777,7 @@ export function PmsBoard({
         });
         setSchedule((prev) => mergeById(prev, sch));
         setDateMarks((prev) => mergeById(prev, dm));
+        setChannelRequests((prev) => mergeById(prev, reqs));
         setLoadedFrom((f) => (targetFrom < f ? targetFrom : f));
         setLoadedTo((t) => (targetTo > t ? targetTo : t));
       } catch (err) {
@@ -2318,6 +2493,10 @@ export function PmsBoard({
 
   return (
     <TooltipProvider delayDuration={300}>
+      {/* Sólo con permiso de canales: la RLS de `channel_reservations` es por
+          organización y no por rol, así que suscribirla manda la fila entera
+          (con `guest` y `amounts`) por WebSocket a quien tenga el board abierto. */}
+      {canViewChannels && <ChannelRequestsLive onChange={onChannelRequestChange} />}
       <div
         ref={zenWrapperRef}
         className={cn(
@@ -3063,7 +3242,7 @@ export function PmsBoard({
 
               {/* Nueva reserva */}
               {canEditBookings && (
-                <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings}>
+                <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings} channelRequests={requestOverlaps}>
                   <Button
                     size="sm"
                     className="h-8 gap-1.5 text-xs"
@@ -3102,6 +3281,17 @@ export function PmsBoard({
                 }}
               />
               Bloqueo operacional
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-5 rounded-sm"
+                style={{
+                  background:
+                    "repeating-linear-gradient(135deg, rgba(245,158,11,.55) 0 4px, rgba(245,158,11,.14) 4px 8px)",
+                  border: "1px solid rgba(245,158,11,.55)",
+                }}
+              />
+              Solicitud de OTA (sin confirmar)
             </span>
           </div>
         </div>
@@ -3376,6 +3566,21 @@ export function PmsBoard({
                       />
                     ))}
 
+                    {/* Solicitudes de OTA — carril inferior, DEBAJO de las
+                        barras reales en el orden del DOM (no por z-index) para
+                        que una solicitud nunca tape una reserva de verdad. */}
+                    {(requestsByUnit.get(unit.id) ?? []).map((r) => (
+                      <ChannelRequestBar
+                        key={r.id}
+                        request={r}
+                        windowStart={windowStart}
+                        windowDays={windowDays}
+                        cellWidth={CELL}
+                        rowHeight={ROW}
+                        canDecide={canEditBookings}
+                      />
+                    ))}
+
                     {/* Booking bars */}
                     {unitBookings.map((b) => (
                       <BookingBar
@@ -3541,6 +3746,7 @@ export function PmsBoard({
             units={units}
             accounts={accounts}
             existingBookings={bookings}
+            channelRequests={requestOverlaps}
             open
             onOpenChange={(o) => { if (!o) setEditBooking(null); }}
           />
@@ -3552,6 +3758,7 @@ export function PmsBoard({
             units={units}
             accounts={accounts}
             existingBookings={bookings}
+            channelRequests={requestOverlaps}
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
             checkOut={quickAdd.checkOut}
@@ -3571,7 +3778,7 @@ export function PmsBoard({
             Lo escondemos en editMode (reorden) y mientras el usuario arrastra,
             para no tapar el target ni competir con el DragChip. */}
         {canEditBookings && !editMode && !drag && (
-          <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings}>
+          <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings} channelRequests={requestOverlaps}>
             <button
               type="button"
               aria-label="Nueva reserva"
@@ -3977,6 +4184,173 @@ interface BookingBarProps {
   customStatusHex: string | null;
   canEditBookings: boolean;
   canViewMoney: boolean;
+}
+
+/**
+ * Suscripción a `channel_reservations`. Componente y no hook para poder
+ * montarla condicionalmente según el permiso de canales.
+ */
+function ChannelRequestsLive({
+  onChange,
+}: {
+  onChange: (change: { id?: string | null; eventType?: string; new?: unknown }) => void;
+}) {
+  useLiveTable({
+    table: "channel_reservations",
+    onChange,
+    // El desalojo y la re-lectura autoritativa los hace el resync del board.
+  });
+  return null;
+}
+
+/**
+ * Barra de una SOLICITUD de OTA. Deliberadamente distinta de todo lo demás:
+ *
+ *  · media altura, en el carril inferior de la fila (la barra real ocupa del
+ *    14 % al 86 %), así se lee "hay algo pedido acá" sin competir con la reserva
+ *  · rayado ámbar a 135°: ámbar sólido + borde punteado ya es el estado
+ *    "pendiente" de una reserva, y el rayado de UNIT_OVERLAY_STYLE usa otros
+ *    colores. Es el único lenguaje visual libre.
+ *  · `pointer-events-none` en el contenedor y `auto` sólo en el botón: la celda
+ *    de abajo tiene un <button absolute inset-0> para el alta rápida, y sin esto
+ *    la solicitud se lo robaría.
+ *  · sin onPointerDown: el drag arranca únicamente desde `data-bar-root`, así
+ *    que la solicitud es transparente al gesto de arrastrar.
+ */
+function ChannelRequestBar({
+  request,
+  windowStart,
+  windowDays,
+  cellWidth,
+  rowHeight,
+  canDecide,
+}: {
+  request: ChannelRequestRow;
+  windowStart: string;
+  windowDays: number;
+  cellWidth: number;
+  rowHeight: number;
+  canDecide: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [isPending, startTransition] = useTransition();
+  if (!request.check_in || !request.check_out) return null;
+
+  const startOff = dayOffset(windowStart, request.check_in);
+  const endOff = dayOffset(windowStart, request.check_out);
+  if (endOff <= 0 || startOff >= windowDays) return null;
+  const clippedStart = Math.max(startOff, 0);
+  const clippedEnd = Math.min(endOff, windowDays);
+  const width = (clippedEnd - clippedStart) * cellWidth - 4;
+  if (width <= 0) return null;
+
+  const canal = request.channel === "airbnb" ? "Airbnb" : "Booking";
+  const nights = Math.round(
+    (Date.parse(`${request.check_out}T00:00:00Z`) - Date.parse(`${request.check_in}T00:00:00Z`)) /
+      86_400_000,
+  );
+
+  const run = (fn: () => Promise<{ ok: true } | { ok: false; error: string }>, msg: string) => {
+    startTransition(async () => {
+      const res = await fn();
+      if (res.ok) {
+        toast.success(msg);
+        setOpen(false);
+      } else {
+        toast.error(res.error);
+      }
+    });
+  };
+
+  return (
+    <div
+      className="absolute pointer-events-none"
+      style={{
+        // Carril inferior LIMPIO: la barra de reserva ocupa del 14 % al 86 % de
+        // la fila, así que arrancar en 0.76 se le metía adentro un 10 % y en
+        // mobile (ROW 48 px) dejaba 3,8 px visibles.
+        top: rowHeight * 0.88,
+        height: Math.max(6, rowHeight * 0.11),
+        left: clippedStart * cellWidth + 2,
+        width,
+      }}
+    >
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={`Solicitud de ${canal}, ${request.check_in} a ${request.check_out}`}
+            className="pointer-events-auto h-full w-full rounded-[3px] px-1 text-left text-[10px] leading-none font-medium text-amber-900 dark:text-amber-200 overflow-hidden whitespace-nowrap"
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(135deg, rgba(245,158,11,.55) 0 4px, rgba(245,158,11,.14) 4px 8px)",
+              border: "1px solid rgba(245,158,11,.55)",
+            }}
+          >
+            {width > 90 && rowHeight >= 60 ? `Solicitud ${canal}` : ""}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-72 space-y-3 text-sm">
+          <div>
+            <div className="font-medium">Solicitud de {canal}</div>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {canal} pidió estas fechas y todavía no están confirmadas.{" "}
+              {request.holds_availability
+                ? "No es una reserva, pero quedan retenidas hasta que se resuelva."
+                : "No ocupan el calendario hasta que se confirmen."}
+            </p>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {request.check_in} → {request.check_out}
+            {Number.isFinite(nights) && nights > 0
+              ? ` · ${nights} ${nights === 1 ? "noche" : "noches"}`
+              : ""}
+            {request.confirmation_code ? (
+              <>
+                <br />
+                {request.confirmation_code}
+              </>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {request.external_url ? (
+              <Button asChild size="sm" className="w-full">
+                <a href={request.external_url} target="_blank" rel="noopener noreferrer">
+                  Ver en {canal}
+                </a>
+              </Button>
+            ) : null}
+            {canDecide ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="w-full"
+                  disabled={isPending}
+                  onClick={() =>
+                    run(() => confirmChannelRequest(request.id), "Se cargó la reserva.")
+                  }
+                >
+                  Es una reserva
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="w-full"
+                  disabled={isPending}
+                  onClick={() =>
+                    run(() => discardChannelRequest(request.id), "Solicitud descartada.")
+                  }
+                >
+                  Se cayó
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
 }
 
 function BookingBar({
@@ -4435,6 +4809,7 @@ function QuickAddBridge({
   units,
   accounts,
   existingBookings,
+  channelRequests,
   unitId,
   checkIn,
   checkOut,
@@ -4443,6 +4818,7 @@ function QuickAddBridge({
   units: Unit[];
   accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   existingBookings: BookingWithRelations[];
+  channelRequests?: RequestOverlap[];
   unitId: string;
   checkIn: string;
   checkOut: string;
@@ -4453,6 +4829,7 @@ function QuickAddBridge({
       units={units}
       accounts={accounts}
       existingBookings={existingBookings}
+      channelRequests={channelRequests}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
       defaultCheckOut={checkOut}
@@ -4472,11 +4849,13 @@ function LazyNewBookingTrigger({
   units,
   accounts,
   existingBookings,
+  channelRequests,
   children,
 }: {
   units: UnitWithRelations[];
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   existingBookings: BookingWithRelations[];
+  channelRequests?: RequestOverlap[];
   children: React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>;
 }) {
   const [open, setOpen] = useState(false);
@@ -4496,6 +4875,7 @@ function LazyNewBookingTrigger({
           units={units}
           accounts={accounts}
           existingBookings={existingBookings}
+          channelRequests={channelRequests}
           open={open}
           onOpenChange={setOpen}
         />

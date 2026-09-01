@@ -2,6 +2,11 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Clock, MapPin, Users } from "lucide-react";
 import { listBookingRequestsForOrg } from "@/lib/actions/booking-requests";
+import {
+  listDiscardedChannelRequests,
+  listPendingChannelRequests,
+} from "@/lib/actions/channel-requests";
+import { ChannelRequestCard } from "@/components/channels/channel-request-card";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
@@ -25,28 +30,73 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 export default async function ReservasPendientesPage() {
   const { role } = await getCurrentOrg();
   if (!can(role, "bookings", "view")) redirect("/dashboard");
-  const requests = await listBookingRequestsForOrg();
+  const canViewChannels = can(role, "channels", "view");
+  const [requests, channelRequests, discardedRequests] = await Promise.all([
+    listBookingRequestsForOrg(),
+    canViewChannels ? listPendingChannelRequests() : Promise.resolve([]),
+    canViewChannels ? listDiscardedChannelRequests() : Promise.resolve([]),
+  ]);
   const canViewMoney = can(role, "payments", "view");
   const pendingCount = requests.filter((r) => r.status === "pendiente").length;
+  const totalPending = pendingCount + channelRequests.length;
 
   return (
     <div className="page-x page-y max-w-6xl mx-auto space-y-5">
-      <LiveRefresh tables={["booking_requests", "bookings"]} label="solicitud" labelPlural="solicitudes" />
+      {/* `channel_reservations` sólo con permiso de canales: su RLS es por
+          organización, no por rol, así que suscribirla manda las filas enteras
+          (con `guest` y `amounts`) por WebSocket a cualquiera que abra esta
+          pantalla — owner_view incluido. */}
+      <LiveRefresh
+        tables={
+          canViewChannels
+            ? ["booking_requests", "bookings", "channel_reservations"]
+            : ["booking_requests", "bookings"]
+        }
+        label="solicitud"
+        labelPlural="solicitudes"
+      />
       <header className="flex items-end justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">
-            Solicitudes del marketplace
-          </h1>
+          <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Solicitudes</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Huéspedes esperando tu respuesta para unidades sin reserva al toque.
+            Fechas pedidas que todavía no son reservas. Se cargan como reserva recién cuando se confirman.
           </p>
         </div>
-        {pendingCount > 0 ? (
+        {totalPending > 0 ? (
           <Badge className="bg-amber-100 text-amber-800 border-amber-200">
-            {pendingCount} esperando respuesta
+            {totalPending} esperando respuesta
           </Badge>
         ) : null}
       </header>
+
+      {canViewChannels ? (
+        <section className="space-y-3">
+          <div className="flex items-baseline gap-2">
+            <h2 className="text-lg font-semibold tracking-tight">De las OTAs</h2>
+            <span className="text-xs text-muted-foreground">
+              Airbnb y Booking · se resuelven solas si la OTA las retira
+            </span>
+          </div>
+          {channelRequests.length === 0 ? (
+            <Card className="p-6 text-sm text-muted-foreground">
+              No hay solicitudes de OTA esperando. Las que se caen se descartan solas.
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {channelRequests.map((r) => (
+                <ChannelRequestCard key={r.id} request={r} />
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      <div className="flex items-baseline gap-2 pt-1">
+        <h2 className="text-lg font-semibold tracking-tight">De la web propia</h2>
+        <span className="text-xs text-muted-foreground">
+          Huéspedes esperando tu respuesta para unidades sin reserva al toque
+        </span>
+      </div>
 
       {requests.length === 0 ? (
         <Card className="p-12 text-center">
@@ -112,6 +162,19 @@ export default async function ReservasPendientesPage() {
           })}
         </div>
       )}
+
+      {canViewChannels && discardedRequests.length > 0 ? (
+        <details className="rounded-lg border p-4">
+          <summary className="cursor-pointer text-sm font-medium">
+            Solicitudes de OTA descartadas (últimos 30 días) · {discardedRequests.length}
+          </summary>
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {discardedRequests.map((r) => (
+              <ChannelRequestCard key={r.id} request={r} variant="discarded" />
+            ))}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }

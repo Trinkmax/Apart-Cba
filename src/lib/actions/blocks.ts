@@ -6,7 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { can } from "@/lib/permissions";
-import type { Channel } from "@/lib/channels/types";
+import type { Channel, ChannelReservationStatus } from "@/lib/channels/types";
 
 /**
  * Ocupación importada de una OTA que el PMS no puede clasificar solo.
@@ -44,7 +44,7 @@ export interface ChannelBlockContext {
   reservation: {
     id: string;
     channel: Channel;
-    external_status: "active" | "cancelled" | "ignored";
+    external_status: ChannelReservationStatus;
     ical_uid: string | null;
     confirmation_code: string | null;
     last_seen_at: string | null;
@@ -116,10 +116,7 @@ export async function getChannelBlockContext(
       ? {
           id: reservation.id as string,
           channel: reservation.channel as Channel,
-          external_status: reservation.external_status as
-            | "active"
-            | "cancelled"
-            | "ignored",
+          external_status: reservation.external_status as ChannelReservationStatus,
           ical_uid: (reservation.ical_uid as string | null) ?? null,
           confirmation_code: (reservation.confirmation_code as string | null) ?? null,
           last_seen_at: (reservation.last_seen_at as string | null) ?? null,

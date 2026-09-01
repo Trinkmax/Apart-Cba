@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/card";
 import { ConnectionsTable } from "@/components/canales/connections-table";
 import { IssuesPanel } from "@/components/canales/issues-panel";
 import { listPendingCancellations } from "@/lib/actions/channel-cancellations";
+import { getChannelRequestStats } from "@/lib/actions/channel-requests";
 import { EmailSettingsCard } from "@/components/canales/email-settings-card";
 import { SyncNowButton } from "@/components/canales/sync-now-button";
 import { formatDistanceToNow } from "date-fns";
@@ -38,7 +39,10 @@ export default async function CanalesPage() {
   const { links, issues } = overview;
   // Cancelaciones que una OTA propuso y todavía nadie resolvió. Mientras
   // esperan, las reservas siguen vivas: el sistema no cancela solo.
-  const pendingCancellations = await listPendingCancellations();
+  const [pendingCancellations, requestStats] = await Promise.all([
+    listPendingCancellations(),
+    getChannelRequestStats(),
+  ]);
 
   const active = links.filter((l) => l.status === "active");
   const airbnb = links.filter((l) => l.channel === "airbnb");
@@ -73,7 +77,10 @@ export default async function CanalesPage() {
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 max-w-6xl mx-auto">
-      <LiveRefresh tables={["bookings", "notifications"]} throttleMs={6_000} />
+      <LiveRefresh
+        tables={["bookings", "notifications", "channel_reservations"]}
+        throttleMs={6_000}
+      />
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -120,6 +127,31 @@ export default async function CanalesPage() {
         </Card>
       )}
 
+      {/* Solicitudes sin confirmar. Va DESPUÉS de las cancelaciones porque no
+          exige decisión: se resuelven solas. Pero se muestra, porque son fechas
+          que alguien pidió y que el calendario todavía no está reteniendo. */}
+      {requestStats.pendientes > 0 && (
+        <Card className="p-4 border border-amber-500/30 bg-amber-500/10">
+          <div className="flex flex-wrap items-center gap-3">
+            <Clock className="size-5 shrink-0 text-amber-500" />
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                {requestStats.pendientes === 1
+                  ? "Una solicitud esperando confirmación"
+                  : `${requestStats.pendientes} solicitudes esperando confirmación`}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                No ocupan el calendario. Si la OTA las rechaza se descartan solas; cuando se
+                confirman se cargan como reserva.
+              </p>
+            </div>
+            <Button asChild variant="outline" className="shrink-0">
+              <Link href="/dashboard/reservas-pendientes">Revisar</Link>
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* Estado general de protección */}
       <Card className={`p-4 border ${overallClass}`}>
         <div className="flex items-center gap-3 flex-wrap">
@@ -146,6 +178,19 @@ export default async function CanalesPage() {
             tone={overview.awaitingData > 0 ? "info" : undefined}
           />
         </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Solicitudes (30 días): {requestStats.confirmadas}{" "}
+          {requestStats.confirmadas === 1 ? "confirmada" : "confirmadas"} ·{" "}
+          {requestStats.caidas} {requestStats.caidas === 1 ? "caída" : "caídas"}
+          {requestStats.sinMail > 0 ? (
+            // Si esto no es cero, el pipeline de email de la OTA está fallando y
+            // la red de seguridad temporal es lo único que evita reservas invisibles.
+            <span className="text-amber-700 dark:text-amber-400">
+              {" "}
+              · {requestStats.sinMail} sin mail de la OTA
+            </span>
+          ) : null}
+        </p>
       </Card>
 
       {/* Incidencias accionables */}

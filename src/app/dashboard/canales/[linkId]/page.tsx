@@ -138,20 +138,27 @@ export default async function LinkDetailPage({
 }
 
 function ReservationRow({ r }: { r: ChannelReservationRow }) {
-  const stateLabel =
-    r.external_status === "cancelled"
-      ? { text: "Cancelada", cls: "text-muted-foreground" }
-      : r.external_status === "ignored"
-        ? { text: "Liberada por el equipo", cls: "text-muted-foreground" }
-        : r.missing_since
-          ? { text: "Verificando cancelación", cls: "text-amber-700 dark:text-amber-400" }
-          : !r.booking_id
-            ? { text: "Sin proyectar (revisar)", cls: "text-rose-700 dark:text-rose-400" }
-            : r.is_block
-              ? { text: "Cierre de fechas (no es reserva)", cls: "text-slate-600 dark:text-slate-300" }
-              : Object.keys(r.guest ?? {}).length === 0
-                ? { text: "Esperando datos de la OTA", cls: "text-sky-700 dark:text-sky-400" }
-                : { text: "Completa", cls: "text-emerald-700 dark:text-emerald-400" };
+  // Ojo con el orden: una solicitud no tiene booking_id, y sin estas dos ramas
+  // primero caería en "Sin proyectar (revisar)" — en rojo, como si fuera un error.
+  const stateLabel = (() => {
+    if (r.external_status === "pending")
+      return { text: "Solicitud sin confirmar", cls: "text-amber-700 dark:text-amber-400" };
+    if (r.external_status === "expired")
+      return { text: "Solicitud caída", cls: "text-muted-foreground" };
+    if (r.external_status === "cancelled")
+      return { text: "Cancelada", cls: "text-muted-foreground" };
+    if (r.external_status === "ignored")
+      return { text: "Liberada por el equipo", cls: "text-muted-foreground" };
+    if (r.missing_since)
+      return { text: "Verificando cancelación", cls: "text-amber-700 dark:text-amber-400" };
+    if (!r.booking_id)
+      return { text: "Sin proyectar (revisar)", cls: "text-rose-700 dark:text-rose-400" };
+    if (r.is_block)
+      return { text: "Cierre de fechas (no es reserva)", cls: "text-slate-600 dark:text-slate-300" };
+    if (Object.keys(r.guest ?? {}).length === 0)
+      return { text: "Esperando datos de la OTA", cls: "text-sky-700 dark:text-sky-400" };
+    return { text: "Completa", cls: "text-emerald-700 dark:text-emerald-400" };
+  })();
   return (
     <li className="py-2.5 first:pt-0 last:pb-0 flex items-center gap-3 text-sm">
       <span className="font-mono text-xs text-muted-foreground w-32 truncate shrink-0">

@@ -218,7 +218,7 @@ export async function syncSingleFeed(
             origen: "sync_ical_legacy",
           },
         });
-        if (opened) cancelled++;
+        if (opened === "created") cancelled++;
       }
     }
 

@@ -20,9 +20,17 @@ import { cn } from "@/lib/utils";
  */
 export function PendingRequestsBadge({
   initialCount,
+  canViewChannels = false,
   className,
 }: {
   initialCount: number;
+  /**
+   * Sin esto el badge suscribía `channel_reservations` para cualquier rol con
+   * `bookings:view` — `owner_view` incluido — y recibía por WebSocket cada
+   * INSERT/UPDATE con `guest` y `amounts` de todas las unidades, esquivando el
+   * `can(role,'channels','view')` que sí aplica al conteo.
+   */
+  canViewChannels?: boolean;
   className?: string;
 }) {
   const [count, setCount] = useState(initialCount);
@@ -58,8 +66,11 @@ export function PendingRequestsBadge({
     onResync: recount,
   });
 
-  if (count <= 0) return null;
+
+  if (count <= 0) return canViewChannels ? <ChannelRequestsWatcher onEvent={recount} /> : null;
   return (
+    <>
+      {canViewChannels ? <ChannelRequestsWatcher onEvent={recount} /> : null}
     <span
       aria-label={`${count} ${count === 1 ? "solicitud pendiente" : "solicitudes pendientes"}`}
       className={cn(
@@ -70,6 +81,20 @@ export function PendingRequestsBadge({
       )}
     >
       {count > 99 ? "99+" : count}
-    </span>
+      </span>
+    </>
   );
+}
+
+/**
+ * Suscripción aparte para poder montarla sólo con permiso de canales: un hook
+ * no se puede llamar condicionalmente, pero un componente sí.
+ */
+function ChannelRequestsWatcher({ onEvent }: { onEvent: () => void }) {
+  useLiveTable({
+    table: "channel_reservations",
+    onChange: onEvent,
+    onResync: onEvent,
+  });
+  return null;
 }

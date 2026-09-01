@@ -1,9 +1,11 @@
 import { matchUnit } from "@/lib/inbound/matcher";
 import { openCancellationRequest } from "./cancellation-requests";
 import { normalizePhoneE164, resolveGuest } from "./guest";
+import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
 import type {
   Channel,
   ChannelReservationRow,
+  ChannelReservationStatus,
   ChannelIssueType,
   IngestResult,
   ReservationEvent,
@@ -168,7 +170,14 @@ async function processUpsert(
   }
 
   // ── 4. Upsert de channel_reservations ─────────────────────────────────────
+  const isNew = !reservation;
   if (!reservation) {
+    // ¿nace como SOLICITUD o como reserva?
+    //
+    // Un VEVENT de iCal no prueba nada: en Airbnb la solicitud pendiente y la
+    // reserva confirmada son el mismo evento. Así que sin evidencia positiva de
+    // confirmación la fila nace `pending` y NO se proyecta.
+    const initial = await resolveInitialStatus(admin, ev, linkId);
     const { data: created, error } = await admin
       .from("channel_reservations")
       .insert({
@@ -176,7 +185,9 @@ async function processUpsert(
         link_id: linkId,
         unit_id: unitId,
         channel: ev.channel,
-        external_status: "active",
+        external_status: initial.status,
+        promoted_at: initial.source ? new Date().toISOString() : null,
+        promoted_source: initial.source,
         check_in: ev.checkIn ?? null,
         check_out: ev.checkOut ?? null,
         ical_uid: ev.icalUid ?? null,
@@ -249,6 +260,30 @@ async function processUpsert(
     patch.is_block = false;
   }
 
+  // ── Solicitud → reserva ───────────────────────────────────────────────────
+  // El ascenso exige evidencia POSITIVA (`ev.confirmed`), no el transporte: el
+  // evento sintético de reprojectReservation() viaja como "email" y lo disparan
+  // los botones "Reintentar"/"Asignar unidad" de una incidencia. Mirando el
+  // transporte, un operador resolviendo una incidencia promovería un fantasma.
+  // `expired` también asciende: que la hayamos descartado (por una lectura
+  // parcial del feed, o a mano) no invalida una confirmación posterior de la OTA.
+  if (
+    (reservation.external_status === "pending" || reservation.external_status === "expired") &&
+    ev.confirmed === true
+  ) {
+    patch.external_status = "active";
+    patch.promoted_at = new Date().toISOString();
+    patch.promoted_source = "email";
+    patch.expired_at = null;
+    patch.expired_source = null;
+    // Sin esto, una solicitud que venía juntando ausencias pasa a `active` con
+    // los contadores puestos y el barrido abre una propuesta de cancelación
+    // sobre una reserva confirmada hace dos minutos.
+    patch.missing_since = null;
+    patch.missing_runs = 0;
+    patch.last_seen_at = new Date().toISOString();
+  }
+
   if (reservation.external_status === "cancelled" && ev.transport === "ical") {
     // reapareció en el feed después de cancelada → reactivar es riesgoso;
     // lo dejamos a revisión manual
@@ -277,10 +312,33 @@ async function processUpsert(
     reservation = { ...reservation, ...patch } as ChannelReservationRow;
   }
 
-  // ── 5. Proyección al booking (único punto que escribe bookings) ───────────
+  // ── 5. Gate de solicitudes ────────────────────────────────────────────────
+  // Sin confirmar, la fila queda registrada, visible y con last_seen_at al día,
+  // pero NO se escribe en `bookings`: no ocupa calendario, no dispara limpiezas,
+  // no entra a KPIs ni liquidaciones y no puede chocar con bookings_no_overlap.
+  //
+  // El gate mira el ESTADO DE LA FILA, no el transporte: una reserva ya
+  // confirmada que extiende fechas llega por iCal con el mismo UID, y un gate
+  // por transporte le congelaría la modificación.
+  // Descartada y sin confirmación: la única vuelta posible es `resolveRequests`
+  // (que respeta `expired_source='manual'`) o un email con `ev.confirmed`, que
+  // ya la habría ascendido más arriba. Una lectura de iCal cuyo contenido
+  // cambió, el replay de un evento en error o el botón "Reintentar" NO son
+  // evidencia de nada — y proyectar acá dejaría la fila en `expired` CON
+  // booking, un estado del que no se sale por ninguna vía de la UI.
+  if (reservation.external_status === "expired") {
+    return { outcome: "duplicate", reservationId: reservation.id };
+  }
+
+  if (reservation.external_status === "pending") {
+    if (isNew) await notifyRequestPending(admin, ev, reservation);
+    return { outcome: "requested", reservationId: reservation.id };
+  }
+
+  // ── 6. Proyección al booking (único punto que escribe bookings) ───────────
   const projected = await projectToBooking(admin, eventId, ev, reservation);
 
-  // ── 6. Número de reserva pendiente ────────────────────────────────────────
+  // ── 7. Número de reserva pendiente ────────────────────────────────────────
   // El aviso por email suele llegar unos minutos ANTES que el iCal, así que
   // acá es donde el número termina de pegarse a la reserva. Va después de la
   // proyección para poder escribir también `bookings.external_id` y el ref.
@@ -294,6 +352,141 @@ async function processUpsert(
   }
 
   return projected;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Solicitudes: nacer pendiente, y el cruce con una confirmación ya recibida
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Decide con qué estado nace una reserva externa nueva.
+ *
+ * `active` sólo con evidencia positiva de confirmación. `pending` es el default
+ * cuando la política del canal está encendida — porque el feed iCal no
+ * distingue una solicitud de una reserva aceptada.
+ */
+async function resolveInitialStatus(
+  admin: AdminClient,
+  ev: ReservationEvent,
+  linkId: string | null,
+): Promise<{ status: ChannelReservationStatus; source: "email" | "email_backfill" | null }> {
+  // El propio email de confirmación: nace confirmada, sin pasar por pendiente.
+  if (ev.confirmed === true) return { status: "active", source: "email" };
+
+  // Un cierre de fechas no es una reserva ni una solicitud: no hay nada que
+  // confirmar y bloquear de más nunca fue el problema.
+  if (ev.isBlock === true) return { status: "active", source: null };
+
+  const policy = await getChannelRequestPolicy(admin, ev.organizationId, ev.channel);
+  if (!appliesToLink(policy, linkId)) return { status: "active", source: null };
+
+  // ¿La confirmación ya había llegado, antes que el iCal? Pasa seguido: medido
+  // en producción el mail gana la carrera por 3-5 minutos, y si en ese momento
+  // no había fila que tocar quedó en needs_review sin efecto. Esta es la mitad
+  // que hace que el orden de llegada no importe.
+  const backfill = await findStoredConfirmation(admin, ev);
+  if (backfill) return { status: "active", source: "email_backfill" };
+
+  return { status: "pending", source: null };
+}
+
+/**
+ * Busca en `channel_events` una confirmación por email ya recibida para este
+ * mismo evento. Mira CUALQUIER status, `needs_review` incluido: justamente el
+ * caso que queremos rescatar es el del mail que no pudo resolver la unidad.
+ *
+ * Los dos canales confirman distinto:
+ *   · Airbnb  → el mail "Reservación confirmada" trae el código HM, que el iCal
+ *               también publica en la DESCRIPTION. Cruce exacto.
+ *   · Booking → no hay código en el iCal; el aviso "¡Nueva reserva!" llega como
+ *               `reservation_reference` con el número y la fecha de llegada. Se
+ *               cruza por fecha de llegada, y sólo si es inequívoco.
+ */
+async function findStoredConfirmation(
+  admin: AdminClient,
+  ev: ReservationEvent,
+): Promise<boolean> {
+  if (ev.confirmationCode) {
+    const code = normalizeRef(ev.channel, ev.confirmationCode);
+    const { data } = await admin
+      .from("channel_events")
+      .select("id")
+      .eq("organization_id", ev.organizationId)
+      .eq("transport", "email")
+      .eq("event_type", "reservation_upsert")
+      .eq("payload->>confirmation_code", code)
+      .limit(1);
+    if ((data ?? []).length > 0) return true;
+    // Y si no matchea, NO se cae al cruce por fecha: ése existe sólo para
+    // Booking, cuyo iCal nunca trae número. Cayendo, una solicitud de Airbnb
+    // podía adoptar la confirmación de OTRA unidad con la misma llegada
+    // (pasa: una confirmación que quedó en needs_review no crea fila, así que
+    // su código queda "libre") y nacer proyectada con sello de confirmada.
+    return false;
+  }
+
+  if (!ev.checkIn) return false;
+
+  const { data: refs } = await admin
+    .from("channel_events")
+    .select("payload")
+    .eq("organization_id", ev.organizationId)
+    .eq("transport", "email")
+    .in("event_type", ["reservation_reference", "reservation_upsert"])
+    .eq("payload->>channel", ev.channel)
+    .eq("payload->>check_in", ev.checkIn)
+    .order("created_at", { ascending: false })
+    .limit(3);
+
+  const codes = new Set(
+    (refs ?? [])
+      .map((e) => (e.payload as Record<string, unknown>)?.confirmation_code)
+      .filter((c): c is string => typeof c === "string" && c.length > 0),
+  );
+  // Dos avisos distintos para la misma llegada = ambiguo: no adivinamos cuál es.
+  if (codes.size !== 1) return false;
+
+  // …y sólo vale si ese número no está ya pegado a otra reserva.
+  const code = normalizeRef(ev.channel, [...codes][0]);
+  const { data: taken } = await admin
+    .from("channel_reservations")
+    .select("id")
+    .eq("organization_id", ev.organizationId)
+    .eq("channel", ev.channel)
+    .eq("confirmation_code", code)
+    .limit(1);
+  return (taken ?? []).length === 0;
+}
+
+/**
+ * Aviso al staff cuando entra una solicitud con llegada cercana. Lejana no
+ * avisa: son ~0,8 solicitudes por día y la mayoría se resuelve sola en minutos.
+ */
+async function notifyRequestPending(
+  admin: AdminClient,
+  ev: ReservationEvent,
+  reservation: ChannelReservationRow,
+): Promise<void> {
+  const days = daysUntil(reservation.check_in);
+  if (days === null || days > 3) return;
+  await notify(admin, {
+    organization_id: reservation.organization_id,
+    type: "channel_request_pending",
+    severity: days <= 1 ? "critical" : "warning",
+    title: `Solicitud de ${channelLabel(ev.channel)} con llegada cercana`,
+    body: `${reservation.check_in} → ${reservation.check_out}. No ocupa el calendario hasta que se confirme.`,
+    action_url: "/dashboard/reservas-pendientes",
+    dedup_key: `channel_request:${reservation.id}`,
+  });
+}
+
+/** Días entre hoy y una fecha YYYY-MM-DD. Negativo si ya pasó. */
+export function daysUntil(ymd: string | null): number | null {
+  if (!ymd) return null;
+  const target = Date.parse(`${ymd}T00:00:00Z`);
+  if (Number.isNaN(target)) return null;
+  const today = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  return Math.round((target - today) / 86_400_000);
 }
 
 /**
@@ -313,7 +506,17 @@ export async function reprojectReservation(
   const reservation = data as ChannelReservationRow;
   // Un bloqueo liberado a mano no se re-proyecta: el reconciliador diario no
   // puede revertir una decisión del operador.
-  if (reservation.external_status === "ignored") {
+  //
+  // Una solicitud tampoco: esta función la llaman los botones "Reintentar" y
+  // "Asignar unidad" de una incidencia, y el reconciliador diario. Ninguno de
+  // los tres es evidencia de que la OTA haya confirmado nada. El ascenso pasa
+  // sí o sí por confirmChannelRequest / el mail / el TTL, que escriben
+  // `external_status='active'` ANTES de llamar acá.
+  if (
+    reservation.external_status === "ignored" ||
+    reservation.external_status === "pending" ||
+    reservation.external_status === "expired"
+  ) {
     return { outcome: "duplicate", reservationId: reservation.id };
   }
   const syntheticEv: ReservationEvent = {
@@ -706,7 +909,23 @@ async function updateProjectedBooking(
  */
 async function stampConfirmationCode(
   admin: AdminClient,
-  input: { organizationId: string; channel: Channel; code: string; checkIn: string },
+  input: {
+    organizationId: string;
+    channel: Channel;
+    code: string;
+    checkIn: string;
+    /**
+     * Si la fila está `pending`, ¿el número de reserva cuenta como confirmación?
+     *
+     * Para el aviso "¡Nueva reserva!" de Booking, SÍ: sus reservas son
+     * instantáneas y ese mail sólo sale cuando ya se vendió.
+     * Para una CANCELACIÓN, jamás — y `processCancellation` también estampa
+     * números. Sin este freno, un mail de cancelación de Booking creaba una
+     * reserva confirmada (la fila quedaba `cancelled`, fuera del barrido, y la
+     * 053 impedía que nada la cancelara: sólo la encontraba un humano).
+     */
+    allowPromotion?: boolean;
+  },
 ): Promise<string | null> {
   const value = normalizeRef(input.channel, input.code);
 
@@ -723,22 +942,57 @@ async function stampConfirmationCode(
 
   const { data: candidates } = await admin
     .from("channel_reservations")
-    .select("id, booking_id, link_id, ical_uid, check_in, check_out")
+    .select("id, booking_id, link_id, ical_uid, check_in, check_out, external_status")
     .eq("organization_id", input.organizationId)
     .eq("channel", input.channel)
-    .eq("external_status", "active")
+    // `expired` incluido: el aviso "¡Nueva reserva!" es la ÚNICA evidencia de
+    // confirmación de Booking, y una venta instantánea no puede perderse porque
+    // el barrido hubiera descartado la solicitud mientras tanto.
+    .in("external_status", ["active", "pending", "expired"])
     .eq("check_in", input.checkIn)
     .is("confirmation_code", null);
   const list = candidates ?? [];
   if (list.length !== 1) return null;
   const target = list[0];
 
+  // El número de reserva de la OTA ES la confirmación en Booking.com: sus
+  // reservas son instantáneas y el aviso "¡Nueva reserva!" sólo sale cuando ya
+  // se vendió. Los VEVENT sin aviso son los marcadores de ventana de
+  // disponibilidad — que es justo lo que NO queremos proyectar.
+  const promoting =
+    (target.external_status === "pending" || target.external_status === "expired") &&
+    input.allowPromotion === true;
   const { error } = await admin
     .from("channel_reservations")
-    .update({ confirmation_code: value })
+    .update(
+      promoting
+        ? {
+            confirmation_code: value,
+            external_status: "active",
+            promoted_at: new Date().toISOString(),
+            promoted_source: "email",
+            expired_at: null,
+            expired_source: null,
+            // Si venía juntando ausencias por una lectura parcial, el barrido
+            // abriría una propuesta de cancelación sobre una reserva que se
+            // acaba de confirmar.
+            missing_since: null,
+            missing_runs: 0,
+          }
+        : { confirmation_code: value },
+    )
     .eq("id", target.id)
     .is("confirmation_code", null); // guard contra carrera con otro procesador
   if (error) return null;
+
+  // Recién ahora existe la evidencia que habilita escribir en `bookings`.
+  if (promoting) {
+    try {
+      await reprojectReservation(admin, target.id as string);
+    } catch (err) {
+      console.error("[channels/ingest] proyección tras confirmar solicitud falló", err);
+    }
+  }
 
   if (target.booking_id) {
     const { error: refErr } = await admin.from("booking_external_refs").insert({
@@ -777,6 +1031,8 @@ async function processReference(
     channel: ev.channel,
     code: ev.confirmationCode,
     checkIn: ev.checkIn,
+    // El aviso "¡Nueva reserva!" ES la confirmación en Booking.com.
+    allowPromotion: true,
   });
   // El aviso llega ~5 min ANTES de que el iCal proyecte la reserva, así que
   // "todavía no hay a quién ponerle el número" es el caso normal, no un fallo.
@@ -818,6 +1074,7 @@ async function applyPendingReference(
     channel: ev.channel,
     code: [...codes][0],
     checkIn: reservation.check_in,
+    allowPromotion: true,
   });
 }
 
@@ -878,7 +1135,7 @@ async function processCancellation(
       .select("*")
       .eq("organization_id", orgId)
       .eq("channel", ev.channel)
-      .eq("external_status", "active")
+      .in("external_status", ["active", "pending", "expired"])
       .eq("check_in", ev.checkIn);
     const list = (candidates ?? []) as ChannelReservationRow[];
     if (list.length === 1) {
@@ -891,6 +1148,7 @@ async function processCancellation(
           channel: ev.channel,
           code: ev.confirmationCode,
           checkIn: ev.checkIn,
+          allowPromotion: false, // una cancelación no confirma nada
         });
       }
     }
@@ -941,7 +1199,7 @@ async function processCancellation(
         // número de reserva no matchea, el fallback busca por fecha de llegada
         // — puede señalar la reserva equivocada. Con una reserva viva del otro
         // lado, eso no se ejecuta solo: se propone y decide una persona.
-        await openCancellationRequest(admin, {
+        const proposal = await openCancellationRequest(admin, {
           organizationId: orgId,
           linkId: reservation?.link_id ?? null,
           channel: ev.channel,
@@ -956,6 +1214,18 @@ async function processCancellation(
             matcheada_por: reservation ? "reserva externa" : "referencia",
           },
         });
+        // "failed" = no se pudo ni siquiera LEER la reserva (timeout). El
+        // reconcile sólo reintenta eventos en `error`, así que devolver
+        // needs_review acá dejaba desaparecer un email de cancelación con un
+        // console.error como única huella.
+        if (proposal === "failed") {
+          return {
+            outcome: "error",
+            error: "no se pudo abrir la propuesta de cancelación",
+            bookingId,
+            reservationId: reservation?.id,
+          };
+        }
         return { outcome: "needs_review", bookingId, reservationId: reservation?.id };
       }
     }
@@ -1027,7 +1297,13 @@ async function findReservation(
       .select("*")
       .eq("organization_id", ev.organizationId)
       .eq("channel", ev.channel)
-      .eq("external_status", "active")
+      // `pending` y `expired` incluidos a propósito: si el email de confirmación
+      // no encuentra la solicitud que el iCal ya creó, insertaría una fila
+      // gemela y la segunda proyección moriría contra bookings_no_overlap. Y
+      // que la hayamos descartado no invalida una confirmación posterior — para
+      // Booking éste es el ÚNICO camino, porque el feed no trae número y el
+      // mail no trae UID.
+      .in("external_status", ["active", "pending", "expired"])
       .eq("check_in", ev.checkIn)
       .eq("check_out", ev.checkOut);
     const list = (candidates ?? []) as ChannelReservationRow[];
@@ -1159,7 +1435,7 @@ async function resolveUnitDeterministic(
       .select("unit_id, link_id")
       .eq("organization_id", orgId)
       .eq("channel", ev.channel)
-      .eq("external_status", "active")
+      .in("external_status", ["active", "pending"])
       .eq("check_in", ev.checkIn)
       .eq("check_out", ev.checkOut)
       .not("unit_id", "is", null);
@@ -1523,6 +1799,10 @@ function minimizePayload(ev: ReservationEvent): Record<string, unknown> {
     check_in: ev.checkIn ?? null,
     check_out: ev.checkOut ?? null,
     is_block: ev.isBlock ?? false,
+    // Es el ÚNICO campo que autoriza a escribir en `bookings`. Sin persistirlo,
+    // cada replay (botón "Reintentar", reintento del reconcile) degrada una
+    // reserva confirmada a solicitud y cierra la incidencia como exitosa.
+    confirmed: ev.confirmed === true,
     listing_id: ev.listingId ?? null,
     listing_hint: ev.listingHint?.slice(0, 120) ?? null,
     guest_name: ev.guest?.name?.slice(0, 120) ?? null,

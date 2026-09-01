@@ -47,6 +47,36 @@ describe("airbnbParser", () => {
     });
   });
 
+  // La regresión que motivó el guard: el asunto de una SOLICITUD contiene
+  // "reservación", así que el gate genérico /reserv|booking|confirm/ la dejaba
+  // pasar entera. Hoy sólo la frenan por accidente la falta de código y de
+  // fechas en el cuerpo del recordatorio.
+  it("NO parsea una solicitud pendiente como reserva", () => {
+    const solicitud = {
+      ...AIRBNB_CONFIRMATION,
+      subject:
+        "Recordatorio: solicitud de reservación en Depto. Pueyrredon para las fechas 15 de sept – 15 de oct de 2026",
+    };
+    expect(airbnbParser.parse(solicitud)).toBeNull();
+  });
+
+  it("NO parsea una solicitud denegada como reserva", () => {
+    expect(
+      airbnbParser.parse({
+        ...AIRBNB_CONFIRMATION,
+        subject: "Solicitud de reservación denegada: pago no realizado",
+      }),
+    ).toBeNull();
+  });
+
+  it("una confirmación que menciona la solicitud sigue siendo reserva", () => {
+    const parsed = airbnbParser.parse({
+      ...AIRBNB_CONFIRMATION,
+      subject: "Solicitud de reservación confirmada: María González llega el 15 de agosto",
+    });
+    expect(parsed?.type).toBe("new_booking");
+  });
+
   it("devuelve null si faltan fechas (no adivina)", () => {
     const parsed = airbnbParser.parse({
       ...AIRBNB_CONFIRMATION,
@@ -186,6 +216,33 @@ describe("normalizeInboundEmail (adaptador email → ReservationEvent)", () => {
     expect(n.event?.eventType).toBe("reservation_reference");
     expect(n.event?.confirmationCode).toBe("6963230667");
     expect(n.event?.checkIn).toBe("2026-11-09");
+  });
+
+  // `confirmed` es lo ÚNICO que habilita escribir en `bookings` para una
+  // solicitud. Si se cae, todas las reservas de OTA quedan invisibles.
+  it("la confirmación por email marca el evento como confirmado", () => {
+    const { event } = normalizeInboundEmail({
+      organizationId: "org-1",
+      providerMessageId: "msg-confirmed",
+      email: AIRBNB_CONFIRMATION,
+    });
+    expect(event?.eventType).toBe("reservation_upsert");
+    expect(event?.confirmed).toBe(true);
+  });
+
+  it("el aviso de referencia NO viaja como confirmado", () => {
+    const { event } = normalizeInboundEmail({
+      organizationId: "org-1",
+      providerMessageId: "msg-ref",
+      email: {
+        from: "noreply@booking.com",
+        to: "ota-abc123@inbound.apartcba.com",
+        subject: "¡Nueva reserva! 5908886743 llega el 29 de agosto de 2026",
+        html: "",
+        text: "",
+      },
+    });
+    expect(event?.confirmed).toBeUndefined();
   });
 
   it("email irreconocible → sin evento, con hash para auditoría", () => {
