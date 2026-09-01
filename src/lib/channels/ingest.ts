@@ -951,7 +951,13 @@ async function stampConfirmationCode(
     .in("external_status", ["active", "pending", "expired"])
     .eq("check_in", input.checkIn)
     .is("confirmation_code", null);
-  const list = candidates ?? [];
+  // Con más de una candidata NO se adivina… salvo por estado: una descartada
+  // acumulada (los marcadores de Booking se apilan) no puede hacer que se
+  // pierda en silencio la confirmación de una solicitud viva con la misma
+  // llegada. Se prefiere lo vivo; si el empate persiste, se aborta.
+  const all = candidates ?? [];
+  const live = all.filter((r) => r.external_status !== "expired");
+  const list = live.length > 0 ? live : all;
   if (list.length !== 1) return null;
   const target = list[0];
 
@@ -987,10 +993,30 @@ async function stampConfirmationCode(
 
   // Recién ahora existe la evidencia que habilita escribir en `bookings`.
   if (promoting) {
+    let projected = false;
     try {
-      await reprojectReservation(admin, target.id as string);
+      const res = await reprojectReservation(admin, target.id as string);
+      projected = res.outcome === "created" || res.outcome === "updated";
     } catch (err) {
       console.error("[channels/ingest] proyección tras confirmar solicitud falló", err);
+    }
+    if (!projected) {
+      // `active` sin booking sale de la bandeja, de la grilla y del iCal
+      // saliente: las fechas quedarían libres sin reserva detrás. Vuelve a
+      // solicitud — con el número ya puesto, así que el próximo intento
+      // (reintento horario o reconcile) matchea exacto.
+      await admin
+        .from("channel_reservations")
+        .update({
+          external_status: "pending",
+          promoted_at: null,
+          promoted_source: null,
+          projection_attempted_at: new Date().toISOString(),
+        })
+        .eq("id", target.id)
+        .eq("external_status", "active")
+        .is("booking_id", null);
+      return target.id as string;
     }
   }
 

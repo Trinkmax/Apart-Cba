@@ -12,6 +12,11 @@ import {
 } from "@/lib/marketplace/availability";
 import { addDaysIso, computePricing, todayIsoAR } from "@/lib/marketplace/pricing";
 import { rowToSummary, type UnitRow } from "@/lib/marketplace/listing-reads";
+import {
+  channelsHoldingAvailability,
+  getChannelRequestPolicies,
+} from "@/lib/channels/request-policy";
+import type { Channel } from "@/lib/channels/types";
 
 export type SearchFilters = {
   city?: string | null;
@@ -148,7 +153,7 @@ export async function searchListings(filters: SearchFilters): Promise<{
     const checkOut = filters.checkOut;
     const ids = unitsRaw.map((u) => u.id);
 
-    const [bookingsRes, requestsRes] = await Promise.all([
+    const [bookingsRes, requestsRes, otaRes] = await Promise.all([
       admin
         .from("bookings")
         .select("unit_id")
@@ -164,11 +169,41 @@ export async function searchListings(filters: SearchFilters): Promise<{
         .gt("expires_at", new Date().toISOString())
         .lt("check_in_date", checkOut)
         .gt("check_out_date", checkIn),
+      // Solicitudes de OTA sin confirmar. Sin esto el buscador mostraba
+      // disponible una unidad que el date-picker bloquea y el checkout rechaza:
+      // tres superficies con dos criterios distintos.
+      admin
+        .from("channel_reservations")
+        .select("unit_id, channel")
+        .in("unit_id", ids)
+        .eq("external_status", "pending")
+        .lt("check_in", checkOut)
+        .gt("check_out", checkIn),
     ]);
 
     const blocked = new Set<string>();
     for (const r of bookingsRes.data ?? []) blocked.add(r.unit_id);
     for (const r of requestsRes.data ?? []) blocked.add(r.unit_id);
+
+    // El buscador es cross-org, así que la política de retención se resuelve
+    // por organización de la unidad (son una o dos; la lectura está cacheada).
+    const otaRows = (otaRes.data ?? []) as { unit_id: string; channel: Channel }[];
+    if (otaRows.length > 0) {
+      const orgByUnit = new Map(unitsRaw.map((u) => [u.id, u.organization_id]));
+      const holdsByOrg = new Map<string, Channel[]>();
+      for (const orgId of new Set(otaRows.map((r) => orgByUnit.get(r.unit_id)).filter(Boolean))) {
+        holdsByOrg.set(
+          orgId as string,
+          channelsHoldingAvailability(
+            await getChannelRequestPolicies(admin, orgId as string),
+          ),
+        );
+      }
+      for (const r of otaRows) {
+        const orgId = orgByUnit.get(r.unit_id);
+        if (orgId && (holdsByOrg.get(orgId) ?? []).includes(r.channel)) blocked.add(r.unit_id);
+      }
+    }
 
     unitsRaw = unitsRaw.filter((u) => !blocked.has(u.id));
   }

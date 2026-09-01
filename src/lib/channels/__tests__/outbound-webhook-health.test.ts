@@ -225,10 +225,17 @@ describe("computeLinkHealth", () => {
   it("verifying: activa pero la OTA nunca consultó el export", () => {
     expect(computeLinkHealth({ ...base, last_export_access_at: null })).toBe("verifying");
   });
-  it("degraded: 1-2 fallos o >10 min sin éxito", () => {
+  // El umbral es >15 min (health.ts): el test usaba exactamente 15, así que
+  // dependía de que pasara al menos 1 ms entre los dos Date.now(). Se prueba
+  // el umbral por los dos lados con valores inequívocos.
+  it("degraded: 1-2 fallos o >15 min sin éxito", () => {
     expect(computeLinkHealth({ ...base, consecutive_failures: 1 })).toBe("degraded");
-    const min15 = new Date(Date.now() - 15 * 60_000).toISOString();
-    expect(computeLinkHealth({ ...base, last_success_at: min15 })).toBe("degraded");
+    const min20 = new Date(Date.now() - 20 * 60_000).toISOString();
+    expect(computeLinkHealth({ ...base, last_success_at: min20 })).toBe("degraded");
+    // Justo por debajo del umbral sigue sana: un tick perdido del cron no puede
+    // pintar toda la operación en ámbar.
+    const min10 = new Date(Date.now() - 10 * 60_000).toISOString();
+    expect(computeLinkHealth({ ...base, last_success_at: min10 })).toBe("healthy");
   });
   it("critical: ≥3 fallos, >30 min sin éxito, o incidencia crítica", () => {
     expect(computeLinkHealth({ ...base, consecutive_failures: 3 })).toBe("critical");

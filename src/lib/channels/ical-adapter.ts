@@ -157,7 +157,21 @@ export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent
       // Booking.com: todo VEVENT ocupa calendario y entra como RESERVA, sin
       // datos del huésped todavía (los trae el email de confirmación, si llega).
       // Ver la nota de arriba sobre por qué acá no se puede adivinar más.
-      out.push({ uid, checkIn, checkOut, summary, isBlock: false });
+      //
+      // La ÚNICA excepción es la duración: nadie se aloja 183 noches por
+      // Booking.com. Un VEVENT así es un marcador de ventana de disponibilidad
+      // (la propiedad está cerrada o limitada de ahí en adelante), y el feed lo
+      // regenera con UID nuevo todos los días. En BRASIL eso creaba una reserva
+      // "confirmada" de 6 meses por día, que alguien tenía que cancelar a mano:
+      // 31 filas en 20 días, ninguna con número de reserva, ninguna real.
+      //
+      // Entra igual al calendario — esas fechas SÍ están cerradas en Booking —
+      // pero como CIERRE, no como reserva: barra gris "Bloqueado", sin huésped
+      // que completar, fuera de KPIs y liquidaciones, y sin pedir una
+      // cancelación. Si alguna vez fuera una estadía real, el email de
+      // confirmación la asciende (ingest.ts hace exactamente eso con is_block).
+      const isLongRange = nights(checkIn, checkOut) > LONG_RANGE_BLOCK_NIGHTS;
+      out.push({ uid, checkIn, checkOut, summary, isBlock: isLongRange });
     }
   }
   return out;
@@ -165,8 +179,9 @@ export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent
 
 /**
  * Un VEVENT más largo que esto no es una estadía: es un marcador de ventana de
- * disponibilidad de la OTA. Sigue entrando al calendario (ocupa fechas), pero no
- * define hasta dónde el feed publica información confiable.
+ * disponibilidad de la OTA. Sigue entrando al calendario (ocupa fechas), pero
+ * entra como CIERRE y no como reserva, y no define hasta dónde el feed publica
+ * información confiable.
  */
 const LONG_RANGE_BLOCK_NIGHTS = 120;
 

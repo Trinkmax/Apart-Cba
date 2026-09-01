@@ -88,6 +88,45 @@ describe("parseIcs — Booking.com", () => {
     expect(events).toHaveLength(1);
     expect(events[0].isBlock).toBe(false);
   });
+
+  // La excepción a lo anterior es la duración. Nadie se aloja 183 noches por
+  // Booking.com: eso es un marcador de ventana de disponibilidad, y el feed lo
+  // regenera con UID nuevo todos los días. En producción (unidad BRASIL) eso
+  // creaba una reserva "confirmada" de 6 meses por día — 31 en 20 días, ninguna
+  // con número de reserva — que había que cancelar a mano.
+  it("un VEVENT larguísimo entra como CIERRE, no como reserva", () => {
+    const events = parseIcs(
+      ics([vevent("mark1@booking.com", "20270901", "20280228", "CLOSED - Not available")]),
+      "booking",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].isBlock).toBe(true);
+  });
+
+  it("una estadía larga pero plausible sigue siendo reserva", () => {
+    // 120 noches es el corte; una mensualidad de 3-4 meses tiene que pasar.
+    const events = parseIcs(
+      ics([vevent("stay1@booking.com", "20261001", "20270101", "CLOSED - Not available")]),
+      "booking",
+    );
+    expect(events[0].isBlock).toBe(false);
+  });
+
+  it("el corte no aplica a Airbnb (su feed sí distingue bloqueo de reserva)", () => {
+    const events = parseIcs(
+      ics([
+        vevent(
+          "abnb-long@airbnb.com",
+          "20270901",
+          "20280228",
+          "Reserved",
+          "Reservation URL: https://www.airbnb.com/hosting/reservations/details/HMLONGSTAY",
+        ),
+      ]),
+      "airbnb",
+    );
+    expect(events[0].isBlock).toBe(false);
+  });
 });
 
 describe("toReservationEvent", () => {
