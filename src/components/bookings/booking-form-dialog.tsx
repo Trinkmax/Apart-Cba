@@ -373,11 +373,22 @@ export function BookingFormDialog({
   }, [guestQuery, guestSearchOpen]);
 
   // Auto-fill currency + cleaning_fee + commission + mode cuando elige unit
+  /**
+   * Cambiar de moneda invalida la cuenta elegida: el Select vuelve al
+   * placeholder (el id ya no está en `accountsForCurrency`) pero `account_id`
+   * seguía guardando el id viejo, así que el guard de "elegí una cuenta" lo veía
+   * como completo y la reserva se creaba con el cobro cargado y sin asiento en
+   * Caja — la misma fuga que estos guards vienen a cerrar.
+   */
+  function setCurrency(v: string) {
+    setForm((f) => (f.currency === v ? f : { ...f, currency: v, account_id: null }));
+  }
+
   function onSelectUnit(unitId: string) {
     set("unit_id", unitId);
     const u = units.find((x) => x.id === unitId);
     if (!u) return;
-    if (u.base_price_currency && !isEdit) set("currency", u.base_price_currency);
+    if (u.base_price_currency && !isEdit) setCurrency(u.base_price_currency);
     if (u.cleaning_fee && !form.cleaning_fee) {
       set("cleaning_fee", formatMoneyValue(u.cleaning_fee));
     }
@@ -958,7 +969,7 @@ export function BookingFormDialog({
                 {/* 1. Moneda */}
                 <div className="space-y-1.5">
                   <Label className={labelCls}>Moneda</Label>
-                  <Select value={form.currency} onValueChange={(v) => set("currency", v)}>
+                  <Select value={form.currency} onValueChange={setCurrency}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="ARS">ARS</SelectItem>

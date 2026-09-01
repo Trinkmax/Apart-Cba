@@ -106,7 +106,7 @@ export function QuickPayCard({
           <span>Falta cargar el precio</span>
         </div>
         <p className="text-amber-800/90 dark:text-amber-200/80">
-          Esta reserva entró desde el canal sin importe. Cargá el total para calcular la
+          Esta reserva no tiene importe cargado. Cargá el total para calcular la
           comisión y la liquidación al propietario.
         </p>
         {Number(paidAmount) > 0 && (

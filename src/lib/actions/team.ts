@@ -1,5 +1,6 @@
 "use server";
 
+import { randomBytes } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient, createAuthAdminClient } from "@/lib/supabase/server";
@@ -85,9 +86,34 @@ async function listAllAuthUsers(): Promise<AuthUserLite[]> {
   return out;
 }
 
+/**
+ * Gate para las acciones que manejan credenciales o expulsan gente.
+ *
+ * `isAdminLevel()` incluye a recepción (ver permissions.ts), y eso acá es una
+ * escalada: recepción podría regenerar la contraseña de la dueña, entrar con
+ * ella y quedarse con la organización. Invitar y editar perfiles sí siguen
+ * abiertos a recepción; tocar la credencial de otro, no.
+ */
+function assertOwnsCredentials(
+  role: string,
+  isSuperadmin: boolean,
+  accion: string
+): void {
+  if (role !== "admin" && !isSuperadmin) {
+    throw new Error(`Solo un administrador puede ${accion}`);
+  }
+}
+
 /** Formato único de contraseña temporal: legible por teléfono y pegable en WhatsApp. */
 function generateTempPassword(): string {
-  return `Apart${Math.random().toString(36).slice(-8)}!`;
+  // `Math.random()` no es un CSPRNG y esta clave es el ÚNICO mecanismo de acceso
+  // y de recuperación del staff (no hay reset por mail): tiene que ser
+  // impredecible. Alfabeto sin 0/O/1/l/I porque la clave se dicta por teléfono.
+  const ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = randomBytes(10);
+  let body = "";
+  for (const b of bytes) body += ALPHABET[b % ALPHABET.length];
+  return `Apart${body}!`;
 }
 
 export async function listTeamMembers(): Promise<TeamMemberRow[]> {
@@ -197,11 +223,35 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
       // Cuenta fantasma: existe pero nunca ingresó (típicamente una invitación
       // anterior cuya contraseña se perdió). Regeneramos y la devolvemos —
       // es exactamente lo que buscaba quien vuelve a invitar.
-      tempPassword = generateTempPassword();
-      const { error } = await authAdmin.auth.admin.updateUserById(userId, {
-        password: tempPassword,
-      });
-      if (error) throw new Error(error.message);
+      //
+      // Pero `auth.users` es de TODO el proyecto Supabase: lo comparten las
+      // otras organizaciones, los huéspedes del marketplace (`guest_profiles`)
+      // y TextOS, que vive en el schema `public`. Regenerar a ciegas por
+      // coincidencia de email deja que cualquier admin se apodere de una cuenta
+      // ajena tipeando su mail. Sólo tocamos la clave si esa cuenta no es de
+      // nadie más.
+      const [{ data: otherMemberships }, { data: guestProfile }] = await Promise.all([
+        admin
+          .from("organization_members")
+          .select("organization_id")
+          .eq("user_id", userId)
+          .neq("organization_id", organization.id)
+          .limit(1),
+        admin
+          .from("guest_profiles")
+          .select("user_id")
+          .eq("user_id", userId)
+          .maybeSingle(),
+      ]);
+      if ((otherMemberships?.length ?? 0) > 0 || guestProfile) {
+        alreadyHadAccess = true;
+      } else {
+        tempPassword = generateTempPassword();
+        const { error } = await authAdmin.auth.admin.updateUserById(userId, {
+          password: tempPassword,
+        });
+        if (error) throw new Error(error.message);
+      }
     }
   } else {
     // Crear nuevo
@@ -255,9 +305,7 @@ export async function resetMemberAccess(
 ): Promise<{ email: string; fullName: string; tempPassword: string }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
-    throw new Error("Solo los admins pueden regenerar contraseñas");
-  }
+  assertOwnsCredentials(role, session.profile.is_superadmin, "regenerar contraseñas");
   const admin = createAdminClient();
 
   // El target tiene que ser miembro de esta organización.
@@ -307,9 +355,7 @@ export async function resetMemberAccess(
 export async function removeMember(userId: string): Promise<{ unassigned: number }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
-  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
-    throw new Error("Solo los admins pueden quitar personas del equipo");
-  }
+  assertOwnsCredentials(role, session.profile.is_superadmin, "quitar personas del equipo");
   if (userId === session.userId) {
     throw new Error("No podés quitarte a vos mismo del equipo");
   }
@@ -342,21 +388,25 @@ export async function removeMember(userId: string): Promise<{ unassigned: number
 
   // Tablas con `assigned_to` en el schema (el stack `messaging_*` queda afuera
   // a propósito: es legacy, el CRM vivo es `crm_*`).
+  // Sólo se desasigna lo que sigue abierto. `cleaning_tasks` no tiene
+  // `completed_by` ni los tickets `resolved_by`: en lo ya cerrado, `assigned_to`
+  // ES el registro de quién lo hizo, y borrarlo reescribe el historial.
   const ASSIGNABLE_TABLES = [
-    "maintenance_tickets",
-    "cleaning_tasks",
-    "concierge_requests",
-    "crm_conversations",
+    { table: "maintenance_tickets", open: ["abierto", "en_progreso", "esperando_repuesto"] },
+    { table: "cleaning_tasks", open: ["pendiente", "en_progreso"] },
+    { table: "concierge_requests", open: ["pendiente", "en_progreso"] },
+    { table: "crm_conversations", open: null },
   ] as const;
 
   let unassigned = 0;
-  for (const table of ASSIGNABLE_TABLES) {
-    const { data, error } = await admin
+  for (const { table, open } of ASSIGNABLE_TABLES) {
+    let q = admin
       .from(table)
       .update({ assigned_to: null })
       .eq("organization_id", organization.id)
-      .eq("assigned_to", userId)
-      .select("id");
+      .eq("assigned_to", userId);
+    if (open) q = q.in("status", open as unknown as string[]);
+    const { data, error } = await q.select("id");
     if (error) throw new Error(error.message);
     unassigned += data?.length ?? 0;
   }

@@ -100,7 +100,15 @@ async function syncBookingPaymentToCash(params: {
   accountId: string | null | undefined;
 }): Promise<void> {
   if (!params.delta || Math.abs(params.delta) < 0.01) return;
-  if (!params.accountId) return; // sin cuenta no podemos imputar
+  // Los dos `return` mudos que había acá son los que hicieron desaparecer un
+  // cobro de la Caja sin que nadie se enterara. Ahora los callers ya garantizan
+  // que venga una cuenta, así que si igual no se puede imputar es un error de
+  // verdad y tiene que frenar la operación, no tragársela.
+  if (!params.accountId) {
+    throw new Error(
+      "Elegí a qué cuenta de caja imputar el cobro. Sin cuenta, no queda registrado en Caja."
+    );
+  }
   const admin = createAdminClient();
   // Verificar que la cuenta exista y sea de la org + moneda correcta
   const { data: account } = await admin
@@ -110,7 +118,11 @@ async function syncBookingPaymentToCash(params: {
     .eq("organization_id", params.organizationId)
     .eq("active", true)
     .maybeSingle();
-  if (!account) return;
+  if (!account) {
+    throw new Error(
+      "La cuenta de caja elegida ya no existe o fue desactivada. Elegí otra y volvé a intentar."
+    );
+  }
   if (account.currency !== params.currency) {
     throw new Error(
       `La cuenta seleccionada es ${account.currency} pero la reserva es en ${params.currency}`
