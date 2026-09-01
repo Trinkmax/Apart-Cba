@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { can } from "@/lib/permissions";
 import type {
   ConciergeEvent,
   ConciergeRequest,
@@ -182,7 +183,13 @@ export async function listConciergeRequests(filters?: {
   /** Si es `true`, devuelve sólo las tareas ya archivadas por el reset semanal. Default: sólo activas. */
   showArchived?: boolean;
 }) {
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  // Los pedidos de conserjería traen nombre de huésped y agenda: si el rol no
+  // tiene el permiso, no alcanza con esconder el link — la action tampoco
+  // responde. (El gate de pantalla se saltaba escribiendo la URL a mano.)
+  if (!can(role, "concierge", "view")) {
+    throw new Error("No tenés permiso para ver las tareas de conserjería");
+  }
   const admin = createAdminClient();
   let q = admin
     .from("concierge_requests")

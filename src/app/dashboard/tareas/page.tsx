@@ -1,7 +1,9 @@
+import { redirect } from "next/navigation";
 import { ListTodo, Plus, Sparkles } from "lucide-react";
 import { listConciergeRequests, listAssignableMembers } from "@/lib/actions/concierge";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConciergeBoard } from "@/components/concierge/concierge-board";
@@ -37,8 +39,14 @@ export default async function TareasPage({
   const { historial } = await searchParams;
   const showArchived = historial === "1";
 
-  const [{ organization }, requests, units, members] = await Promise.all([
-    getCurrentOrg(),
+  // Conserjería es material de recepción: nombres de huéspedes, pedidos y
+  // agenda. Los roles operativos (limpieza, mantenimiento) no tienen el
+  // permiso, pero la tarjeta "Atención requerida" del home los linkeaba acá
+  // igual y la página no chequeaba nada.
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "concierge", "view")) redirect("/dashboard");
+
+  const [requests, units, members] = await Promise.all([
     listConciergeRequests({ showArchived }),
     listUnitsEnriched(),
     listAssignableMembers(),

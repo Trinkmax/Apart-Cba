@@ -144,6 +144,13 @@ const organizationProfileSchema = z.object({
     .refine((v) => v === null || HEX_COLOR_RE.test(v), {
       message: "Color inválido (#RRGGBB)",
     }),
+  // Solo se usa como valor propuesto al crear una unidad (`createUnit`). Las
+  // unidades ya cargadas guardan su propio número y no se tocan al cambiarlo.
+  default_commission_pct: z.coerce
+    .number()
+    .min(0, "La comisión no puede ser negativa")
+    .max(100, "La comisión no puede pasar de 100%")
+    .optional(),
   brand_show_name: z.boolean().optional(),
 });
 
@@ -166,6 +173,9 @@ export async function updateOrganizationProfile(
       legal_name: validated.legal_name,
       tax_id: validated.tax_id,
       primary_color: validated.primary_color,
+      ...(validated.default_commission_pct !== undefined
+        ? { default_commission_pct: validated.default_commission_pct }
+        : {}),
       ...(validated.brand_show_name !== undefined
         ? { brand_show_name: validated.brand_show_name }
         : {}),

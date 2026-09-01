@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CircleAlert, Info, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, CircleAlert, Info, Link2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,12 +25,15 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { resolveChannelIssue } from "@/lib/actions/channels";
-import type { ChannelIssueRow } from "@/lib/channels/types";
+import { ChangeFeedDialog } from "./change-feed-dialog";
+import type { Channel, ChannelIssueRow } from "@/lib/channels/types";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 
 type IssueWithUnit = ChannelIssueRow & {
   unit: { id: string; code: string; name: string } | null;
+  /** Canal de la conexión que abrió la incidencia (null si no viene de una). */
+  channel: Channel | null;
 };
 
 const SEVERITY_META = {
@@ -95,20 +98,21 @@ function IssueRow({
           unit_id: extra?.unit_id,
           reason: extra?.reason,
         });
-        if (r.ok) {
-          toast.success(
-            action === "dismiss"
-              ? "Incidencia descartada"
-              : action === "assign_unit"
-                ? "Unidad asignada y reserva proyectada"
-                : "Reintento ejecutado",
-          );
-          setAssignOpen(false);
-          setDismissOpen(false);
-          router.refresh();
-        } else {
+        if (!r.ok) {
           toast.error(r.error ?? "No se pudo resolver");
+          return;
         }
+        if (r.already) toast.success("Esta incidencia ya estaba resuelta");
+        else if (action === "dismiss") toast.success("Incidencia descartada");
+        else if (action === "assign_unit") toast.success("Unidad asignada y reserva proyectada");
+        // Un reintento que corre no es un reintento que arregla: si la
+        // incidencia sigue abierta hay que decirlo, o la operadora cree que
+        // quedó resuelto y el problema sigue ahí en silencio.
+        else if (r.resolved) toast.success("Reintento exitoso: la incidencia se resolvió");
+        else toast.warning(r.detail ?? "Reintentamos y el problema sigue. La incidencia queda abierta.");
+        setAssignOpen(false);
+        setDismissOpen(false);
+        router.refresh();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Error");
       }
@@ -118,6 +122,10 @@ function IssueRow({
   const canAssign =
     (issue.issue_type === "unmapped_unit" || issue.issue_type === "ambiguous_unit") &&
     Boolean(issue.reservation_id);
+  // "Revisá el enlace del calendario" sin un lugar donde cambiarlo es un
+  // callejón sin salida: la incidencia trae su propia salida.
+  const canChangeFeed =
+    issue.issue_type === "feed_error" && Boolean(issue.link_id) && Boolean(issue.channel) && Boolean(issue.unit);
 
   return (
     <li className="py-3 first:pt-0 last:pb-0">
@@ -150,6 +158,21 @@ function IssueRow({
             <Button size="sm" variant="secondary" onClick={() => setAssignOpen(true)} disabled={pending}>
               Asignar unidad
             </Button>
+          )}
+          {canChangeFeed && issue.channel && issue.unit && (
+            <ChangeFeedDialog
+              linkId={issue.link_id as string}
+              channel={issue.channel}
+              unitCode={issue.unit.code}
+              unitName={issue.unit.name}
+              // el enlace nuevo recién cuenta cuando una lectura real lo confirma
+              onSaved={() => run("retry")}
+              trigger={
+                <Button size="sm" variant="secondary" className="gap-1.5" disabled={pending}>
+                  <Link2 size={13} /> Cambiar enlace
+                </Button>
+              }
+            />
           )}
           {!canAssign && (
             <Button size="sm" variant="ghost" onClick={() => run("retry")} disabled={pending} className="gap-1.5">

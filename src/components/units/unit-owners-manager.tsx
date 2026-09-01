@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Plus, Star, Trash2, Loader2 } from "lucide-react";
+import { Pencil, Plus, Star, Trash2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -26,7 +26,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { linkOwnerToUnit, unlinkOwnerFromUnit } from "@/lib/actions/units";
+import {
+  linkOwnerToUnit,
+  unlinkOwnerFromUnit,
+  updateUnitOwnerCommission,
+} from "@/lib/actions/units";
 import { getInitials } from "@/lib/format";
 import type { UnitOwner, Owner } from "@/lib/types/database";
 
@@ -34,9 +38,25 @@ interface UnitOwnersManagerProps {
   unitId: string;
   unitOwners: (UnitOwner & { owner: Owner })[];
   availableOwners: Owner[];
+  /** La comisión de la unidad: es la que rige si el propietario no tiene excepción. */
+  unitDefaultCommissionPct: number | null;
 }
 
-export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitOwnersManagerProps) {
+/** `null` = sin excepción, se usa la comisión de la unidad. */
+function parseOverride(raw: string): { ok: true; value: number | null } | { ok: false } {
+  const trimmed = raw.trim();
+  if (trimmed === "") return { ok: true, value: null };
+  const n = Number(trimmed.replace(",", "."));
+  if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false };
+  return { ok: true, value: n };
+}
+
+export function UnitOwnersManager({
+  unitId,
+  unitOwners,
+  availableOwners,
+  unitDefaultCommissionPct,
+}: UnitOwnersManagerProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -44,6 +64,9 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
   const [pct, setPct] = useState(100);
   const [isPrimary, setIsPrimary] = useState(unitOwners.length === 0);
   const [override, setOverride] = useState<string>("");
+  /** Fila cuya excepción de comisión se está editando (null = dialog cerrado). */
+  const [editing, setEditing] = useState<{ id: string; ownerName: string } | null>(null);
+  const [editingValue, setEditingValue] = useState<string>("");
 
   const totalPct = unitOwners.reduce((acc, uo) => acc + Number(uo.ownership_pct), 0);
   const linkedIds = new Set(unitOwners.map((uo) => uo.owner_id));
@@ -66,20 +89,48 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
       toast.error("La suma de % de propiedad no puede pasar 100");
       return;
     }
+    const parsedOverride = parseOverride(override);
+    if (!parsedOverride.ok) {
+      toast.error("Comisión inválida", { description: "Tiene que ser un número entre 0 y 100." });
+      return;
+    }
     startTransition(async () => {
       try {
-        await linkOwnerToUnit(
-          unitId,
-          selectedOwner,
-          pct,
-          isPrimary,
-          override === "" ? null : Number(override)
-        );
+        await linkOwnerToUnit(unitId, selectedOwner, pct, isPrimary, parsedOverride.value);
         toast.success("Propietario agregado");
         setOpen(false);
         setSelectedOwner("");
         setPct(100);
         setOverride("");
+        router.refresh();
+        preserveScrollAcrossRefresh();
+      } catch (e) {
+        toast.error("Error", { description: (e as Error).message });
+      }
+    });
+  }
+
+  function openEditor(unitOwnerId: string, ownerName: string, current: number | null | undefined) {
+    setEditing({ id: unitOwnerId, ownerName });
+    setEditingValue(current === null || current === undefined ? "" : String(current));
+  }
+
+  function handleSaveOverride() {
+    if (!editing) return;
+    const parsed = parseOverride(editingValue);
+    if (!parsed.ok) {
+      toast.error("Comisión inválida", { description: "Tiene que ser un número entre 0 y 100." });
+      return;
+    }
+    startTransition(async () => {
+      try {
+        await updateUnitOwnerCommission(editing.id, unitId, parsed.value);
+        toast.success(
+          parsed.value === null
+            ? "Ahora usa la comisión de la unidad"
+            : `Comisión de administración: ${parsed.value}%`
+        );
+        setEditing(null);
         router.refresh();
         preserveScrollAcrossRefresh();
       } catch (e) {
@@ -108,7 +159,8 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
         <div>
           <h2 className="text-sm font-semibold">Propietarios</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Total asignado: {totalPct.toFixed(0)}% / 100%
+            Total asignado: {totalPct.toFixed(0)}% / 100% · Comisión de administración
+            de la unidad: {unitDefaultCommissionPct ?? 20}%
           </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
@@ -147,7 +199,7 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Comisión rentOS (override, opcional)</Label>
+                <Label>Comisión de administración (solo para este propietario)</Label>
                 <Input
                   type="number"
                   min="0"
@@ -155,8 +207,12 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
                   step="0.01"
                   value={override}
                   onChange={(e) => setOverride(e.target.value)}
-                  placeholder="Usa la default de la unidad"
+                  placeholder={`Vacío = ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`}
                 />
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Solo si con este propietario arreglaste un porcentaje distinto. Lo
+                  podés cambiar cuando quieras.
+                </p>
               </div>
               <div className="flex items-center justify-between pt-2">
                 <Label htmlFor="is_primary" className="cursor-pointer">Marcar como propietario principal</Label>
@@ -196,11 +252,17 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
                     </Badge>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground mt-0.5">
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1 hover:text-foreground transition-colors text-left"
+                  onClick={() => openEditor(uo.id, uo.owner.full_name, uo.commission_pct_override)}
+                  disabled={isPending}
+                >
                   {uo.commission_pct_override !== null && uo.commission_pct_override !== undefined
-                    ? `Comisión override: ${uo.commission_pct_override}%`
-                    : "Comisión por defecto"}
-                </div>
+                    ? `Comisión de administración: ${uo.commission_pct_override}% (solo para este propietario)`
+                    : `Comisión de administración: ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`}
+                  <Pencil size={11} className="opacity-60 shrink-0" />
+                </button>
               </div>
               <Badge variant="outline" className="font-mono text-sm font-semibold">
                 {Number(uo.ownership_pct).toFixed(0)}%
@@ -218,6 +280,44 @@ export function UnitOwnersManager({ unitId, unitOwners, availableOwners }: UnitO
           ))}
         </div>
       )}
+
+      <Dialog open={editing !== null} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent className="max-w-md" onCloseAutoFocus={(e) => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle>Comisión de administración</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Qué porcentaje le descontás a <strong>{editing?.ownerName}</strong> en
+              esta unidad cuando generás la liquidación.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="owner-commission">Porcentaje (%)</Label>
+              <Input
+                id="owner-commission"
+                type="text"
+                inputMode="decimal"
+                value={editingValue}
+                onChange={(e) => setEditingValue(e.target.value)}
+                placeholder={`${unitDefaultCommissionPct ?? 20}`}
+                autoFocus
+              />
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Dejalo vacío para usar la comisión de la unidad ({unitDefaultCommissionPct ?? 20}%).
+              </p>
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEditing(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveOverride} disabled={isPending}>
+              {isPending && <Loader2 className="animate-spin" />}
+              Guardar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

@@ -57,6 +57,10 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
+  // Las reservas que llegan por iCal entran sin importe: mientras el total sea
+  // 0, comisión y neto al propietario no son datos, son placeholders. Un
+  // bloqueo, en cambio, vale $0 de verdad — ahí no falta nada por cargar.
+  const sinPrecio = !b.is_block && Number(b.total_amount) <= 0;
 
   // Link del depto para el mensaje. .trim() + sin barra final: el env de Vercel
   // puede traer un "\n" al final y eso parte el link ("...com⏎/u/slug").
@@ -259,7 +263,19 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                   totalAmount={Number(b.total_amount)}
                   paidAmount={Number(b.paid_amount)}
                   accounts={accounts}
-                  disabled={b.status === "cancelada" || b.status === "no_show"}
+                  disabled={b.status === "cancelada" || b.status === "no_show" || b.is_block}
+                  loadPriceTrigger={
+                    canEditBooking ? (
+                      <BookingFormDialog
+                        booking={b}
+                        units={units}
+                        accounts={accounts}
+                        existingBookings={unitBookings}
+                      >
+                        <Button size="sm">Cargar precio</Button>
+                      </BookingFormDialog>
+                    ) : undefined
+                  }
                 />
                 {canCreatePayment && (
                   <ExtraChargeDialog
@@ -283,9 +299,21 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
 
               <Separator />
               <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Comisión rentOS</span>
-                <span>{formatMoney(b.commission_amount, b.currency)} ({b.commission_pct}%)</span>
+                {/* El % de acá es el que quedó guardado en la reserva; la
+                    liquidación recalcula con el del propietario o el de la
+                    unidad, así que pueden no coincidir. Lo decimos en vez de
+                    tocar el cálculo. */}
+                <span className="text-muted-foreground">Comisión de administración</span>
+                <span>
+                  {sinPrecio
+                    ? "—"
+                    : `${formatMoney(b.commission_amount, b.currency)} (${b.commission_pct}%)`}
+                </span>
               </div>
+              <p className="text-[11px] leading-snug text-muted-foreground/80">
+                Referencia. La comisión definitiva se calcula al generar la liquidación,
+                según la unidad y el propietario.
+              </p>
               <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Fee limpieza</span>
                 <span>{formatMoney(b.cleaning_fee, b.currency)}</span>
@@ -294,12 +322,21 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               <div className="flex justify-between font-semibold">
                 <span>Neto al propietario</span>
                 <span className="text-emerald-700 dark:text-emerald-300">
-                  {formatMoney(
-                    Number(b.total_amount) - Number(b.commission_amount ?? 0) - Number(b.cleaning_fee ?? 0),
-                    b.currency
-                  )}
+                  {sinPrecio
+                    ? "—"
+                    : formatMoney(
+                        Number(b.total_amount) - Number(b.commission_amount ?? 0) - Number(b.cleaning_fee ?? 0),
+                        b.currency
+                      )}
                 </span>
               </div>
+              {/* Un "$0,00" acá se lee como un dato cierto: el propietario no
+                  cobra nada. Sin precio cargado no hay número que mostrar. */}
+              {sinPrecio && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  Se calcula cuando cargues el precio.
+                </p>
+              )}
             </div>
           </div>
         </Card>

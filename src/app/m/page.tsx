@@ -7,6 +7,7 @@ import { listCleaningTasks } from "@/lib/actions/cleaning";
 import { listTickets } from "@/lib/actions/tickets";
 import { listConciergeRequests } from "@/lib/actions/concierge";
 import { listUnitTips } from "@/lib/actions/unit-tips";
+import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { CleaningTask, MaintenanceTicket } from "@/lib/types/database";
@@ -24,7 +25,9 @@ export default async function MobileHome() {
   const [cleaning, tickets, concierge, tips] = await Promise.all([
     listCleaningTasks({ assignedTo: session.userId }),
     listTickets({ openOnly: true }),
-    listConciergeRequests(),
+    // Limpieza y mantenimiento no tienen permiso de conserjería: ni siquiera
+    // les pedimos el contador (la tarjeta tampoco se les muestra).
+    can(role, "concierge", "view") ? listConciergeRequests() : Promise.resolve([]),
     listUnitTips({ limit: 30 }),
   ]);
 

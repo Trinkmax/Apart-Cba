@@ -26,6 +26,7 @@ export function OrganizationProfileForm({
   organization: Pick<
     Organization,
     | "name" | "legal_name" | "tax_id" | "primary_color" | "logo_url" | "slug" | "timezone" | "brand_show_name"
+    | "default_commission_pct"
   >;
 }) {
   const router = useRouter();
@@ -39,10 +40,20 @@ export function OrganizationProfileForm({
   const [color, setColor] = useState(organization.primary_color ?? DEFAULT_COLOR);
   const [logoUrl, setLogoUrl] = useState(organization.logo_url);
   const [showName, setShowName] = useState(organization.brand_show_name ?? true);
+  const [commissionPct, setCommissionPct] = useState(
+    String(organization.default_commission_pct ?? 20)
+  );
 
   function handleSubmit() {
     if (!name.trim()) {
       toast.error("El nombre es obligatorio");
+      return;
+    }
+    const parsedCommission = Number(commissionPct.replace(",", "."));
+    if (!Number.isFinite(parsedCommission) || parsedCommission < 0 || parsedCommission > 100) {
+      toast.error("Comisión inválida", {
+        description: "Tiene que ser un número entre 0 y 100.",
+      });
       return;
     }
     if (color.trim() && !HEX_RE.test(color.trim())) {
@@ -58,6 +69,7 @@ export function OrganizationProfileForm({
           legal_name: legalName,
           tax_id: taxId,
           primary_color: color.trim() || null,
+          default_commission_pct: parsedCommission,
         });
         toast.success("Datos de la organización actualizados");
         router.refresh();
@@ -291,6 +303,39 @@ export function OrganizationProfileForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t">
           <ReadOnlyField label="Slug" value={organization.slug} />
           <ReadOnlyField label="Zona horaria" value={organization.timezone} />
+        </div>
+      </div>
+
+      {/* Comisiones */}
+      <div className="rounded-lg border bg-card p-4 sm:p-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold">Comisión de administración</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Lo que te quedás vos por administrar, y que se le descuenta al
+            propietario en la liquidación.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="org-commission">
+              Comisión de administración por defecto (%)
+            </Label>
+            <Input
+              id="org-commission"
+              type="text"
+              inputMode="decimal"
+              value={commissionPct}
+              onChange={(e) => setCommissionPct(e.target.value)}
+              placeholder="20"
+              className="font-mono"
+            />
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Solo se propone al <strong>crear una unidad nueva</strong>. Las
+              unidades que ya tenés cargadas no cambian: cada una guarda su
+              propia comisión y se edita desde la ficha de la unidad.
+            </p>
+          </div>
         </div>
       </div>
 

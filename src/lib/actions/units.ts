@@ -30,7 +30,10 @@ const unitSchema = z.object({
   base_price: z.coerce.number().min(0).optional().nullable(),
   base_price_currency: z.string().default("ARS"),
   cleaning_fee: z.coerce.number().min(0).optional().nullable(),
-  default_commission_pct: z.coerce.number().min(0).max(100).default(20),
+  // Sin default acá: si el form no manda nada, `createUnit` hereda el de la org
+  // (Configuración → Organización). Un default fijo de 20 acá se comía siempre
+  // esa preferencia.
+  default_commission_pct: z.coerce.number().min(0).max(100).optional(),
   default_mode: z
     .enum(["temporario", "mensual", "mixto"])
     .default("temporario"),
@@ -222,7 +225,16 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
 
   const { data, error } = await admin
     .from("units")
-    .insert({ ...validated, organization_id: organization.id, position: newPosition })
+    .insert({
+      ...validated,
+      // Cascada de la comisión de administración: lo que se cargó en el form →
+      // el default de la org → 20. La unidad guarda SIEMPRE un número concreto,
+      // así cambiar el default de la org después no altera lo ya liquidado.
+      default_commission_pct:
+        validated.default_commission_pct ?? organization.default_commission_pct ?? 20,
+      organization_id: organization.id,
+      position: newPosition,
+    })
     .select()
     .single();
   if (error) throw new Error(error.message);
@@ -423,6 +435,58 @@ export async function linkOwnerToUnit(
   if (error) throw new Error(error.message);
 
   revalidatePath(`/dashboard/unidades/${unitId}`);
+}
+
+/**
+ * Cambia la comisión de administración pactada con UN propietario dentro de una
+ * unidad. `null` = vuelve a usar la de la unidad.
+ *
+ * Es el único nivel de excepción que existe: junto con `units.default_commission_pct`
+ * son los dos valores que lee `buildSettlementLines` al generar la liquidación.
+ * Antes solo se podía fijar al vincular al propietario y nunca más; con tres
+ * condiciones distintas por dueño eso obligaba a desvincular y volver a vincular.
+ */
+export async function updateUnitOwnerCommission(
+  unitOwnerId: string,
+  unitId: string,
+  commission_pct_override: number | null
+) {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) {
+    throw new Error("No tenés permiso para cambiar la comisión");
+  }
+  const validated = z
+    .number()
+    .min(0, "La comisión no puede ser negativa")
+    .max(100, "La comisión no puede pasar de 100%")
+    .nullable()
+    .parse(commission_pct_override);
+
+  const admin = createAdminClient();
+
+  // El vínculo no tiene organization_id propio: lo acotamos por la unidad.
+  const { data: unit } = await admin
+    .from("units")
+    .select("id")
+    .eq("id", unitId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!unit) throw new Error("Unidad no encontrada");
+
+  const { data: updated, error } = await admin
+    .from("unit_owners")
+    .update({ commission_pct_override: validated })
+    .eq("id", unitOwnerId)
+    .eq("unit_id", unitId)
+    .select("owner_id")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!updated) throw new Error("No encontramos ese propietario en la unidad");
+
+  revalidatePath(`/dashboard/unidades/${unitId}`);
+  revalidatePath(`/dashboard/propietarios/${updated.owner_id}`);
+  revalidatePath("/dashboard/propietarios");
 }
 
 export async function unlinkOwnerFromUnit(unitOwnerId: string, unitId: string) {

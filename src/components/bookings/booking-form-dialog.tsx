@@ -3,6 +3,7 @@
 import { useState, useTransition, useEffect } from "react";
 import { CalendarRange, Loader2, Plus, UserPlus, Search, House, Wallet } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Dialog,
@@ -498,10 +499,22 @@ export function BookingFormDialog({
       account_id: cashDelta > 0 ? form.account_id : null,
       skip_split: skipSplit,
     };
-    if (cashDelta > 0 && !payload.account_id && accountsForCurrency.length > 0) {
-      toast.error("Falta seleccionar cuenta de cobro", {
-        description: `Elegí en qué cuenta querés registrar el cobro de ${form.currency}`,
-      });
+    // Sin cuenta elegida el importe se guarda en `paid_amount` y NO genera
+    // ningún movimiento de caja: plata cobrada que la Caja nunca ve. El guard
+    // pedía además que existiera alguna cuenta en la moneda, así que en una org
+    // sin cuentas creadas (el día 1 de cualquier cliente) el cobro se perdía en
+    // silencio. Ahora frena siempre y, si no hay ninguna cuenta, dice cómo salir.
+    if (cashDelta > 0 && !payload.account_id) {
+      if (accountsForCurrency.length === 0) {
+        toast.error(`No hay ninguna cuenta de caja en ${form.currency}`, {
+          description:
+            "Creá una en Caja (Efectivo, Banco, Mercado Pago…) antes de registrar un cobro. Si no, la plata no queda asentada en ningún lado.",
+        });
+      } else {
+        toast.error("Falta seleccionar cuenta de cobro", {
+          description: `Elegí en qué cuenta querés registrar el cobro de ${form.currency}`,
+        });
+      }
       return;
     }
     if (existingBookings && form.unit_id && form.check_in_date && form.check_out_date) {
@@ -1201,9 +1214,22 @@ export function BookingFormDialog({
                   </div>
                 </div>
                 {accountsForCurrency.length === 0 ? (
-                  <p className="text-xs text-amber-800 dark:text-amber-300">
-                    No hay cuentas activas en {form.currency}. Cargá una cuenta primero en Caja.
-                  </p>
+                  <div className="rounded-md border border-amber-300/70 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200 space-y-1">
+                    <p className="font-semibold">
+                      No hay ninguna cuenta de caja en {form.currency}
+                    </p>
+                    <p>
+                      Creá una en{" "}
+                      <Link
+                        href="/dashboard/caja"
+                        className="font-medium underline underline-offset-2 hover:no-underline"
+                      >
+                        Caja
+                      </Link>{" "}
+                      (Efectivo, Banco, Mercado Pago…) antes de registrar un cobro. Si no, la
+                      plata no queda asentada en ningún lado.
+                    </p>
+                  </div>
                 ) : (
                   <Select
                     value={form.account_id ?? undefined}

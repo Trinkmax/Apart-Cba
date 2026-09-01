@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { Plus } from "lucide-react";
 import { listTickets } from "@/lib/actions/tickets";
 import { listUnitsEnriched } from "@/lib/actions/units";
@@ -25,17 +26,27 @@ export default async function MantenimientoPage({
   const { historial } = await searchParams;
   const showArchived = historial === "1";
 
-  const [session, { organization, role }, tickets, units, owners, members, occupancyByUnit, accounts] =
-    await Promise.all([
-      requireSession(),
-      getCurrentOrg(),
-      listTickets({ showArchived }),
-      listUnitsEnriched(),
-      listOwners(),
-      listOrgMemberNames(),
-      listCurrentOccupancyByUnit(),
-      listAccounts(),
-    ]);
+  // La página no chequeaba nada y cargaba propietarios y cuentas de caja para
+  // cualquiera que llegara. Limpieza no tiene permiso de tickets: entraba desde
+  // la tarjeta "Atención requerida" del home y se llevaba puestos datos de
+  // propietarios y de plata. El rol mantenimiento sí entra, pero tampoco tiene
+  // `owners` ni `cash`: esas dos listas se piden sólo si el rol las puede ver.
+  const [session, { organization, role }] = await Promise.all([
+    requireSession(),
+    getCurrentOrg(),
+  ]);
+  if (!can(role, "tickets", "view")) redirect("/dashboard");
+
+  const canViewOwners = can(role, "owners", "view");
+  const canViewCash = can(role, "cash", "view");
+  const [tickets, units, owners, members, occupancyByUnit, accounts] = await Promise.all([
+    listTickets({ showArchived }),
+    listUnitsEnriched(),
+    canViewOwners ? listOwners() : Promise.resolve([]),
+    listOrgMemberNames(),
+    listCurrentOccupancyByUnit(),
+    canViewCash ? listAccounts() : Promise.resolve([]),
+  ]);
   // Mantenimiento ve solo lo asignado a esa persona; admin/recepción, todo.
   const restrictToUserId = isAdminLevel(role) ? null : session.userId;
   const canRegisterPayment = can(role, "cash", "create");

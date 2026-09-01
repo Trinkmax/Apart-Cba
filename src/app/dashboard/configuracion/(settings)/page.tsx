@@ -15,7 +15,8 @@ export default async function GeneralConfigPage() {
           Organización
         </h2>
         <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-          Logo, nombre, datos fiscales, color de marca y contacto público.
+          Logo, nombre, datos fiscales, color de marca, comisión de
+          administración por defecto y contacto público.
         </p>
       </header>
       <OrganizationProfileForm organization={organization} />

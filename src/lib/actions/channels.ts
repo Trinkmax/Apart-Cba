@@ -16,6 +16,7 @@ import { processStoredEvent, reprojectReservation } from "@/lib/channels/ingest"
 import { reservationEventFromRow } from "@/lib/channels/dispatch";
 import { sha256Hex } from "@/lib/channels/token";
 import type {
+  Channel,
   ChannelIssueRow,
   ChannelLinkHealth,
   ChannelLinkRow,
@@ -57,6 +58,7 @@ export interface ChannelsOverview {
   links: ChannelLinkOverview[];
   issues: (ChannelIssueRow & {
     unit: { id: string; code: string; name: string } | null;
+    channel: Channel | null;
   })[];
   settings: {
     email_ingest_enabled: boolean;
@@ -80,7 +82,7 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
       .order("created_at", { ascending: true }),
     admin
       .from("channel_issues")
-      .select("*, link:channel_links(unit:units(id, code, name))")
+      .select("*, link:channel_links(channel, unit:units(id, code, name))")
       .eq("organization_id", organization.id)
       .eq("status", "open")
       .order("severity", { ascending: true })
@@ -115,9 +117,14 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
     unit: { id: string; code: string; name: string };
   })[];
   const issues = (issuesRes.data ?? []).map(
-    (i: ChannelIssueRow & { link: { unit: { id: string; code: string; name: string } } | null }) => ({
+    (
+      i: ChannelIssueRow & {
+        link: { channel: Channel; unit: { id: string; code: string; name: string } } | null;
+      },
+    ) => ({
       ...i,
       unit: i.link?.unit ?? null,
+      channel: i.link?.channel ?? null,
     }),
   );
 
@@ -371,7 +378,26 @@ const resolveIssueSchema = z.object({
   unit_id: z.string().uuid().optional(),
 });
 
-export async function resolveChannelIssue(input: z.infer<typeof resolveIssueSchema>) {
+/**
+ * Resultado de resolver una incidencia. `resolved` es el dato que importa:
+ * "el reintento corrió" y "el reintento arregló algo" no son lo mismo, y la
+ * UI mostraba un tilde verde en los dos casos.
+ */
+export interface ChannelIssueResolution {
+  ok: boolean;
+  /** La incidencia quedó cerrada (no sólo "se intentó"). */
+  resolved?: boolean;
+  /** Por qué no alcanzó, en castellano, para mostrarlo tal cual. */
+  detail?: string;
+  outcome?: string;
+  bookingId?: string;
+  already?: boolean;
+  error?: string;
+}
+
+export async function resolveChannelIssue(
+  input: z.infer<typeof resolveIssueSchema>,
+): Promise<ChannelIssueResolution> {
   const { organization } = await requireChannelsAccess("update");
   const session = await requireSession();
   const validated = resolveIssueSchema.parse(input);
@@ -459,7 +485,11 @@ export async function resolveChannelIssue(input: z.infer<typeof resolveIssueSche
       const ev = reservationEventFromRow(evRow);
       if (ev) {
         const result = await processStoredEvent(admin, evRow.id, ev);
-        if (result.outcome !== "error" && result.outcome !== "needs_review" && result.outcome !== "conflict") {
+        const solved =
+          result.outcome !== "error" &&
+          result.outcome !== "needs_review" &&
+          result.outcome !== "conflict";
+        if (solved) {
           await admin
             .from("channel_issues")
             .update({
@@ -471,13 +501,19 @@ export async function resolveChannelIssue(input: z.infer<typeof resolveIssueSche
             .eq("id", issue.id);
         }
         revalidateCanales();
-        return { ok: true, outcome: result.outcome };
+        return {
+          ok: true,
+          resolved: solved,
+          outcome: result.outcome,
+          detail: solved ? undefined : retryFailureDetail(result.outcome),
+        };
       }
     }
   }
   if (issue.reservation_id) {
     const result = await reprojectReservation(admin, issue.reservation_id);
-    if (result.outcome === "created" || result.outcome === "updated") {
+    const solved = result.outcome === "created" || result.outcome === "updated";
+    if (solved) {
       await admin
         .from("channel_issues")
         .update({
@@ -489,18 +525,76 @@ export async function resolveChannelIssue(input: z.infer<typeof resolveIssueSche
         .eq("id", issue.id);
     }
     revalidateCanales();
-    return { ok: true, outcome: result.outcome };
+    return {
+      ok: true,
+      resolved: solved,
+      outcome: result.outcome,
+      detail: solved ? undefined : retryFailureDetail(result.outcome),
+    };
   }
   if (issue.link_id) {
-    // reintento de conexión: forzar un sync de ese link
+    // Reintento de conexión: forzar un sync de ese link. Lo que se responde NO
+    // sale del dispatch (que puede procesar de paso otras conexiones vencidas),
+    // sino del estado de ESTA conexión antes y después: si no hubo una lectura
+    // nueva, o volvió vacía, la incidencia sigue abierta y hay que decirlo.
+    const before = await getOwnLink(admin, organization.id, issue.link_id);
     await runChannelDispatch(admin, "manual", {
       organizationId: organization.id,
       linkIds: [issue.link_id],
     });
+    const after = await getOwnLink(admin, organization.id, issue.link_id);
+
+    const freshRead = Boolean(after.last_success_at) && after.last_success_at !== before.last_success_at;
+    const failedRead = after.consecutive_failures > before.consecutive_failures;
+    // un 200 con cero eventos teniendo reservas activas no es una lectura sana
+    const stillEmpty = Boolean(after.health?.anomalous_empty);
+    const solved = freshRead && after.consecutive_failures === 0 && !stillEmpty;
+
+    if (solved) {
+      // El dispatcher cierra solo las incidencias de fallo (`feed:`/`stale:`),
+      // pero no la de feed vacío: esa la cierra esta lectura buena.
+      await admin
+        .from("channel_issues")
+        .update({
+          status: "resolved",
+          resolution: "El calendario volvió a leerse correctamente",
+          resolved_by: session.userId,
+          resolved_at: new Date().toISOString(),
+        })
+        .eq("id", issue.id)
+        .eq("status", "open");
+    }
     revalidateCanales();
-    return { ok: true, outcome: "retried" };
+    return {
+      ok: true,
+      resolved: solved,
+      outcome: solved ? "retried" : stillEmpty ? "still_empty" : "still_failing",
+      detail: solved
+        ? undefined
+        : stillEmpty
+          ? "El calendario respondió pero sigue sin traer ningún evento: el enlace no es el correcto. Cambiá el enlace del calendario."
+          : failedRead
+            ? "No se pudo leer el calendario de la OTA. La incidencia queda abierta."
+            : freshRead
+              ? "Volvimos a leer el calendario y el problema sigue. La incidencia queda abierta."
+              : "No se pudo revisar la conexión. Si está en pausa, reanudala y volvé a intentar.",
+    };
   }
   return { ok: false, error: "Nada que reintentar" };
+}
+
+/** Por qué un reintento no alcanzó, en el idioma de quien lo apretó. */
+function retryFailureDetail(outcome: string): string {
+  switch (outcome) {
+    case "conflict":
+      return "El reintento chocó con otra reserva en las mismas fechas. La incidencia queda abierta.";
+    case "needs_review":
+      return "El reintento no alcanzó: falta una decisión a mano (por ejemplo, a qué departamento va).";
+    case "error":
+      return "El reintento falló. La incidencia queda abierta.";
+    default:
+      return "Reintentamos y el problema sigue. La incidencia queda abierta.";
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

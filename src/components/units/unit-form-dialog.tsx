@@ -33,6 +33,12 @@ interface UnitFormDialogProps {
   children?: React.ReactNode;
   unit?: Unit;
   owners?: Owner[];
+  /**
+   * Comisión de administración por defecto de la org (Configuración →
+   * Organización). Es el valor con el que nace una unidad nueva; si no llega,
+   * cae en 20 igual que el servidor.
+   */
+  orgDefaultCommissionPct?: number | null;
   /** Estado controlado (opcional). Si se pasa, ignora el children/trigger. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -41,6 +47,7 @@ interface UnitFormDialogProps {
 export function UnitFormDialog({
   children,
   unit,
+  orgDefaultCommissionPct,
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
 }: UnitFormDialogProps) {
@@ -71,7 +78,8 @@ export function UnitFormDialog({
     base_price: unit?.base_price ?? null,
     base_price_currency: unit?.base_price_currency ?? "ARS",
     cleaning_fee: unit?.cleaning_fee ?? null,
-    default_commission_pct: unit?.default_commission_pct ?? 20,
+    default_commission_pct:
+      unit?.default_commission_pct ?? orgDefaultCommissionPct ?? 20,
     default_mode: (unit?.default_mode as UnitDefaultMode | undefined) ?? "temporario",
     status: unit?.status ?? "disponible",
     description: unit?.description ?? "",
@@ -381,23 +389,34 @@ export function UnitFormDialog({
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="default_commission_pct">Comisión rentOS (%)</Label>
+                  <Label htmlFor="default_commission_pct">Comisión de administración (%)</Label>
                   <Input
                     id="default_commission_pct"
                     type="text"
                     inputMode="decimal"
-                    value={form.default_commission_pct}
+                    value={form.default_commission_pct ?? ""}
                     onChange={(e) => {
-                      const n = Number(e.target.value.replace(",", "."));
+                      const raw = e.target.value.trim();
+                      // Vacío ≠ 0%: lo dejamos sin valor para que el servidor
+                      // caiga en el default de la org.
+                      if (raw === "") return set("default_commission_pct", undefined);
+                      const n = Number(raw.replace(",", "."));
                       if (Number.isFinite(n)) set("default_commission_pct", n);
                     }}
-                    placeholder="20"
+                    placeholder={String(orgDefaultCommissionPct ?? 20)}
                   />
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">
-                La comisión por defecto se puede sobreescribir en cada reserva.
-              </p>
+              <div className="rounded-md border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground space-y-1.5">
+                <p className="font-medium text-foreground">
+                  Es lo que le descontás al propietario cuando generás la liquidación.
+                </p>
+                <p>
+                  Manda esta comisión, la de la unidad. Si con algún propietario
+                  arreglaste otro porcentaje, cargale la excepción en la ficha de la
+                  unidad → pestaña <strong>Propietarios</strong>.
+                </p>
+              </div>
             </TabsContent>
           </Tabs>
 

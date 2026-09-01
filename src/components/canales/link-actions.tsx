@@ -3,7 +3,7 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Pause, Play, RefreshCw, Trash2, Wrench } from "lucide-react";
+import { Link2, Pause, Play, RefreshCw, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,15 +18,23 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { deleteLink, pauseLink, resumeLink, syncChannelsNow } from "@/lib/actions/channels";
+import { ChangeFeedDialog } from "./change-feed-dialog";
+import type { Channel } from "@/lib/channels/types";
 
 export function LinkActions({
   linkId,
   status,
   hasFeed,
+  channel,
+  unitCode,
+  unitName,
 }: {
   linkId: string;
   status: "draft" | "active" | "paused" | "error";
   hasFeed: boolean;
+  channel: Channel;
+  unitCode: string;
+  unitName: string;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -85,6 +93,23 @@ export function LinkActions({
         >
           <Play size={14} /> Reanudar
         </Button>
+      )}
+      {/* Cambiar el calendario entrante sin desconectar nada: el asistente sólo
+          muestra borradores, así que una conexión activa no tenía dónde hacerlo.
+          En borrador lo resuelve el propio asistente (paso A). */}
+      {status !== "draft" && (
+        <ChangeFeedDialog
+          linkId={linkId}
+          channel={channel}
+          unitCode={unitCode}
+          unitName={unitName}
+          hasFeed={hasFeed}
+          trigger={
+            <Button size="sm" variant="outline" className="gap-1.5" disabled={pending}>
+              <Link2 size={14} /> {hasFeed ? "Cambiar enlace del calendario" : "Cargar enlace del calendario"}
+            </Button>
+          }
+        />
       )}
       {status !== "active" && (
         <AlertDialog>

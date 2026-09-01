@@ -105,7 +105,7 @@ export function AssignUnitDialog({
             />
           </div>
           <div className="space-y-1.5">
-            <Label>Comisión rentOS (override, opcional)</Label>
+            <Label>Comisión de administración (solo para este propietario)</Label>
             <Input
               type="number"
               min="0"
@@ -113,8 +113,12 @@ export function AssignUnitDialog({
               step="0.01"
               value={override}
               onChange={(e) => setOverride(e.target.value)}
-              placeholder="Usa la default de la unidad"
+              placeholder="Vacío = la comisión de la unidad"
             />
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Solo si con este propietario arreglaste un porcentaje distinto al de la
+              unidad. Después se edita desde la ficha de la unidad → Propietarios.
+            </p>
           </div>
           <div className="flex items-center justify-between pt-2">
             <Label htmlFor="assign_is_primary" className="cursor-pointer">

@@ -38,7 +38,7 @@ export default async function LinkDetailPage({
   const src = BOOKING_SOURCE_META[link.channel];
   const openIssues = issues
     .filter((i) => i.status === "open")
-    .map((i) => ({ ...i, unit: link.unit }));
+    .map((i) => ({ ...i, unit: link.unit, channel: link.channel }));
 
   return (
     <div className="page-x page-y space-y-4 max-w-4xl mx-auto">
@@ -68,6 +68,9 @@ export default async function LinkDetailPage({
           linkId={link.id}
           status={link.status}
           hasFeed={Boolean(link.feed_secret_id)}
+          channel={link.channel}
+          unitCode={link.unit.code}
+          unitName={link.unit.name}
         />
       </div>
 

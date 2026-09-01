@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, Plus, Wallet, CheckCircle2 } from "lucide-react";
+import { Loader2, Plus, Wallet, CheckCircle2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +30,11 @@ interface QuickPayCardProps {
   accounts: AccountLite[];
   /** Cuando la reserva está cancelada/no_show, deshabilitamos el cobro. */
   disabled?: boolean;
+  /**
+   * Acción para cargar el precio, que se muestra cuando la reserva llegó sin
+   * importe. Lo inyecta la page para no meter el form de edición acá adentro.
+   */
+  loadPriceTrigger?: React.ReactNode;
 }
 
 /**
@@ -45,6 +50,7 @@ export function QuickPayCard({
   paidAmount,
   accounts,
   disabled = false,
+  loadPriceTrigger,
 }: QuickPayCardProps) {
   const router = useRouter();
   const pendingAmount = Math.max(0, Number(totalAmount) - Number(paidAmount));
@@ -86,6 +92,32 @@ export function QuickPayCard({
         });
       }
     });
+  }
+
+  // Sin precio no hay saldo que calcular: "Reserva saldada" sería mentira. Las
+  // reservas de Booking entran por iCal en $0 (el feed no trae importe), así
+  // que el saldo daba 0 y la tarjeta de cobro desaparecía — el camino correcto
+  // para cobrar dejaba de existir justo donde más falta hacía.
+  if (Number(totalAmount) <= 0) {
+    return (
+      <div className="rounded-lg border border-amber-300/60 bg-amber-50 dark:bg-amber-950/25 dark:border-amber-800/40 px-3 py-2.5 space-y-1.5 text-xs text-amber-900 dark:text-amber-200">
+        <div className="flex items-center gap-1.5 font-semibold">
+          <AlertTriangle size={14} className="shrink-0" />
+          <span>Falta cargar el precio</span>
+        </div>
+        <p className="text-amber-800/90 dark:text-amber-200/80">
+          Esta reserva entró desde el canal sin importe. Cargá el total para calcular la
+          comisión y la liquidación al propietario.
+        </p>
+        {Number(paidAmount) > 0 && (
+          <p className="font-medium">
+            Ya cobraste {formatMoney(Number(paidAmount), currency)} sobre una reserva sin
+            precio.
+          </p>
+        )}
+        {loadPriceTrigger && <div className="pt-1">{loadPriceTrigger}</div>}
+      </div>
+    );
   }
 
   // Saldo cero → mostramos un estado consolidado, sin abrir form.

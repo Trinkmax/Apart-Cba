@@ -9,6 +9,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn } from "@/lib/actions/auth";
 
+/**
+ * Supabase Auth devuelve sus errores en inglés y sin contexto ("Invalid login
+ * credentials"): acá se traducen a algo que la persona pueda accionar sola —
+ * el staff no tiene recuperación por email, la contraseña la regenera su admin.
+ * Los mensajes que ya vienen en castellano son nuestros (los arma `signIn`) y
+ * pasan derecho.
+ */
+function loginErrorMessage(raw: string): string {
+  const m = raw.toLowerCase();
+  if (raw === "Esta cuenta no está habilitada para rentOS.") return raw;
+  if (m.includes("invalid login credentials") || m.includes("invalid credentials")) {
+    return "Email o contraseña incorrectos. Si perdiste la contraseña, pedile al administrador que te la regenere.";
+  }
+  if (m.includes("email not confirmed")) {
+    return "Tu cuenta todavía no está confirmada. Avisale al administrador.";
+  }
+  if (m.includes("rate limit") || m.includes("too many requests") || m.includes("for security purposes")) {
+    return "Demasiados intentos. Esperá un minuto y probá de nuevo.";
+  }
+  return "No pudimos entrar con esos datos. Probá de nuevo en un momento y, si sigue, avisale al administrador.";
+}
+
 export function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -21,7 +43,9 @@ export function LoginForm() {
     startTransition(async () => {
       const result = await signIn(email, password);
       if (result.error) {
-        toast.error("No se pudo iniciar sesión", { description: result.error });
+        toast.error("No se pudo iniciar sesión", {
+          description: loginErrorMessage(result.error),
+        });
         return;
       }
       if (result.requiresMfa) {

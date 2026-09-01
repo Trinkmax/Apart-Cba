@@ -21,7 +21,10 @@ import { cn } from "@/lib/utils";
 import type { BookingStatus, BookingListRow } from "@/lib/types/database";
 
 interface Props {
-  rows: BookingListRow[];
+  // `is_block` no viaja en BookingListRow: la lista ya filtra los bloqueos en
+  // el server, pero el chip "Sin precio" no tiene por qué aparecer sobre uno si
+  // alguna vez llegan acá.
+  rows: (BookingListRow & { is_block?: boolean | null })[];
   total: number;
   page: number;
   pageSize: number;
@@ -135,6 +138,13 @@ export function BookingsListClient({
                 const sm = BOOKING_STATUS_META[b.status];
                 const src = BOOKING_SOURCE_META[b.source];
                 const nights = formatNights(b.check_in_date, b.check_out_date);
+                // Las reservas de canal entran sin importe. Mostrarlas en
+                // "$0,00" las hace pasar por saldadas: es el único aviso de que
+                // falta completarlas antes de liquidarle al propietario.
+                const sinPrecio =
+                  Number(b.total_amount) <= 0 &&
+                  b.status !== "cancelada" &&
+                  !b.is_block;
                 return (
                   <Link
                     key={b.id}
@@ -160,7 +170,9 @@ export function BookingsListClient({
                           </div>
                           <div className="text-right shrink-0">
                             {canViewMoney && (
-                              <div className="text-sm font-semibold tabular-nums">{formatMoney(b.total_amount, b.currency)}</div>
+                              <div className="text-sm font-semibold tabular-nums">
+                                {sinPrecio ? "—" : formatMoney(b.total_amount, b.currency)}
+                              </div>
                             )}
                             <Badge className="font-normal text-[9px] gap-1 mt-0.5" style={{ color: sm.color, backgroundColor: sm.color + "15", borderColor: sm.color + "30" }}>
                               {sm.label}
@@ -176,7 +188,12 @@ export function BookingsListClient({
                           </div>
                           <span className="shrink-0">{nights}n · {b.guests_count}p</span>
                         </div>
-                        {canViewMoney && b.paid_amount < b.total_amount && (
+                        {canViewMoney && sinPrecio && (
+                          <span className="mt-1 inline-flex items-center rounded-full border border-amber-300/70 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
+                            Sin precio
+                          </span>
+                        )}
+                        {canViewMoney && !sinPrecio && b.paid_amount < b.total_amount && (
                           <div className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
                             Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
                           </div>
@@ -206,8 +223,15 @@ export function BookingsListClient({
                       <div className="col-span-2 text-right">
                         {canViewMoney ? (
                           <>
-                            <div className="text-sm font-semibold">{formatMoney(b.total_amount, b.currency)}</div>
-                            {b.paid_amount < b.total_amount && (
+                            <div className="text-sm font-semibold">
+                              {sinPrecio ? "—" : formatMoney(b.total_amount, b.currency)}
+                            </div>
+                            {sinPrecio && (
+                              <span className="mt-0.5 inline-flex items-center rounded-full border border-amber-300/70 bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-950/40 dark:text-amber-300">
+                                Sin precio
+                              </span>
+                            )}
+                            {!sinPrecio && b.paid_amount < b.total_amount && (
                               <div className="text-[10px] text-amber-600 dark:text-amber-400">
                                 Falta {formatMoney(b.total_amount - b.paid_amount, b.currency)}
                               </div>

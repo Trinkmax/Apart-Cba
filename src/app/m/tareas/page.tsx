@@ -1,5 +1,8 @@
+import { redirect } from "next/navigation";
 import { CalendarClock, ListTodo, User2 } from "lucide-react";
 import { listConciergeRequests } from "@/lib/actions/concierge";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatTimeAgo } from "@/lib/format";
@@ -19,6 +22,11 @@ function formatScheduled(iso: string): string {
 }
 
 export default async function MobileTareasPage() {
+  // El tab de Tareas está oculto para limpieza/mantenimiento en el layout, pero
+  // la ruta seguía siendo alcanzable a mano y devolvía la conserjería entera.
+  const { role } = await getCurrentOrg();
+  if (!can(role, "concierge", "view")) redirect("/m");
+
   const all = await listConciergeRequests();
   const active = (all as { status: string }[]).filter((r) =>
     ["pendiente", "en_progreso"].includes(r.status)

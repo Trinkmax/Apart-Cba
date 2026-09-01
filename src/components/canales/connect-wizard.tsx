@@ -30,6 +30,7 @@ import {
 } from "@/lib/actions/channels";
 import type { ChannelLinkOverview } from "@/lib/actions/channels";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
+import { OTA_FEED_PLACEHOLDER, OTA_IMPORT_PATH } from "@/lib/channels/ota-help";
 import type { Channel } from "@/lib/channels/types";
 
 /**
@@ -303,10 +304,7 @@ function ChecklistStep({
   onAddMore: () => void;
 }) {
   const meta = BOOKING_SOURCE_META[channel];
-  const otaCalendarPath =
-    channel === "airbnb"
-      ? "Airbnb → Calendario → Disponibilidad → Conectar calendarios"
-      : "Booking.com → Tarifas y disponibilidad → Sincronizar calendarios";
+  const otaCalendarPath = OTA_IMPORT_PATH[channel];
 
   if (drafts.length === 0) {
     return (
@@ -402,10 +400,7 @@ function DraftChecklistCard({
     });
   }
 
-  const placeholder =
-    channel === "airbnb"
-      ? "https://www.airbnb.com/calendar/ical/…ics?s=…"
-      : "https://ical.booking.com/v1/export?t=…";
+  const placeholder = OTA_FEED_PLACEHOLDER[channel];
 
   return (
     <Card className={`p-4 space-y-3 ${highlight ? "border-primary/50" : ""}`}>

@@ -469,7 +469,7 @@ export async function listBookingsPaged(params?: {
   let listQ = admin
     .from("bookings")
     .select(
-      `id, status, source, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount,
+      `id, status, source, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount, is_block,
       unit:units(id, code, name), guest:guests(id, full_name)`,
       { count: "exact" }
     )
@@ -930,6 +930,21 @@ export async function createBooking(
     nightsBetween(validated.check_in_date, validated.check_out_date),
   );
 
+  // Un cobro sin cuenta se guarda en `paid_amount` y no genera ningún asiento:
+  // la reserva dice "cobrado" y la Caja no se entera nunca. `syncBookingPayment
+  // ToCash` hace `return` cuando no hay cuenta, así que ese silencio es
+  // indistinguible del éxito — por eso el corte va acá, antes de escribir.
+  // Sólo el formulario llama a esta action; los otros orígenes de reserva
+  // (marketplace, ingest de canales, aprobación de solicitudes) insertan en
+  // `bookings` directo y no pasan por este camino.
+  // El umbral es el mismo que usa `syncBookingPaymentToCash` para decidir si
+  // hay movimiento: cortamos exactamente cuando habría un asiento que perder.
+  if (Number(validated.paid_amount) >= 0.01 && !accountId) {
+    throw new Error(
+      `Elegí a qué cuenta de caja imputar el cobro de ${Number(validated.paid_amount).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${validated.currency}. Sin cuenta, el cobro no queda registrado en Caja.`,
+    );
+  }
+
   // Buscar comisión default de la unit si no fue dada
   if (validated.commission_pct === null || validated.commission_pct === undefined) {
     const admin = createAdminClient();
@@ -1208,6 +1223,15 @@ export async function updateBooking(
   const previousPaid = Number(current?.paid_amount ?? 0);
   const newPaid = Number(validated.paid_amount);
   const delta = newPaid - previousPaid;
+
+  // Misma red que en createBooking: si el cobrado sube y no vino cuenta, el
+  // delta no llega a Caja y nadie se entera. Cortamos antes del UPDATE para no
+  // dejar la reserva con plata cobrada y ningún movimiento que la respalde.
+  if (delta >= 0.01 && !accountId) {
+    throw new Error(
+      `Elegí a qué cuenta de caja imputar el cobro de ${delta.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${validated.currency}. Sin cuenta, el cobro no queda registrado en Caja.`,
+    );
+  }
 
   const { data, error } = await admin
     .from("bookings")

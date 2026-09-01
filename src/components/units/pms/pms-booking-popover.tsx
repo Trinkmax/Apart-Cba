@@ -406,11 +406,18 @@ export function PmsBookingPopoverContent({
           intent={pendingAmount > 0 ? "warn" : "ok"}
         />
         {booking.commission_amount !== null && (
-          <MoneyRow
-            label="Comisión"
-            value={formatMoney(Number(booking.commission_amount), booking.currency)}
-            subtle
-          />
+          <>
+            <MoneyRow
+              label="Comisión de administración"
+              value={formatMoney(Number(booking.commission_amount), booking.currency)}
+              subtle
+            />
+            {/* Se congeló al crear la reserva y la liquidación no la mira: la
+                recalcula con la comisión de la unidad o la del propietario. */}
+            <p className="text-[10px] leading-snug text-muted-foreground/70 pl-3.5">
+              Referencia: la definitiva se calcula en la liquidación.
+            </p>
+          </>
         )}
         {booking.cleaning_fee !== null && booking.cleaning_fee !== undefined && (
           <MoneyRow

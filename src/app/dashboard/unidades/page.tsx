@@ -9,7 +9,7 @@ import { UnitsGrid } from "@/components/units/units-grid";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 export default async function UnidadesPage() {
-  const [units, { role }] = await Promise.all([
+  const [units, { organization, role }] = await Promise.all([
     listUnitsEnriched(),
     getCurrentOrg(),
   ]);
@@ -34,7 +34,7 @@ export default async function UnidadesPage() {
             </Button>
           </Link>
           {canCreateUnit && (
-            <UnitFormDialog>
+            <UnitFormDialog orgDefaultCommissionPct={organization.default_commission_pct}>
               <Button className="gap-2 shrink-0">
                 <Plus size={16} />
                 <span>
@@ -53,7 +53,7 @@ export default async function UnidadesPage() {
         canViewMoney={canViewMoney}
         emptyCta={
           canCreateUnit ? (
-            <UnitFormDialog>
+            <UnitFormDialog orgDefaultCommissionPct={organization.default_commission_pct}>
               <Button className="gap-2">
                 <Plus size={16} /> Crear primera unidad
               </Button>

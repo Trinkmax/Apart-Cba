@@ -142,7 +142,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
                   <div className="font-medium">{formatMoney(u.cleaning_fee, u.base_price_currency ?? "ARS")}</div>
                 </div>
                 <div>
-                  <div className="text-xs text-muted-foreground">Comisión</div>
+                  <div className="text-xs text-muted-foreground">Comisión de administración</div>
                   <div className="font-medium">{u.default_commission_pct ?? 0}%</div>
                 </div>
               </div>
@@ -169,6 +169,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
             unitId={u.id}
             unitOwners={u.unit_owners}
             availableOwners={owners}
+            unitDefaultCommissionPct={u.default_commission_pct}
           />
         </TabsContent>
 
