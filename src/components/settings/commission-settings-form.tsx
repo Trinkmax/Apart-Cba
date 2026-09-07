@@ -44,6 +44,8 @@ const EXAMPLE_CLEANING = 15_000;
 
 type Initial = {
   channel_commissions: Partial<Record<BookingSource, number>>;
+  /** % que cobra la administración por canal (migración 059). Vacío = el de la unidad. */
+  commission_by_source: Partial<Record<BookingSource, number>>;
   commission_base: CommissionBase;
   default_commission_pct: number;
   default_currency: string;
@@ -68,6 +70,14 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
     }
     return out;
   });
+  const [mine, setMine] = useState<Record<BookingSource, string>>(() => {
+    const out = {} as Record<BookingSource, string>;
+    for (const c of CHANNELS) {
+      const v = initial.commission_by_source[c.source];
+      out[c.source] = v === undefined || v === null ? "" : String(v);
+    }
+    return out;
+  });
   const [base, setBase] = useState<CommissionBase>(initial.commission_base);
   const [adminPct, setAdminPct] = useState(String(initial.default_commission_pct));
   const [exampleSource, setExampleSource] = useState<BookingSource>("booking");
@@ -76,7 +86,10 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
   // plata. Usa los valores que la persona está tipeando, no los guardados.
   const example = useMemo(() => {
     const channelPct = parsePct(pcts[exampleSource]);
-    const commissionPct = parsePct(adminPct);
+    // El % propio del canal gana sobre el general — igual que en la liquidación.
+    const own = parsePct(mine[exampleSource]);
+    const commissionPct =
+      own !== null && Number.isFinite(own) ? own : parsePct(adminPct);
     return computeBookingEconomics({
       total: EXAMPLE_TOTAL,
       cleaningFee: EXAMPLE_CLEANING,
@@ -84,7 +97,7 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
       commissionPct: Number.isFinite(commissionPct ?? 0) ? commissionPct ?? 0 : 0,
       commissionBase: base,
     });
-  }, [pcts, exampleSource, adminPct, base]);
+  }, [pcts, mine, exampleSource, adminPct, base]);
 
   function handleSubmit() {
     const parsedAdmin = parsePct(adminPct);
@@ -109,9 +122,25 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
       }
       map[c.source] = v;
     }
+    const mineMap: Partial<Record<BookingSource, number | null>> = {};
+    for (const c of CHANNELS) {
+      const v = parsePct(mine[c.source]);
+      if (v === null) {
+        mineMap[c.source] = null;
+        continue;
+      }
+      if (!Number.isFinite(v) || v < 0 || v > 100) {
+        toast.error(`Tu comisión en ${BOOKING_SOURCE_META[c.source].label} es inválida`, {
+          description: "Tiene que ser un número entre 0 y 100, o quedar vacío.",
+        });
+        return;
+      }
+      mineMap[c.source] = v;
+    }
     startTransition(async () => {
       const r = await updateCommissionSettings({
         channel_commissions: map,
+        commission_by_source: mineMap,
         commission_base: base,
         default_commission_pct: parsedAdmin,
       });
@@ -133,49 +162,104 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
       {/* ── Por canal ─────────────────────────────────────────────────── */}
       <div className="rounded-lg border bg-card p-4 sm:p-6 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold">Comisión de cada canal de venta</h3>
+          <h3 className="text-sm font-semibold">Cada canal de venta</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            El porcentaje que se lleva la plataforma sobre lo que paga el huésped. Se
-            aplica a las reservas nuevas de ese canal; en cada reserva podés
-            corregirlo a mano.
+            Dos porcentajes por canal: lo que se lleva la plataforma sobre lo que paga
+            el huésped, y lo que cobrás vos por administrar cuando la reserva entra por
+            ahí. Si dejás tu comisión vacía se usa la de la unidad.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+        <div className="space-y-3">
+          {/* Encabezado de las dos columnas — sólo en pantalla ancha */}
+          <div className="hidden sm:grid grid-cols-[1fr_120px_120px] gap-3 items-end px-1">
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Canal
+            </span>
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground text-center">
+              Se lleva
+            </span>
+            <span className="text-[11px] uppercase tracking-wider text-muted-foreground text-center">
+              Tu comisión
+            </span>
+          </div>
+
           {CHANNELS.map((c) => {
             const meta = BOOKING_SOURCE_META[c.source];
             const id = `channel-pct-${c.source}`;
+            const mineId = `mine-pct-${c.source}`;
             return (
-              <div key={c.source} className="space-y-1.5">
-                <Label htmlFor={id} className="flex items-center gap-2">
-                  <span
-                    className="inline-block size-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: meta.color }}
-                    aria-hidden
-                  />
-                  {meta.label}
-                </Label>
-                <div className="relative">
-                  <Input
-                    id={id}
-                    type="text"
-                    inputMode="decimal"
-                    value={pcts[c.source]}
-                    onChange={(e) =>
-                      setPcts((p) => ({ ...p, [c.source]: e.target.value }))
-                    }
-                    placeholder="0"
-                    className="font-mono pr-8"
-                  />
-                  <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                    %
-                  </span>
+              <div
+                key={c.source}
+                className="grid grid-cols-2 sm:grid-cols-[1fr_120px_120px] gap-3 items-start rounded-lg border bg-background/40 p-3"
+              >
+                <div className="col-span-2 sm:col-span-1 min-w-0">
+                  <div className="flex items-center gap-2 font-medium text-sm">
+                    <span
+                      className="inline-block size-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: meta.color }}
+                      aria-hidden
+                    />
+                    {meta.label}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-snug mt-1">
+                    {c.hint}
+                  </p>
                 </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">{c.hint}</p>
+
+                <div className="space-y-1">
+                  <Label htmlFor={id} className="text-[11px] sm:sr-only">
+                    Se lleva {meta.label}
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id={id}
+                      type="text"
+                      inputMode="decimal"
+                      value={pcts[c.source]}
+                      onChange={(e) =>
+                        setPcts((p) => ({ ...p, [c.source]: e.target.value }))
+                      }
+                      placeholder="0"
+                      className="font-mono pr-7 h-9"
+                    />
+                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                      %
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor={mineId} className="text-[11px] sm:sr-only">
+                    Tu comisión
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id={mineId}
+                      type="text"
+                      inputMode="decimal"
+                      value={mine[c.source]}
+                      onChange={(e) =>
+                        setMine((p) => ({ ...p, [c.source]: e.target.value }))
+                      }
+                      placeholder={String(initial.default_commission_pct)}
+                      className="font-mono pr-7 h-9"
+                    />
+                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                      %
+                    </span>
+                  </div>
+                </div>
               </div>
             );
           })}
         </div>
+
+        <p className="text-[11px] text-muted-foreground leading-snug">
+          El porcentaje gris es el de la unidad: mientras dejes tu comisión vacía, se
+          usa ese. Si un propietario tiene un porcentaje acordado en su unidad, ese
+          manda siempre por encima de esta tabla.
+        </p>
       </div>
 
       {/* ── Administración ────────────────────────────────────────────── */}

@@ -173,6 +173,77 @@ export function channelCommissionPctFor(
   return Number.isFinite(n) ? clampPct(n) : 0;
 }
 
+// ── Comisión de administración: de dónde sale el % ───────────────────────────
+
+/**
+ * Por qué esa reserva lleva ese porcentaje. Se muestra al lado del número: un
+ * "27,5%" sin explicación es imposible de auditar cuando hay cuatro lugares
+ * donde se puede configurar.
+ */
+export type CommissionOrigin =
+  | "propietario"
+  | "canal"
+  | "unidad"
+  | "organizacion"
+  | "default";
+
+export const COMMISSION_ORIGIN_LABEL: Record<CommissionOrigin, string> = {
+  propietario: "acordado con el propietario",
+  canal: "por canal de venta",
+  unidad: "de la unidad",
+  organizacion: "de la organización",
+  default: "valor por defecto",
+};
+
+export interface CommissionResolution {
+  pct: number;
+  origin: CommissionOrigin;
+}
+
+/**
+ * Resuelve la comisión de administración de una reserva (migración 059).
+ *
+ * Orden, del acuerdo más específico al default general:
+ *
+ *   1. `ownerOverride` — lo negociado con ESE propietario en ESA unidad. Es un
+ *      acuerdo con una persona: una política general no lo pisa en silencio.
+ *   2. `bySource[source]` — la política por canal de venta ("las directas 27,5").
+ *   3. `unitPct` — el porcentaje de la unidad.
+ *   4. `orgPct` — el default de la organización.
+ *   5. 20.
+ *
+ * Un 0 explícito en cualquier nivel es un valor válido (comisión cero), no un
+ * "sin configurar": sólo `null`/`undefined` pasan al siguiente.
+ */
+export function resolveCommissionPct(input: {
+  source?: string | null;
+  ownerOverride?: number | null;
+  bySource?: ChannelCommissionMap | null;
+  unitPct?: number | null;
+  orgPct?: number | null;
+}): CommissionResolution {
+  const owner = finiteOrNull(input.ownerOverride);
+  if (owner !== null) return { pct: clampPct(owner), origin: "propietario" };
+
+  const bySource = input.source ? finiteOrNull(input.bySource?.[input.source]) : null;
+  if (bySource !== null) return { pct: clampPct(bySource), origin: "canal" };
+
+  const unit = finiteOrNull(input.unitPct);
+  if (unit !== null) return { pct: clampPct(unit), origin: "unidad" };
+
+  const org = finiteOrNull(input.orgPct);
+  if (org !== null) return { pct: clampPct(org), origin: "organizacion" };
+
+  return { pct: 20, origin: "default" };
+}
+
+/** null/undefined/NaN → null. Un 0 explícito sobrevive. */
+function finiteOrNull(v: number | null | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Normaliza lo que viene de un form: descarta vacíos, negativos y >100. */
 export function normalizeChannelCommissionMap(
   input: Record<string, unknown> | null | undefined

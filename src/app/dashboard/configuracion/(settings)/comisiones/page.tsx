@@ -13,12 +13,14 @@ export default async function ComisionesPage() {
         <h2 className="text-lg sm:text-xl font-semibold tracking-tight">Comisiones</h2>
         <p className="text-xs sm:text-sm text-muted-foreground mt-1">
           Lo que se lleva cada plataforma por vender, y lo que te quedás vos por
-          administrar. Con esto, cada reserva sabe cuánto va al propietario.
+          administrar — que puede ser distinto según por dónde entró la reserva. Con
+          esto, cada reserva sabe cuánto va al propietario.
         </p>
       </header>
       <CommissionSettingsForm
         initial={{
           channel_commissions: organization.channel_commissions ?? {},
+          commission_by_source: organization.commission_by_source ?? {},
           commission_base: organization.commission_base ?? "net_of_channel",
           default_commission_pct: organization.default_commission_pct ?? 20,
           default_currency: organization.default_currency ?? "ARS",

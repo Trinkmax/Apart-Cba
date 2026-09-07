@@ -171,6 +171,12 @@ export interface Organization {
    * src/lib/finance/booking-economics.ts. Migración 058.
    */
   commission_base: "gross" | "net_of_channel";
+  /**
+   * % que cobra LA ADMINISTRACIÓN según el canal de venta, p. ej.
+   * {"directo": 27.5}. Gana sobre el % de la unidad, pero no sobre el acuerdo
+   * con el propietario. Vacío = se usa el de la unidad. Migración 059.
+   */
+  commission_by_source: Partial<Record<BookingSource, number>>;
   description: string | null;
   address: string | null;
   contact_phone: string | null;
@@ -786,6 +792,8 @@ export interface SettlementLineMeta {
   source?: string | null;
   mode?: "temporario" | "mensual" | null;
   commission_pct?: number | null;
+  /** De dónde salió `commission_pct` (migración 059). */
+  commission_origin?: "propietario" | "canal" | "unidad" | "organizacion" | "default" | null;
   /** % de la plataforma aplicado a esta reserva (migración 058). */
   channel_commission_pct?: number | null;
   /** Sobre qué base se calculó la comisión de administración (migración 058). */

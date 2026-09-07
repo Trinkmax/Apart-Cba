@@ -36,6 +36,7 @@ import {
   channelCommissionPctFor,
   DEFAULT_COMMISSION_BASE,
   managementCommissionAmount,
+  resolveCommissionPct,
   round2,
   type ChannelCommissionMap,
   type CommissionBase,
@@ -245,7 +246,12 @@ function resolveChannelPct(params: {
  */
 async function resolveDefaultCommissionPct(
   unitId: string,
-  organization: { id: string; default_commission_pct: number | null },
+  organization: {
+    id: string;
+    default_commission_pct: number | null;
+    commission_by_source?: Partial<Record<string, number>> | null;
+  },
+  source?: string | null,
 ): Promise<number> {
   const admin = createAdminClient();
   const { data: unit } = await admin
@@ -254,7 +260,14 @@ async function resolveDefaultCommissionPct(
     .eq("id", unitId)
     .eq("organization_id", organization.id)
     .maybeSingle();
-  return Number(unit?.default_commission_pct ?? organization.default_commission_pct ?? 20);
+  // Misma cascada que la liquidación (migración 059). Acá no hay propietario:
+  // el acuerdo con el dueño lo aplica la liquidación, que es la que paga.
+  return resolveCommissionPct({
+    source,
+    bySource: organization.commission_by_source,
+    unitPct: unit?.default_commission_pct,
+    orgPct: organization.default_commission_pct,
+  }).pct;
 }
 
 /** Importes ya prorrateados de un tramo de una reserva larga. */
@@ -1139,6 +1152,7 @@ export async function createBooking(
     validated.commission_pct = await resolveDefaultCommissionPct(
       validated.unit_id,
       organization,
+      validated.source,
     );
   }
 
@@ -1428,6 +1442,7 @@ export async function updateBooking(
     validated.commission_pct = await resolveDefaultCommissionPct(
       validated.unit_id,
       organization,
+      validated.source,
     );
   }
   validated.channel_commission_pct = resolveChannelPct({
@@ -3009,12 +3024,17 @@ export async function completeChannelPrice(input: {
         ? round2(unitCleaning)
         : currentCleaning;
 
-  const commissionPct: number = Number(
-    booking.commission_pct ??
-      unit?.default_commission_pct ??
-      organization.default_commission_pct ??
-      20,
-  );
+  // El snapshot de la fila gana (si ya lo tenía); si no, la misma cascada que
+  // usa la liquidación: canal de venta → unidad → org → 20 (migración 059).
+  const commissionPct: number =
+    booking.commission_pct !== null && booking.commission_pct !== undefined
+      ? Number(booking.commission_pct)
+      : resolveCommissionPct({
+          source: booking.source as string | null,
+          bySource: organization.commission_by_source,
+          unitPct: unit?.default_commission_pct,
+          orgPct: organization.default_commission_pct,
+        }).pct;
   // Lo tipeado gana; si no, el snapshot de la fila; si no, el default de la
   // org (null si ese canal no está configurado — nunca un 0 congelado).
   const channelPct = resolveChannelPct({

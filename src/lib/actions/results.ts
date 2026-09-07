@@ -11,8 +11,9 @@
  * números coincidan con lo que después se le manda al propietario:
  *   • temporario → se cuenta en el mes del CHECK-OUT;
  *   • mensual    → se prorratea la renta por los días del mes;
- *   • % de administración → override del dueño en la unidad, si no el de la
- *     unidad, si no 20;
+ *   • % de administración → acuerdo con el dueño en la unidad, si no la política
+ *     por canal de venta, si no el de la unidad, si no el de la org, si no 20
+ *     (resolveCommissionPct, migración 059);
  *   • los importes salen de src/lib/finance/booking-economics.ts.
  */
 
@@ -23,6 +24,7 @@ import { can } from "@/lib/permissions";
 import {
   computeBookingEconomics,
   channelCommissionPctFor,
+  resolveCommissionPct,
   round2,
   type CommissionBase,
 } from "@/lib/finance/booking-economics";
@@ -149,6 +151,9 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
 
   const commissionBase: CommissionBase = organization.commission_base ?? "net_of_channel";
   const channelMap = organization.channel_commissions ?? {};
+  // Comisión de administración por canal (migración 059). Misma cascada que la
+  // liquidación: acuerdo con el propietario → canal → unidad → org → 20.
+  const commissionBySource = organization.commission_by_source ?? {};
 
   const [{ data: bookings, error: bErr }, { data: units, error: uErr }, { data: settlements }] =
     await Promise.all([
@@ -271,9 +276,12 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
     let weightedPct = 0;
 
     if (unitOwners.length === 0) {
-      const pct = Number(
-        b.commission_pct ?? unit?.default_commission_pct ?? organization.default_commission_pct ?? 20
-      );
+      const pct = resolveCommissionPct({
+        source,
+        bySource: commissionBySource,
+        unitPct: unit?.default_commission_pct,
+        orgPct: organization.default_commission_pct,
+      }).pct;
       const eco = computeBookingEconomics({
         total,
         cleaningFee: cleaning,
@@ -297,7 +305,13 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
       const sharesTotal = unitOwners.reduce((a, uo) => a + Number(uo.ownership_pct ?? 100), 0) || 100;
       for (const uo of unitOwners) {
         const share = Number(uo.ownership_pct ?? 100) / sharesTotal;
-        const pct = Number(uo.commission_pct_override ?? unit?.default_commission_pct ?? 20);
+        const pct = resolveCommissionPct({
+          source,
+          ownerOverride: uo.commission_pct_override,
+          bySource: commissionBySource,
+          unitPct: unit?.default_commission_pct,
+          orgPct: organization.default_commission_pct,
+        }).pct;
         const eco = computeBookingEconomics({
           total,
           cleaningFee: cleaning,

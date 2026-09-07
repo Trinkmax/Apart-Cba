@@ -203,6 +203,17 @@ const commissionSettingsSchema = z.object({
       .nullable()
   ),
   commission_base: z.enum(["gross", "net_of_channel"]),
+  /** % que cobra la administración por canal. Vacío = se usa el de la unidad. */
+  commission_by_source: z
+    .record(
+      z.enum(BOOKING_SOURCES as [BookingSource, ...BookingSource[]]),
+      z.coerce
+        .number()
+        .min(0, "La comisión no puede ser negativa")
+        .max(100, "La comisión no puede pasar de 100%")
+        .nullable(),
+    )
+    .optional(),
   default_commission_pct: z.coerce
     .number()
     .min(0, "La comisión no puede ser negativa")
@@ -232,11 +243,13 @@ export async function updateCommissionSettings(
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
   }
   const map = normalizeChannelCommissionMap(parsed.data.channel_commissions);
+  const bySource = normalizeChannelCommissionMap(parsed.data.commission_by_source ?? {});
   const admin = createAdminClient();
   const { error } = await admin
     .from("organizations")
     .update({
       channel_commissions: map,
+      commission_by_source: bySource,
       commission_base: parsed.data.commission_base,
       ...(parsed.data.default_commission_pct !== undefined
         ? { default_commission_pct: parsed.data.default_commission_pct }

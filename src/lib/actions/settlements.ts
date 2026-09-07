@@ -23,6 +23,7 @@ import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-ow
 import {
   computeBookingEconomics,
   channelCommissionPctFor,
+  resolveCommissionPct,
   DEFAULT_COMMISSION_BASE,
   type CommissionBase,
 } from "@/lib/finance/booking-economics";
@@ -241,11 +242,15 @@ async function buildSettlementLines(opts: {
   // (es lo que hace Resultados). Un valor guardado, incluso 0, siempre gana.
   const { data: orgRow } = await admin
     .from("organizations")
-    .select("channel_commissions")
+    .select("channel_commissions, commission_by_source, default_commission_pct")
     .eq("id", organizationId)
     .maybeSingle();
   const channelCommissions =
     (orgRow?.channel_commissions as Partial<Record<string, number>> | null) ?? {};
+  // Comisión de administración por canal (migración 059). Vacío = como siempre.
+  const commissionBySource =
+    (orgRow?.commission_by_source as Partial<Record<string, number>> | null) ?? {};
+  const orgCommissionPct = (orgRow?.default_commission_pct as number | null) ?? null;
 
   const { data: unitOwners } = await admin
     .from("unit_owners")
@@ -329,13 +334,20 @@ async function buildSettlementLines(opts: {
     const unit = uo?.unit as unknown as
       | { code?: string; default_commission_pct?: number }
       | undefined;
-    const commissionPct = Number(
-      uo?.commission_pct_override ?? unit?.default_commission_pct ?? 20,
-    );
     const unitCode = unit?.code ?? "—";
     const guestName =
       (b.guest as unknown as { full_name?: string } | null)?.full_name ?? null;
     const source = (b.source as string | null) ?? null;
+    // Acuerdo con el propietario → política por canal → unidad → org → 20.
+    // Una sola función para toda la app (ver booking-economics.ts).
+    const commissionResolved = resolveCommissionPct({
+      source,
+      ownerOverride: uo?.commission_pct_override,
+      bySource: commissionBySource,
+      unitPct: unit?.default_commission_pct,
+      orgPct: orgCommissionPct,
+    });
+    const commissionPct = commissionResolved.pct;
     const mode = (b.mode as "temporario" | "mensual" | undefined) ?? "temporario";
     const bookingCurrency = (b.currency as string | null) ?? BASE_CURRENCY;
 
@@ -460,6 +472,9 @@ async function buildSettlementLines(opts: {
         source,
         mode: "temporario",
         commission_pct: commissionPct,
+        // De dónde salió ese % (acuerdo con el propietario / canal / unidad).
+        // Sin esto, un 27,5% en una liquidación vieja es imposible de auditar.
+        commission_origin: commissionResolved.origin,
         channel_commission_pct: econ.channelPct > 0 ? econ.channelPct : null,
         commission_base: commissionBase,
       },
