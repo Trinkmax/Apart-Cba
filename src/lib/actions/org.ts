@@ -10,9 +10,11 @@ import { Resend } from "resend";
 import { requireSession, getSessionContext } from "./auth";
 import { createAdminClient } from "@/lib/supabase/server";
 import { isAdminLevel } from "@/lib/permissions";
-import { BOOKING_STATUS_META } from "@/lib/constants";
+import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { findInvalidVariables } from "@/lib/email/templates/variables";
+import { normalizeChannelCommissionMap } from "@/lib/finance/booking-economics";
 import type {
+  BookingSource,
   BookingStatus,
   BookingStatusColors,
   Organization,
@@ -183,6 +185,71 @@ export async function updateOrganizationProfile(
     .eq("id", organization.id);
   if (error) throw new Error(error.message);
   revalidatePath("/", "layout");
+}
+
+// ── Comisiones: por canal de venta + base de la comisión de administración ──
+// Ver src/lib/finance/booking-economics.ts (reglas) y migración 058 (columnas).
+
+const BOOKING_SOURCES = Object.keys(BOOKING_SOURCE_META) as BookingSource[];
+
+const commissionSettingsSchema = z.object({
+  /** % por canal. Vacío / null = "no configurado" (se guarda sin la clave, cuenta 0). */
+  channel_commissions: z.record(
+    z.enum(BOOKING_SOURCES as [BookingSource, ...BookingSource[]]),
+    z.coerce
+      .number()
+      .min(0, "La comisión no puede ser negativa")
+      .max(100, "La comisión no puede pasar de 100%")
+      .nullable()
+  ),
+  commission_base: z.enum(["gross", "net_of_channel"]),
+  default_commission_pct: z.coerce
+    .number()
+    .min(0, "La comisión no puede ser negativa")
+    .max(100, "La comisión no puede pasar de 100%")
+    .optional(),
+});
+
+export type CommissionSettingsInput = z.input<typeof commissionSettingsSchema>;
+
+/**
+ * Guarda la comisión de cada canal de venta (lo que cobra la plataforma) y sobre
+ * qué base se calcula la comisión de administración. Sólo afecta reservas
+ * NUEVAS (el % se snapshotea al crearlas) y los cálculos "en vivo" (Resultados,
+ * liquidaciones que se generen de acá en más). Las reservas ya cargadas
+ * conservan su propio %, editable una por una.
+ */
+export async function updateCommissionSettings(
+  input: CommissionSettingsInput
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) {
+    return { ok: false, error: "Solo un administrador puede cambiar las comisiones" };
+  }
+  const parsed = commissionSettingsSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+  const map = normalizeChannelCommissionMap(parsed.data.channel_commissions);
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("organizations")
+    .update({
+      channel_commissions: map,
+      commission_base: parsed.data.commission_base,
+      ...(parsed.data.default_commission_pct !== undefined
+        ? { default_commission_pct: parsed.data.default_commission_pct }
+        : {}),
+    })
+    .eq("id", organization.id);
+  if (error) return { ok: false, error: error.message };
+  // La org viaja en la sesión (get_session_context) → hay que refrescar todo el
+  // layout, no sólo la pantalla de configuración.
+  revalidatePath("/", "layout");
+  revalidatePath("/dashboard/configuracion/comisiones");
+  revalidatePath("/dashboard/resultados");
+  return { ok: true };
 }
 
 /** Toggle independiente: mostrar/ocultar el nombre junto al logo (sidebar). */

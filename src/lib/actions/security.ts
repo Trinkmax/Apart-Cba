@@ -4,7 +4,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { requireSession } from "./auth";
+import { requireSession, getLandingPath } from "./auth";
 import { logSecurityEvent } from "@/lib/security/audit";
 import { generateRecoveryCodes, consumeRecoveryCode } from "@/lib/security/recovery-codes";
 import { sendSystemMail } from "@/lib/email/system";
@@ -482,7 +482,7 @@ export async function getMfaStatus(): Promise<{
 export async function verifyMfaLogin(args: {
   factorId: string;
   code: string;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+}): Promise<{ ok: true; landing: "/m" | "/dashboard" } | { ok: false; error: string }> {
   if (!/^\d{6}$/.test(args.code)) return { ok: false, error: "Código inválido" };
   const sb = await createClient();
   const { data: challenge, error: chErr } = await sb.auth.mfa.challenge({ factorId: args.factorId });
@@ -493,7 +493,8 @@ export async function verifyMfaLogin(args: {
     code: args.code,
   });
   if (verifyErr) return { ok: false, error: "Código incorrecto" };
-  return { ok: true };
+  // Mismo destino que un login sin 2FA: limpieza/mantenimiento → /m.
+  return { ok: true, landing: await getLandingPath() };
 }
 
 /**

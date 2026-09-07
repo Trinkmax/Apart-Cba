@@ -40,6 +40,9 @@ function Neg({ n, currency }: { n: number; currency: string }) {
  */
 export function SettlementStatement({ model }: { model: StatementModel }) {
   const c = model.currency;
+  // Columna "Canal" (comisión de Booking / Airbnb…) sólo cuando hay algo que
+  // mostrar: los documentos anteriores se ven exactamente igual que antes.
+  const hasChannel = model.hasChannelCommission;
 
   return (
     <Card className="@container overflow-hidden p-0 gap-0">
@@ -119,12 +122,29 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
 
       {/* KPIs: 2x2 en angosto, una fila de 4 cuando hay lugar. El neto queda
           siempre en el último casillero — nada de `col-span-2` en angosto, que
-          dejaba un hueco gris en la grilla. */}
-      <div className="grid grid-cols-2 @[34rem]:grid-cols-4 gap-px bg-border border-y">
+          dejaba un hueco gris en la grilla. Con "Canal" son 5: en angosto el
+          neto ocupa las dos columnas de la última fila (si no, queda un hueco). */}
+      <div
+        className={cn(
+          "grid grid-cols-2 gap-px bg-border border-y",
+          hasChannel ? "@[34rem]:grid-cols-5" : "@[34rem]:grid-cols-4",
+        )}
+      >
         <Kpi label="Bruto" value={formatMoney(model.totals.gross, c)} />
+        {hasChannel && (
+          <Kpi
+            label="Canal"
+            value={`−${formatMoney(model.totals.channelCommission, c)}`}
+          />
+        )}
         <Kpi label="Comisión" value={`−${formatMoney(model.totals.commission, c)}`} />
         <Kpi label="Gastos" value={`−${formatMoney(model.totals.deductions, c)}`} />
-        <div className="bg-primary/5 px-4 py-4">
+        <div
+          className={cn(
+            "bg-primary/5 px-4 py-4",
+            hasChannel && "col-span-2 @[34rem]:col-span-1",
+          )}
+        >
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
             Neto por pagar
           </div>
@@ -171,6 +191,9 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
                     <TableHead className="h-9">Huésped</TableHead>
                     <TableHead className="h-9 text-center">Noches</TableHead>
                     <TableHead className="h-9 text-right">Bruto</TableHead>
+                    {hasChannel && (
+                      <TableHead className="h-9 text-right">Canal</TableHead>
+                    )}
                     <TableHead className="h-9 text-right">Comisión</TableHead>
                     <TableHead className="h-9 text-right">Gastos</TableHead>
                     <TableHead className="h-9 text-right">Neto</TableHead>
@@ -199,6 +222,11 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
                       <TableCell className="text-right tabular-nums font-medium">
                         {formatMoney(b.gross, c)}
                       </TableCell>
+                      {hasChannel && (
+                        <TableCell className="text-right">
+                          <Neg n={b.channelCommission} currency={c} />
+                        </TableCell>
+                      )}
                       <TableCell className="text-right">
                         <Neg n={b.commission} currency={c} />
                       </TableCell>
@@ -219,6 +247,11 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
                     <TableCell className="text-right tabular-nums">
                       {formatMoney(u.subtotal.gross, c)}
                     </TableCell>
+                    {hasChannel && (
+                      <TableCell className="text-right">
+                        <Neg n={u.subtotal.channelCommission} currency={c} />
+                      </TableCell>
+                    )}
                     <TableCell className="text-right">
                       <Neg n={u.subtotal.commission} currency={c} />
                     </TableCell>
@@ -250,6 +283,7 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
                 </div>
                 <Breakdown
                   gross={u.subtotal.gross}
+                  channelCommission={u.subtotal.channelCommission}
                   commission={u.subtotal.commission}
                   expenses={u.subtotal.expenses}
                   currency={c}
@@ -365,6 +399,7 @@ function BookingCard({ row: b, currency }: { row: StatementBookingRow; currency:
 
       <Breakdown
         gross={b.gross}
+        channelCommission={b.channelCommission}
         commission={b.commission}
         expenses={b.expenses}
         currency={currency}
@@ -373,14 +408,16 @@ function BookingCard({ row: b, currency }: { row: StatementBookingRow; currency:
   );
 }
 
-/** Bruto / comisión / gastos en una línea que envuelve si no entra. */
+/** Bruto / canal / comisión / gastos en una línea que envuelve si no entra. */
 function Breakdown({
   gross,
+  channelCommission = 0,
   commission,
   expenses,
   currency,
 }: {
   gross: number;
+  channelCommission?: number;
   commission: number;
   expenses: number;
   currency: string;
@@ -391,6 +428,14 @@ function Breakdown({
         Bruto{" "}
         <span className="font-medium text-foreground">{formatMoney(gross, currency)}</span>
       </span>
+      {channelCommission > 0 && (
+        <span>
+          Canal{" "}
+          <span className="font-medium text-rose-600 dark:text-rose-400">
+            −{formatMoney(channelCommission, currency)}
+          </span>
+        </span>
+      )}
       {commission > 0 && (
         <span>
           Comisión{" "}

@@ -51,3 +51,13 @@ export function canAny(role: UserRole, checks: Array<[Resource, Action?]>): bool
 export function isAdminLevel(role: UserRole | null | undefined): boolean {
   return role === "admin" || role === "recepcion";
 }
+
+/**
+ * A dónde llevar a cada rol después de entrar. Limpieza y mantenimiento viven
+ * en la versión mobile (`/m`: sus tabs, sus tareas asignadas); el resto opera
+ * en el PMS de escritorio. Sin rol (superadmin sin org, cuenta sin membresía)
+ * → `/dashboard`, que ya sabe redirigir a /superadmin o /sin-acceso.
+ */
+export function landingPathForRole(role: UserRole | null | undefined): "/m" | "/dashboard" {
+  return role === "limpieza" || role === "mantenimiento" ? "/m" : "/dashboard";
+}

@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/select";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatNights, getInitials } from "@/lib/format";
+import { computeBookingEconomics } from "@/lib/finance/booking-economics";
 import {
   addBookingPayment,
   changeBookingStatus,
@@ -111,6 +112,17 @@ export function PmsBookingPopoverContent({
   const sourceMeta = BOOKING_SOURCE_META[booking.source];
   const nights = formatNights(booking.check_in_date, booking.check_out_date);
   const pendingAmount = Math.max(0, Number(booking.total_amount) - Number(booking.paid_amount));
+  // Misma cuenta que el detalle y la liquidación: sólo la usamos para lo que
+  // se lleva el canal (la comisión de administración se muestra como quedó
+  // guardada, con su aviso). En mensual el canal no aplica — igual que en la
+  // liquidación y en Resultados.
+  const esMensual = booking.mode === "mensual";
+  const econ = computeBookingEconomics({
+    total: booking.total_amount,
+    cleaningFee: esMensual ? 0 : booking.cleaning_fee,
+    channelPct: esMensual ? 0 : booking.channel_commission_pct,
+    commissionPct: booking.commission_pct,
+  });
 
   const matchingAccounts = accounts.filter((a) => a.currency === booking.currency);
   const [showPayForm, setShowPayForm] = useState(false);
@@ -405,6 +417,14 @@ export function PmsBookingPopoverContent({
           value={formatMoney(pendingAmount, booking.currency)}
           intent={pendingAmount > 0 ? "warn" : "ok"}
         />
+        {/* Lo que se lleva Booking/Airbnb. En directo no hay fila. */}
+        {econ.total > 0 && econ.channelPct > 0 && (
+          <MoneyRow
+            label={`Se lleva ${sourceMeta?.label ?? booking.source} (${econ.channelPct}%)`}
+            value={`−${formatMoney(econ.channelCommission, booking.currency)}`}
+            subtle
+          />
+        )}
         {booking.commission_amount !== null && (
           <>
             <MoneyRow
@@ -421,7 +441,7 @@ export function PmsBookingPopoverContent({
         )}
         {booking.cleaning_fee !== null && booking.cleaning_fee !== undefined && (
           <MoneyRow
-            label="Fee limpieza"
+            label="Limpieza (incluida en el total)"
             value={formatMoney(Number(booking.cleaning_fee), booking.currency)}
             subtle
           />

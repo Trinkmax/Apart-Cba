@@ -39,12 +39,24 @@ import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/bookings";
 import { searchGuests } from "@/lib/actions/guests";
 import { BOOKING_MODE_META, BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
-import { formatNights } from "@/lib/format";
+import { formatMoney, formatNights } from "@/lib/format";
 import {
   MAX_BOOKING_NIGHTS,
   nightsBetween,
   splitBookingSegments,
 } from "@/lib/booking-split";
+import {
+  channelCommissionPctFor,
+  computeBookingEconomics,
+  DEFAULT_COMMISSION_BASE,
+  round2,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
+import {
+  formatMoneyEditable,
+  formatMoneyValue,
+  parseMoneyInput,
+} from "@/components/bookings/money-input";
 import { cn } from "@/lib/utils";
 import {
   AlertDialog,
@@ -59,6 +71,7 @@ import {
 import type {
   Booking,
   BookingMode,
+  BookingSource,
   BookingWithRelations,
   CashAccount,
   Guest,
@@ -66,42 +79,11 @@ import type {
   UnitDefaultMode,
 } from "@/lib/types/database";
 
-// ─── Helpers para inputs monetarios ─────────────────────────────────────────
-// Aceptan tanto `.` como `,` como separador decimal. Vacío → null.
-function parseMoneyInput(v: string): number | null {
-  const trimmed = v.trim();
-  if (trimmed === "") return null;
-  const normalized = trimmed.replace(/\./g, "").replace(",", ".");
-  // Si tenía un solo punto (input internacional), revertir el primer reemplazo.
-  // Heurística: si normalized no parsea, probamos el original con punto.
-  const direct = Number(trimmed.replace(",", "."));
-  const n = Number.isFinite(direct) ? direct : Number(normalized);
-  return Number.isFinite(n) ? n : null;
-}
-
-// Postgres devuelve `numeric` como string ("0.00", "1500.50") via PostgREST,
-// aunque las types de la app lo declaren como `number`. Acepta ambos para
-// evitar bugs de display tipo "0.00" ocupando un input editable.
-function formatMoneyValue(n: number | string | null | undefined): string {
-  if (n === null || n === undefined || n === "") return "";
-  const num = typeof n === "number" ? n : Number(n);
-  if (!Number.isFinite(num)) return "";
-  return String(num);
-}
-
-// Forma display para inputs *editables*: trata 0 como "no cargado" (igual que
-// null) para que el placeholder se muestre y el usuario pueda tipear sin tener
-// que borrar el "0" existente. Para read-only o porcentajes con 0 explícito
-// (ej. comisión 0%), usar formatMoneyValue.
-function formatMoneyEditable(n: number | string | null | undefined): string {
-  if (n === null || n === undefined || n === "") return "";
-  const num = typeof n === "number" ? n : Number(n);
-  if (!Number.isFinite(num) || num === 0) return "";
-  return String(num);
-}
-
-// Util compartido (mismo módulo que usa el server action) — mantiene cliente y
-// servidor en sync por construcción. NO duplicar la lógica acá.
+// Los helpers de inputs monetarios (parseMoneyInput / formatMoneyValue /
+// formatMoneyEditable) viven en ./money-input — los comparte el diálogo
+// "Completar datos". Las reglas de plata (total = alojamiento + limpieza,
+// comisión del canal, neto al propietario) salen de booking-economics: NO
+// duplicar la fórmula acá.
 
 type SelectedGuest = Pick<Guest, "id" | "full_name" | "phone" | "email">;
 
@@ -158,6 +140,31 @@ interface BookingFormDialogProps {
   onOpenChange?: (open: boolean) => void;
   /** Callback cuando el dialog se cierra (para coordinar con el parent) */
   onClosed?: () => void;
+  /**
+   * % que se lleva cada canal (organizations.channel_commissions). Rellena
+   * "Comisión canal %" al cambiar el Origen mientras el usuario no lo haya
+   * tocado a mano. Default vacío = 0% para todo.
+   */
+  channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  /** Base de la comisión de administración (organizations.commission_base). Sólo para el desglose. */
+  commissionBase?: CommissionBase;
+}
+
+/**
+ * Qué muestra el campo "Comisión canal %" cuando nadie lo tipeó todavía:
+ * el default de la org para ese origen, o VACÍO si la org no lo configuró.
+ * Vacío viaja como null y el server lo deja null ("sin configurar"): si más
+ * adelante cargan "Booking 15%", esa reserva lo toma. Un "0" tipeado o
+ * configurado a propósito sí se guarda como 0.
+ */
+function channelPctDisplay(
+  map: Partial<Record<string, number>> | undefined,
+  source: string | null | undefined
+): string {
+  if (!map || !source) return "";
+  const raw = map[source];
+  if (raw === null || raw === undefined) return "";
+  return formatMoneyValue(channelCommissionPctFor(map, source));
 }
 
 export function BookingFormDialog({
@@ -174,6 +181,8 @@ export function BookingFormDialog({
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
   onClosed,
+  channelCommissionDefaults = {},
+  commissionBase = DEFAULT_COMMISSION_BASE,
 }: BookingFormDialogProps) {
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const isControlled = controlledOpen !== undefined;
@@ -213,6 +222,7 @@ export function BookingFormDialog({
     | "total_amount"
     | "paid_amount"
     | "commission_pct"
+    | "channel_commission_pct"
     | "cleaning_fee"
     | "monthly_rent"
     | "monthly_expenses"
@@ -220,18 +230,22 @@ export function BookingFormDialog({
     | "monthly_inflation_adjustment_pct"
   > & {
     /**
-     * Precio por noche (modo temporario). NO se persiste — el server recibe
-     * `total_amount` ya calculado como `price_per_night × nights`. La comisión
-     * se decide en liquidaciones, no acá.
+     * Precio por noche = SOLO alojamiento (modo temporario). NO se persiste —
+     * el server recibe `total_amount` = price_per_night × nights + limpieza.
+     * La comisión se decide en liquidaciones, no acá.
      */
     price_per_night: string;
     /**
-     * Total del período (modo mensual). En temporario se calcula en vivo
-     * desde price_per_night × nights y se muestra como display readonly.
+     * Total que paga el huésped, limpieza INCLUIDA. En temporario es la fuente
+     * de verdad y se mantiene en sync con Precio/noche; en mensual lo tipea
+     * el usuario y la limpieza no entra en la cuenta (mensual es ciego a la
+     * limpieza a propósito).
      */
     total_amount: string;
     paid_amount: string;
     commission_pct: string;
+    /** % que se lleva la plataforma (Booking/Airbnb). "0" explícito = sin comisión. */
+    channel_commission_pct: string;
     cleaning_fee: string;
     monthly_rent: string;
     monthly_expenses: string;
@@ -246,18 +260,42 @@ export function BookingFormDialog({
     add_payment: string;
   };
 
-  // Derivar price_per_night inicial: en edición = total / nights del booking;
-  // en creación = vacío (lo rellena el auto-cálculo desde unit.base_price).
+  // Derivar price_per_night inicial: en edición = (total − limpieza) / nights
+  // del booking — el total guardado ya incluye la limpieza, así que dividirlo
+  // entero inflaba el precio por noche de toda reserva con limpieza (las del
+  // marketplace siempre la tienen). En creación = vacío (lo rellena el
+  // auto-cálculo desde unit.base_price).
   const initialPricePerNight = (() => {
     if (!booking) return "";
     const ci = booking.check_in_date;
     const co = booking.check_out_date;
     const n = ci && co ? nightsBetween(ci, co) : 0;
     const total = Number(booking.total_amount ?? 0);
-    if (n > 0 && total > 0) {
-      return formatMoneyValue(Math.round((total / n) * 100) / 100);
+    const cleaning = Number(booking.cleaning_fee ?? 0);
+    const lodging = Math.max(0, total - cleaning);
+    if (n > 0 && lodging > 0) {
+      return formatMoneyValue(round2(lodging / n));
     }
     return "";
+  })();
+
+  // Reserva de OTA sin precio (entra en $0 y sin limpieza): al cargarle el
+  // precio desde acá la limpieza de la unidad tiene que entrar igual que en
+  // "Completar datos" (completeChannelPrice la snapshotea). Si no, el neto al
+  // propietario de la misma reserva dependía de qué botón apretó el staff.
+  // Queda visible en la celda: se puede borrar o cambiar antes de guardar.
+  const prefilledCleaning = (() => {
+    if (!booking || booking.is_block || booking.mode === "mensual") return null;
+    if (Number(booking.total_amount ?? 0) > 0) return null;
+    if (Number(booking.cleaning_fee ?? 0) > 0) return null;
+    const u = units.find((x) => x.id === booking.unit_id);
+    // El fee de la unidad está en SU moneda: copiarlo a una reserva en otra
+    // moneda mete "$15.000" adentro de un total en dólares (pasó en la demo).
+    if (u?.base_price_currency && booking.currency && u.base_price_currency !== booking.currency) {
+      return null;
+    }
+    const fee = Number(u?.cleaning_fee ?? 0);
+    return fee > 0 ? fee : null;
   })();
 
   const [form, setForm] = useState<FormShape>({
@@ -280,7 +318,17 @@ export function BookingFormDialog({
       booking?.commission_pct !== null && booking?.commission_pct !== undefined
         ? formatMoneyValue(booking.commission_pct)
         : "20",
-    cleaning_fee: formatMoneyEditable(booking?.cleaning_fee),
+    // formatMoneyValue (no Editable): un 0% explícito tiene que verse como "0",
+    // no como un input vacío que parece sin cargar. Las reservas de OTA entran
+    // sin pct (el iCal no lo trae): cae al default de la org para su origen.
+    channel_commission_pct:
+      booking?.channel_commission_pct !== null && booking?.channel_commission_pct !== undefined
+        ? formatMoneyValue(booking.channel_commission_pct)
+        : channelPctDisplay(channelCommissionDefaults, booking?.source ?? "directo"),
+    cleaning_fee:
+      prefilledCleaning !== null
+        ? formatMoneyValue(prefilledCleaning)
+        : formatMoneyEditable(booking?.cleaning_fee),
     monthly_rent: formatMoneyEditable(booking?.monthly_rent),
     monthly_expenses: formatMoneyEditable(booking?.monthly_expenses),
     security_deposit: formatMoneyEditable(booking?.security_deposit),
@@ -307,6 +355,18 @@ export function BookingFormDialog({
   const [lastTouched, setLastTouched] = useState<"price" | "total" | null>(
     isEdit ? "price" : null
   );
+  // ¿El precio/noche lo TIPEÓ el usuario en esta apertura? Distinto de
+  // `priceTouched` (que en edición arranca en true sólo para frenar el
+  // autorrelleno desde unit.base_price): en edición el precio es un derivado
+  // redondeado del total guardado (100000 ÷ 3 = 33333,33) y no sirve como
+  // base para recalcular ese total — ver el onChange de Limpieza.
+  const [priceTyped, setPriceTyped] = useState(false);
+  // Si el usuario editó a mano el % del canal en ESTA apertura, cambiar el
+  // Origen no lo pisa. Arranca siempre en false: el % guardado en la reserva
+  // es el snapshot del default de la org al momento de crearla (el server lo
+  // completa siempre), no evidencia de una decisión — si corrigen el Origen
+  // de una reserva mal cargada, el % tiene que seguir al canal nuevo.
+  const [channelPctTouched, setChannelPctTouched] = useState(false);
 
   function set<K extends keyof FormShape>(k: K, v: FormShape[K]) {
     setForm((f) => ({ ...f, [k]: v }));
@@ -322,25 +382,41 @@ export function BookingFormDialog({
           rent_billing_day: f.rent_billing_day ?? 1,
         };
       }
+      // Mensual guarda 0% de canal (no aplica). Al volver a temporario el %
+      // vuelve al default de la org para el origen, salvo que lo hayan tipeado.
+      if (next === "temporario" && f.mode === "mensual" && !channelPctTouched) {
+        return {
+          ...f,
+          mode: next,
+          channel_commission_pct: channelPctDisplay(channelCommissionDefaults, f.source),
+        };
+      }
       return { ...f, mode: next };
     });
   }
 
   // ─── Auto-cálculo de precio/total ────────────────────────────────────────
-  // Modo mensual: auto-rellena total_amount desde monthly_rent × días/30.
-  // Modo temporario (bidireccional):
-  //   - Si el último editado fue "total" → re-deriva el precio = total ÷ noches
-  //     cuando cambian fechas (mantiene fijo el total que tipeó el usuario).
+  // Modo mensual: auto-rellena total_amount desde monthly_rent × días/30
+  // (sin limpieza: mensual es ciego a la limpieza a propósito).
+  // Modo temporario (bidireccional, la limpieza siempre adentro del total):
+  //   - Si el último editado fue "total" → re-deriva el precio =
+  //     (total − limpieza) ÷ noches cuando cambian fechas/unidad (mantiene
+  //     fijo el total que tipeó el usuario).
   //   - En cualquier otro caso → flujo "price-driven": precio desde
-  //     unit.base_price si !priceTouched, y total = precio × noches.
-  // Patrón "ajuste de state durante render" para no violar
-  // react-hooks/set-state-in-effect.
+  //     unit.base_price si !priceTouched, y total = precio × noches + limpieza.
+  // La limpieza NO va en la key: la maneja el onChange de Limpieza, que en
+  // edición mueve el total por la diferencia (el precio guardado es un
+  // derivado redondeado y recalcular precio × noches desde acá volvía a meter
+  // centavos de deuda). Al elegir unidad la limpieza cambia junto con
+  // unit_id, así que ese caso sí entra por acá. Patrón "ajuste de state
+  // durante render" para no violar react-hooks/set-state-in-effect.
   const autoKey = `${form.unit_id}|${form.mode}|${form.monthly_rent}|${form.check_in_date}|${form.check_out_date}`;
   const [prevAutoKey, setPrevAutoKey] = useState(autoKey);
   if (prevAutoKey !== autoKey) {
     setPrevAutoKey(autoKey);
     const u = units.find((x) => x.id === form.unit_id);
     const nightsCount = nightsBetween(form.check_in_date, form.check_out_date);
+    const cleaning = parseMoneyInput(form.cleaning_fee) ?? 0;
     if (form.mode === "mensual") {
       if (!totalTouched) {
         const rent = parseMoneyInput(form.monthly_rent);
@@ -350,11 +426,10 @@ export function BookingFormDialog({
         }
       }
     } else if (lastTouched === "total" && totalTouched && nightsCount > 0) {
-      // Total fijo → re-derivar precio cuando cambian fechas/unidad.
+      // Total fijo → re-derivar precio cuando cambian fechas/unidad/limpieza.
       const totalParsed = parseMoneyInput(form.total_amount);
-      if (totalParsed && totalParsed > 0) {
-        const computedPrice =
-          Math.round((totalParsed / nightsCount) * 100) / 100;
+      if (totalParsed && totalParsed - cleaning > 0) {
+        const computedPrice = round2((totalParsed - cleaning) / nightsCount);
         setForm((f) => ({
           ...f,
           price_per_night: formatMoneyValue(computedPrice),
@@ -363,12 +438,13 @@ export function BookingFormDialog({
     } else {
       // Precio fijo → re-derivar total. Si !priceTouched y la unidad tiene
       // base_price, autorrellenar el precio antes de calcular el total.
+      // Sin precio no escribimos un total que sea sólo la limpieza.
       const basePrice =
         !priceTouched && u?.base_price ? Number(u.base_price) : null;
       const priceParsed = parseMoneyInput(form.price_per_night);
       const price = basePrice ?? priceParsed;
       if (price && nightsCount > 0) {
-        const computedTotal = Math.round(price * nightsCount * 100) / 100;
+        const computedTotal = round2(price * nightsCount + cleaning);
         setForm((f) => ({
           ...f,
           ...(basePrice !== null
@@ -411,12 +487,38 @@ export function BookingFormDialog({
     setForm((f) => (f.currency === v ? f : { ...f, currency: v, account_id: null }));
   }
 
+  /**
+   * El Origen arrastra el % del canal desde el mapa de la org, salvo que el
+   * usuario lo haya escrito a mano en esta apertura (una comisión negociada
+   * distinta no se pierde por cambiar de Airbnb a Booking y volver). El %
+   * guardado NO cuenta como tocado: en edición, corregir el Origen de una
+   * reserva mal cargada tiene que traer el % del canal correcto.
+   */
+  function setSource(v: BookingInput["source"]) {
+    setForm((f) => ({
+      ...f,
+      source: v,
+      ...(channelPctTouched
+        ? null
+        : {
+            channel_commission_pct: channelPctDisplay(channelCommissionDefaults, v),
+          }),
+    }));
+  }
+
   function onSelectUnit(unitId: string) {
     set("unit_id", unitId);
     const u = units.find((x) => x.id === unitId);
     if (!u) return;
     if (u.base_price_currency && !isEdit) setCurrency(u.base_price_currency);
-    if (u.cleaning_fee && !form.cleaning_fee) {
+    // La limpieza de la unidad entra al total vía el auto-cálculo (unit_id
+    // está en autoKey y los dos set() se baten en el mismo render), así que
+    // elegir unidad ya deja Total = precio × noches + limpieza.
+    // En edición la moneda ya está fijada: si no coincide con la de la unidad,
+    // el fee (en la moneda de la unidad) no se copia — sería otra moneda.
+    const currencyMatches =
+      !isEdit || !u.base_price_currency || u.base_price_currency === form.currency;
+    if (u.cleaning_fee && !form.cleaning_fee && currencyMatches) {
       set("cleaning_fee", formatMoneyValue(u.cleaning_fee));
     }
     if (u.default_commission_pct !== null && u.default_commission_pct !== undefined && !isEdit) {
@@ -438,22 +540,43 @@ export function BookingFormDialog({
   // verdad del importe — ver nota abajo en `totalNum`.
   const pricePerNightNum = parseMoneyInput(form.price_per_night) ?? 0;
   const totalAmountParsed = parseMoneyInput(form.total_amount);
-  // El campo "Total" es la fuente de verdad del importe de la reserva. En
-  // temporario lo mantienen en sync el onChange de Precio/noche y el efecto de
-  // fechas (total = precio × noches); en edición arranca con el total guardado.
+  const cleaningNum = parseMoneyInput(form.cleaning_fee) ?? 0;
+  // El campo "Total" es la fuente de verdad del importe de la reserva (con la
+  // limpieza adentro). En temporario lo mantienen en sync el onChange de
+  // Precio/noche y el efecto de fechas (total = precio × noches + limpieza);
+  // en edición arranca con el total guardado.
   // NO recalculamos `round(precio × noches)` cuando ya hay un total cargado:
   // ese ida-y-vuelta precio↔total perdía centavos —`round(total / noches) ×
   // noches ≠ total`— y dejaba "deuda de centavos" al saldar (y reescribía el
   // total guardado al editar). Sólo derivamos del precio si el Total está vacío
-  // (creación temprana, antes de que el efecto/onChange lo completen).
+  // (creación temprana, antes de que el efecto/onChange lo completen) — y nunca
+  // un total que sea sólo la limpieza.
   const totalNum =
     form.mode === "mensual"
       ? totalAmountParsed ?? 0
-      : totalAmountParsed ?? Math.round(pricePerNightNum * nights * 100) / 100;
+      : totalAmountParsed ??
+        (pricePerNightNum > 0 && nights > 0
+          ? round2(pricePerNightNum * nights + cleaningNum)
+          : 0);
   // Comisión ya no se ingresa en este form — se decide en liquidaciones.
   // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
   // para no perder data en edición; el server decide el fallback definitivo.
   const commissionPctNum = parseMoneyInput(form.commission_pct);
+  // La comisión del canal aplica sólo a temporario (la liquidación y
+  // Resultados la ignoran en mensual): en mensual se guarda 0 para que lo
+  // que queda en la reserva sea lo mismo que ven todos los consumidores.
+  // null = "sin configurar" (el server no lo congela en 0; ver channelPctDisplay).
+  const channelPctNum =
+    form.mode === "mensual" ? null : parseMoneyInput(form.channel_commission_pct);
+  // Desglose en vivo — misma fórmula que el server y la liquidación.
+  const econ = computeBookingEconomics({
+    total: totalNum,
+    cleaningFee: form.mode === "mensual" ? 0 : cleaningNum,
+    channelPct: channelPctNum,
+    commissionPct: commissionPctNum,
+    commissionBase,
+  });
+  const sourceLabel = BOOKING_SOURCE_META[form.source]?.label ?? form.source;
 
   // ─── Split: reservas > MAX_BOOKING_NIGHTS ───
   const splitSegments =
@@ -505,6 +628,17 @@ export function BookingFormDialog({
       });
       return;
     }
+    // El total trae la limpieza adentro: una limpieza mayor al total es un
+    // error de carga, no un dato (misma regla que el snapshot del server en
+    // "Completar datos"). Con total en $0 no frenamos: una reserva de OTA
+    // sin precio se puede seguir editando (fechas, huésped) con la limpieza
+    // de la unidad ya cargada.
+    if (form.mode !== "mensual" && totalNum > 0 && cleaningNum > totalNum) {
+      toast.error("La limpieza no puede ser mayor que el total", {
+        description: `El total (${formatMoney(totalNum, form.currency)}) ya incluye la limpieza (${formatMoney(cleaningNum, form.currency)}). Bajá la limpieza o dejala vacía.`,
+      });
+      return;
+    }
     const addPayment = isEdit ? parseMoneyInput(form.add_payment) ?? 0 : 0;
     const paidAmount = isEdit
       ? previousPaid + addPayment
@@ -526,6 +660,9 @@ export function BookingFormDialog({
       total_amount: totalNum,
       paid_amount: paidAmount,
       commission_pct: commissionPctNum,
+      // Snapshot del % del canal (null = sin configurar / mensual); el importe
+      // lo recalcula el server siempre.
+      channel_commission_pct: channelPctNum,
       cleaning_fee: parseMoneyInput(form.cleaning_fee),
       monthly_rent: parseMoneyInput(form.monthly_rent),
       monthly_expenses: parseMoneyInput(form.monthly_expenses),
@@ -790,7 +927,7 @@ export function BookingFormDialog({
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label>Origen</Label>
-              <Select value={form.source} onValueChange={(v) => set("source", v as BookingInput["source"])}>
+              <Select value={form.source} onValueChange={(v) => setSource(v as BookingInput["source"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {Object.entries(BOOKING_SOURCE_META).map(([k, m]) => (
@@ -995,9 +1132,10 @@ export function BookingFormDialog({
             </div>
           )}
 
-          {/* Money — grid simétrico de 5 cols: labels en una línea, inputs
-              alineados, helper text con altura fija para que todas las
-              columnas tengan exactamente la misma altura visual. */}
+          {/* Money — grid simétrico de 6 cols (3 en tablet): labels en una
+              línea, inputs alineados, helper text con altura fija para que
+              todas las columnas tengan exactamente la misma altura visual.
+              Regla: Total = alojamiento + limpieza (lo que paga el huésped). */}
           {(() => {
             const pendingNum = Math.max(
               0,
@@ -1012,7 +1150,7 @@ export function BookingFormDialog({
             const readonlyBoxCls =
               "flex h-9 w-full items-center rounded-md border border-input bg-muted/40 px-3 py-1 text-sm font-mono tabular-nums text-muted-foreground";
             return (
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 border-t pt-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 border-t pt-4">
                 {/* 1. Moneda */}
                 <div className="space-y-1.5">
                   <Label className={labelCls}>Moneda</Label>
@@ -1095,6 +1233,7 @@ export function BookingFormDialog({
                       onFocus={(e) => {
                         if (parseMoneyInput(e.target.value) === 0) {
                           setPriceTouched(true);
+                          setPriceTyped(true);
                           setLastTouched("price");
                           set("price_per_night", "");
                         }
@@ -1102,6 +1241,7 @@ export function BookingFormDialog({
                       onChange={(e) => {
                         const v = e.target.value;
                         setPriceTouched(true);
+                        setPriceTyped(true);
                         setLastTouched("price");
                         setForm((f) => {
                           const priceParsed = parseMoneyInput(v);
@@ -1110,8 +1250,9 @@ export function BookingFormDialog({
                             f.check_out_date
                           );
                           if (priceParsed !== null && nightsCount > 0) {
-                            const computedTotal =
-                              Math.round(priceParsed * nightsCount * 100) / 100;
+                            // Precio = sólo alojamiento; la limpieza se suma al total.
+                            const cleaning = parseMoneyInput(f.cleaning_fee) ?? 0;
+                            const computedTotal = round2(priceParsed * nightsCount + cleaning);
                             return {
                               ...f,
                               price_per_night: v,
@@ -1128,8 +1269,10 @@ export function BookingFormDialog({
                     />
                     <p className={helperCls}>
                       {lastTouched === "total" && totalTouched && nights > 0
-                        ? `Total ÷ ${nights}n`
-                        : "Tarifa por noche"}
+                        ? cleaningNum > 0
+                          ? `(Total − limpieza) ÷ ${nights}n`
+                          : `Total ÷ ${nights}n`
+                        : "Sólo alojamiento"}
                     </p>
                   </div>
                 )}
@@ -1192,13 +1335,15 @@ export function BookingFormDialog({
                             f.check_in_date,
                             f.check_out_date
                           );
+                          // El total trae la limpieza adentro: el precio por
+                          // noche sale de lo que queda después de restarla.
+                          const cleaning = parseMoneyInput(f.cleaning_fee) ?? 0;
                           if (
                             totalParsed !== null &&
-                            totalParsed > 0 &&
+                            totalParsed - cleaning > 0 &&
                             nightsCount > 0
                           ) {
-                            const computedPrice =
-                              Math.round((totalParsed / nightsCount) * 100) / 100;
+                            const computedPrice = round2((totalParsed - cleaning) / nightsCount);
                             return {
                               ...f,
                               total_amount: v,
@@ -1211,7 +1356,7 @@ export function BookingFormDialog({
                       placeholder={(() => {
                         if (nights > 0 && pricePerNightNum > 0) {
                           return formatMoneyValue(
-                            Math.round(pricePerNightNum * nights * 100) / 100
+                            round2(pricePerNightNum * nights + cleaningNum)
                           );
                         }
                         return "0";
@@ -1219,16 +1364,16 @@ export function BookingFormDialog({
                     />
                     <p className={helperCls}>
                       {lastTouched === "total" && totalTouched
-                        ? "Total del período"
+                        ? "Paga el huésped, con limpieza"
                         : nights > 0 && pricePerNightNum > 0
-                          ? `${formatMoneyValue(pricePerNightNum)} × ${nights}n`
-                          : "Total del período"}
+                          ? `${formatMoneyValue(pricePerNightNum)} × ${nights}n${cleaningNum > 0 ? ` + ${formatMoneyValue(cleaningNum)}` : ""}`
+                          : "Paga el huésped, con limpieza"}
                     </p>
                   </div>
                 )}
 
-                {/* 5. Limpieza */}
-                <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                {/* 5. Limpieza — parte del total; se la queda la administración */}
+                <div className="space-y-1.5">
                   <Label htmlFor="cleaning_fee" className={labelCls}>Limpieza</Label>
                   <Input
                     id="cleaning_fee"
@@ -1238,14 +1383,164 @@ export function BookingFormDialog({
                     onFocus={(e) => {
                       if (parseMoneyInput(e.target.value) === 0) set("cleaning_fee", "");
                     }}
-                    onChange={(e) => set("cleaning_fee", e.target.value)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      // Mover la limpieza mueve UN lado del par según lo último
+                      // que tocó el usuario: con el total fijo se re-deriva el
+                      // precio; con el precio tipeado, total = precio × noches
+                      // + limpieza. Mensual no la mete en la cuenta.
+                      setForm((f) => {
+                        if (f.mode === "mensual") return { ...f, cleaning_fee: v };
+                        const cleaning = parseMoneyInput(v) ?? 0;
+                        const prevCleaning = parseMoneyInput(f.cleaning_fee) ?? 0;
+                        const nightsCount = nightsBetween(f.check_in_date, f.check_out_date);
+                        const totalParsed = parseMoneyInput(f.total_amount);
+                        if (lastTouched === "total" && totalTouched) {
+                          if (
+                            totalParsed !== null &&
+                            totalParsed - cleaning > 0 &&
+                            nightsCount > 0
+                          ) {
+                            return {
+                              ...f,
+                              cleaning_fee: v,
+                              price_per_night: formatMoneyValue(
+                                round2((totalParsed - cleaning) / nightsCount)
+                              ),
+                            };
+                          }
+                          return { ...f, cleaning_fee: v };
+                        }
+                        const price = parseMoneyInput(f.price_per_night);
+                        if (priceTyped) {
+                          if (price !== null && price > 0 && nightsCount > 0) {
+                            return {
+                              ...f,
+                              cleaning_fee: v,
+                              total_amount: formatMoneyValue(round2(price * nightsCount + cleaning)),
+                            };
+                          }
+                          return { ...f, cleaning_fee: v };
+                        }
+                        // Precio derivado (edición, o el base_price de la
+                        // unidad): el alojamiento no cambia, así que el total
+                        // se mueve exactamente lo que se movió la limpieza.
+                        // Recalcular desde el precio redondeado (33333,33 × 3
+                        // + 5000 = 104999,99) reescribía el total guardado
+                        // con centavos de deuda.
+                        if (totalParsed !== null && totalParsed > 0) {
+                          return {
+                            ...f,
+                            cleaning_fee: v,
+                            total_amount: formatMoneyValue(
+                              round2(totalParsed - prevCleaning + cleaning)
+                            ),
+                          };
+                        }
+                        // Sin total todavía (creación temprana): si ya hay
+                        // precio, total = precio × noches + limpieza.
+                        if (price !== null && price > 0 && nightsCount > 0) {
+                          return {
+                            ...f,
+                            cleaning_fee: v,
+                            total_amount: formatMoneyValue(round2(price * nightsCount + cleaning)),
+                          };
+                        }
+                        return { ...f, cleaning_fee: v };
+                      });
+                    }}
                     placeholder="0"
                   />
-                  <p className={helperCls}>Fee de limpieza</p>
+                  <p className={helperCls} title="Incluida en el total. No va al propietario.">
+                    {form.mode === "mensual"
+                      ? "No entra en el total mensual"
+                      : "Incluida en el total. No va al propietario."}
+                  </p>
+                </div>
+
+                {/* 6. Comisión del canal — lo que se lleva Booking/Airbnb.
+                    Se snapshotea en la reserva; el importe lo calcula el server.
+                    En mensual no aplica (se guarda 0): las OTAs no venden
+                    contratos y la liquidación prorratea la renta sin canal. */}
+                <div className="space-y-1.5">
+                  <Label htmlFor="channel_commission_pct" className={labelCls}>Comisión canal %</Label>
+                  {form.mode === "mensual" ? (
+                    <div className={readonlyBoxCls} aria-label="Comisión del canal">—</div>
+                  ) : (
+                    <Input
+                      id="channel_commission_pct"
+                      type="text"
+                      inputMode="decimal"
+                      value={form.channel_commission_pct}
+                      onChange={(e) => {
+                        setChannelPctTouched(true);
+                        set("channel_commission_pct", e.target.value);
+                      }}
+                      placeholder="0"
+                    />
+                  )}
+                  <p className={helperCls}>
+                    {form.mode === "mensual"
+                      ? "No aplica en mensual"
+                      : econ.channelPct > 0
+                        ? `${sourceLabel} · −${formatMoney(econ.channelCommission, form.currency)}`
+                        : "Sin comisión de canal"}
+                  </p>
                 </div>
               </div>
             );
           })()}
+
+          {/* Desglose — la misma cuenta que hace el server y la liquidación,
+              a la vista donde se tipea. En mensual la limpieza no entra. */}
+          {form.mode !== "mensual" && (
+            <div className="rounded-md bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground space-y-0.5">
+              {totalNum > 0 ? (
+                <>
+                  <p>
+                    Alojamiento{" "}
+                    <span className="font-mono tabular-nums text-foreground">
+                      {formatMoney(econ.lodging, form.currency)}
+                    </span>
+                    {" + "}Limpieza{" "}
+                    <span className="font-mono tabular-nums text-foreground">
+                      {formatMoney(econ.cleaning, form.currency)}
+                    </span>
+                    {" = "}Total{" "}
+                    <span className="font-mono tabular-nums font-semibold text-foreground">
+                      {formatMoney(econ.total, form.currency)}
+                    </span>{" "}
+                    (paga el huésped)
+                  </p>
+                  <p>
+                    {econ.channelPct > 0 && (
+                      <>
+                        Se lleva {sourceLabel}{" "}
+                        <span className="font-mono tabular-nums">
+                          −{formatMoney(econ.channelCommission, form.currency)}
+                        </span>
+                        {" · "}
+                      </>
+                    )}
+                    Tu comisión{" "}
+                    <span className="font-mono tabular-nums">
+                      −{formatMoney(econ.commission, form.currency)}
+                    </span>
+                    {" · "}Limpieza{" "}
+                    <span className="font-mono tabular-nums">
+                      −{formatMoney(econ.cleaning, form.currency)}
+                    </span>
+                    {" → "}Al propietario{" "}
+                    <span className="font-mono tabular-nums font-semibold text-emerald-700 dark:text-emerald-300">
+                      {formatMoney(econ.ownerNet, form.currency)}
+                    </span>
+                  </p>
+                </>
+              ) : (
+                <p>Alojamiento + Limpieza = Total (paga el huésped). Cargá el precio para ver el reparto.</p>
+              )}
+            </div>
+          )}
 
           {/* Cobrar en cuenta — siempre visible en creación y edición */}
           {(() => {
@@ -1462,6 +1757,7 @@ interface ModeSwitchProps {
  * el bloque seleccionado eleva un fondo color con glow y el contenido cambia
  * de tipografía. Bloquea cambios cuando la reserva está en check_out (post-mortem).
  */
+
 function ModeSwitch({ mode, onChange, disabled = false }: ModeSwitchProps) {
   return (
     <div

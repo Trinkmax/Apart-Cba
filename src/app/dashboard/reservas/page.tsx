@@ -21,7 +21,7 @@ type PageProps = {
 };
 
 export default async function ReservasPage({ searchParams }: PageProps) {
-  const { role } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
   if (!can(role, "bookings", "view")) redirect("/dashboard");
   const canCreateBooking = can(role, "bookings", "create");
   const canViewMoney = can(role, "payments", "view");
@@ -59,7 +59,14 @@ export default async function ReservasPage({ searchParams }: PageProps) {
         </div>
         {canCreateBooking && (
           <div className="flex items-center gap-2">
-            <BookingFormDialog units={units} accounts={accounts} existingBookings={overlapBookings} channelRequests={requestOverlaps}>
+            <BookingFormDialog
+              units={units}
+              accounts={accounts}
+              existingBookings={overlapBookings}
+              channelRequests={requestOverlaps}
+              channelCommissionDefaults={organization.channel_commissions ?? {}}
+              commissionBase={organization.commission_base ?? undefined}
+            >
               <Button className="gap-2"><Plus size={16} /> <span className="hidden sm:inline">Nueva reserva</span><span className="sm:hidden">Nueva</span></Button>
             </BookingFormDialog>
           </div>

@@ -1,4 +1,8 @@
 import { matchUnit } from "@/lib/inbound/matcher";
+import {
+  channelCommissionPctFor,
+  type ChannelCommissionMap,
+} from "@/lib/finance/booking-economics";
 import { openCancellationRequest } from "./cancellation-requests";
 import { normalizePhoneE164, resolveGuest } from "./guest";
 import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
@@ -13,6 +17,74 @@ import type {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AdminClient = import("@supabase/supabase-js").SupabaseClient<any, any, any>;
+
+/**
+ * Cache de módulo de `organizations.channel_commissions` (mismo patrón y TTL
+ * que request-policy.ts): el dispatcher proyecta decenas de reservas por
+ * corrida y no tiene por qué leer la org en cada una.
+ *
+ * Un fallo de lectura se trata como `{}` (canal sin configurar → null) y se
+ * cachea poco: la proyección NUNCA se frena por esto — el % es un snapshot
+ * que el staff puede corregir al cargar el precio, mientras que una reserva
+ * sin proyectar es un calendario abierto.
+ */
+const CHANNEL_COMMISSIONS_CACHE = new Map<
+  string,
+  { value: ChannelCommissionMap; expiresAt: number }
+>();
+const CHANNEL_COMMISSIONS_TTL_MS = 60_000;
+const CHANNEL_COMMISSIONS_FAILURE_TTL_MS = 5_000;
+
+async function readOrgChannelCommissions(
+  admin: AdminClient,
+  organizationId: string,
+): Promise<ChannelCommissionMap> {
+  const hit = CHANNEL_COMMISSIONS_CACHE.get(organizationId);
+  if (hit && hit.expiresAt > Date.now()) return hit.value;
+
+  let value: ChannelCommissionMap = {};
+  let failed = false;
+  try {
+    const { data, error } = await admin
+      .from("organizations")
+      .select("channel_commissions")
+      .eq("id", organizationId)
+      .maybeSingle();
+    if (error) {
+      // Incluye la ventana previa a aplicar la 058 (columna inexistente):
+      // se proyecta igual, con el % en 0.
+      console.error("[channels/ingest] no se pudo leer channel_commissions", error.message);
+      failed = true;
+    } else if (data?.channel_commissions && typeof data.channel_commissions === "object") {
+      value = data.channel_commissions as ChannelCommissionMap;
+    }
+  } catch (err) {
+    console.error("[channels/ingest] lectura de channel_commissions falló", err);
+    failed = true;
+  }
+
+  CHANNEL_COMMISSIONS_CACHE.set(organizationId, {
+    value,
+    expiresAt:
+      Date.now() + (failed ? CHANNEL_COMMISSIONS_FAILURE_TTL_MS : CHANNEL_COMMISSIONS_TTL_MS),
+  });
+  return value;
+}
+
+/**
+ * Default de la org para un canal, distinguiendo "no configurado" (null) de
+ * "0 %" (0). `channelCommissionPctFor` devuelve 0 en los dos casos, y ese 0
+ * escrito en la fila se vuelve un snapshot que gana sobre el default de la
+ * org — ver el comentario en projectToBooking.
+ */
+function resolveChannelPctOrNull(
+  map: ChannelCommissionMap,
+  source: string | null | undefined,
+): number | null {
+  const raw = source ? map[source] : undefined;
+  if (raw === null || raw === undefined) return null;
+  return channelCommissionPctFor(map, source);
+}
 
 /**
  * Servicio canónico de ingestión. TODO evento externo (iCal o email) entra por
@@ -644,6 +716,17 @@ async function projectToBooking(
   // insertar booking NUEVO — sin huésped todavía (se enlaza después, y así un
   // fallo acá no deja huéspedes huérfanos)
   const isBlock = ev.isBlock ?? false;
+  // El % del canal se snapshotea acá, con el total todavía en $0: así una
+  // reserva que nunca recibe precio igual cuenta con su canal en Resultados, y
+  // al cargar el precio sólo hay que recalcular el importe. Un cierre no lleva
+  // comisión. Si la org no configuró ese canal (o no se pudo leer) queda
+  // null, NO 0: el dispatcher corre cada 2 min y con `channel_commissions =
+  // {}` congelaría 0 % en cada reserva hasta que el admin cargue Comisiones;
+  // null deja que Resultados y "Completar datos" apliquen el default de la
+  // org cuando exista.
+  const channelPct = isBlock
+    ? null
+    : resolveChannelPctOrNull(await readOrgChannelCommissions(admin, orgId), ev.channel);
   const { data: inserted, error: insertErr } = await admin
     .from("bookings")
     .insert({
@@ -660,6 +743,9 @@ async function projectToBooking(
       check_out_time: "10:00",
       currency: "ARS",
       total_amount: 0,
+      channel_commission_pct: channelPct,
+      // total 0 × pct = 0; sin pct no hay importe que anotar.
+      channel_commission_amount: channelPct === null ? null : 0,
       guests_count: 1,
       notes: isBlock
         ? `Cierre de fechas en ${channelLabel(ev.channel)}`

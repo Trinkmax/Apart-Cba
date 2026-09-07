@@ -2,7 +2,6 @@
 
 import { useState, type ComponentProps } from "react";
 import { FileText } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { GenerateSettlementDialog } from "@/components/settlements/generate-settlement-dialog";
 import {
   SettlementsViewTabs,
@@ -10,6 +9,7 @@ import {
 } from "@/components/settlements/settlements-view-tabs";
 import { SettlementsListClient } from "@/components/settlements/settlements-list-client";
 import { PeriodBatchPanel } from "@/components/settlements/period-batch-panel";
+import { SettlementsOnboarding } from "@/components/settlements/settlements-onboarding";
 import { formatPeriod } from "@/lib/settlements/labels";
 
 /**
@@ -80,15 +80,9 @@ export function LiquidacionesTabs({
 
       {tab === "propietario" ? (
         settlements.length === 0 ? (
-          <Card className="p-8 sm:p-12 text-center border-dashed">
-            <FileText className="size-10 mx-auto text-muted-foreground/50 mb-3" />
-            <p className="text-sm font-medium">Sin liquidaciones</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              Generá la primera para un propietario, o usá la vista{" "}
-              <span className="font-medium">Por período</span> para hacerlas en
-              lote.
-            </p>
-          </Card>
+          // Primera vez: en lugar de "no hay nada", los tres pasos para
+          // llegar a la primera liquidación (el paso 1 suele ser el que falta).
+          <SettlementsOnboarding />
         ) : (
           <SettlementsListClient settlements={settlements} />
         )

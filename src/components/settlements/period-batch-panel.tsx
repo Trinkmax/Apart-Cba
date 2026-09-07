@@ -89,13 +89,27 @@ export function PeriodBatchPanel({
     start(async () => {
       try {
         const res = await generateSettlementsForPeriod(year, month);
-        const ok = res.filter((r) => r.ok).length;
+        const okRows = res.filter((r) => r.ok);
+        const ok = okRows.length;
         const skipped = res.length - ok;
-        toast.success(`${ok} liquidaciones generadas`, {
-          description: skipped
-            ? `${skipped} sin cambios (sin unidades, ya cerradas o sin reservas).`
-            : "Todas al día — una por moneda.",
-        });
+        // Un propietario sin reservas en el mes NO se saltea: se le genera
+        // igual una liquidación en cero (que se puede completar a mano).
+        // Sólo se saltean los que no tienen unidades o ya tienen la del mes
+        // cerrada (revisada / enviada / pagada).
+        const empty = okRows.filter((r) => (r.lines ?? 0) === 0).length;
+        const parts = [
+          skipped > 0 &&
+            `${skipped} salteada${skipped === 1 ? "" : "s"} (sin unidades o ya cerrada${skipped === 1 ? "" : "s"})`,
+          empty > 0 &&
+            `${empty} en cero (sin reservas con check-out en el mes)`,
+        ].filter(Boolean);
+        toast.success(
+          `${ok} ${ok === 1 ? "liquidación generada" : "liquidaciones generadas"}`,
+          {
+            description:
+              parts.length > 0 ? `${parts.join(" · ")}.` : "Todas al día.",
+          },
+        );
         router.refresh();
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });

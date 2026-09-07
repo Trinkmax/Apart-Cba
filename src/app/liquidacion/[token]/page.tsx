@@ -25,8 +25,10 @@ type TokenLine = {
   description: string;
   amount: number;
   sign: "+" | "-";
+  currency: string | null;
   is_manual: boolean;
   meta: SettlementLineMeta | null;
+  display_order: number | null;
   unit: { id: string; code: string; name: string } | null;
 };
 
@@ -55,6 +57,8 @@ export default async function PublicSettlementPage({
     generated_at: string | null;
     sent_at: string | null;
     paid_at: string | null;
+    unit_order: string[] | null;
+    exchange_rates: Record<string, number> | null;
     owner: {
       full_name: string;
       bank_name: string | null;
@@ -89,6 +93,11 @@ export default async function PublicSettlementPage({
           alias_cbu: s.owner.alias_cbu,
         }
       : null,
+    // Mismo orden, monedas y TC que el detalle del panel: el link público
+    // tiene que mostrar el documento tal cual lo revisó el operador (la
+    // columna "Canal" también sale del modelo, así que aparece sola).
+    unit_order: s.unit_order ?? [],
+    exchange_rates: s.exchange_rates ?? {},
     lines: (s.lines ?? []).map((l) => ({
       id: l.id,
       line_type: l.line_type,
@@ -98,8 +107,10 @@ export default async function PublicSettlementPage({
       description: l.description,
       amount: Number(l.amount),
       sign: l.sign,
+      currency: l.currency,
       is_manual: l.is_manual,
       meta: l.meta,
+      display_order: l.display_order,
       unit: l.unit,
     })),
   };

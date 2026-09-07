@@ -20,6 +20,13 @@ import {
 } from "@/lib/settlements/labels";
 import { zonedTimeToUtc, addDaysYmd } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
+import {
+  computeBookingEconomics,
+  channelCommissionPctFor,
+  DEFAULT_COMMISSION_BASE,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
+import { BOOKING_SOURCE_META } from "@/lib/constants";
 import type {
   OwnerSettlement,
   SettlementLine,
@@ -34,6 +41,7 @@ type Admin = ReturnType<typeof createAdminClient>;
 const LINE_TYPES = [
   "booking_revenue",
   "commission",
+  "channel_commission",
   "maintenance_charge",
   "cleaning_charge",
   "adjustment",
@@ -107,6 +115,12 @@ function dayDiff(fromISO: string, toISO: string): number {
  *   • deductions = Σ del resto de líneas con signo '-'
  *   • net     = Σ con signo (── + suma, ── − resta)
  *
+ * La comisión del canal (`channel_commission`, migración 058) entra en
+ * `deductions`: `owner_settlements` no tiene columna propia para ella y no
+ * vale la pena agregarla sólo para persistir un desglose. Es el modelo de la
+ * planilla (`statement-model.ts`) el que la separa de "Gastos" para mostrarla
+ * en su propia columna; el neto es el mismo por los dos caminos.
+ *
  * Multi-moneda: cada línea trae su `currency`. Si difiere de `baseCurrency`,
  * el importe se convierte usando `exchangeRates[currency]`. Si no hay tasa
  * definida para esa moneda, esa línea cuenta como 0 (la UI debe mostrar un
@@ -166,13 +180,42 @@ function computeTotals(
 function revalidateSettlement(id?: string) {
   // Ambas vistas (Por propietario / Por período) viven ahora en esta única ruta.
   revalidatePath("/dashboard/liquidaciones");
+  // Resultados muestra el estado de la liquidación de cada propietario.
+  revalidatePath("/dashboard/resultados");
   if (id) revalidatePath(`/dashboard/liquidaciones/${id}`);
 }
 
+/**
+ * Diagnóstico de una generación: explica por qué una liquidación quedó vacía
+ * (la causa típica: reservas que ocupan el mes pero hacen check-out en otro).
+ * Lo consume la previsualización del diálogo "Generar liquidación".
+ */
+interface SettlementBuildStats {
+  /** Reservas que tocan el mes (cualquier modo, antes de filtrar). */
+  bookingsInWindow: number;
+  /** Reservas que efectivamente generaron líneas. */
+  bookingsIncluded: number;
+  /** Temporarias que ocupan el mes pero se liquidan en otro (check-out afuera). */
+  temporarioCheckoutOutside: Array<{
+    id: string;
+    unitCode: string;
+    guest_name: string | null;
+    check_in_date: string;
+    check_out_date: string;
+  }>;
+  /** Mensuales salteadas (0 días ocupados o sin renta cargada). */
+  mensualSkipped: number;
+  ticketCount: number;
+  expenseCount: number;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
-// Core de cálculo — sin escrituras. Reutilizado por single + lote.
+// Core de cálculo. Reutilizado por single + lote + previsualización.
 // Snapshotea `meta` sobre la línea de ingreso para reconstruir la planilla
 // por unidad sin re-derivar de bookings que pueden cambiar después.
+//
+// Única escritura: libera los tickets cobrados a un BORRADOR del mismo
+// owner+período (ver abajo). Con `dryRun` no escribe nada.
 // ════════════════════════════════════════════════════════════════════════════
 async function buildSettlementLines(opts: {
   admin: Admin;
@@ -180,8 +223,29 @@ async function buildSettlementLines(opts: {
   ownerId: string;
   year: number;
   month: number;
-}): Promise<{ lines: ComputedLine[]; ticketIds: string[] }> {
-  const { admin, organizationId, ownerId, year, month } = opts;
+  /** Base de la comisión de administración (por org, migración 058). */
+  commissionBase: CommissionBase;
+  /** true = previsualización: mismas líneas, cero escrituras. */
+  dryRun?: boolean;
+}): Promise<{
+  lines: ComputedLine[];
+  ticketIds: string[];
+  stats: SettlementBuildStats;
+}> {
+  const { admin, organizationId, ownerId, year, month, commissionBase } = opts;
+  const dryRun = opts.dryRun === true;
+
+  // % de canal por defecto de la org. Una reserva guarda `channel_commission_pct`
+  // NULL cuando el canal no estaba configurado al escribirla; si después la
+  // administración carga "Booking 15%", la liquidación tiene que aplicarlo igual
+  // (es lo que hace Resultados). Un valor guardado, incluso 0, siempre gana.
+  const { data: orgRow } = await admin
+    .from("organizations")
+    .select("channel_commissions")
+    .eq("id", organizationId)
+    .maybeSingle();
+  const channelCommissions =
+    (orgRow?.channel_commissions as Partial<Record<string, number>> | null) ?? {};
 
   const { data: unitOwners } = await admin
     .from("unit_owners")
@@ -210,7 +274,11 @@ async function buildSettlementLines(opts: {
     .eq("period_month", month)
     .eq("status", "borrador");
   const draftIds = (draftSettlements ?? []).map((s) => s.id as string);
-  if (draftIds.length > 0) {
+  // En previsualización NO liberamos: si lo hiciéramos sin que después
+  // `persistSettlement` los vuelva a marcar, el borrador quedaría con una
+  // línea de mantenimiento cuyo ticket ya no figura cobrado → se cobraría dos
+  // veces en la próxima generación. La lectura de abajo los incluye igual.
+  if (draftIds.length > 0 && !dryRun) {
     await admin
       .from("maintenance_tickets")
       .update({ charged_to_owner_at: null, charged_to_settlement_id: null })
@@ -229,16 +297,31 @@ async function buildSettlementLines(opts: {
     .lte("check_in_date", periodEnd)
     .gte("check_out_date", periodStart);
 
+  // Tickets sin cobrar + los ya cobrados al borrador de este período: tras la
+  // liberación de arriba son la misma cosa; en dryRun la segunda rama es la
+  // que hace que la previsualización dé exactamente lo que daría generar.
   const { data: tickets } = await admin
     .from("maintenance_tickets")
     .select("*")
     .in("unit_id", unitIds)
     .eq("billable_to", "owner")
     .eq("related_owner_id", ownerId)
-    .is("charged_to_owner_at", null)
+    .or(
+      draftIds.length > 0
+        ? `charged_to_owner_at.is.null,charged_to_settlement_id.in.(${draftIds.join(",")})`
+        : "charged_to_owner_at.is.null",
+    )
     .not("actual_cost", "is", null);
 
   const lines: ComputedLine[] = [];
+  const stats: SettlementBuildStats = {
+    bookingsInWindow: (bookings ?? []).length,
+    bookingsIncluded: 0,
+    temporarioCheckoutOutside: [],
+    mensualSkipped: 0,
+    ticketCount: 0,
+    expenseCount: 0,
+  };
 
   for (const b of bookings ?? []) {
     const uo = unitOwners.find((x) => x.unit_id === b.unit_id);
@@ -261,11 +344,18 @@ async function buildSettlementLines(opts: {
       const overlapStart = b.check_in_date > periodStart ? b.check_in_date : periodStart;
       const overlapEnd = b.check_out_date < periodEnd ? b.check_out_date : periodEnd;
       const occupiedDays = dayDiff(overlapStart, overlapEnd);
-      if (occupiedDays === 0) continue;
+      if (occupiedDays === 0) {
+        stats.mensualSkipped++;
+        continue;
+      }
 
       const monthlyRent = Number(b.monthly_rent ?? 0);
       const monthlyExpenses = Number(b.monthly_expenses ?? 0);
-      if (monthlyRent <= 0) continue;
+      if (monthlyRent <= 0) {
+        stats.mensualSkipped++;
+        continue;
+      }
+      stats.bookingsIncluded++;
 
       const proratedRent = round2((monthlyRent / daysInMonth) * occupiedDays * ownerShare);
       const proratedExpenses = round2(
@@ -322,9 +412,35 @@ async function buildSettlementLines(opts: {
     }
 
     // ── Temporario: liquida en el mes del check_out ──
-    if (b.check_out_date < periodStart || b.check_out_date > periodEnd) continue;
-    const grossOwner = round2(Number(b.total_amount) * ownerShare);
-    const commission = round2(grossOwner * (commissionPct / 100));
+    if (b.check_out_date < periodStart || b.check_out_date > periodEnd) {
+      stats.temporarioCheckoutOutside.push({
+        id: b.id,
+        unitCode,
+        guest_name: guestName,
+        check_in_date: b.check_in_date,
+        check_out_date: b.check_out_date,
+      });
+      continue;
+    }
+    stats.bookingsIncluded++;
+    // Canal, base y comisión salen de la fuente única en booking-economics.ts.
+    // Con canal 0 y base net_of_channel da exactamente lo de siempre:
+    // round2(total × share) y comisión sobre eso.
+    const econ = computeBookingEconomics({
+      total: b.total_amount,
+      cleaningFee: b.cleaning_fee,
+      channelPct:
+        b.channel_commission_pct ??
+        channelCommissionPctFor(channelCommissions, b.source as string | null),
+      commissionPct,
+      commissionBase,
+      ownerShare,
+    });
+    // La limpieza NO sale de `econ`: el helper la topea al total (min(fee, total))
+    // y acá se cobra entera aunque el huésped haya pagado menos — una reserva
+    // de OTA que entró en $0 (el iCal no trae precio) igual se limpió y ese
+    // costo lo carga el propietario. Es lo que la liquidación hizo siempre.
+    const cleaningCharge = round2(Number(b.cleaning_fee ?? 0) * ownerShare);
     const nights = dayDiff(b.check_in_date, b.check_out_date);
 
     lines.push({
@@ -333,7 +449,7 @@ async function buildSettlementLines(opts: {
       ref_id: b.id,
       unit_id: b.unit_id,
       description: `Reserva ${b.check_in_date} → ${b.check_out_date} (${unitCode})`,
-      amount: grossOwner,
+      amount: econ.total,
       sign: "+",
       currency: bookingCurrency,
       meta: {
@@ -344,28 +460,48 @@ async function buildSettlementLines(opts: {
         source,
         mode: "temporario",
         commission_pct: commissionPct,
+        channel_commission_pct: econ.channelPct > 0 ? econ.channelPct : null,
+        commission_base: commissionBase,
       },
     });
+    // Lo que se lleva la plataforma (Booking, Airbnb…). Sólo si hay %: así
+    // las liquidaciones sin canal regeneran con las mismas 3 líneas de hoy.
+    if (econ.channelCommission > 0) {
+      const sourceLabel =
+        (source && BOOKING_SOURCE_META[source as keyof typeof BOOKING_SOURCE_META]?.label) ||
+        "canal";
+      lines.push({
+        line_type: "channel_commission",
+        ref_type: "booking",
+        ref_id: b.id,
+        unit_id: b.unit_id,
+        description: `Comisión ${sourceLabel} ${econ.channelPct}%`,
+        amount: econ.channelCommission,
+        sign: "-",
+        currency: bookingCurrency,
+        meta: null,
+      });
+    }
     lines.push({
       line_type: "commission",
       ref_type: "booking",
       ref_id: b.id,
       unit_id: b.unit_id,
       description: `Comisión ${commissionPct}%`,
-      amount: commission,
+      amount: econ.commission,
       sign: "-",
       currency: bookingCurrency,
       meta: null,
     });
 
-    if (b.cleaning_fee && Number(b.cleaning_fee) > 0) {
+    if (cleaningCharge > 0) {
       lines.push({
         line_type: "cleaning_charge",
         ref_type: "booking",
         ref_id: b.id,
         unit_id: b.unit_id,
         description: "Fee de limpieza",
-        amount: round2(Number(b.cleaning_fee) * ownerShare),
+        amount: cleaningCharge,
         sign: "-",
         currency: bookingCurrency,
         meta: null,
@@ -376,6 +512,7 @@ async function buildSettlementLines(opts: {
   for (const t of tickets ?? []) {
     const cost = Number(t.actual_cost ?? 0);
     if (cost > 0) {
+      stats.ticketCount++;
       lines.push({
         line_type: "maintenance_charge",
         ref_type: "ticket",
@@ -456,6 +593,7 @@ async function buildSettlementLines(opts: {
     const rt = m.ref_type as string | null;
     if (rt && EXCLUDED_EXPENSE_REF_TYPES.has(rt)) continue;
     const desc = (m.description as string | null)?.trim();
+    stats.expenseCount++;
     lines.push({
       line_type: "adjustment",
       ref_type: "cash_movement",
@@ -469,7 +607,7 @@ async function buildSettlementLines(opts: {
     });
   }
 
-  return { lines, ticketIds: (tickets ?? []).map((t) => t.id) };
+  return { lines, ticketIds: (tickets ?? []).map((t) => t.id), stats };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -754,16 +892,27 @@ async function generateOne(opts: {
   month: number;
   currency: string;
   userId: string;
+  commissionBase: CommissionBase;
 }): Promise<{ settlement: OwnerSettlement; lineCount: number }> {
-  const { admin, organizationId, ownerId, year, month } = opts;
+  const { admin, organizationId, ownerId, year, month, commissionBase } = opts;
   const { lines: autoLines, ticketIds } = await buildSettlementLines({
     admin,
     organizationId,
     ownerId,
     year,
     month,
+    commissionBase,
   });
   return persistSettlement({ ...opts, autoLines, ticketIds });
+}
+
+/**
+ * Base de la comisión de administración de la org. `?? DEFAULT` porque hasta
+ * que se aplique la migración 058 la columna no existe y el contexto de
+ * sesión la trae undefined.
+ */
+function commissionBaseOf(org: { commission_base?: CommissionBase | null }): CommissionBase {
+  return org.commission_base ?? DEFAULT_COMMISSION_BASE;
 }
 
 // Helpers removidos en migración 027 (settlements multi-moneda):
@@ -855,6 +1004,7 @@ export async function generateSettlement(
       // al total cargando el TC del día en el detalle ("Tipos de cambio").
       currency: BASE_CURRENCY,
       userId: session.userId,
+      commissionBase: commissionBaseOf(organization),
     });
   } catch (e) {
     const msg = (e as Error).message;
@@ -913,6 +1063,152 @@ export async function generateSettlement(
   };
 }
 
+/** Totales de la previsualización, por moneda nativa (sin convertir). */
+interface PreviewCurrencyTotals {
+  gross: number;
+  channelCommission: number;
+  commission: number;
+  /** Gastos SIN la comisión del canal (a diferencia de `deductions_amount`). */
+  deductions: number;
+  net: number;
+}
+
+/**
+ * Previsualización de "Generar liquidación": las mismas líneas que produciría
+ * la generación, con cero escrituras (dryRun). Sirve para que el diálogo
+ * muestre qué va a entrar ANTES de crear el documento y, cuando no entra nada,
+ * explique por qué (temporarias con check-out en otro mes, etc.).
+ *
+ * Los totales van por moneda nativa: todavía no existe el settlement que
+ * guarda los tipos de cambio, así que no hay forma honesta de sumar en ARS.
+ * Sólo cuenta las líneas automáticas — los ajustes manuales de un borrador
+ * previo se conservan al regenerar, pero no son parte de "lo que entra".
+ */
+export async function previewSettlement(
+  ownerId: string,
+  year: number,
+  month: number,
+): Promise<
+  | {
+      ok: true;
+      /** Reservas distintas que generan líneas. */
+      bookings: number;
+      lines: number;
+      byCurrency: Record<string, PreviewCurrencyTotals>;
+      stats: SettlementBuildStats;
+      /** Liquidación ya existente para owner+período (moneda base), si la hay. */
+      existing: { id: string; status: SettlementStatus } | null;
+    }
+  | { ok: false; reason: "no_units" | "forbidden" | "unknown"; message: string }
+> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "view")) {
+    return {
+      ok: false,
+      reason: "forbidden",
+      message: "No tenés permisos para ver liquidaciones",
+    };
+  }
+  const parsed = z
+    .object({
+      ownerId: z.string().uuid(),
+      year: z.coerce.number().int().min(2000).max(2100),
+      month: z.coerce.number().int().min(1).max(12),
+    })
+    .safeParse({ ownerId, year, month });
+  if (!parsed.success) {
+    return { ok: false, reason: "unknown", message: "Parámetros inválidos" };
+  }
+  const admin = createAdminClient();
+
+  // Misma defensa multi-tenant que generateSettlement: buildSettlementLines
+  // lee por owner/unidad sin filtro de org.
+  const { data: ownerRow } = await admin
+    .from("owners")
+    .select("id")
+    .eq("id", parsed.data.ownerId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!ownerRow) {
+    return { ok: false, reason: "unknown", message: "Propietario no encontrado" };
+  }
+
+  let built: Awaited<ReturnType<typeof buildSettlementLines>>;
+  try {
+    built = await buildSettlementLines({
+      admin,
+      organizationId: organization.id,
+      ownerId: parsed.data.ownerId,
+      year: parsed.data.year,
+      month: parsed.data.month,
+      commissionBase: commissionBaseOf(organization),
+      dryRun: true,
+    });
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (msg === "NO_UNITS") {
+      return {
+        ok: false,
+        reason: "no_units",
+        message: "El propietario no tiene unidades asignadas",
+      };
+    }
+    return { ok: false, reason: "unknown", message: msg };
+  }
+
+  const byCurrency: Record<string, PreviewCurrencyTotals> = {};
+  const bookingIds = new Set<string>();
+  for (const l of built.lines) {
+    if (l.ref_type === "booking" && l.ref_id) bookingIds.add(l.ref_id);
+    const t = (byCurrency[l.currency] ??= {
+      gross: 0,
+      channelCommission: 0,
+      commission: 0,
+      deductions: 0,
+      net: 0,
+    });
+    const amt = Number(l.amount) || 0;
+    if (l.sign === "+") {
+      t.gross += amt;
+      t.net += amt;
+    } else {
+      t.net -= amt;
+      if (l.line_type === "commission") t.commission += amt;
+      else if (l.line_type === "channel_commission") t.channelCommission += amt;
+      else t.deductions += amt;
+    }
+  }
+  for (const t of Object.values(byCurrency)) {
+    t.gross = round2(t.gross);
+    t.channelCommission = round2(t.channelCommission);
+    t.commission = round2(t.commission);
+    t.deductions = round2(t.deductions);
+    t.net = round2(t.net);
+  }
+
+  const { data: existing } = await admin
+    .from("owner_settlements")
+    .select("id, status")
+    .eq("organization_id", organization.id)
+    .eq("owner_id", parsed.data.ownerId)
+    .eq("period_year", parsed.data.year)
+    .eq("period_month", parsed.data.month)
+    .eq("currency", BASE_CURRENCY)
+    .maybeSingle();
+
+  return {
+    ok: true,
+    bookings: bookingIds.size,
+    lines: built.lines.length,
+    byCurrency,
+    stats: built.stats,
+    existing: existing
+      ? { id: existing.id as string, status: existing.status as SettlementStatus }
+      : null,
+  };
+}
+
 /**
  * Genera/regenera en lote todas las liquidaciones de un período para todos los
  * propietarios activos de la org. No pisa liquidaciones cerradas (las saltea).
@@ -951,6 +1247,7 @@ export async function generateSettlementsForPeriod(
         ownerId: o.id,
         year,
         month,
+        commissionBase: commissionBaseOf(organization),
       });
 
       // Mismo tratamiento que la regeneración individual: si la liquidación ya
@@ -1641,6 +1938,11 @@ const bookingRowSchema = z.object({
   gross: z.coerce.number().min(0, "El bruto no puede ser negativo"),
   commission: z.coerce.number().min(0),
   expenses: z.coerce.number().min(0),
+  /**
+   * Comisión del canal (Booking, Airbnb…). Opcional: si no viene, la línea
+   * `channel_commission` del grupo queda como está (no se pisa ni se borra).
+   */
+  channel_commission: z.coerce.number().min(0).optional(),
   guest_name: z.string().max(160).optional().nullable(),
   check_in: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
   check_out: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
@@ -1702,13 +2004,22 @@ export async function updateSettlementBookingRow(
   if (!revenue) throw new Error("La reserva no tiene línea de ingreso");
   const commissionLines = group.filter((g) => g.line_type === "commission");
   const commissionLine = commissionLines[0];
+  // La comisión del canal tiene su propia columna en la planilla: NO entra en
+  // el colapso a "Gastos" de abajo (si entrara, la primera edición de la fila
+  // la fundiría con la limpieza y la línea desaparecería).
+  const channelLines = group.filter((g) => g.line_type === "channel_commission");
+  const channelLine = channelLines[0];
   const deductionLines = group.filter(
-    (g) => g.sign === "-" && g.line_type !== "commission",
+    (g) =>
+      g.sign === "-" &&
+      g.line_type !== "commission" &&
+      g.line_type !== "channel_commission",
   );
   // Líneas de ingreso/comisión duplicadas a eliminar (queda solo la primera).
   const staleDuplicateIds = [
     ...revenueLines.slice(1),
     ...commissionLines.slice(1),
+    ...channelLines.slice(1),
   ].map((g) => g.id);
 
   const oldMeta: SettlementLineMeta = revenue.meta ?? {};
@@ -1724,13 +2035,29 @@ export async function updateSettlementBookingRow(
   const oldExpenses = round2(
     deductionLines.reduce((a, g) => a + Number(g.amount), 0),
   );
+  const oldChannel = round2(
+    channelLines.reduce((a, g) => a + Number(g.amount), 0),
+  );
+  // undefined = "no tocar": la línea del canal se conserva tal cual.
+  const newChannel =
+    v.channel_commission !== undefined ? round2(v.channel_commission) : oldChannel;
 
   const unitCode = revenue.unit?.code ?? "—";
   const checkIn = v.check_in ?? oldMeta.check_in ?? null;
   const checkOut = v.check_out ?? oldMeta.check_out ?? null;
   const guestName = v.guest_name?.trim() || oldMeta.guest_name || null;
+  // El % se guarda sobre la MISMA base con la que el editor lo recalcula
+  // (booking-economics): bruto, o bruto − canal si la fila se liquidó
+  // net_of_channel. Si se guardara siempre sobre el bruto, una fila con canal
+  // derivaría el % en cada guardado (17% en vez de 20%) y el próximo recálculo
+  // del editor pagaría de más al propietario. Filas viejas sin base = bruto.
+  const rowBase: CommissionBase = oldMeta.commission_base ?? "gross";
+  const pctBaseAmount =
+    rowBase === "net_of_channel" ? round2(v.gross - newChannel) : v.gross;
   const commissionPct =
-    v.gross > 0 ? round2((v.commission / v.gross) * 100) : oldMeta.commission_pct ?? null;
+    pctBaseAmount > 0
+      ? round2((v.commission / pctBaseAmount) * 100)
+      : oldMeta.commission_pct ?? null;
   const isMensual = oldMeta.mode === "mensual";
   const rangeLabel =
     checkIn && checkOut ? `${checkIn} → ${checkOut}` : `${v.nights} noches`;
@@ -1803,6 +2130,46 @@ export async function updateSettlementBookingRow(
       ...stamp,
     });
     if (error) throw new Error(error.message);
+  }
+
+  // 2b) Comisión del canal — misma mecánica que la comisión, pero opcional:
+  //     sólo si el editor la mandó. En 0 se borra (no dejamos una línea vacía
+  //     que haga aparecer la columna "Canal" en el documento).
+  if (v.channel_commission !== undefined) {
+    if (channelLine && newChannel > 0) {
+      const { error } = await admin
+        .from("settlement_lines")
+        .update({
+          ...stamp,
+          ...stampCurrency,
+          amount: newChannel,
+        })
+        .eq("id", channelLine.id);
+      if (error) throw new Error(error.message);
+    } else if (channelLine) {
+      const { error } = await admin
+        .from("settlement_lines")
+        .delete()
+        .eq("id", channelLine.id);
+      if (error) throw new Error(error.message);
+    } else if (newChannel > 0) {
+      const { error } = await admin.from("settlement_lines").insert({
+        settlement_id: v.settlement_id,
+        line_type: "channel_commission",
+        ref_type: "booking",
+        ref_id: v.ref_id,
+        unit_id: revenue.unit_id,
+        description: "Comisión del canal",
+        amount: newChannel,
+        sign: "-",
+        currency: groupCurrency,
+        meta: null,
+        display_order: (revenue.display_order ?? 0) + 1,
+        created_by: session.userId,
+        ...stamp,
+      });
+      if (error) throw new Error(error.message);
+    }
   }
 
   // 3) Gastos — colapsamos a una sola línea "Gastos" (lo que muestra la
@@ -1879,6 +2246,9 @@ export async function updateSettlementBookingRow(
       noches: { from: oldNights, to: v.nights },
       bruto: { from: oldGross, to: round2(v.gross) },
       comision: { from: oldCommission, to: round2(v.commission) },
+      ...(oldChannel !== newChannel
+        ? { comision_canal: { from: oldChannel, to: newChannel } }
+        : {}),
       gastos: { from: oldExpenses, to: round2(v.expenses) },
       ...(currencyChanged
         ? { moneda: { from: revenue.currency, to: groupCurrency } }
@@ -1910,6 +2280,8 @@ const addBookingRowSchema = z.object({
   gross: z.coerce.number().min(0, "El bruto no puede ser negativo"),
   commission: z.coerce.number().min(0),
   expenses: z.coerce.number().min(0),
+  /** Comisión del canal (Booking, Airbnb…), opcional. */
+  channel_commission: z.coerce.number().min(0).optional(),
   /** Moneda de la reserva cargada a mano. Default = base del settlement. */
   currency: z.string().min(3).max(8).optional(),
 });
@@ -1961,8 +2333,14 @@ export async function addSettlementBookingRow(
     .maybeSingle();
   const baseOrder = (Number(last?.display_order ?? -1) || 0) + 1;
 
+  // La fila nace con la base de la org; el % se guarda sobre esa misma base
+  // (bruto, o bruto − canal) para que el editor lo lea y recalcule igual.
+  const rowBase = commissionBaseOf(organization);
+  const channelAmount = round2(v.channel_commission ?? 0);
+  const pctBaseAmount =
+    rowBase === "net_of_channel" ? round2(v.gross - channelAmount) : v.gross;
   const commissionPct =
-    v.gross > 0 ? round2((v.commission / v.gross) * 100) : null;
+    pctBaseAmount > 0 ? round2((v.commission / pctBaseAmount) * 100) : null;
   const guestName = v.guest_name?.trim() || null;
   const rangeLabel =
     v.check_in && v.check_out
@@ -1996,11 +2374,28 @@ export async function addSettlementBookingRow(
         source: "manual",
         mode: "temporario",
         commission_pct: commissionPct,
+        commission_base: rowBase,
       },
       display_order: baseOrder,
       ...stamp,
     },
   ];
+  if (channelAmount > 0) {
+    lines.push({
+      settlement_id: v.settlement_id,
+      line_type: "channel_commission",
+      ref_type: "booking",
+      ref_id: refId,
+      unit_id: v.unit_id,
+      description: "Comisión del canal",
+      amount: channelAmount,
+      sign: "-",
+      currency: lineCurrency,
+      meta: null,
+      display_order: baseOrder + 1,
+      ...stamp,
+    });
+  }
   if (v.commission > 0) {
     lines.push({
       settlement_id: v.settlement_id,
@@ -2013,7 +2408,7 @@ export async function addSettlementBookingRow(
       sign: "-",
       currency: lineCurrency,
       meta: null,
-      display_order: baseOrder + 1,
+      display_order: baseOrder + 2,
       ...stamp,
     });
   }
@@ -2029,7 +2424,7 @@ export async function addSettlementBookingRow(
       sign: "-",
       currency: lineCurrency,
       meta: null,
-      display_order: baseOrder + 2,
+      display_order: baseOrder + 3,
       ...stamp,
     });
   }
@@ -2047,6 +2442,9 @@ export async function addSettlementBookingRow(
       reserva: guestName ?? unit.code,
       bruto: { from: 0, to: round2(v.gross) },
       comision: { from: 0, to: round2(v.commission) },
+      ...(channelAmount > 0
+        ? { comision_canal: { from: 0, to: channelAmount } }
+        : {}),
       gastos: { from: 0, to: round2(v.expenses) },
     },
     reason: `agregó la reserva de ${guestName ?? unit.code} (${formatMoney(v.gross, before.currency)})`,
@@ -3267,7 +3665,7 @@ export async function getSettlementByToken(token: string) {
     .from("owner_settlements")
     .select(
       `id, organization_id, owner_id, period_year, period_month, status, currency,
-       period_index, period_cycle, period_note,
+       period_index, period_cycle, period_note, unit_order, exchange_rates,
        gross_revenue, commission_amount, deductions_amount, net_payable,
        generated_at, sent_at, paid_at, public_token,
        owner:owners(id, full_name, bank_name, cbu, alias_cbu, preferred_currency),

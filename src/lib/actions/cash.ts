@@ -400,6 +400,10 @@ export async function createMovement(input: MovementInput) {
     .single();
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/caja");
+  // El inicio muestra "Cobrado · 30 días" y Resultados el cobrado por reserva:
+  // un ingreso cargado a mano (booking_payment / extra_charge / refund) los mueve.
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/resultados");
   return data as CashMovement;
 }
 
@@ -1076,6 +1080,9 @@ function pathsForMovementMutation(opts: {
     "/dashboard/unidades/calendario/mensual",
     "/dashboard/alertas",
     "/dashboard",
+    // Editar/borrar un cobro mueve paid_amount por RPC: es el "cobrado" y
+    // "faltan" de Resultados, y el "Cobrado · 30 días" del inicio.
+    "/dashboard/resultados",
   ];
   if (opts.newAccountId && opts.newAccountId !== opts.accountId) {
     paths.push(`/dashboard/caja/${opts.newAccountId}`);

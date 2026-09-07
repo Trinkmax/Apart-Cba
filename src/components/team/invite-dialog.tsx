@@ -99,9 +99,19 @@ export function InviteDialog({ orgName, children }: { orgName: string; children:
           setOpen(false);
           setCredential({
             fullName: form.full_name,
-            email: form.email,
+            email: form.email.trim().toLowerCase(),
             password: r.tempPassword,
+            role: form.role,
+            regenerated: r.regenerated,
           });
+          if (r.regenerated) {
+            // Además del aviso en el diálogo: el toast queda aunque cierre rápido.
+            toast.warning("Se generó una contraseña nueva", {
+              description:
+                "Esta persona ya estaba invitada y nunca había entrado. La contraseña anterior dejó de funcionar: mandale esta.",
+              duration: 10000,
+            });
+          }
         } else if (r.alreadyHadAccess) {
           setAlreadyHadAccess(true);
         } else {

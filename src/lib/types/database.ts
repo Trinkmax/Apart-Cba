@@ -159,6 +159,18 @@ export interface Organization {
   brand_show_name: boolean;
   /** Override de colores por status de reserva (hex). Si null o falta una clave, se usa el default. */
   booking_status_colors: BookingStatusColors | null;
+  /**
+   * % que cobra cada canal de venta (la plataforma), p. ej. {"booking": 15,
+   * "airbnb": 3}. Default que se snapshotea en `bookings.channel_commission_pct`
+   * al crear una reserva según su `source`. Migración 058.
+   */
+  channel_commissions: Partial<Record<BookingSource, number>>;
+  /**
+   * Sobre qué se calcula la comisión de administración: 'gross' (total del
+   * huésped) o 'net_of_channel' (total − comisión del canal). Ver
+   * src/lib/finance/booking-economics.ts. Migración 058.
+   */
+  commission_base: "gross" | "net_of_channel";
   description: string | null;
   address: string | null;
   contact_phone: string | null;
@@ -415,6 +427,11 @@ export interface Booking {
   paid_amount: number;
   commission_pct: number | null;
   commission_amount: number | null;
+  /** % que se lleva la plataforma (Booking, Airbnb…). Snapshot del default de la org; editable. Migración 058. */
+  channel_commission_pct: number | null;
+  /** total_amount × channel_commission_pct / 100, recalculado en cada escritura. */
+  channel_commission_amount: number | null;
+  /** Incluido en `total_amount`; se descuenta al propietario. Ver src/lib/finance/booking-economics.ts. */
   cleaning_fee: number | null;
   monthly_rent: number | null;
   monthly_expenses: number | null;
@@ -769,6 +786,10 @@ export interface SettlementLineMeta {
   source?: string | null;
   mode?: "temporario" | "mensual" | null;
   commission_pct?: number | null;
+  /** % de la plataforma aplicado a esta reserva (migración 058). */
+  channel_commission_pct?: number | null;
+  /** Sobre qué base se calculó la comisión de administración (migración 058). */
+  commission_base?: "gross" | "net_of_channel" | null;
   /** Días ocupados del mes (prorrateo mensual). */
   prorate_days?: number | null;
   /** Días totales del mes (prorrateo mensual). */
@@ -781,6 +802,8 @@ export interface SettlementLine {
   line_type:
     | "booking_revenue"
     | "commission"
+    /** Comisión de la plataforma (Booking, Airbnb…), descontada al propietario. Migración 058. */
+    | "channel_commission"
     | "maintenance_charge"
     | "cleaning_charge"
     | "adjustment"

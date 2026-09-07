@@ -11,12 +11,21 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { landingPathForRole } from "@/lib/permissions";
+import type { UserRole } from "@/lib/types/database";
 
 /** Acceso recién generado. La contraseña sólo existe acá: al cerrar, se pierde. */
 export interface AccessCredential {
   fullName: string;
   email: string;
   password: string;
+  /** Rol con el que entra: cambia el mensaje (limpieza/mantenimiento usan la app mobile). */
+  role?: UserRole;
+  /**
+   * La persona ya tenía una clave que nunca usó y ésta la reemplaza. Hay que
+   * decirlo fuerte: la que el admin ya había mandado dejó de funcionar.
+   */
+  regenerated?: boolean;
 }
 
 interface Props {
@@ -33,6 +42,9 @@ const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/+$/, "
 
 function buildWhatsappMessage(c: AccessCredential, orgName: string): string {
   const firstName = c.fullName.trim().split(/\s+/)[0] || c.fullName.trim();
+  // El link es siempre /login: al entrar, cada rol cae en su casa (limpieza y
+  // mantenimiento en la app mobile). A ellos les sumamos el tip de instalarla.
+  const mobile = landingPathForRole(c.role) === "/m";
   return [
     `Hola ${firstName}! Te di acceso al sistema de ${orgName}.`,
     "",
@@ -40,7 +52,13 @@ function buildWhatsappMessage(c: AccessCredential, orgName: string): string {
     `Usuario: ${c.email}`,
     `Contraseña: ${c.password}`,
     "",
+    ...(c.regenerated
+      ? ["Ojo: esta contraseña reemplaza a la anterior, la vieja ya no sirve.", ""]
+      : []),
     "Cuando entres, cambiala por una tuya desde tu perfil. Cualquier cosa, avisame.",
+    ...(mobile
+      ? ["Después de entrar, podés agregar la app a tu pantalla de inicio desde el menú."]
+      : []),
   ].join("\n");
 }
 
@@ -102,11 +120,23 @@ function CredentialDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {credential.regenerated && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/50 bg-amber-500/15 p-3">
+              <TriangleAlert className="size-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <p className="text-sm leading-relaxed">
+                <span className="font-medium">Esta persona ya estaba invitada y nunca había entrado.</span>{" "}
+                Se generó una contraseña <span className="font-semibold">NUEVA</span>: la anterior
+                dejó de funcionar. Mandale esta.
+              </p>
+            </div>
+          )}
+
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
             <TriangleAlert className="size-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
             <p className="text-xs leading-relaxed">
               Esta contraseña se muestra una sola vez. Si cerrás sin pasarla, vas a
-              tener que generar una nueva desde el menú <span className="font-mono">⋯</span> del equipo.
+              tener que generar una nueva desde Equipo (botón «Pasarle el acceso» o
+              menú <span className="font-mono">⋯</span>).
             </p>
           </div>
 

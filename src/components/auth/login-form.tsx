@@ -48,12 +48,17 @@ export function LoginForm() {
         });
         return;
       }
+      // Cada rol entra a su casa: limpieza/mantenimiento a /m, el resto al
+      // PMS de escritorio. `landing` lo decide el server (signIn) con la
+      // membresía activa; si por lo que sea no viene, /dashboard es el fallback.
+      const landing = result.landing ?? "/dashboard";
       if (result.requiresMfa) {
-        router.push(`/login/2fa?factorId=${result.requiresMfa.factorId}`);
+        const q = new URLSearchParams({ factorId: result.requiresMfa.factorId, next: landing });
+        router.push(`/login/2fa?${q.toString()}`);
         return;
       }
       toast.success("Sesión iniciada");
-      router.push("/dashboard");
+      router.push(landing);
       router.refresh();
     });
   }

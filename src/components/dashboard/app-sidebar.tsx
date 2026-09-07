@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   ScrollText,
   Inbox,
+  PieChart,
 } from "lucide-react";
 import {
   Sidebar,
@@ -76,6 +77,10 @@ const NAV: NavGroup[] = [
     label: "Finanzas",
     items: [
       { label: "Caja", href: "/dashboard/caja", icon: Wallet, resource: "cash" },
+      // "Qué entra, qué se lleva cada uno y qué le queda a cada propietario":
+      // la vista que junta ventas, comisión de plataformas, comisión propia y
+      // neto a propietarios en un solo lugar, por mes.
+      { label: "Resultados", href: "/dashboard/resultados", icon: PieChart, resource: "payments" },
       { label: "Liquidaciones", href: "/dashboard/liquidaciones", icon: FileText, resource: "settlements" },
       { label: "Propietarios", href: "/dashboard/propietarios", icon: ShieldCheck, resource: "owners" },
     ],

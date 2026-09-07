@@ -152,6 +152,7 @@ export const SETTLEMENT_LINE_META: Record<
   booking_revenue:       { label: "Reserva",       color: "#10b981" },
   monthly_rent_fraction: { label: "Renta mensual", color: "#7c3aed" },
   commission:            { label: "Comisión",      color: "#a855f7" },
+  channel_commission:    { label: "Comisión del canal", color: "#f43f5e" },
   cleaning_charge:       { label: "Limpieza",      color: "#06b6d4" },
   maintenance_charge:    { label: "Mantenimiento", color: "#f97316" },
   expenses_fraction:     { label: "Expensas",      color: "#a78bfa" },

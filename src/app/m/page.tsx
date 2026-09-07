@@ -7,7 +7,7 @@ import { listCleaningTasks } from "@/lib/actions/cleaning";
 import { listTickets } from "@/lib/actions/tickets";
 import { listConciergeRequests } from "@/lib/actions/concierge";
 import { listUnitTips } from "@/lib/actions/unit-tips";
-import { can } from "@/lib/permissions";
+import { can, isAdminLevel } from "@/lib/permissions";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { CleaningTask, MaintenanceTicket } from "@/lib/types/database";
@@ -129,18 +129,23 @@ export default async function MobileHome() {
           </Card>
         </Link>
 
-        <Link href="/dashboard" className="block tap">
-          <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all flex items-center gap-3 border-dashed">
-            <div className="size-12 rounded-xl bg-muted flex items-center justify-center shrink-0">
-              <ClipboardList size={20} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-semibold">Dashboard completo</div>
-              <div className="text-xs text-muted-foreground">Vista de escritorio</div>
-            </div>
-            <ChevronRight size={16} className="text-muted-foreground shrink-0" />
-          </Card>
-        </Link>
+        {/* El PMS de escritorio sólo le sirve a quien opera reservas y plata.
+            A limpieza/mantenimiento los mandaba a una pantalla llena de cosas
+            que no pueden abrir; su casa es esta. */}
+        {isAdminLevel(role) && (
+          <Link href="/dashboard" className="block tap">
+            <Card className="p-4 hover:shadow-md active:scale-[0.99] transition-all flex items-center gap-3 border-dashed">
+              <div className="size-12 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                <ClipboardList size={20} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold">Dashboard completo</div>
+                <div className="text-xs text-muted-foreground">Vista de escritorio</div>
+              </div>
+              <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+            </Card>
+          </Link>
+        )}
       </div>
     </div>
   );

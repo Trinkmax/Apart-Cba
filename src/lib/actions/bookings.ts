@@ -22,6 +22,7 @@ import type {
   CashMovement,
 } from "@/lib/types/database";
 import { BOOKING_STATUS_META } from "@/lib/constants";
+import { completionCutoffYmd, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 import {
   isGenericGuestName,
   normalizeEmail,
@@ -30,6 +31,15 @@ import {
 import { sendGuestMail } from "@/lib/email/guest";
 import { plainTextToHtml } from "@/lib/email/render";
 import { buildBookingContext, buildOwnerConfirmationDraft } from "@/lib/email/booking-templates";
+import {
+  channelCommissionAmount,
+  channelCommissionPctFor,
+  DEFAULT_COMMISSION_BASE,
+  managementCommissionAmount,
+  round2,
+  type ChannelCommissionMap,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
 
 // Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
 // en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
@@ -59,6 +69,13 @@ const bookingSchema = z.object({
   total_amount: z.coerce.number().min(0).default(0),
   paid_amount: z.coerce.number().min(0).default(0),
   commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
+  // % que se lleva la plataforma (Booking, Airbnb…). Si viene vacío, la action
+  // lo completa con el default de la org para el `source`. El importe
+  // (`channel_commission_amount`) NUNCA entra por el schema: se recalcula en
+  // cada escritura del servidor — el `...validated` va directo a PostgREST.
+  channel_commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
+  // Incluida en `total_amount` (regla del modelo: el total es lo que paga el
+  // huésped con todo). Ver src/lib/finance/booking-economics.ts.
   cleaning_fee: z.coerce.number().min(0).optional().nullable(),
   // Mensual — todos opcionales: la renta puede cargarse después o ajustarse
   // por cuota; el form no debe forzar al usuario a tipear un monto si todavía
@@ -185,6 +202,151 @@ function totalMensualSeguro(
 }
 
 /**
+ * % del canal que se GUARDA en una fila de `bookings`. Es el único lugar que
+ * decide cuándo va un número y cuándo va null; todos los caminos de escritura
+ * de este archivo pasan por acá.
+ *
+ *   - Mensual → siempre null. La comisión del canal es sólo de temporarias:
+ *     las OTAs no venden contratos mensuales, y Resultados y la liquidación
+ *     ya la ignoran en mensual. Si se snapshoteara igual, el detalle de la
+ *     reserva mostraría "Se lleva Airbnb (15 %)" y una comisión neta del canal
+ *     que ninguna liquidación va a cobrar.
+ *   - Valor ya cargado (form o fila) → se respeta tal cual, incluido un 0 %
+ *     explícito.
+ *   - Sin valor → el default de la org para el `source`… sólo si está
+ *     configurado. Si la org no cargó ese canal queda null, NO 0: un 0
+ *     congelado dice "la plataforma no cobra", mientras que null deja que
+ *     Resultados / "Completar datos" apliquen el % cuando el admin lo
+ *     configure más tarde. Con `channel_commissions = {}` (todas las orgs al
+ *     salir la 058) esa diferencia es todo el dispatcher de canales.
+ */
+function resolveChannelPct(params: {
+  mode: string | null | undefined;
+  stored: number | string | null | undefined;
+  channelCommissions: ChannelCommissionMap | null | undefined;
+  source: string | null | undefined;
+}): number | null {
+  if (params.mode === "mensual") return null;
+  if (params.stored !== null && params.stored !== undefined) {
+    const n = Number(params.stored);
+    return Number.isFinite(n) ? n : null;
+  }
+  const map = params.channelCommissions ?? {};
+  const raw = params.source ? map[params.source] : undefined;
+  if (raw === null || raw === undefined) return null;
+  return channelCommissionPctFor(map, params.source);
+}
+
+/**
+ * % de comisión de administración cuando la reserva no lo trae:
+ * unidad → org → 20. Una sola cadena para createBooking, updateBooking y
+ * completeChannelPrice — si difieren, la misma reserva de OTA muestra una
+ * comisión distinta según por qué pantalla se le cargó el precio.
+ */
+async function resolveDefaultCommissionPct(
+  unitId: string,
+  organization: { id: string; default_commission_pct: number | null },
+): Promise<number> {
+  const admin = createAdminClient();
+  const { data: unit } = await admin
+    .from("units")
+    .select("default_commission_pct")
+    .eq("id", unitId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  return Number(unit?.default_commission_pct ?? organization.default_commission_pct ?? 20);
+}
+
+/** Importes ya prorrateados de un tramo de una reserva larga. */
+type SegmentMoney = {
+  total_amount: number;
+  cleaning_fee: number;
+  commission_amount: number | null;
+  channel_commission_amount: number | null;
+};
+
+/**
+ * Reparte la plata de una reserva larga entre sus tramos. Es la ÚNICA fórmula
+ * de prorrateo: la usan el alta con división automática, la división de una
+ * reserva existente y (al revés) la reunificación.
+ *
+ * Temporario: el total incluye la limpieza, así que por noches se prorratea
+ * sólo el alojamiento (total − limpieza) y la limpieza va entera al último
+ * tramo — el mismo que carga `cleaning_fee`. Si se prorrateara el total
+ * completo, la limpieza quedaría desparramada en los totales de todos los
+ * tramos pero cargada en uno solo, y el alojamiento del último quedaría
+ * subestimado. El resto de redondeo también cae en el último tramo para que la
+ * suma de los tramos sea exactamente el total.
+ *
+ * Mensual: sigue ciego a la limpieza — cada tramo vale renta ÷ 30 × noches
+ * (ver `montoDeTramoMensual`); la limpieza, si la hay, va al último como
+ * siempre.
+ *
+ * Las comisiones (canal y administración) se calculan sobre el total de CADA
+ * tramo, porque cada tramo se liquida por separado. En mensual el canal no
+ * existe (ver `resolveChannelPct`): se fuerza acá también, así un caller que
+ * pase un % por error no reparte comisión de canal fantasma entre los tramos.
+ */
+function prorateBookingSegments(params: {
+  segments: Array<{ nights: number }>;
+  mode: string;
+  totalAmount: number;
+  cleaningFee: number;
+  monthlyRent: number | null | undefined;
+  commissionPct: number | null | undefined;
+  channelPct: number | null | undefined;
+  commissionBase: CommissionBase;
+}): SegmentMoney[] {
+  const { segments } = params;
+  const channelPct = params.mode === "mensual" ? null : params.channelPct;
+  const totalNights = segments.reduce((a, s) => a + s.nights, 0);
+  const totalAmount = Math.max(0, Number(params.totalAmount) || 0);
+  const cleaningFee = Math.max(0, Number(params.cleaningFee) || 0);
+  // Una reserva sin precio (OTA en $0) con limpieza cargada es inconsistente:
+  // no inventamos un total igual a la limpieza. Misma clamp que
+  // computeBookingEconomics.
+  const cleaningInTotal = Math.min(cleaningFee, totalAmount);
+  const lodging = round2(totalAmount - cleaningInTotal);
+
+  const out: SegmentMoney[] = [];
+  let lodgingAssigned = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const isLast = i === segments.length - 1;
+    const share = totalNights > 0 ? seg.nights / totalNights : 0;
+
+    let segTotal: number;
+    if (params.mode === "mensual") {
+      segTotal = totalMensualSeguro(
+        params.mode,
+        round2(totalAmount * share),
+        params.monthlyRent,
+        seg.nights,
+      );
+    } else {
+      const segLodging = isLast
+        ? round2(lodging - lodgingAssigned)
+        : round2(lodging * share);
+      lodgingAssigned = round2(lodgingAssigned + segLodging);
+      segTotal = round2(segLodging + (isLast ? cleaningInTotal : 0));
+    }
+
+    out.push({
+      total_amount: segTotal,
+      cleaning_fee: isLast ? cleaningFee : 0,
+      commission_amount: managementCommissionAmount({
+        total: segTotal,
+        commissionPct: params.commissionPct,
+        channelPct,
+        commissionBase: params.commissionBase,
+      }),
+      channel_commission_amount: channelCommissionAmount(segTotal, channelPct),
+    });
+  }
+  return out;
+}
+
+/**
  * Si una reserva existente quedó con > MAX_BOOKING_NIGHTS (típicamente porque
  * se la extendió con moveBookingTransaction o updateBooking), la "materializa"
  * en N reservas back-to-back:
@@ -193,8 +355,9 @@ function totalMensualSeguro(
  *   - Se INSERTAN N-1 filas nuevas con los segmentos restantes.
  *   - Si ninguna estaba en un lease_group, se crea uno nuevo y todas quedan
  *     bajo el mismo grupo.
- *   - total_amount, commission_amount y cleaning_fee se prorratean igual que
- *     en createBooking (cleaning sólo en el último; paid en el primero).
+ *   - total_amount, commission_amount, channel_commission_amount y
+ *     cleaning_fee se prorratean con `prorateBookingSegments`, igual que en
+ *     createBooking (cleaning sólo en el último; paid en el primero).
  *
  * Idempotente: si la reserva ya cabe en el cap, no hace nada.
  *
@@ -202,11 +365,17 @@ function totalMensualSeguro(
  * la operación previa (UPDATE) ya hubiera fallado por bookings_no_overlap.
  * Igual capturamos ese error al insertar nuevos segmentos por si el delta
  * agregó un solapamiento.
+ *
+ * `commissionBase` y `channelCommissions` vienen de la organización del caller
+ * (todos tienen `getCurrentOrg()` a mano): así no pagamos una lectura extra de
+ * `organizations` por cada división.
  */
 async function enforceLeaseSplitOnExisting(params: {
   bookingId: string;
   organizationId: string;
   userId: string;
+  commissionBase: CommissionBase;
+  channelCommissions: ChannelCommissionMap | null | undefined;
 }): Promise<void> {
   const admin = createAdminClient();
   const { data: original, error } = await admin
@@ -229,26 +398,33 @@ async function enforceLeaseSplitOnExisting(params: {
   // como "reserva única" (el usuario eligió no dividir). No forzamos el split.
   if (!original.lease_group_id) return;
 
-  const totalNights = nightsBetween(
-    original.check_in_date,
-    original.check_out_date
-  );
-  const totalAmount = Number(original.total_amount) || 0;
-  const commissionPctValue = Number(original.commission_pct) || 0;
-  const cleaningFeeOriginal = Number(original.cleaning_fee) || 0;
   const leaseGroupId = original.lease_group_id ?? crypto.randomUUID();
+
+  // Filas anteriores a la 058 pueden no tener el % del canal: si la org lo
+  // configuró para el `source`, lo dejamos escrito en todos los tramos así el
+  // snapshot queda consistente; si no, queda null (nunca 0) y en mensual no
+  // hay canal — ver resolveChannelPct.
+  const channelPct = resolveChannelPct({
+    mode: original.mode,
+    stored: original.channel_commission_pct,
+    channelCommissions: params.channelCommissions,
+    source: original.source,
+  });
+
+  const money = prorateBookingSegments({
+    segments,
+    mode: original.mode,
+    totalAmount: Number(original.total_amount) || 0,
+    cleaningFee: Number(original.cleaning_fee) || 0,
+    monthlyRent: original.monthly_rent,
+    commissionPct: original.commission_pct,
+    channelPct,
+    commissionBase: params.commissionBase,
+  });
 
   // Segmento 0: UPDATE de la fila original (recorte + prorrateo).
   const seg0 = segments[0];
-  const seg0Share = totalNights > 0 ? seg0.nights / totalNights : 0;
-  const seg0Amount = totalMensualSeguro(
-    original.mode,
-    Math.round(totalAmount * seg0Share * 100) / 100,
-    original.monthly_rent,
-    seg0.nights,
-  );
-  const seg0Commission =
-    Math.round((seg0Amount * commissionPctValue) / 100 * 100) / 100;
+  const seg0Money = money[0];
   // Cleaning fee va al último segmento — la fila original deja de tenerlo
   // (salvo que originalmente ya fuera el último, lo cual no aplica acá).
   const { error: errUpd } = await admin
@@ -256,8 +432,10 @@ async function enforceLeaseSplitOnExisting(params: {
     .update({
       check_out_date: seg0.to,
       check_out_time: "12:00",
-      total_amount: seg0Amount,
-      commission_amount: seg0Commission,
+      total_amount: seg0Money.total_amount,
+      commission_amount: seg0Money.commission_amount,
+      channel_commission_pct: channelPct,
+      channel_commission_amount: seg0Money.channel_commission_amount,
       cleaning_fee: 0,
       lease_group_id: leaseGroupId,
     })
@@ -278,17 +456,8 @@ async function enforceLeaseSplitOnExisting(params: {
   const inserted: string[] = [];
   for (let i = 1; i < segments.length; i++) {
     const seg = segments[i];
-    const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
-    const segAmount = totalMensualSeguro(
-      original.mode,
-      Math.round(totalAmount * segShare * 100) / 100,
-      original.monthly_rent,
-      seg.nights,
-    );
-    const segCommission =
-      Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
+    const segMoney = money[i];
     const isLast = i === segments.length - 1;
-    const segCleaningFee = isLast ? cleaningFeeOriginal : 0;
 
     const { data: ins, error: errIns } = await admin
       .from("bookings")
@@ -306,11 +475,13 @@ async function enforceLeaseSplitOnExisting(params: {
         check_out_time: isLast ? original.check_out_time : "12:00",
         guests_count: original.guests_count,
         currency: original.currency,
-        total_amount: segAmount,
+        total_amount: segMoney.total_amount,
         paid_amount: 0,
         commission_pct: original.commission_pct,
-        commission_amount: segCommission,
-        cleaning_fee: segCleaningFee,
+        commission_amount: segMoney.commission_amount,
+        channel_commission_pct: channelPct,
+        channel_commission_amount: segMoney.channel_commission_amount,
+        cleaning_fee: segMoney.cleaning_fee,
         monthly_rent: original.monthly_rent,
         monthly_expenses: original.monthly_expenses,
         security_deposit: original.security_deposit,
@@ -330,6 +501,8 @@ async function enforceLeaseSplitOnExisting(params: {
       if (inserted.length > 0) {
         await admin.from("bookings").delete().in("id", inserted);
       }
+      // Se restaura TODO lo que tocó el UPDATE del tramo 0 — incluidos los
+      // campos de canal — o una división fallida deja el importe recortado.
       await admin
         .from("bookings")
         .update({
@@ -337,6 +510,8 @@ async function enforceLeaseSplitOnExisting(params: {
           check_out_time: original.check_out_time,
           total_amount: original.total_amount,
           commission_amount: original.commission_amount,
+          channel_commission_pct: original.channel_commission_pct,
+          channel_commission_amount: original.channel_commission_amount,
           cleaning_fee: original.cleaning_fee,
           lease_group_id: original.lease_group_id,
         })
@@ -957,16 +1132,29 @@ export async function createBooking(
     );
   }
 
-  // Buscar comisión default de la unit si no fue dada
+  // Comisión de administración si no fue dada: unidad → org → 20. Es la misma
+  // cadena que updateBooking y completeChannelPrice, así una reserva vale lo
+  // mismo entre por donde entre.
   if (validated.commission_pct === null || validated.commission_pct === undefined) {
-    const admin = createAdminClient();
-    const { data: unit } = await admin
-      .from("units")
-      .select("default_commission_pct")
-      .eq("id", validated.unit_id)
-      .maybeSingle();
-    validated.commission_pct = unit?.default_commission_pct ?? 20;
+    validated.commission_pct = await resolveDefaultCommissionPct(
+      validated.unit_id,
+      organization,
+    );
   }
+
+  // Comisión del canal: si el form no la mandó (cliente viejo, API), se
+  // snapshotea el default de la org para el `source` — null si no está
+  // configurado, y nunca en mensual (ver resolveChannelPct). La base de la
+  // comisión de administración también es de la org. Los `?? default` cubren
+  // la ventana entre el deploy y la 058 aplicada.
+  validated.channel_commission_pct = resolveChannelPct({
+    mode: validated.mode,
+    stored: validated.channel_commission_pct,
+    channelCommissions: organization.channel_commissions,
+    source: validated.source,
+  });
+  const commissionBase: CommissionBase =
+    organization.commission_base ?? DEFAULT_COMMISSION_BASE;
 
   const admin = createAdminClient();
 
@@ -984,28 +1172,25 @@ export async function createBooking(
   if (segments.length >= 2) {
     // Generamos lease_group_id en cliente (UUID v4 via crypto)
     const leaseGroupId = crypto.randomUUID();
-    const totalNights = nightsBetween(
-      validated.check_in_date,
-      validated.check_out_date
-    );
-    const totalAmount = Number(validated.total_amount) || 0;
-    const commissionPctValue = validated.commission_pct ?? 0;
+    // Prorrateo único (alojamiento por noches, limpieza y resto al último
+    // tramo, comisiones por tramo) — ver prorateBookingSegments.
+    const money = prorateBookingSegments({
+      segments,
+      mode: validated.mode,
+      totalAmount: Number(validated.total_amount) || 0,
+      cleaningFee: Number(validated.cleaning_fee) || 0,
+      monthlyRent: validated.monthly_rent,
+      commissionPct: validated.commission_pct,
+      channelPct: validated.channel_commission_pct,
+      commissionBase,
+    });
 
     const created: Booking[] = [];
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
-      const segShare = totalNights > 0 ? seg.nights / totalNights : 0;
-      const segAmount = totalMensualSeguro(
-        validated.mode,
-        Math.round(totalAmount * segShare * 100) / 100,
-        validated.monthly_rent,
-        seg.nights,
-      );
-      const segCommission = Math.round((segAmount * commissionPctValue) / 100 * 100) / 100;
+      const segMoney = money[i];
       // El cobrado se aplica al primer período (representa la seña/anticipo).
       const segPaid = i === 0 ? Number(validated.paid_amount) || 0 : 0;
-      // Cleaning fee solo en el último período (al cierre del contrato).
-      const segCleaningFee = i === segments.length - 1 ? validated.cleaning_fee : 0;
 
       const { data, error } = await admin
         .from("bookings")
@@ -1020,10 +1205,12 @@ export async function createBooking(
             i === 0 ? validated.check_in_time : "12:00",
           check_out_time:
             i === segments.length - 1 ? validated.check_out_time : "12:00",
-          total_amount: segAmount,
+          total_amount: segMoney.total_amount,
           paid_amount: segPaid,
-          commission_amount: segCommission,
-          cleaning_fee: segCleaningFee,
+          commission_amount: segMoney.commission_amount,
+          channel_commission_amount: segMoney.channel_commission_amount,
+          // Cleaning fee solo en el último período (al cierre del contrato).
+          cleaning_fee: segMoney.cleaning_fee,
           lease_group_id: leaseGroupId,
           external_id: validated.external_id || null,
           notes:
@@ -1094,11 +1281,23 @@ export async function createBooking(
     revalidatePath("/dashboard/unidades/calendario/mensual");
     revalidatePath("/dashboard/caja");
     revalidatePath("/dashboard/alertas");
+    revalidatePath("/dashboard/resultados");
     return created[0];
   }
 
   // ─── Single booking (caso normal) ───
-  const commission_amount = validated.total_amount * (validated.commission_pct! / 100);
+  // Comisión de administración sobre la base que eligió la org (total, o
+  // total − comisión del canal); comisión del canal = total × %.
+  const commission_amount = managementCommissionAmount({
+    total: validated.total_amount,
+    commissionPct: validated.commission_pct,
+    channelPct: validated.channel_commission_pct,
+    commissionBase,
+  });
+  const channel_commission_amount = channelCommissionAmount(
+    validated.total_amount,
+    validated.channel_commission_pct,
+  );
 
   const { data, error } = await admin
     .from("bookings")
@@ -1106,6 +1305,7 @@ export async function createBooking(
       ...validated,
       external_id: validated.external_id || null,
       commission_amount,
+      channel_commission_amount,
       organization_id: organization.id,
       created_by: session.userId,
     })
@@ -1165,6 +1365,7 @@ export async function createBooking(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   revalidatePath("/dashboard/alertas");
+  revalidatePath("/dashboard/resultados");
 
   // CRM event publisher (best-effort; no falla si CRM no está configurado)
   try {
@@ -1216,10 +1417,37 @@ export async function updateBooking(
     nightsBetween(validated.check_in_date, validated.check_out_date),
   );
 
-  const commission_amount =
-    validated.commission_pct !== null && validated.commission_pct !== undefined
-      ? validated.total_amount * (validated.commission_pct / 100)
-      : null;
+  // Este es el camino que toman las reservas de OTA (entran en $0 y sin
+  // comisión de administración: ingest no la setea) cuando el staff carga el
+  // precio desde el form completo, así que los dos porcentajes se completan
+  // igual que en createBooking/completeChannelPrice y los dos importes se
+  // recalculan siempre. Un % de canal vacío no significa "sin comisión",
+  // significa "no lo cargaron": vuelve el default de la org para el `source`
+  // si está configurado, null si no (nunca 0), y nunca en mensual.
+  if (validated.commission_pct === null || validated.commission_pct === undefined) {
+    validated.commission_pct = await resolveDefaultCommissionPct(
+      validated.unit_id,
+      organization,
+    );
+  }
+  validated.channel_commission_pct = resolveChannelPct({
+    mode: validated.mode,
+    stored: validated.channel_commission_pct,
+    channelCommissions: organization.channel_commissions,
+    source: validated.source,
+  });
+  const commissionBase: CommissionBase =
+    organization.commission_base ?? DEFAULT_COMMISSION_BASE;
+  const commission_amount = managementCommissionAmount({
+    total: validated.total_amount,
+    commissionPct: validated.commission_pct,
+    channelPct: validated.channel_commission_pct,
+    commissionBase,
+  });
+  const channel_commission_amount = channelCommissionAmount(
+    validated.total_amount,
+    validated.channel_commission_pct,
+  );
 
   const admin = createAdminClient();
   // Leemos paid_amount actual + campos que afectan al schedule para detectar
@@ -1251,6 +1479,7 @@ export async function updateBooking(
       ...validated,
       external_id: validated.external_id || null,
       commission_amount,
+      channel_commission_amount,
     })
     .eq("id", id)
     .eq("organization_id", organization.id)
@@ -1321,6 +1550,8 @@ export async function updateBooking(
     bookingId: id,
     organizationId: organization.id,
     userId: session.userId,
+    commissionBase,
+    channelCommissions: organization.channel_commissions,
   });
 
   revalidatePath("/dashboard/reservas");
@@ -1329,6 +1560,7 @@ export async function updateBooking(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   revalidatePath("/dashboard/alertas");
+  revalidatePath("/dashboard/resultados");
   return data as Booking;
 }
 
@@ -1390,6 +1622,9 @@ export async function addBookingPayment(
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
+  // El inicio y Resultados muestran lo cobrado del mes.
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/resultados");
   return data as Booking;
 }
 
@@ -1487,6 +1722,7 @@ export async function addBookingExtraCharge(input: ExtraChargeInput) {
   revalidatePath("/dashboard/caja");
   revalidatePath(`/dashboard/caja/${account.id}`);
   revalidatePath("/dashboard");
+  revalidatePath("/dashboard/resultados");
   return data as CashMovement;
 }
 
@@ -1700,6 +1936,12 @@ export interface BookingChangePreview {
     suggested_total: number;
     basis: "nightly" | "monthly_prorated" | "unchanged";
     delta_amount: number;
+    /**
+     * Limpieza incluida en los totales. En "nightly" se escala sólo el
+     * alojamiento (total − limpieza) y la limpieza se suma fija: el modal
+     * puede mostrar "x noches + limpieza".
+     */
+    cleaning_fee: number;
   };
   warnings: Array<{ kind: "blocking" | "info"; message: string }>;
 }
@@ -1843,19 +2085,27 @@ export async function previewBookingChange(input: {
   const oldNights = nightsBetween(original.check_in_date, original.check_out_date);
   const newNights = nightsBetween(input.check_in_date, input.check_out_date);
   const previousTotal = Number(original.total_amount ?? 0);
+  // La limpieza está incluida en el total y no depende de las noches: al
+  // escalar el precio por noches se escala sólo el alojamiento, si no
+  // 3 → 6 noches duplicaba también la limpieza. Misma clamp que el resto del
+  // modelo: una reserva en $0 con limpieza cargada no "vale" la limpieza.
+  const cleaningFee = Math.min(
+    Math.max(0, Number(original.cleaning_fee ?? 0)),
+    Math.max(0, previousTotal),
+  );
   let suggestedTotal = previousTotal;
   let basis: BookingChangePreview["price_diff"]["basis"] = "unchanged";
 
   if (newNights !== oldNights && oldNights > 0) {
     if (original.mode === "mensual" && original.monthly_rent) {
-      // Prorrateo: total = (renta/30) × noches
+      // Prorrateo: total = (renta/30) × noches (mensual es ciego a la limpieza)
       const dailyRate = Number(original.monthly_rent) / 30;
-      suggestedTotal = Math.round(dailyRate * newNights * 100) / 100;
+      suggestedTotal = round2(dailyRate * newNights);
       basis = "monthly_prorated";
     } else {
-      // Tarifa por noche derivada del total original
-      const nightlyRate = previousTotal / oldNights;
-      suggestedTotal = Math.round(nightlyRate * newNights * 100) / 100;
+      // Tarifa por noche derivada del alojamiento original (total − limpieza)
+      const nightlyRate = (previousTotal - cleaningFee) / oldNights;
+      suggestedTotal = round2(nightlyRate * newNights + cleaningFee);
       basis = "nightly";
     }
   }
@@ -1873,7 +2123,8 @@ export async function previewBookingChange(input: {
       previous_total: previousTotal,
       suggested_total: suggestedTotal,
       basis,
-      delta_amount: Math.round((suggestedTotal - previousTotal) * 100) / 100,
+      delta_amount: round2(suggestedTotal - previousTotal),
+      cleaning_fee: cleaningFee,
     },
     warnings,
   };
@@ -1904,7 +2155,9 @@ export async function moveBookingTransaction(input: {
   // Lee la reserva original para calcular delta_days y validar permisos
   const { data: original, error: errOrig } = await admin
     .from("bookings")
-    .select("id, unit_id, check_in_date, check_out_date, status, mode, monthly_rent, total_amount")
+    .select(
+      "id, unit_id, check_in_date, check_out_date, status, mode, monthly_rent, total_amount, source, commission_pct, channel_commission_pct, cleaning_fee"
+    )
     .eq("id", input.id)
     .eq("organization_id", organization.id)
     .maybeSingle();
@@ -1921,6 +2174,8 @@ export async function moveBookingTransaction(input: {
   // Se quitó porque recepción opera con acceso equivalente a admin. Si más
   // adelante se rebaja recepción, reponer el cap (delta de check-in + check-out).
 
+  const commissionBase: CommissionBase =
+    organization.commission_base ?? DEFAULT_COMMISSION_BASE;
   const update: Record<string, unknown> = {
     unit_id: input.unit_id,
     check_in_date: input.check_in_date,
@@ -1932,6 +2187,25 @@ export async function moveBookingTransaction(input: {
     input.total_amount !== Number(original.total_amount)
   ) {
     update.total_amount = input.total_amount;
+    // Si cambia el total cambian las dos comisiones: antes esto dejaba
+    // `commission_amount` viejo después de aceptar el precio sugerido en un
+    // arrastre. Una fila anterior a la 058 sin % de canal toma el default de
+    // la org para su `source` (si está configurado) y lo deja escrito; en
+    // mensual queda null — ver resolveChannelPct.
+    const channelPct = resolveChannelPct({
+      mode: original.mode,
+      stored: original.channel_commission_pct,
+      channelCommissions: organization.channel_commissions,
+      source: original.source,
+    });
+    update.channel_commission_pct = channelPct;
+    update.channel_commission_amount = channelCommissionAmount(input.total_amount, channelPct);
+    update.commission_amount = managementCommissionAmount({
+      total: input.total_amount,
+      commissionPct: original.commission_pct,
+      channelPct,
+      commissionBase,
+    });
   }
 
   const { data, error } = await admin
@@ -1977,6 +2251,8 @@ export async function moveBookingTransaction(input: {
     bookingId: input.id,
     organizationId: organization.id,
     userId: session.userId,
+    commissionBase,
+    channelCommissions: organization.channel_commissions,
   });
 
   revalidatePath("/dashboard/reservas");
@@ -1985,6 +2261,7 @@ export async function moveBookingTransaction(input: {
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/dashboard/liquidaciones");
+  revalidatePath("/dashboard/resultados");
   return data as Booking;
 }
 
@@ -2429,9 +2706,27 @@ export async function mergeLeaseGroup(
     (sum, s) => sum + (Number(s.cleaning_fee) || 0),
     0
   );
-  const commissionPct = Number(first.commission_pct) || 0;
-  const commissionAmount =
-    Math.round((totalAmount * commissionPct) / 100 * 100) / 100;
+  const mergedTotal = round2(totalAmount);
+  // Las comisiones NO se suman de los tramos: se recalculan sobre el total
+  // reunificado con el snapshot del primer tramo, así la fila queda igual que
+  // si se hubiera cargado de una. Un tramo sin % de canal (anterior a la 058)
+  // toma el default de la org para su `source` si está configurado; en
+  // mensual no hay canal — ver resolveChannelPct.
+  const commissionBase: CommissionBase =
+    organization.commission_base ?? DEFAULT_COMMISSION_BASE;
+  const channelPct = resolveChannelPct({
+    mode: first.mode,
+    stored: first.channel_commission_pct,
+    channelCommissions: organization.channel_commissions,
+    source: first.source,
+  });
+  const commissionAmount = managementCommissionAmount({
+    total: mergedTotal,
+    commissionPct: first.commission_pct,
+    channelPct,
+    commissionBase,
+  });
+  const channelCommission = channelCommissionAmount(mergedTotal, channelPct);
 
   // Extender el primer segmento para cubrir todo el rango
   const { data: merged, error: errUpd } = await admin
@@ -2439,10 +2734,12 @@ export async function mergeLeaseGroup(
     .update({
       check_out_date: last.check_out_date,
       check_out_time: last.check_out_time,
-      total_amount: Math.round(totalAmount * 100) / 100,
-      paid_amount: Math.round(totalPaid * 100) / 100,
+      total_amount: mergedTotal,
+      paid_amount: round2(totalPaid),
       commission_amount: commissionAmount,
-      cleaning_fee: Math.round(totalCleaning * 100) / 100,
+      channel_commission_pct: channelPct,
+      channel_commission_amount: channelCommission,
+      cleaning_fee: round2(totalCleaning),
       lease_group_id: null, // ya no es un grupo
     })
     .eq("id", first.id)
@@ -2483,6 +2780,7 @@ export async function mergeLeaseGroup(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   revalidatePath("/dashboard/alertas");
+  revalidatePath("/dashboard/resultados");
   return merged as Booking;
 }
 
@@ -2534,6 +2832,8 @@ export async function splitBookingIntoSegments(
     bookingId,
     organizationId: organization.id,
     userId: session.userId,
+    commissionBase: organization.commission_base ?? DEFAULT_COMMISSION_BASE,
+    channelCommissions: organization.channel_commissions,
   });
 
   revalidatePath("/dashboard/reservas");
@@ -2541,28 +2841,249 @@ export async function splitBookingIntoSegments(
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/caja");
   revalidatePath("/dashboard/alertas");
+  revalidatePath("/dashboard/resultados");
 }
 
-// ─── Reservas de canal sin huésped ("Completar datos") ──────────────────────
+// ─── Reservas de canal por completar ("Completar datos") ────────────────────
 // Las reservas que entran por iCal de Airbnb/Booking se proyectan sin huésped
-// (guest_id null) hasta que llega el email de la OTA o alguien las completa a
-// mano. Este par de acciones alimenta el flujo rápido de completado del PMS.
+// (guest_id null) y sin precio (total_amount 0) hasta que llega el email de la
+// OTA o alguien las completa a mano. Estas acciones alimentan el flujo rápido
+// de completado del PMS.
 
-/** Reservas entradas por canal (Airbnb/Booking) sin huésped asignado. */
-export async function listBookingsNeedingGuest(): Promise<BookingWithRelations[]> {
+/**
+ * Reservas entradas por canal (Airbnb/Booking) a las que les falta el huésped
+ * O el precio. Las filas traen `select *`, así que el cliente tiene
+ * total_amount, currency, guest_id, source, channel_commission_pct y
+ * cleaning_fee para decidir qué parte del formulario mostrar. El mismo
+ * predicado tiene que respetar el merge en vivo del PMS: una fila sale de la
+ * lista sólo cuando tiene las dos cosas.
+ */
+export async function listBookingsNeedingCompletion(): Promise<BookingWithRelations[]> {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+  // Cota inferior: desde el mes pasado. Lo anterior ya no es "por completar"
+  // sino una liquidación con datos faltantes (ver completionCutoffYmd). Misma
+  // cota en kpis.ts y en bookingNeedsCompletion() del tablero.
+  const cutoff = completionCutoffYmd(organization.timezone || DEFAULT_ORG_TIMEZONE);
   const { data, error } = await admin
     .from("bookings")
     .select(`*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`)
     .eq("organization_id", organization.id)
-    .is("guest_id", null)
+    .or("guest_id.is.null,total_amount.lte.0")
     .eq("is_block", false)
     .in("source", ["airbnb", "booking"])
     .in("status", ["pendiente", "confirmada", "check_in", "check_out"])
+    .gte("check_out_date", cutoff)
     .order("check_in_date", { ascending: true });
   if (error) throw new Error(error.message);
   return (data as BookingWithRelations[]) ?? [];
+}
+
+/**
+ * @deprecated Usar `listBookingsNeedingCompletion` (huésped O precio). Queda
+ * como alias para que los callers actuales compilen hasta que migren.
+ */
+export async function listBookingsNeedingGuest(): Promise<BookingWithRelations[]> {
+  return listBookingsNeedingCompletion();
+}
+
+const completePriceSchema = z.object({
+  booking_id: z.string().uuid(),
+  total_amount: z.coerce.number().positive("Cargá un importe mayor a 0"),
+  currency: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z]{3}$/, "Moneda inválida")
+    .optional()
+    .nullable(),
+  channel_commission_pct: z.coerce.number().min(0).max(100).optional().nullable(),
+});
+
+export type CompleteChannelPriceResult =
+  | {
+      ok: true;
+      booking: {
+        id: string;
+        total_amount: number;
+        currency: string;
+        commission_pct: number | null;
+        commission_amount: number | null;
+        channel_commission_pct: number | null;
+        channel_commission_amount: number | null;
+      };
+    }
+  | { ok: false; error: string };
+
+/**
+ * Carga el precio de una reserva que entró sin precio (las de OTA se
+ * proyectan en $0). Es el camino liviano del panel "Completar datos": no pasa
+ * por el formulario completo, pero deja el mismo snapshot de dinero que
+ * createBooking/updateBooking:
+ *
+ *   - `total_amount` es lo que paga el huésped CON limpieza (regla del
+ *     modelo). Si la reserva no tenía limpieza cargada y la unidad sí tiene
+ *     un fee, se snapshotea el de la unidad — así el neto al propietario la
+ *     descuenta, como en una reserva cargada a mano. Nunca se pisa una
+ *     limpieza ya cargada.
+ *   - `commission_pct`: el de la reserva, o el default de la unidad, o el de
+ *     la org, o 20 — el mismo fallback que createBooking y updateBooking
+ *     (`resolveDefaultCommissionPct`).
+ *   - `channel_commission_pct`: lo tipeado, o el snapshot de la reserva, o el
+ *     default de la org para el `source` (null si no está configurado).
+ *
+ * El UPDATE lleva guard `total_amount <= 0`: dos pestañas (o el form completo
+ * en paralelo) no pueden cargar el precio dos veces. No toca `paid_amount`.
+ */
+export async function completeChannelPrice(input: {
+  booking_id: string;
+  total_amount: number;
+  currency?: string | null;
+  channel_commission_pct?: number | null;
+}): Promise<CompleteChannelPriceResult> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "bookings", "update") || !can(role, "payments", "view")) {
+    return { ok: false, error: "No tenés permiso para cargar el precio de una reserva" };
+  }
+  const parsed = completePriceSchema.safeParse({
+    ...input,
+    currency: input.currency || null,
+  });
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+  const validated = parsed.data;
+  const admin = createAdminClient();
+
+  const { data: booking, error: bookingErr } = await admin
+    .from("bookings")
+    .select(
+      "id, unit_id, source, mode, is_block, status, total_amount, currency, commission_pct, channel_commission_pct, cleaning_fee"
+    )
+    .eq("id", validated.booking_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (bookingErr) return { ok: false, error: bookingErr.message };
+  if (!booking) return { ok: false, error: "Reserva no encontrada" };
+  if (booking.is_block) {
+    return { ok: false, error: "Un bloqueo de fechas no lleva precio" };
+  }
+  if (booking.status === "cancelada" || booking.status === "no_show") {
+    return { ok: false, error: "La reserva está cancelada — no corresponde cargar precio" };
+  }
+  if (booking.mode === "mensual") {
+    // En mensual el importe sale de la renta (migración 054): cargar un total
+    // suelto acá dejaría el contrato sin renta y con un tramo inventado.
+    return {
+      ok: false,
+      error: "Para un alquiler mensual cargá la renta desde la edición de la reserva",
+    };
+  }
+  if (Number(booking.total_amount) > 0) {
+    return { ok: false, error: "La reserva ya tiene precio (se cargó por otro lado)" };
+  }
+
+  const { data: unit } = await admin
+    .from("units")
+    .select("default_commission_pct, cleaning_fee, base_price_currency")
+    .eq("id", booking.unit_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+
+  const total = round2(validated.total_amount);
+  const currency = validated.currency ?? booking.currency ?? organization.default_currency ?? "ARS";
+
+  // Limpieza: sólo se completa si la reserva no la tenía y la unidad sí; nunca
+  // por encima del total (una limpieza mayor al total tipeado es un error de
+  // carga, no un dato) y sólo si la unidad cobra en la misma moneda (el fee
+  // está en la moneda de la unidad: "$15.000" adentro de un total en USD no).
+  const currentCleaning = Number(booking.cleaning_fee ?? 0);
+  const unitCleaning = Number(unit?.cleaning_fee ?? 0);
+  const unitCurrencyMatches =
+    !unit?.base_price_currency || unit.base_price_currency === currency;
+  const cleaningFee =
+    currentCleaning > 0
+      ? currentCleaning
+      : unitCleaning > 0 && unitCleaning < total && unitCurrencyMatches
+        ? round2(unitCleaning)
+        : currentCleaning;
+
+  const commissionPct: number = Number(
+    booking.commission_pct ??
+      unit?.default_commission_pct ??
+      organization.default_commission_pct ??
+      20,
+  );
+  // Lo tipeado gana; si no, el snapshot de la fila; si no, el default de la
+  // org (null si ese canal no está configurado — nunca un 0 congelado).
+  const channelPct = resolveChannelPct({
+    mode: booking.mode,
+    stored: validated.channel_commission_pct ?? booking.channel_commission_pct,
+    channelCommissions: organization.channel_commissions,
+    source: booking.source,
+  });
+  const commissionBase: CommissionBase =
+    organization.commission_base ?? DEFAULT_COMMISSION_BASE;
+
+  const commissionAmount = managementCommissionAmount({
+    total,
+    commissionPct,
+    channelPct,
+    commissionBase,
+  });
+  const channelAmount = channelCommissionAmount(total, channelPct);
+
+  const { data: updated, error: updateErr } = await admin
+    .from("bookings")
+    .update({
+      total_amount: total,
+      currency,
+      cleaning_fee: cleaningFee,
+      commission_pct: commissionPct,
+      commission_amount: commissionAmount,
+      channel_commission_pct: channelPct,
+      channel_commission_amount: channelAmount,
+    })
+    .eq("id", booking.id)
+    .eq("organization_id", organization.id)
+    // CAS: si otra pestaña (o el form completo) ya cargó el precio, no se pisa.
+    .lte("total_amount", 0)
+    .select(
+      "id, total_amount, currency, commission_pct, commission_amount, channel_commission_pct, channel_commission_amount"
+    )
+    .maybeSingle();
+  if (updateErr) return { ok: false, error: updateErr.message };
+  if (!updated) {
+    return { ok: false, error: "La reserva ya tiene precio (se cargó por otro lado)" };
+  }
+
+  revalidatePath("/dashboard/reservas");
+  revalidatePath(`/dashboard/reservas/${booking.id}`);
+  revalidatePath("/dashboard/unidades/kanban");
+  revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/caja");
+  revalidatePath("/dashboard/alertas");
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/resultados");
+
+  return {
+    ok: true,
+    booking: {
+      id: updated.id,
+      total_amount: Number(updated.total_amount),
+      currency: updated.currency,
+      commission_pct: updated.commission_pct === null ? null : Number(updated.commission_pct),
+      commission_amount:
+        updated.commission_amount === null ? null : Number(updated.commission_amount),
+      channel_commission_pct:
+        updated.channel_commission_pct === null ? null : Number(updated.channel_commission_pct),
+      channel_commission_amount:
+        updated.channel_commission_amount === null
+          ? null
+          : Number(updated.channel_commission_amount),
+    },
+  };
 }
 
 const completeGuestSchema = z.object({

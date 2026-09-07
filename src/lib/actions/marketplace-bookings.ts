@@ -12,6 +12,14 @@ import type {
   UnitPricingRule,
 } from "@/lib/types/database";
 import { notifyHostNewBooking, notifyGuestBookingConfirmed } from "@/lib/marketplace/notifications";
+import {
+  channelCommissionAmount,
+  channelCommissionPctFor,
+  DEFAULT_COMMISSION_BASE,
+  managementCommissionAmount,
+  type ChannelCommissionMap,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
 
 /**
  * Techo absoluto de noches para cualquier reserva del marketplace, aun cuando la
@@ -97,7 +105,7 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResu
       `
         id, organization_id, slug, marketplace_published, active, marketplace_title,
         base_price, cleaning_fee, marketplace_currency, max_guests, min_nights, max_nights,
-        instant_book, check_in_window_start, check_in_window_end
+        instant_book, check_in_window_start, check_in_window_end, default_commission_pct
       `
     )
     .eq("id", data.unit_id)
@@ -164,6 +172,10 @@ export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResu
         marketplace_title: unit.marketplace_title ?? "",
         check_in_window_start: unit.check_in_window_start ?? "15:00",
         check_in_window_end: unit.check_in_window_end ?? "22:00",
+        default_commission_pct:
+          unit.default_commission_pct === null || unit.default_commission_pct === undefined
+            ? null
+            : Number(unit.default_commission_pct),
       },
       data,
       total: breakdown.total,
@@ -200,7 +212,45 @@ type UnitLite = {
   marketplace_title: string;
   check_in_window_start: string;
   check_in_window_end: string;
+  /** Sólo lo usa el camino instant_book (la solicitud no crea booking). */
+  default_commission_pct?: number | null;
 };
+
+/**
+ * Defaults de dinero de la org dueña de la unidad. Acá no hay `getCurrentOrg()`
+ * (la sesión es de huésped, no de staff), así que se leen por
+ * `unit.organization_id`. Un fallo de lectura cae a los defaults del modelo
+ * (canal sin configurar → null, base net_of_channel): la reserva se confirma
+ * igual — el precio ya está calculado — y el snapshot se puede corregir
+ * editándola.
+ */
+async function readOrgMoneyDefaults(organizationId: string): Promise<{
+  channelCommissions: ChannelCommissionMap;
+  commissionBase: CommissionBase;
+  defaultCommissionPct: number | null;
+}> {
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("organizations")
+    .select("channel_commissions, commission_base, default_commission_pct")
+    .eq("id", organizationId)
+    .maybeSingle();
+  if (error) {
+    console.error("[marketplace-bookings] no se pudo leer los defaults de comisión:", error.message);
+  }
+  const base = data?.commission_base;
+  return {
+    channelCommissions:
+      data?.channel_commissions && typeof data.channel_commissions === "object"
+        ? (data.channel_commissions as ChannelCommissionMap)
+        : {},
+    commissionBase: base === "gross" || base === "net_of_channel" ? base : DEFAULT_COMMISSION_BASE,
+    defaultCommissionPct:
+      data?.default_commission_pct === null || data?.default_commission_pct === undefined
+        ? null
+        : Number(data.default_commission_pct),
+  };
+}
 
 async function findOrCreateGuestForOrg(params: {
   organizationId: string;
@@ -274,6 +324,28 @@ async function createMarketplaceBooking(params: {
     },
   });
 
+  // Snapshot de dinero igual al de una reserva cargada a mano. `params.total`
+  // ya incluye la limpieza (pricing.ts). Antes esta ruta dejaba la comisión
+  // de administración en null y la reserva aparecía "sin comisión".
+  const orgMoney = await readOrgMoneyDefaults(params.unit.organization_id);
+  const commissionPct = Number(
+    params.unit.default_commission_pct ?? orgMoney.defaultCommissionPct ?? 20,
+  );
+  // null (no 0) si la org no configuró 'directo': mismo criterio que el resto
+  // de los caminos de escritura — un 0 escrito es un snapshot que gana sobre
+  // el default de la org; null deja que el default aplique cuando exista.
+  const channelPct =
+    orgMoney.channelCommissions.directo === null ||
+    orgMoney.channelCommissions.directo === undefined
+      ? null
+      : channelCommissionPctFor(orgMoney.channelCommissions, "directo");
+  const commissionAmount = managementCommissionAmount({
+    total: params.total,
+    commissionPct,
+    channelPct,
+    commissionBase: orgMoney.commissionBase,
+  });
+
   const { data: created, error } = await admin
     .from("bookings")
     .insert({
@@ -293,6 +365,10 @@ async function createMarketplaceBooking(params: {
       total_amount: params.total,
       paid_amount: 0,
       cleaning_fee: params.cleaningFee,
+      commission_pct: commissionPct,
+      commission_amount: commissionAmount,
+      channel_commission_pct: channelPct,
+      channel_commission_amount: channelCommissionAmount(params.total, channelPct),
       notes: params.data.special_requests || null,
       internal_notes: `Reserva marketplace por ${params.data.full_name} (${params.data.email})`,
     })
@@ -329,6 +405,7 @@ async function createMarketplaceBooking(params: {
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/resultados");
   revalidatePath("/mi-cuenta");
   revalidatePath(`/u/${params.unit.slug}`);
 

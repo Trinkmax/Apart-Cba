@@ -24,6 +24,8 @@ import { getInitials } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { NotificationsBell } from "@/components/notifications/notifications-bell";
 import { LiveIndicator } from "@/components/realtime/live-indicator";
+import { InstallAppListener } from "@/components/pwa/install-app-prompt";
+import { InstallAppMenuItem } from "@/components/pwa/install-app-menu-item";
 import type {
   Notification,
   Organization,
@@ -184,6 +186,9 @@ export function TopBar({
               Mi perfil
             </Link>
           </DropdownMenuItem>
+          {/* "Acceso directo para notebook y tablet": se esconde solo si ya
+              corre instalada. El diálogo lo aloja <InstallAppListener/>. */}
+          <InstallAppMenuItem />
           <DropdownMenuItem asChild>
             <Link href="/dashboard/configuracion" className="cursor-pointer">
               <Building2 size={14} />
@@ -200,6 +205,8 @@ export function TopBar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <InstallAppListener />
     </header>
   );
 }

@@ -84,13 +84,27 @@ export function buildSettlementWorkbook(
     } },
   });
 
-  const COLS = [12, 12, 28, 8, 15, 15, 15, 16];
+  // Columna "Comisión del canal" sólo cuando el documento la tiene. Todo lo
+  // posicional (anchos, merges, fórmulas) sale de estos índices para que un
+  // documento sin canal quede EXACTAMENTE como antes (8 columnas).
+  const hasChannel = model.hasChannelCommission;
+  const COL_GROSS = 5;
+  const COL_CHANNEL = hasChannel ? 6 : -1;
+  const COL_COMM = hasChannel ? 7 : 6;
+  const COL_EXP = hasChannel ? 8 : 7;
+  const COL_NET = hasChannel ? 9 : 8;
+  const LAST_COL = COL_NET;
+  const colLetter = (col: number) => String.fromCharCode(64 + col);
+
+  const COLS = hasChannel
+    ? [12, 12, 28, 8, 15, 15, 15, 15, 16]
+    : [12, 12, 28, 8, 15, 15, 15, 16];
   COLS.forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   let r = 1;
 
   const mergeRow = (text: string, opts: Partial<ExcelJS.Style> & { height?: number } = {}) => {
-    ws.mergeCells(r, 1, r, 8);
+    ws.mergeCells(r, 1, r, LAST_COL);
     const cell = ws.getCell(r, 1);
     cell.value = text;
     cell.font = opts.font ?? { color: { argb: INK } };
@@ -135,6 +149,7 @@ export function buildSettlementWorkbook(
     "Huésped",
     "Noches",
     "Bruto",
+    ...(hasChannel ? ["Com. canal"] : []),
     "Comisión",
     "Gastos",
     "Neto",
@@ -190,18 +205,22 @@ export function buildSettlementWorkbook(
         b.guest + (b.mode === "mensual" ? "  (mensual)" : "");
       row.getCell(4).value = b.nights ?? "—";
       row.getCell(4).alignment = { horizontal: "center" };
-      moneyCell(r, 5, b.gross);
-      moneyCell(r, 6, b.commission ? -b.commission : 0);
-      moneyCell(r, 7, b.expenses ? -b.expenses : 0);
-      moneyCell(r, 8, {
-        formula: `E${r}+F${r}+G${r}`,
+      moneyCell(r, COL_GROSS, b.gross);
+      if (hasChannel) {
+        moneyCell(r, COL_CHANNEL, b.channelCommission ? -b.channelCommission : 0);
+      }
+      moneyCell(r, COL_COMM, b.commission ? -b.commission : 0);
+      moneyCell(r, COL_EXP, b.expenses ? -b.expenses : 0);
+      // Neto = suma de las columnas de importe (los descuentos ya van en negativo).
+      moneyCell(r, COL_NET, {
+        formula: `${colLetter(COL_GROSS)}${r}+${hasChannel ? `${colLetter(COL_CHANNEL)}${r}+` : ""}${colLetter(COL_COMM)}${r}+${colLetter(COL_EXP)}${r}`,
         result: b.net,
       });
       for (let col = 1; col <= 4; col++) {
         row.getCell(col).font = { size: 9, color: { argb: INK } };
       }
       if (idx % 2 === 1) {
-        for (let col = 1; col <= 8; col++) {
+        for (let col = 1; col <= LAST_COL; col++) {
           row.getCell(col).fill = {
             type: "pattern",
             pattern: "solid",
@@ -220,12 +239,17 @@ export function buildSettlementWorkbook(
     sub.getCell(3).font = { bold: true, size: 9, color: { argb: INK } };
     sub.getCell(3).alignment = { horizontal: "right" };
     if (u.rows.length > 0) {
-      moneyCell(r, 5, { formula: `SUM(E${firstRow}:E${lastRow})`, result: u.subtotal.gross }, true);
-      moneyCell(r, 6, { formula: `SUM(F${firstRow}:F${lastRow})`, result: -u.subtotal.commission }, true);
-      moneyCell(r, 7, { formula: `SUM(G${firstRow}:G${lastRow})`, result: -u.subtotal.expenses }, true);
-      moneyCell(r, 8, { formula: `SUM(H${firstRow}:H${lastRow})`, result: u.subtotal.net }, true);
+      const sumOf = (col: number) =>
+        `SUM(${colLetter(col)}${firstRow}:${colLetter(col)}${lastRow})`;
+      moneyCell(r, COL_GROSS, { formula: sumOf(COL_GROSS), result: u.subtotal.gross }, true);
+      if (hasChannel) {
+        moneyCell(r, COL_CHANNEL, { formula: sumOf(COL_CHANNEL), result: -u.subtotal.channelCommission }, true);
+      }
+      moneyCell(r, COL_COMM, { formula: sumOf(COL_COMM), result: -u.subtotal.commission }, true);
+      moneyCell(r, COL_EXP, { formula: sumOf(COL_EXP), result: -u.subtotal.expenses }, true);
+      moneyCell(r, COL_NET, { formula: sumOf(COL_NET), result: u.subtotal.net }, true);
     }
-    for (let col = 1; col <= 8; col++) {
+    for (let col = 1; col <= LAST_COL; col++) {
       sub.getCell(col).border = { top: { style: "thin", color: { argb: HAIRLINE } } };
     }
     sub.height = 18;
@@ -241,12 +265,12 @@ export function buildSettlementWorkbook(
       height: 20,
     });
     for (const o of model.otros) {
-      ws.mergeCells(r, 1, r, 7);
+      ws.mergeCells(r, 1, r, LAST_COL - 1);
       const d = ws.getCell(r, 1);
       d.value = o.unitCode ? `${o.description}  (${o.unitCode})` : o.description;
       d.font = { size: 9, color: { argb: INK } };
       d.alignment = { vertical: "middle", horizontal: "left" };
-      moneyCell(r, 8, o.sign === "+" ? o.amount : -o.amount);
+      moneyCell(r, LAST_COL, o.sign === "+" ? o.amount : -o.amount);
       ws.getRow(r).height = 16;
       r++;
     }
@@ -255,17 +279,17 @@ export function buildSettlementWorkbook(
 
   // ── Totales ──
   const totalLine = (label: string, value: number, strong = false) => {
-    ws.mergeCells(r, 5, r, 7);
+    ws.mergeCells(r, 5, r, LAST_COL - 1);
     const l = ws.getCell(r, 5);
     l.value = label;
     l.alignment = { horizontal: "right" };
     l.font = strong
       ? { bold: true, size: 12, color: { argb: brand } }
       : { size: 10, color: { argb: MUTED } };
-    moneyCell(r, 8, value, strong);
+    moneyCell(r, LAST_COL, value, strong);
     if (strong) {
-      ws.getCell(r, 8).font = { bold: true, size: 12, color: { argb: brand } };
-      for (let col = 5; col <= 8; col++) {
+      ws.getCell(r, LAST_COL).font = { bold: true, size: 12, color: { argb: brand } };
+      for (let col = 5; col <= LAST_COL; col++) {
         ws.getCell(r, col).border = { top: { style: "double", color: { argb: brand } } };
       }
     }
@@ -273,6 +297,9 @@ export function buildSettlementWorkbook(
     r++;
   };
   totalLine("Bruto", model.totals.gross);
+  if (hasChannel) {
+    totalLine("− Comisión del canal", -model.totals.channelCommission);
+  }
   totalLine("− Comisión", -model.totals.commission);
   totalLine("− Gastos", -model.totals.deductions);
   totalLine("NETO POR PAGAR", model.totals.net, true);

@@ -11,6 +11,12 @@ import {
   notifyGuestRequestApproved,
   notifyGuestRequestRejected,
 } from "@/lib/marketplace/notifications";
+import {
+  channelCommissionAmount,
+  channelCommissionPctFor,
+  DEFAULT_COMMISSION_BASE,
+  managementCommissionAmount,
+} from "@/lib/finance/booking-economics";
 
 export async function listBookingRequestsForOrg(opts?: {
   status?: "pendiente" | "aprobada" | "rechazada" | "expirada" | "cancelada";
@@ -117,6 +123,35 @@ export async function approveBookingRequest(
   }
 
   // 3) Crear booking
+  // Mismo snapshot de dinero que una reserva cargada a mano: comisión de
+  // administración con el default de la unidad (esta ruta la dejaba en null y
+  // la reserva aparecía sin comisión hasta que alguien la editaba) y comisión
+  // del canal para 'directo' (normalmente 0, pero es la org la que decide).
+  // `req.total_amount` ya viene con la limpieza incluida (pricing.ts).
+  const { data: unit } = await admin
+    .from("units")
+    .select("default_commission_pct")
+    .eq("id", req.unit_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  const commissionPct = Number(
+    unit?.default_commission_pct ?? organization.default_commission_pct ?? 20,
+  );
+  // null (no 0) si la org no configuró 'directo': mismo criterio que el resto
+  // de los caminos de escritura — un 0 escrito es un snapshot que gana sobre
+  // el default de la org; null deja que el default aplique cuando exista.
+  const channelMap = organization.channel_commissions ?? {};
+  const channelPct =
+    channelMap.directo === null || channelMap.directo === undefined
+      ? null
+      : channelCommissionPctFor(channelMap, "directo");
+  const commissionAmount = managementCommissionAmount({
+    total: totalAmount,
+    commissionPct,
+    channelPct,
+    commissionBase: organization.commission_base ?? DEFAULT_COMMISSION_BASE,
+  });
+
   const { data: booking, error: bkErr } = await admin
     .from("bookings")
     .insert({
@@ -139,6 +174,10 @@ export async function approveBookingRequest(
       paid_amount: 0,
       deposit_amount: deposit,
       cleaning_fee: req.cleaning_fee ?? 0,
+      commission_pct: commissionPct,
+      commission_amount: commissionAmount,
+      channel_commission_pct: channelPct,
+      channel_commission_amount: channelCommissionAmount(totalAmount, channelPct),
       notes: req.special_requests,
       internal_notes: baseNote,
       created_by: session.userId,
@@ -178,6 +217,7 @@ export async function approveBookingRequest(
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
+  revalidatePath("/dashboard/resultados");
   revalidatePath("/mi-cuenta");
 
   return { ok: true, booking_id: booking.id };

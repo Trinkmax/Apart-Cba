@@ -11,9 +11,11 @@ import { verifyMfaLogin, loginWithRecoveryCode } from "@/lib/actions/security";
 
 interface Props {
   factorId: string;
+  /** Casa del rol (ya validada por la page); fallback si el server no manda `landing`. */
+  next: "/m" | "/dashboard";
 }
 
-export function TotpForm({ factorId }: Props) {
+export function TotpForm({ factorId, next }: Props) {
   const router = useRouter();
   const [mode, setMode] = useState<"totp" | "recovery">("totp");
   const [code, setCode] = useState("");
@@ -28,7 +30,7 @@ export function TotpForm({ factorId }: Props) {
         toast.error("Código incorrecto", { description: result.error });
         return;
       }
-      router.push("/dashboard");
+      router.push(result.landing ?? next);
       router.refresh();
     });
   }
@@ -46,7 +48,8 @@ export function TotpForm({ factorId }: Props) {
           "Tu factor 2FA y los códigos restantes fueron invalidados. Re-activá 2FA desde tu perfil cuanto antes.",
         duration: 8000,
       });
-      router.push("/dashboard/perfil");
+      // Al perfil de la casa del rol: /m tiene el suyo con la misma card de 2FA.
+      router.push(`${next}/perfil`);
       router.refresh();
     });
   }

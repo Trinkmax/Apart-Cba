@@ -114,7 +114,7 @@ import { reorderUnitsGlobal, listUnitsEnriched } from "@/lib/actions/units";
 import {
   searchBookingsGlobal,
   listBookingsInRange,
-  listBookingsNeedingGuest,
+  listBookingsNeedingCompletion,
 } from "@/lib/actions/bookings";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
@@ -128,6 +128,8 @@ import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { useFlashIds, useLiveTable } from "@/lib/realtime/use-live";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/format";
+import type { CommissionBase } from "@/lib/finance/booking-economics";
+import type { CompletedPatch } from "@/components/bookings/complete-guest-dialog";
 import type {
   BookingMode,
   BookingPaymentSchedule,
@@ -188,18 +190,44 @@ const CompleteGuestDialog = dynamic(
 // Identidad estable para el default de initialNeedsGuest — un `= []` inline
 // crearía un array nuevo por render y dispararía el prop-sync en loop.
 const EMPTY_NEEDS_GUEST: BookingWithRelations[] = [];
+// Ídem para el mapa de comisiones por canal (se pasa a dialogs en dynamic()).
+const EMPTY_CHANNEL_DEFAULTS: Partial<Record<BookingSource, number>> = {};
 
 /**
- * Lista de reservas de canal sin huésped — contenido compartido por el chip
- * de la toolbar desktop y el botón de la toolbar mobile. Orden: huésped en
- * casa primero, después futuras por fecha, al final las pasadas.
+ * Criterio "por completar" — el MISMO que `listBookingsNeedingCompletion` en
+ * el server: reserva de OTA viva, sin huésped o sin precio. Lo usan el merge
+ * realtime y el callback del diálogo; si divergen, las filas parpadean o se
+ * van antes de tiempo.
+ */
+function bookingNeedsCompletion(b: BookingWithRelations, cutoffYmd: string): boolean {
+  return (
+    !b.is_block &&
+    // Misma cota que el server (completionCutoffYmd): lo que hizo check-out
+    // antes del mes pasado ya no es "por completar".
+    b.check_out_date >= cutoffYmd &&
+    (!b.guest_id || Number(b.total_amount ?? 0) <= 0) &&
+    (b.source === "airbnb" || b.source === "booking") &&
+    (b.status === "pendiente" ||
+      b.status === "confirmada" ||
+      b.status === "check_in" ||
+      b.status === "check_out")
+  );
+}
+
+/**
+ * Lista de reservas de canal sin huésped o sin precio — contenido compartido
+ * por el chip de la toolbar desktop y el botón de la toolbar mobile. Orden:
+ * huésped en casa primero, después futuras por fecha, al final las pasadas.
  */
 function NeedsGuestPanel({
   items,
   onPick,
+  showPrice,
 }: {
   items: BookingWithRelations[];
   onPick: (b: BookingWithRelations) => void;
+  /** Sin permiso de plata la etiqueta "sin precio" no se muestra. */
+  showPrice: boolean;
 }) {
   const todayIso = todayYmdInTz();
   const rank = (x: BookingWithRelations) =>
@@ -212,8 +240,8 @@ function NeedsGuestPanel({
       <div className="px-3 py-2.5 border-b">
         <div className="text-sm font-semibold">Reservas por completar</div>
         <p className="text-[11px] text-muted-foreground mt-0.5">
-          Entraron por el calendario de la OTA sin datos del huésped. Los datos
-          están en el mail o la app de Airbnb/Booking.
+          Entraron por el calendario de la OTA sin huésped{showPrice ? " o sin precio" : ""}.
+          Los datos están en el mail o la app de Airbnb/Booking.
         </p>
       </div>
       {sorted.length === 0 ? (
@@ -247,6 +275,19 @@ function NeedsGuestPanel({
                     {b.status === "check_in" && (
                       <span className="ml-1.5 text-sky-600 dark:text-sky-400 font-medium">
                         en casa
+                      </span>
+                    )}
+                  </span>
+                  {/* Qué falta en cada fila: puede ser una cosa o las dos. */}
+                  <span className="mt-0.5 flex flex-wrap gap-1">
+                    {!b.guest_id && (
+                      <span className="rounded-full border border-amber-300/70 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                        sin huésped
+                      </span>
+                    )}
+                    {showPrice && Number(b.total_amount ?? 0) <= 0 && (
+                      <span className="rounded-full border border-amber-300/70 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                        sin precio
                       </span>
                     )}
                   </span>
@@ -302,13 +343,19 @@ interface PmsBoardProps {
   canRegisterExpense?: boolean;
   /** Cuenta de gastos corrientes por defecto para "Registrar gasto". */
   expenseDefaultId?: string | null;
-  /** Reservas de canal (Airbnb/Booking) sin huésped — flujo "Completar datos". */
+  /** Reservas de canal (Airbnb/Booking) sin huésped o sin precio — flujo "Completar datos". */
   initialNeedsGuest?: BookingWithRelations[];
   /** Abre el popover "Por completar" al montar (deep-link ?completar=1 del dashboard). */
   openNeedsGuestOnMount?: boolean;
   startISO: string; // ISO yyyy-MM-dd — primer día visible
   days: number; // total de días a mostrar
   orgCurrency?: string;
+  /** % que se lleva cada canal (organizations.channel_commissions) — para los forms de reserva. */
+  channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  /** Cota inferior (YYYY-MM-DD) de "por completar"; la calcula el server con la tz de la org. */
+  completionCutoff: string;
+  /** Base de la comisión de administración (organizations.commission_base) — sólo para desgloses. */
+  commissionBase?: CommissionBase;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -435,6 +482,9 @@ export function PmsBoard({
   startISO,
   days,
   orgCurrency = "ARS",
+  channelCommissionDefaults = EMPTY_CHANNEL_DEFAULTS,
+  completionCutoff,
+  commissionBase,
 }: PmsBoardProps) {
   const router = useRouter();
   const statusColors = useBookingStatusColors();
@@ -679,18 +729,28 @@ export function PmsBoard({
   const [needsGuestOpenM, setNeedsGuestOpenM] = useState(openNeedsGuestOnMount);
   const [completeGuestBooking, setCompleteGuestBooking] =
     useState<BookingWithRelations | null>(null);
-  const handleGuestCompleted = useCallback(
-    (
-      bookingId: string,
-      guest: { id: string; full_name: string; phone: string | null; email: string | null }
-    ) => {
-      setNeedsGuestList((prev) => prev.filter((x) => x.id !== bookingId));
-      setBookings((prev) =>
-        prev.map((x) => (x.id === bookingId ? { ...x, guest_id: guest.id, guest } : x))
-      );
-    },
-    []
-  );
+  // Aplica lo que guardó el diálogo (huésped y/o precio) a la grilla y al
+  // panel. La fila sale del panel sólo cuando tiene huésped Y precio: se puede
+  // completar de a una cosa por vez.
+  const handleGuestCompleted = useCallback((bookingId: string, patch: CompletedPatch) => {
+    const apply = (x: BookingWithRelations): BookingWithRelations => ({
+      ...x,
+      ...(patch.guest ? { guest_id: patch.guest.id, guest: patch.guest } : null),
+      ...(patch.price ?? null),
+    });
+    setNeedsGuestList((prev) =>
+      prev
+        .map((x) => (x.id === bookingId ? apply(x) : x))
+        .filter((x) => x.id !== bookingId || bookingNeedsCompletion(x, completionCutoff))
+    );
+    setBookings((prev) => prev.map((x) => (x.id === bookingId ? apply(x) : x)));
+  }, [completionCutoff]);
+  // Sin permiso de plata, una fila a la que sólo le falta el precio no se
+  // puede resolver desde acá: no la mostramos (la lista completa queda igual,
+  // consistente con el server, para que el merge realtime no la pierda).
+  const visibleNeedsList = canViewMoney
+    ? needsGuestList
+    : needsGuestList.filter((b) => !b.guest_id);
 
   // Si había un popover abierto (reserva/unidad/marca/búsqueda) cuando arrancó
   // el gesto, el click en celda vacía sólo debe cerrarlo — NO abrir el quick-add.
@@ -1406,23 +1466,20 @@ export function PmsBoard({
         return Array.from(m.values());
       });
       // El panel "Completar datos" se mantiene al día sin recargar: si el email
-      // de la OTA trajo el huésped, la fila sale sola del contador.
+      // de la OTA trajo el huésped o alguien cargó el precio desde el detalle,
+      // la fila sale sola del contador (sólo cuando ya no le falta nada).
       setNeedsGuestList((prev) => {
         const m = new Map(prev.map((b) => [b.id, b]));
         evicted.forEach((id) => m.delete(id));
         alive.forEach((b) => {
-          const needs =
-            !b.is_block &&
-            !b.guest_id &&
-            (b.source === "airbnb" || b.source === "booking");
-          if (needs) m.set(b.id, b);
+          if (bookingNeedsCompletion(b, completionCutoff)) m.set(b.id, b);
           else m.delete(b.id);
         });
         return Array.from(m.values());
       });
       alive.forEach((b) => flash(b.id));
     },
-    [flash]
+    [flash, completionCutoff]
   );
 
   const scheduleHydrate = useCallback(
@@ -1493,7 +1550,7 @@ export function PmsBoard({
           () => null as OrgDateMark[] | null
         ),
         canEditBookings
-          ? listBookingsNeedingGuest().catch(() => null as BookingWithRelations[] | null)
+          ? listBookingsNeedingCompletion().catch(() => null as BookingWithRelations[] | null)
           : Promise.resolve(null),
         listUnitsEnriched().catch(() => null),
         listChannelRequestsInRange(from, to).catch(() => null as ChannelRequestRow[] | null),
@@ -2553,24 +2610,25 @@ export function PmsBoard({
                 </button>
               )}
             </div>
-            {canEditBookings && needsGuestList.length > 0 && (
+            {canEditBookings && visibleNeedsList.length > 0 && (
               <Popover open={needsGuestOpenM} onOpenChange={setNeedsGuestOpenM}>
                 <PopoverTrigger asChild>
                   <Button
                     size="icon"
                     variant="outline"
                     className="size-9 shrink-0 tap relative text-amber-600 dark:text-amber-400 border-amber-300/60 dark:border-amber-800/50"
-                    aria-label={`${needsGuestList.length} reservas por completar`}
+                    aria-label={`${visibleNeedsList.length} reservas por completar`}
                   >
                     <UserPlus size={16} />
                     <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold tabular-nums">
-                      {needsGuestList.length}
+                      {visibleNeedsList.length}
                     </span>
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent align="end" className="w-[min(92vw,340px)] p-0" hideWhenDetached>
                   <NeedsGuestPanel
-                    items={needsGuestList}
+                    items={visibleNeedsList}
+                    showPrice={canViewMoney}
                     onPick={(b) => {
                       setNeedsGuestOpenM(false);
                       setCompleteGuestBooking(b);
@@ -2855,7 +2913,7 @@ export function PmsBoard({
                 </TooltipContent>
               </Tooltip>
 
-              {/* Reservas de canal sin huésped: contador + lista → form rápido */}
+              {/* Reservas de canal sin huésped o sin precio: contador + lista → form rápido */}
               {canEditBookings && (
                 <Popover open={needsGuestOpen} onOpenChange={setNeedsGuestOpen}>
                   <PopoverTrigger asChild>
@@ -2865,23 +2923,24 @@ export function PmsBoard({
                       variant="outline"
                       className={cn(
                         "h-8 gap-1 text-xs",
-                        needsGuestList.length > 0 &&
+                        visibleNeedsList.length > 0 &&
                           "border-amber-300/70 dark:border-amber-700/60 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40"
                       )}
-                      aria-label={`${needsGuestList.length} reservas por completar`}
+                      aria-label={`${visibleNeedsList.length} reservas por completar`}
                     >
                       <UserPlus size={12} />
                       Completar
-                      {needsGuestList.length > 0 && (
+                      {visibleNeedsList.length > 0 && (
                         <span className="ml-0.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold tabular-nums">
-                          {needsGuestList.length}
+                          {visibleNeedsList.length}
                         </span>
                       )}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="end" className="w-[340px] p-0" hideWhenDetached>
                     <NeedsGuestPanel
-                      items={needsGuestList}
+                      items={visibleNeedsList}
+                      showPrice={canViewMoney}
                       onPick={(b) => {
                         setNeedsGuestOpen(false);
                         setCompleteGuestBooking(b);
@@ -3242,7 +3301,14 @@ export function PmsBoard({
 
               {/* Nueva reserva */}
               {canEditBookings && (
-                <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings} channelRequests={requestOverlaps}>
+                <LazyNewBookingTrigger
+                  units={units}
+                  accounts={accounts}
+                  existingBookings={bookings}
+                  channelRequests={requestOverlaps}
+                  channelCommissionDefaults={channelCommissionDefaults}
+                  commissionBase={commissionBase}
+                >
                   <Button
                     size="sm"
                     className="h-8 gap-1.5 text-xs"
@@ -3725,7 +3791,7 @@ export function PmsBoard({
           </DialogContent>
         </Dialog>
 
-        {/* Completar datos del huésped (reservas de canal sin huésped) */}
+        {/* Completar datos (reservas de canal sin huésped o sin precio) */}
         {completeGuestBooking && (
           <CompleteGuestDialog
             key={completeGuestBooking.id}
@@ -3734,6 +3800,13 @@ export function PmsBoard({
             onOpenChange={(o) => {
               if (!o) setCompleteGuestBooking(null);
             }}
+            canViewMoney={canViewMoney}
+            orgCurrency={orgCurrency}
+            // Moneda base y limpieza de la unidad: el desglose en vivo tiene
+            // que restar lo mismo que el server va a snapshotear al guardar.
+            unit={units.find((u) => u.id === completeGuestBooking.unit_id) ?? null}
+            channelCommissionDefaults={channelCommissionDefaults}
+            commissionBase={commissionBase}
             onCompleted={handleGuestCompleted}
           />
         )}
@@ -3747,6 +3820,8 @@ export function PmsBoard({
             accounts={accounts}
             existingBookings={bookings}
             channelRequests={requestOverlaps}
+            channelCommissionDefaults={channelCommissionDefaults}
+            commissionBase={commissionBase}
             open
             onOpenChange={(o) => { if (!o) setEditBooking(null); }}
           />
@@ -3759,6 +3834,8 @@ export function PmsBoard({
             accounts={accounts}
             existingBookings={bookings}
             channelRequests={requestOverlaps}
+            channelCommissionDefaults={channelCommissionDefaults}
+            commissionBase={commissionBase}
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
             checkOut={quickAdd.checkOut}
@@ -3778,7 +3855,14 @@ export function PmsBoard({
             Lo escondemos en editMode (reorden) y mientras el usuario arrastra,
             para no tapar el target ni competir con el DragChip. */}
         {canEditBookings && !editMode && !drag && (
-          <LazyNewBookingTrigger units={units} accounts={accounts} existingBookings={bookings} channelRequests={requestOverlaps}>
+          <LazyNewBookingTrigger
+            units={units}
+            accounts={accounts}
+            existingBookings={bookings}
+            channelRequests={requestOverlaps}
+            channelCommissionDefaults={channelCommissionDefaults}
+            commissionBase={commissionBase}
+          >
             <button
               type="button"
               aria-label="Nueva reserva"
@@ -4810,6 +4894,8 @@ function QuickAddBridge({
   accounts,
   existingBookings,
   channelRequests,
+  channelCommissionDefaults,
+  commissionBase,
   unitId,
   checkIn,
   checkOut,
@@ -4819,6 +4905,8 @@ function QuickAddBridge({
   accounts: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   existingBookings: BookingWithRelations[];
   channelRequests?: RequestOverlap[];
+  channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  commissionBase?: CommissionBase;
   unitId: string;
   checkIn: string;
   checkOut: string;
@@ -4830,6 +4918,8 @@ function QuickAddBridge({
       accounts={accounts}
       existingBookings={existingBookings}
       channelRequests={channelRequests}
+      channelCommissionDefaults={channelCommissionDefaults}
+      commissionBase={commissionBase}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
       defaultCheckOut={checkOut}
@@ -4850,12 +4940,16 @@ function LazyNewBookingTrigger({
   accounts,
   existingBookings,
   channelRequests,
+  channelCommissionDefaults,
+  commissionBase,
   children,
 }: {
   units: UnitWithRelations[];
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   existingBookings: BookingWithRelations[];
   channelRequests?: RequestOverlap[];
+  channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  commissionBase?: CommissionBase;
   children: React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>;
 }) {
   const [open, setOpen] = useState(false);
@@ -4876,6 +4970,8 @@ function LazyNewBookingTrigger({
           accounts={accounts}
           existingBookings={existingBookings}
           channelRequests={channelRequests}
+          channelCommissionDefaults={channelCommissionDefaults}
+          commissionBase={commissionBase}
           open={open}
           onOpenChange={setOpen}
         />

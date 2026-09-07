@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { UserPlus } from "lucide-react";
 import { listTeamMembers } from "@/lib/actions/team";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { requireSession } from "@/lib/actions/auth";
 import { isAdminLevel } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -17,6 +18,9 @@ export default async function EquipoPage() {
   // domicilio, contacto de emergencia…): solo admin/recepción pueden verlos.
   const { organization, role } = await getCurrentOrg();
   if (!isAdminLevel(role)) redirect("/dashboard");
+  const session = await requireSession();
+  // Regenerar credenciales es sólo de admin (recepción invita pero no toca claves).
+  const canResetAccess = role === "admin" || session.profile.is_superadmin;
 
   const members = await listTeamMembers();
 
@@ -29,6 +33,9 @@ export default async function EquipoPage() {
           </h2>
           <p className="text-xs sm:text-sm text-muted-foreground mt-1">
             {members.length} {members.length === 1 ? "miembro" : "miembros"} en esta organización
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Si alguien no puede entrar, regenerale la contraseña y mandásela: la anterior deja de servir.
           </p>
         </div>
         <InviteDialog orgName={organization.name}>
@@ -54,7 +61,7 @@ export default async function EquipoPage() {
                     {/* `joined_at` se setea al insertar la membresía: decía "se unió"
                         de gente que nunca había podido entrar. El único dato honesto
                         es el último ingreso real de auth.users. */}
-                    {m.active && !m.last_sign_in_at && (
+                    {m.active && m.auth_known && !m.last_sign_in_at && (
                       <Badge className="text-[10px] font-normal border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-400">
                         Invitado · nunca ingresó
                       </Badge>
@@ -66,9 +73,13 @@ export default async function EquipoPage() {
                   )}
                   {m.active && (
                     <div className="text-[10px] text-muted-foreground mt-0.5">
-                      {m.last_sign_in_at
-                        ? `Último ingreso ${formatTimeAgo(m.last_sign_in_at)}`
-                        : "Pasale el acceso desde el menú ⋯"}
+                      {!m.auth_known
+                        ? "No pudimos leer el último ingreso (probá de nuevo en un momento)"
+                        : m.last_sign_in_at
+                          ? `Último ingreso ${formatTimeAgo(m.last_sign_in_at)}`
+                          : canResetAccess
+                            ? "Todavía no entró: generale el acceso y mandáselo"
+                            : "Todavía no entró: un administrador tiene que pasarle el acceso"}
                     </div>
                   )}
                 </div>
@@ -78,7 +89,11 @@ export default async function EquipoPage() {
                 >
                   {roleMeta.label}
                 </Badge>
-                <TeamMemberActions member={m} orgName={organization.name} />
+                <TeamMemberActions
+                  member={m}
+                  orgName={organization.name}
+                  canResetAccess={canResetAccess}
+                />
               </div>
             );
           })}

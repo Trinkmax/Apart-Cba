@@ -36,6 +36,22 @@ export function tomorrowYmdInTz(timeZone: string = DEFAULT_ORG_TIMEZONE): string
   return addDaysYmd(todayYmdInTz(timeZone), 1);
 }
 
+/**
+ * Primer día del mes ANTERIOR al de hoy (en la tz de la org), como YYYY-MM-DD.
+ *
+ * Es la cota inferior de "reservas por completar" (sin huésped o sin precio):
+ * una temporaria se liquida en el mes de su check-out, así que lo que salió
+ * antes del mes pasado ya es un problema de liquidación, no un pendiente del
+ * calendario. Sin la cota, el panel acumulaba reservas viejas para siempre.
+ * La usan el listado del tablero, el contador del dashboard y el predicado
+ * client-side del tablero, así los tres cuentan exactamente lo mismo.
+ */
+export function completionCutoffYmd(timeZone: string = DEFAULT_ORG_TIMEZONE): string {
+  const [y, m] = todayYmdInTz(timeZone).split("-").map(Number);
+  const prev = new Date(Date.UTC(y, m - 2, 1)); // m-1 = mes actual (0-based) → m-2 = anterior
+  return prev.toISOString().slice(0, 10);
+}
+
 function wallClockAsUtcMs(date: Date, timeZone: string): number {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,

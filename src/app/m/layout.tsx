@@ -8,9 +8,13 @@ import {
   Building2,
   MessageSquareText,
   ScrollText,
+  Monitor,
 } from "lucide-react";
 import { getSession } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { isAdminLevel } from "@/lib/permissions";
+import { InstallAppListener } from "@/components/pwa/install-app-prompt";
+import { InstallAppButton } from "@/components/pwa/install-app-menu-item";
 import { LiveProvider } from "@/lib/realtime/live-context";
 import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { signOut } from "@/lib/actions/auth";
@@ -88,6 +92,20 @@ export default async function MobileLayout({ children }: { children: React.React
             <LiveIndicator />
           </div>
           <div className="flex items-center gap-2">
+            {/* Ícono en inicio/Dock para quien vive en esta versión. Se
+                esconde solo cuando ya corre instalada. */}
+            <InstallAppButton />
+            {/* Sólo admin/recepción operan el PMS de escritorio; limpieza y
+                mantenimiento no tienen nada que hacer ahí. */}
+            {isAdminLevel(role) && (
+              <Link
+                href="/dashboard"
+                className="tap inline-flex items-center gap-1 h-8 px-2 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-accent/50"
+              >
+                <Monitor size={14} />
+                <span className="hidden sm:inline">Versión completa</span>
+              </Link>
+            )}
             <Link href="/m/perfil" className="tap" aria-label="Mi perfil">
               <Avatar className="size-9">
                 {session.profile.avatar_url && (
@@ -109,6 +127,8 @@ export default async function MobileLayout({ children }: { children: React.React
           </div>
         </div>
       </header>
+
+      <InstallAppListener />
 
       {/* Content — pb compensa la bottom nav + safe area */}
       <main className="flex-1 pb-[calc(5rem+env(safe-area-inset-bottom))]">{children}</main>

@@ -42,9 +42,15 @@ interface Props {
   member: TeamMemberRow;
   /** Nombre de la organización — va en el mensaje de acceso y en la confirmación. */
   orgName: string;
+  /**
+   * Quien mira puede regenerar credenciales (admin o superadmin; recepción no,
+   * ver assertOwnsCredentials en team.ts). Gobierna el botón inline "Pasarle
+   * el acceso": mostrárselo a recepción sería un botón que siempre falla.
+   */
+  canResetAccess?: boolean;
 }
 
-export function TeamMemberActions({ member, orgName }: Props) {
+export function TeamMemberActions({ member, orgName, canResetAccess = false }: Props) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -56,8 +62,10 @@ export function TeamMemberActions({ member, orgName }: Props) {
 
   const name = member.profile?.full_name ?? member.email ?? "esta persona";
   // Nunca ingresó → la contraseña que se generó al invitarla ya no existe en
-  // ningún lado, así que regenerarla no le rompe nada a nadie.
-  const neverSignedIn = !member.last_sign_in_at;
+  // ningún lado, así que regenerarla no le rompe nada a nadie. Si no pudimos
+  // leer auth.users (`auth_known` false) NO lo asumimos: sin dato, se pide
+  // confirmación como para cualquiera que sí entra.
+  const neverSignedIn = member.auth_known && !member.last_sign_in_at;
 
   function handleChangeRole(newRole: UserRole) {
     startTransition(async () => {
@@ -76,7 +84,16 @@ export function TeamMemberActions({ member, orgName }: Props) {
     startTransition(async () => {
       try {
         const r = await resetMemberAccess(member.user_id);
-        setCredential({ fullName: r.fullName, email: r.email, password: r.tempPassword });
+        setCredential({
+          fullName: r.fullName,
+          email: r.email,
+          password: r.tempPassword,
+          role: member.role,
+          // Regenerar SIEMPRE mata la clave anterior (la haya usado o no): el
+          // diálogo y el mensaje de WhatsApp lo dicen en grande para que quien
+          // la recibe deje de probar la vieja.
+          regenerated: true,
+        });
         router.refresh();
       } catch (e) {
         toast.error("No se pudo generar el acceso", { description: (e as Error).message });
@@ -126,8 +143,26 @@ export function TeamMemberActions({ member, orgName }: Props) {
     });
   }
 
+  // Botón a la vista para quien nunca entró: el camino de "no puede ingresar"
+  // no puede vivir escondido en un menú ⋯. Misma acción que el item del menú.
+  const showInlineAccess = canResetAccess && member.active && neverSignedIn;
+
   return (
     <>
+      {showInlineAccess && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={isPending}
+          onClick={handleResetAccess}
+          className="gap-1.5 border-amber-500/40 text-amber-700 hover:bg-amber-500/10 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300"
+        >
+          {isPending ? <Loader2 className="size-4 animate-spin" /> : <KeyRound size={14} />}
+          <span className="max-sm:sr-only">Pasarle el acceso</span>
+        </Button>
+      )}
+
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="icon" variant="ghost" className="size-8" disabled={isPending}>

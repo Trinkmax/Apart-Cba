@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getProjectJwks } from "@/lib/supabase/jwks";
+import { landingPathForRole } from "@/lib/permissions";
 import type {
   Notification,
   UserProfile,
@@ -113,10 +114,32 @@ export async function requireSession(): Promise<SessionContext> {
   return session;
 }
 
+/**
+ * Ruta de entrada según el rol en la org activa. Se calcula sobre el contexto
+ * crudo (memberships + currentOrgId) y NO con getCurrentOrg(): ese helper
+ * redirige a /sin-acceso o /superadmin, y adentro de una Server Action eso
+ * es un redirect a ciegas en medio del login. Sin sesión o sin membresía →
+ * /dashboard, que ya sabe a dónde mandar a cada caso.
+ */
+export async function getLandingPath(): Promise<"/m" | "/dashboard"> {
+  const ctx = await sessionContextLoader();
+  if (!ctx) return "/dashboard";
+  const active =
+    ctx.memberships.find((m) => m.organization_id === ctx.currentOrgId) ??
+    ctx.memberships.find((m) => m.active) ??
+    null;
+  return landingPathForRole(active?.role);
+}
+
 export async function signIn(
   email: string,
   password: string
-): Promise<{ error?: string; requiresMfa?: { factorId: string } }> {
+): Promise<{
+  error?: string;
+  requiresMfa?: { factorId: string };
+  /** A dónde ir después de entrar (limpieza/mantenimiento → /m). */
+  landing?: "/m" | "/dashboard";
+}> {
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { error: error.message };
@@ -127,16 +150,18 @@ export async function signIn(
     return { error: "Esta cuenta no está habilitada para rentOS." };
   }
 
+  const landing = await getLandingPath();
+
   // Spec 2: si el user tiene factor TOTP verificado, desviar a /login/2fa
   // antes de revalidar / redirigir al dashboard.
   const { data: factorsData } = await supabase.auth.mfa.listFactors();
   const totpFactor = factorsData?.totp?.[0];
   if (totpFactor && totpFactor.status === "verified") {
-    return { requiresMfa: { factorId: totpFactor.id } };
+    return { requiresMfa: { factorId: totpFactor.id }, landing };
   }
 
   revalidatePath("/", "layout");
-  return {};
+  return { landing };
 }
 
 export async function signOut(): Promise<void> {

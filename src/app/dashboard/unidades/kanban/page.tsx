@@ -1,12 +1,13 @@
 import { redirect } from "next/navigation";
 import { listUnitsEnriched } from "@/lib/actions/units";
-import { listBookingsInRange, listBookingsNeedingGuest } from "@/lib/actions/bookings";
+import { listBookingsInRange, listBookingsNeedingCompletion } from "@/lib/actions/bookings";
 import { listAccounts } from "@/lib/actions/cash";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
 import { listChannelRequestsInRange } from "@/lib/actions/channel-requests";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
+import { completionCutoffYmd, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 import { PmsBoard } from "@/components/units/pms/pms-board";
 import { isoAddDays } from "@/components/units/pms/pms-constants";
 
@@ -48,7 +49,8 @@ export default async function PmsGridPage({
     canViewMoney || canRegisterExpense ? listAccounts() : Promise.resolve([]),
     listScheduleInRange(startISO, endISO).catch(() => []),
     listDateMarksInRange(startISO, endISO).catch(() => []),
-    canEditBookings ? listBookingsNeedingGuest().catch(() => []) : Promise.resolve([]),
+    // Reservas de canal sin huésped O sin precio — el panel "Por completar".
+    canEditBookings ? listBookingsNeedingCompletion().catch(() => []) : Promise.resolve([]),
     // Solicitudes de OTA sin confirmar: se pintan en la grilla pero no crean
     // reserva. `null` (y no `[]`) si falla: el board lo usa para NO desalojar
     // la capa que ya tenga cargada.
@@ -75,6 +77,9 @@ export default async function PmsGridPage({
       startISO={startISO}
       days={90}
       orgCurrency={organization.default_currency ?? "ARS"}
+      channelCommissionDefaults={organization.channel_commissions ?? {}}
+      completionCutoff={completionCutoffYmd(organization.timezone || DEFAULT_ORG_TIMEZONE)}
+      commissionBase={organization.commission_base ?? undefined}
     />
   );
 }

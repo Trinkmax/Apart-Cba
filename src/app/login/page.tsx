@@ -1,11 +1,13 @@
 import { redirect } from "next/navigation";
-import { getSession } from "@/lib/actions/auth";
+import { getSession, getLandingPath } from "@/lib/actions/auth";
 import { LoginForm } from "@/components/auth/login-form";
 import { Logo } from "@/components/brand/logo";
 
 export default async function LoginPage() {
+  // Sesión viva (típico: el ícono de la app instalada apunta a /login) →
+  // derecho a la casa de su rol, no siempre al dashboard de escritorio.
   const session = await getSession();
-  if (session) redirect("/dashboard");
+  if (session) redirect(await getLandingPath());
 
   return (
     <div className="min-h-screen flex items-stretch">

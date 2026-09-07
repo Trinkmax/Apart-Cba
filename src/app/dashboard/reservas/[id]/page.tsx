@@ -23,6 +23,7 @@ import { BookingChannelStatus } from "@/components/bookings/booking-channel-stat
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
+import { computeBookingEconomics } from "@/lib/finance/booking-economics";
 import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
 
@@ -34,7 +35,7 @@ type BookingDetail = Booking & {
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { role } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
   const canViewMoney = can(role, "payments", "view");
   const canCreatePayment = can(role, "payments", "create");
   const canEditBooking = can(role, "bookings", "update");
@@ -65,6 +66,25 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   // 0, comisión y neto al propietario no son datos, son placeholders. Un
   // bloqueo, en cambio, vale $0 de verdad — ahí no falta nada por cargar.
   const sinPrecio = !b.is_block && Number(b.total_amount) <= 0;
+  // Mensual es ciego a la limpieza y no lleva comisión de canal: la
+  // liquidación prorratea la renta y Resultados hace lo mismo. Mostrar acá
+  // "Limpieza" o "Se lleva Airbnb" prometía un neto que ninguna liquidación
+  // produce.
+  const esMensual = b.mode === "mensual";
+  // Una sola cuenta para toda la tarjeta de plata (la misma que hace el
+  // server y la liquidación): total = alojamiento + limpieza; el canal y la
+  // comisión se descuentan, la limpieza queda en la administración.
+  const econ = computeBookingEconomics({
+    total: b.total_amount,
+    cleaningFee: esMensual ? 0 : b.cleaning_fee,
+    channelPct: esMensual ? 0 : b.channel_commission_pct,
+    commissionPct: b.commission_pct,
+    commissionBase: organization.commission_base ?? undefined,
+  });
+  // Defaults por canal para el form (edición y "Cargar precio"); las reservas
+  // de OTA entran sin pct y el form cae al de la org según el origen.
+  const channelCommissionDefaults = organization.channel_commissions ?? {};
+  const commissionBase = organization.commission_base ?? undefined;
 
   // Link del depto para el mensaje. .trim() + sin barra final: el env de Vercel
   // puede traer un "\n" al final y eso parte el link ("...com⏎/u/slug").
@@ -130,7 +150,8 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           )}
           {canEditBooking && (
             <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}
-              channelRequests={requestOverlaps}>
+              channelRequests={requestOverlaps} channelCommissionDefaults={channelCommissionDefaults}
+              commissionBase={commissionBase}>
               <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
             </BookingFormDialog>
           )}
@@ -246,9 +267,23 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
             <h2 className="text-xs uppercase tracking-wider text-muted-foreground">Pago</h2>
             <div className="mt-2 space-y-2 text-sm">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Total</span>
+                <span className="text-muted-foreground">Total (paga el huésped)</span>
                 <span className="font-semibold">{formatMoney(b.total_amount, b.currency)}</span>
               </div>
+              {/* El total ya trae la limpieza adentro; lo abrimos para que el
+                  precio por noche no se lea inflado. */}
+              {!sinPrecio && !esMensual && econ.cleaning > 0 && (
+                <div className="pl-3 space-y-1 text-xs text-muted-foreground">
+                  <div className="flex justify-between">
+                    <span>Alojamiento</span>
+                    <span>{formatMoney(econ.lodging, b.currency)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Limpieza (incluida)</span>
+                    <span>{formatMoney(econ.cleaning, b.currency)}</span>
+                  </div>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Cobrado</span>
                 <span className="font-medium text-emerald-600 dark:text-emerald-400">{formatMoney(b.paid_amount, b.currency)}</span>
@@ -276,7 +311,9 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                         units={units}
                         accounts={accounts}
                         existingBookings={unitBookings}
-              channelRequests={requestOverlaps}
+                        channelRequests={requestOverlaps}
+                        channelCommissionDefaults={channelCommissionDefaults}
+                        commissionBase={commissionBase}
                       >
                         <Button size="sm">Cargar precio</Button>
                       </BookingFormDialog>
@@ -304,6 +341,17 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
               </div>
 
               <Separator />
+              {/* Lo que se lleva la plataforma (Booking/Airbnb). Sólo aparece
+                  si la reserva tiene % de canal: en directo no hay, y en
+                  mensual no aplica. */}
+              {!sinPrecio && !esMensual && econ.channelPct > 0 && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">
+                    Se lleva {src.label} ({econ.channelPct}%)
+                  </span>
+                  <span>−{formatMoney(econ.channelCommission, b.currency)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-xs">
                 {/* El % de acá es el que quedó guardado en la reserva; la
                     liquidación recalcula con el del propietario o el de la
@@ -311,29 +359,32 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                     tocar el cálculo. */}
                 <span className="text-muted-foreground">Comisión de administración</span>
                 <span>
-                  {sinPrecio
+                  {sinPrecio || b.commission_pct === null || b.commission_pct === undefined
                     ? "—"
-                    : `${formatMoney(b.commission_amount, b.currency)} (${b.commission_pct}%)`}
+                    : `−${formatMoney(econ.commission, b.currency)} (${econ.commissionPct}%)`}
                 </span>
               </div>
               <p className="text-[11px] leading-snug text-muted-foreground/80">
                 Referencia. La comisión definitiva se calcula al generar la liquidación,
                 según la unidad y el propietario.
+                {!sinPrecio && !esMensual && econ.channelPct > 0 && (
+                  econ.commissionBase === "gross"
+                    ? " Calculada sobre el total."
+                    : ` Calculada sobre el total menos lo que se lleva ${src.label}.`
+                )}
+                {esMensual && " En mensual se prorratea la renta por los días del mes."}
               </p>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Fee limpieza</span>
-                <span>{formatMoney(b.cleaning_fee, b.currency)}</span>
-              </div>
+              {!esMensual && (
+                <div className="flex justify-between text-xs">
+                  <span className="text-muted-foreground">Limpieza (queda en la administración)</span>
+                  <span>{sinPrecio ? "—" : `−${formatMoney(econ.cleaning, b.currency)}`}</span>
+                </div>
+              )}
               <Separator />
               <div className="flex justify-between font-semibold">
                 <span>Neto al propietario</span>
                 <span className="text-emerald-700 dark:text-emerald-300">
-                  {sinPrecio
-                    ? "—"
-                    : formatMoney(
-                        Number(b.total_amount) - Number(b.commission_amount ?? 0) - Number(b.cleaning_fee ?? 0),
-                        b.currency
-                      )}
+                  {sinPrecio ? "—" : formatMoney(econ.ownerNet, b.currency)}
                 </span>
               </div>
               {/* Un "$0,00" acá se lee como un dato cierto: el propietario no

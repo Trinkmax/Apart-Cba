@@ -191,16 +191,23 @@ export async function buildSettlementDoc(
     );
   }
 
+  // Columna "Com. canal" (comisión de Booking / Airbnb…) sólo cuando el
+  // documento la tiene: las liquidaciones anteriores salen con el layout de
+  // siempre, byte a byte.
+  const hasChannel = model.hasChannelCommission;
   const tableCols = [
     { header: "Ingreso", dataKey: "ci" },
     { header: "Egreso", dataKey: "co" },
     { header: "Huésped", dataKey: "guest" },
     { header: "Noches", dataKey: "nights" },
     { header: "Bruto", dataKey: "gross" },
+    ...(hasChannel ? [{ header: "Com. canal", dataKey: "channel" }] : []),
     { header: "Comisión", dataKey: "commission" },
     { header: "Gastos", dataKey: "expenses" },
     { header: "Neto", dataKey: "net" },
   ];
+  const NET_COL = tableCols.length - 1;
+  const boldRight = { halign: "right" as const, fontStyle: "bold" as const };
 
   for (const u of model.units) {
     y = ensureSpace(doc, y, 30);
@@ -215,6 +222,9 @@ export async function buildSettlementDoc(
         pdfSafe(b.guest + (b.mode === "mensual" ? " (mensual)" : "")),
         b.nights ?? EMPTY,
         money(b.gross, model.currency),
+        ...(hasChannel
+          ? [b.channelCommission ? pdfNeg(money(b.channelCommission, model.currency)) : EMPTY]
+          : []),
         b.commission ? pdfNeg(money(b.commission, model.currency)) : EMPTY,
         b.expenses ? pdfNeg(money(b.expenses, model.currency)) : EMPTY,
         money(b.net, model.currency),
@@ -226,16 +236,19 @@ export async function buildSettlementDoc(
         const b = u.rows[data.row.index];
         if (b?.missingRate) {
           data.cell.styles.textColor = AMBER;
-          if (data.column.index === 7) data.cell.text = [`sin TC ${b.currency}`];
+          if (data.column.index === NET_COL) data.cell.text = [`sin TC ${b.currency}`];
         }
       },
       foot: [
         [
-          { content: pdfSafe(`Subtotal ${u.code}`), colSpan: 4, styles: { halign: "right", fontStyle: "bold" } },
-          { content: money(u.subtotal.gross, model.currency), styles: { halign: "right", fontStyle: "bold" } },
-          { content: pdfNeg(money(u.subtotal.commission, model.currency)), styles: { halign: "right", fontStyle: "bold" } },
-          { content: pdfNeg(money(u.subtotal.expenses, model.currency)), styles: { halign: "right", fontStyle: "bold" } },
-          { content: money(u.subtotal.net, model.currency), styles: { halign: "right", fontStyle: "bold" } },
+          { content: pdfSafe(`Subtotal ${u.code}`), colSpan: 4, styles: boldRight },
+          { content: money(u.subtotal.gross, model.currency), styles: boldRight },
+          ...(hasChannel
+            ? [{ content: pdfNeg(money(u.subtotal.channelCommission, model.currency)), styles: boldRight }]
+            : []),
+          { content: pdfNeg(money(u.subtotal.commission, model.currency)), styles: boldRight },
+          { content: pdfNeg(money(u.subtotal.expenses, model.currency)), styles: boldRight },
+          { content: money(u.subtotal.net, model.currency), styles: boldRight },
         ],
       ],
       theme: "striped",
@@ -244,16 +257,29 @@ export async function buildSettlementDoc(
       bodyStyles: { fontSize: 7.5 },
       // Anchos fijos: la suma de columnas fijas (150) + huésped 'auto' (32) =
       // 182mm = ancho imprimible exacto. Los importes nunca se salen del margen.
-      columnStyles: {
-        0: { cellWidth: 18 },
-        1: { cellWidth: 18 },
-        2: { cellWidth: "auto", overflow: "ellipsize" },
-        3: { halign: "center", cellWidth: 13 },
-        4: { halign: "right", cellWidth: 26 },
-        5: { halign: "right", cellWidth: 26 },
-        6: { halign: "right", cellWidth: 23 },
-        7: { halign: "right", cellWidth: 26 },
-      },
+      // Con "Com. canal" se reparte de nuevo: fijas 157 + huésped 25 = 182.
+      columnStyles: hasChannel
+        ? {
+            0: { cellWidth: 17 },
+            1: { cellWidth: 17 },
+            2: { cellWidth: "auto", overflow: "ellipsize" },
+            3: { halign: "center", cellWidth: 11 },
+            4: { halign: "right", cellWidth: 23 },
+            5: { halign: "right", cellWidth: 22 },
+            6: { halign: "right", cellWidth: 22 },
+            7: { halign: "right", cellWidth: 22 },
+            8: { halign: "right", cellWidth: 23 },
+          }
+        : {
+            0: { cellWidth: 18 },
+            1: { cellWidth: 18 },
+            2: { cellWidth: "auto", overflow: "ellipsize" },
+            3: { halign: "center", cellWidth: 13 },
+            4: { halign: "right", cellWidth: 26 },
+            5: { halign: "right", cellWidth: 26 },
+            6: { halign: "right", cellWidth: 23 },
+            7: { halign: "right", cellWidth: 26 },
+          },
       styles: {
         cellPadding: 1.6,
         fontSize: 7.5,
@@ -312,10 +338,13 @@ export async function buildSettlementDoc(
   }
 
   // ── Totales ──
-  y = ensureSpace(doc, y, 46);
+  // Una línea más ("- Comisión del canal") cuando hay canal: el box crece 6mm
+  // y todo lo de abajo se corre lo mismo. Sin canal, posiciones de siempre.
+  const extra = hasChannel ? 6 : 0;
+  y = ensureSpace(doc, y, 46 + extra);
   const boxX = PAGE_W - MARGIN_X - 86;
   doc.setFillColor(248, 250, 252);
-  doc.rect(boxX, y, 86, 40, "F");
+  doc.rect(boxX, y, 86, 40 + extra, "F");
   const line = (label: string, value: string, yy: number) => {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
@@ -325,16 +354,23 @@ export async function buildSettlementDoc(
     doc.text(pdfSafe(value), boxX + 82, yy, { align: "right" });
   };
   line("Bruto", money(model.totals.gross, model.currency), y + 7);
-  line("- Comisión", pdfNeg(money(model.totals.commission, model.currency)), y + 13);
-  line("- Gastos", pdfNeg(money(model.totals.deductions, model.currency)), y + 19);
+  if (hasChannel) {
+    line(
+      "- Comisión del canal",
+      pdfNeg(money(model.totals.channelCommission, model.currency)),
+      y + 13,
+    );
+  }
+  line("- Comisión", pdfNeg(money(model.totals.commission, model.currency)), y + 13 + extra);
+  line("- Gastos", pdfNeg(money(model.totals.deductions, model.currency)), y + 19 + extra);
   doc.setDrawColor(brand[0], brand[1], brand[2]);
   doc.setLineWidth(0.4);
-  doc.line(boxX + 4, y + 24, boxX + 82, y + 24);
+  doc.line(boxX + 4, y + 24 + extra, boxX + 82, y + 24 + extra);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(11);
   doc.setTextColor(brand[0], brand[1], brand[2]);
-  doc.text("NETO POR PAGAR", boxX + 4, y + 33);
-  doc.text(money(model.totals.net, model.currency), boxX + 82, y + 33, {
+  doc.text("NETO POR PAGAR", boxX + 4, y + 33 + extra);
+  doc.text(money(model.totals.net, model.currency), boxX + 82, y + 33 + extra, {
     align: "right",
   });
   doc.setTextColor(INK[0], INK[1], INK[2]);
@@ -345,7 +381,7 @@ export async function buildSettlementDoc(
     doc.text(
       pdfSafe(`* No incluye importes en ${model.missingRates.join(", ")} (falta TC).`),
       boxX + 82,
-      y + 44,
+      y + 44 + extra,
       { align: "right" },
     );
     doc.setTextColor(INK[0], INK[1], INK[2]);

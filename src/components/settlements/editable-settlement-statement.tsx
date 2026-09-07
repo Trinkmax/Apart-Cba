@@ -82,6 +82,7 @@ import {
 import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { formatMoney, formatDate, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { managementCommissionAmount } from "@/lib/finance/booking-economics";
 import {
   SETTLEMENT_LINE_META,
   describeAuditChange,
@@ -256,6 +257,7 @@ function RowEditor({
     ),
   );
   const [commission, setCommission] = useState(String(row.commission));
+  const [channel, setChannel] = useState(String(row.channelCommission));
   const [expenses, setExpenses] = useState(String(row.expenses));
   const [rowCurrency, setRowCurrency] = useState<string>(row.currency);
   const [impactCaja, setImpactCaja] = useState(true);
@@ -267,24 +269,50 @@ function RowEditor({
   const currencyChanged = rowCurrency !== row.currency;
   const isForeign = rowCurrency !== currency;
 
-  const oldNet = round2(row.gross - row.commission - row.expenses);
-  const newNet = round2(num(gross) - num(commission) - num(expenses));
+  const oldNet = round2(
+    row.gross - row.commission - row.channelCommission - row.expenses,
+  );
+  const newNet = round2(
+    num(gross) - num(commission) - num(channel) - num(expenses),
+  );
   const delta = round2(newNet - oldNet);
   const projected = round2(currentNet + delta);
 
+  // La comisión se recalcula con la MISMA regla que la generación
+  // (booking-economics): sobre el bruto o sobre bruto − canal según la base
+  // con la que se liquidó la fila. Filas viejas (sin base en el meta) siguen
+  // como siempre: sobre el bruto.
+  const commissionBase = row.commissionBase ?? "gross";
+  function recomputeCommission(g: number, p: number, ch: number): string {
+    const channelPct = g > 0 ? (ch / g) * 100 : 0;
+    const c = managementCommissionAmount({
+      total: g,
+      commissionPct: p,
+      channelPct,
+      commissionBase,
+    });
+    return String(c ?? 0);
+  }
+  function baseAmount(g: number, ch: number): number {
+    return commissionBase === "net_of_channel" ? round2(g - ch) : g;
+  }
+
   function onGross(v: string) {
     setGross(v);
-    const g = num(v);
-    setCommission(String(round2((g * num(pct)) / 100)));
+    setCommission(recomputeCommission(num(v), num(pct), num(channel)));
   }
   function onPct(v: string) {
     setPct(v);
-    setCommission(String(round2((num(gross) * num(v)) / 100)));
+    setCommission(recomputeCommission(num(gross), num(v), num(channel)));
+  }
+  function onChannel(v: string) {
+    setChannel(v);
+    setCommission(recomputeCommission(num(gross), num(pct), num(v)));
   }
   function onCommission(v: string) {
     setCommission(v);
-    const g = num(gross);
-    setPct(g > 0 ? String(round2((num(v) / g) * 100)) : "0");
+    const b = baseAmount(num(gross), num(channel));
+    setPct(b > 0 ? String(round2((num(v) / b) * 100)) : "0");
   }
 
   function save() {
@@ -310,6 +338,7 @@ function RowEditor({
           nights: Math.max(0, Math.round(num(nights))),
           gross: round2(num(gross)),
           commission: round2(num(commission)),
+          channel_commission: round2(num(channel)),
           expenses: round2(num(expenses)),
           guest_name: guest.trim() || null,
           check_in: checkIn || null,
@@ -436,14 +465,26 @@ function RowEditor({
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label>Gastos (limpieza / expensas)</Label>
-            <Input
-              type="number"
-              step="0.01"
-              value={expenses}
-              onChange={(e) => setExpenses(e.target.value)}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Comisión del canal</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={channel}
+                onChange={(e) => onChannel(e.target.value)}
+                placeholder="Booking / Airbnb"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Gastos (limpieza / expensas)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                value={expenses}
+                onChange={(e) => setExpenses(e.target.value)}
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -474,8 +515,8 @@ function RowEditor({
             </Select>
             {currencyChanged && (
               <p className="text-[11px] text-amber-700 dark:text-amber-300">
-                Aplicamos {rowCurrency} a las 3 líneas de la reserva (ingreso,
-                comisión y gastos).
+                Aplicamos {rowCurrency} a todas las líneas de la reserva
+                (ingreso, comisiones y gastos).
               </p>
             )}
           </div>
@@ -768,6 +809,7 @@ function SortableUnitBlock({
   unitDndId,
   editable,
   currency,
+  hasChannel,
   pending,
   sensors,
   reorderableBookings,
@@ -780,6 +822,8 @@ function SortableUnitBlock({
   unitDndId: string;
   editable: boolean;
   currency: string;
+  /** Columna "Canal" (comisión de la plataforma). Sólo si el documento la tiene. */
+  hasChannel: boolean;
   pending: boolean;
   sensors: ReturnType<typeof useSensors>;
   /** true → drag entre filas de esta unidad; false → solo lectura. */
@@ -856,6 +900,9 @@ function SortableUnitBlock({
               <TableHead className="h-9">Huésped</TableHead>
               <TableHead className="h-9 text-center">Noches</TableHead>
               <TableHead className="h-9 text-right">Bruto</TableHead>
+              {hasChannel && (
+                <TableHead className="h-9 text-right">Canal</TableHead>
+              )}
               <TableHead className="h-9 text-right">Comisión</TableHead>
               <TableHead className="h-9 text-right">Gastos</TableHead>
               <TableHead className="h-9 text-right">Neto</TableHead>
@@ -880,6 +927,7 @@ function SortableUnitBlock({
                     b={b}
                     editable={editable}
                     currency={currency}
+                    hasChannel={hasChannel}
                     pending={pending}
                     canReorder={reorderableBookings && !!b.ref_id}
                     onRowClick={onRowClick}
@@ -900,6 +948,11 @@ function SortableUnitBlock({
               <TableCell className="text-right tabular-nums">
                 {formatMoney(unit.subtotal.gross, currency)}
               </TableCell>
+              {hasChannel && (
+                <TableCell className="text-right">
+                  <Money n={unit.subtotal.channelCommission} c={currency} neg />
+                </TableCell>
+              )}
               <TableCell className="text-right">
                 <Money n={unit.subtotal.commission} c={currency} neg />
               </TableCell>
@@ -922,6 +975,7 @@ function SortableBookingRow({
   b,
   editable,
   currency,
+  hasChannel,
   pending,
   canReorder,
   onRowClick,
@@ -930,6 +984,7 @@ function SortableBookingRow({
   b: StatementBookingRowT;
   editable: boolean;
   currency: string;
+  hasChannel: boolean;
   pending: boolean;
   canReorder: boolean;
   onRowClick: (b: StatementBookingRowT) => void;
@@ -1004,6 +1059,11 @@ function SortableBookingRow({
       <TableCell className="text-right tabular-nums font-medium">
         {formatMoney(b.gross, b.currency)}
       </TableCell>
+      {hasChannel && (
+        <TableCell className="text-right">
+          <Money n={b.channelCommission} c={b.currency} neg />
+        </TableCell>
+      )}
       <TableCell className="text-right">
         <Money n={b.commission} c={b.currency} neg />
       </TableCell>
@@ -1191,6 +1251,7 @@ const CHARGE_TYPES: { value: LineType; label: string }[] = [
   { value: "maintenance_charge", label: "Mantenimiento" },
   { value: "expenses_fraction", label: "Expensas / servicios" },
   { value: "commission", label: "Comisión" },
+  { value: "channel_commission", label: "Comisión del canal" },
 ];
 
 function ChargeDialog({
@@ -1570,6 +1631,8 @@ export function EditableSettlementStatement({
   undoState: UndoState;
 }) {
   const c = currency;
+  // Columna "Canal" sólo si el documento tiene comisión de plataforma > 0.
+  const hasChannel = model.hasChannelCommission;
   const [editingRow, setEditingRow] = useState<
     StatementModel["units"][number]["rows"][number] | null
   >(null);
@@ -1903,9 +1966,20 @@ export function EditableSettlementStatement({
         </DataCell>
       </dl>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border border-y">
+      {/* KPIs — con "Canal" son 5; en angosto el neto ocupa la última fila. */}
+      <div
+        className={cn(
+          "grid grid-cols-2 gap-px bg-border border-y",
+          hasChannel ? "sm:grid-cols-5" : "sm:grid-cols-4",
+        )}
+      >
         <Kpi label="Bruto" value={formatMoney(model.totals.gross, c)} />
+        {hasChannel && (
+          <Kpi
+            label="Canal"
+            value={`−${formatMoney(model.totals.channelCommission, c)}`}
+          />
+        )}
         <Kpi
           label="Comisión"
           value={`−${formatMoney(model.totals.commission, c)}`}
@@ -1914,7 +1988,12 @@ export function EditableSettlementStatement({
           label="Gastos"
           value={`−${formatMoney(model.totals.deductions, c)}`}
         />
-        <div className="bg-primary/5 px-4 py-4">
+        <div
+          className={cn(
+            "bg-primary/5 px-4 py-4",
+            hasChannel && "col-span-2 sm:col-span-1",
+          )}
+        >
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
             Neto por pagar
           </div>
@@ -2016,6 +2095,7 @@ export function EditableSettlementStatement({
                   unitDndId={u.unit_id ?? "__none__"}
                   editable={editable}
                   currency={c}
+                  hasChannel={hasChannel}
                   pending={pending}
                   sensors={sensors}
                   reorderableBookings={editable && !!u.unit_id}

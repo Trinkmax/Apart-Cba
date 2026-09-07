@@ -97,6 +97,13 @@ export interface StatementBookingRow {
   gross: number;
   commissionPct: number | null;
   commission: number;
+  /**
+   * Comisión de la plataforma (Booking, Airbnb…) — línea `channel_commission`
+   * (migración 058). Va en su propia columna, NO dentro de `expenses`.
+   */
+  channelCommission: number;
+  /** Sobre qué base se calculó `commission` (snapshot del meta; null en docs viejos). */
+  commissionBase: "gross" | "net_of_channel" | null;
   /** limpieza + expensas + otros descuentos del mismo grupo */
   expenses: number;
   net: number;
@@ -117,7 +124,13 @@ export interface StatementUnitGroup {
   name: string;
   rows: StatementBookingRow[];
   /** Subtotales convertidos a moneda base. */
-  subtotal: { gross: number; commission: number; expenses: number; net: number };
+  subtotal: {
+    gross: number;
+    commission: number;
+    channelCommission: number;
+    expenses: number;
+    net: number;
+  };
   /** Monedas distintas presentes en las reservas de esta unidad. */
   currencies: string[];
 }
@@ -171,8 +184,26 @@ export interface StatementModel {
   };
   units: StatementUnitGroup[];
   otros: StatementOtherRow[];
-  /** Totales SIEMPRE en moneda base (ARS) — equivalentes a los persistidos. */
-  totals: { gross: number; commission: number; deductions: number; net: number };
+  /**
+   * Totales SIEMPRE en moneda base (ARS). `gross`, `commission` y `net` son
+   * los persistidos; `deductions` acá EXCLUYE la comisión del canal (que va en
+   * `channelCommission`), mientras que `owner_settlements.deductions_amount`
+   * la incluye porque no tiene columna propia. deductions + channelCommission
+   * = deductions_amount.
+   */
+  totals: {
+    gross: number;
+    commission: number;
+    channelCommission: number;
+    deductions: number;
+    net: number;
+  };
+  /**
+   * true si alguna línea del documento tiene comisión del canal > 0. Las
+   * pantallas, el PDF y el Excel muestran la columna "Canal" SÓLO en ese caso,
+   * así los documentos anteriores a la migración 058 se ven idénticos.
+   */
+  hasChannelCommission: boolean;
   /** Tasas de cambio activas del documento. */
   exchangeRates: Record<string, number>;
   /** Monedas distintas detectadas en las líneas (sin la base). */
@@ -269,12 +300,22 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         .filter((g) => g.line_type === "commission")
         .reduce((acc, g) => acc + Number(g.amount), 0),
     );
-    const expenses = round2(
+    const channelCommission = round2(
       group
-        .filter((g) => g.sign === "-" && g.line_type !== "commission")
+        .filter((g) => g.line_type === "channel_commission")
         .reduce((acc, g) => acc + Number(g.amount), 0),
     );
-    const net = round2(gross - commission - expenses);
+    const expenses = round2(
+      group
+        .filter(
+          (g) =>
+            g.sign === "-" &&
+            g.line_type !== "commission" &&
+            g.line_type !== "channel_commission",
+        )
+        .reduce((acc, g) => acc + Number(g.amount), 0),
+    );
+    const net = round2(gross - commission - channelCommission - expenses);
     const netConv = convert(net, rowCurrency, baseCurrency, exchangeRates);
     if (rowCurrency !== baseCurrency) foreignCurrenciesSet.add(rowCurrency);
     if (netConv.missing) missingRatesSet.add(rowCurrency);
@@ -288,7 +329,13 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         code: u?.code ?? "—",
         name: u?.name ?? "Sin unidad",
         rows: [],
-        subtotal: { gross: 0, commission: 0, expenses: 0, net: 0 },
+        subtotal: {
+          gross: 0,
+          commission: 0,
+          channelCommission: 0,
+          expenses: 0,
+          net: 0,
+        },
         currencies: [],
       };
       unitMap.set(k, ug);
@@ -312,6 +359,8 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       gross,
       commissionPct: meta?.commission_pct ?? null,
       commission,
+      channelCommission,
+      commissionBase: meta?.commission_base ?? null,
       expenses,
       net,
       netInBase: netConv.value,
@@ -358,6 +407,12 @@ export function buildStatementModel(s: StatementInput): StatementModel {
           baseCurrency,
           exchangeRates,
         );
+        const chanConv = convert(
+          r.channelCommission,
+          r.currency,
+          baseCurrency,
+          exchangeRates,
+        );
         const expConv = convert(
           r.expenses,
           r.currency,
@@ -367,11 +422,12 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         return {
           gross: round2(acc.gross + grossConv.value),
           commission: round2(acc.commission + commConv.value),
+          channelCommission: round2(acc.channelCommission + chanConv.value),
           expenses: round2(acc.expenses + expConv.value),
           net: round2(acc.net + r.netInBase),
         };
       },
-      { gross: 0, commission: 0, expenses: 0, net: 0 },
+      { gross: 0, commission: 0, channelCommission: 0, expenses: 0, net: 0 },
     );
     ug.currencies = Array.from(currencySet).sort();
   }
@@ -384,6 +440,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
   const totals = (() => {
     let gross = 0;
     let commission = 0;
+    let channelCommission = 0;
     let deductions = 0;
     let net = 0;
     const pushLine = (
@@ -399,6 +456,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       } else {
         net -= c;
         if (lineType === "commission") commission += c;
+        else if (lineType === "channel_commission") channelCommission += c;
         else deductions += c;
       }
     };
@@ -413,10 +471,19 @@ export function buildStatementModel(s: StatementInput): StatementModel {
     return {
       gross: round2(gross),
       commission: round2(commission),
+      channelCommission: round2(channelCommission),
       deductions: round2(deductions),
       net: round2(net),
     };
   })();
+
+  // La columna "Canal" aparece sólo si hay algo que mostrar. Miramos también
+  // las filas en moneda nativa: una reserva en USD sin TC convierte a 0 y no
+  // sumaría al total, pero su comisión del canal sigue existiendo.
+  const hasChannelCommission =
+    totals.channelCommission > 0 ||
+    units.some((u) => u.rows.some((r) => r.channelCommission > 0)) ||
+    otros.some((o) => o.line_type === "channel_commission" && o.amount > 0);
 
   const statusMeta =
     SETTLEMENT_STATUS_META[s.status as keyof typeof SETTLEMENT_STATUS_META] ?? {
@@ -450,6 +517,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
     units,
     otros,
     totals,
+    hasChannelCommission,
     exchangeRates,
     foreignCurrencies: Array.from(foreignCurrenciesSet).sort(),
     missingRates: Array.from(missingRatesSet).sort(),

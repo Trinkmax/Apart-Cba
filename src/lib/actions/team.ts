@@ -49,6 +49,13 @@ export type TeamMemberRow = OrganizationMember & {
   profile: UserProfile | null;
   email: string | null;
   last_sign_in_at: string | null;
+  /**
+   * false = no pudimos leer auth.users (GoTrue caído o lento): `email` y
+   * `last_sign_in_at` vienen en null por FALTA DE DATO, no porque la persona
+   * nunca haya entrado. La UI no debe ofrecer "regenerar sin confirmar" en
+   * ese estado: pisaría la clave de alguien que sí la usa.
+   */
+  auth_known: boolean;
 };
 
 type AuthUserLite = { id: string; email: string | null; last_sign_in_at: string | null };
@@ -60,6 +67,12 @@ type AuthUserLite = { id: string; email: string | null; last_sign_in_at: string 
  * vieja quedaba fuera del listado y `createUser` explotaba con "already registered".
  */
 async function listAllAuthUsers(): Promise<AuthUserLite[]> {
+  const r = await listAllAuthUsersOrNull();
+  return r ?? [];
+}
+
+/** Igual que {@link listAllAuthUsers} pero distingue "no hay usuarios" de "no pude leer". */
+async function listAllAuthUsersOrNull(): Promise<AuthUserLite[] | null> {
   const authAdmin = createAuthAdminClient();
   const out: AuthUserLite[] = [];
   const perPage = 1000;
@@ -68,7 +81,7 @@ async function listAllAuthUsers(): Promise<AuthUserLite[]> {
     // Seguir pidiendo páginas hasta que una vuelva con menos de perPage usuarios
     for (;;) {
       const { data, error } = await authAdmin.auth.admin.listUsers({ page, perPage });
-      if (error) break;
+      if (error) return null;
       const users = data?.users ?? [];
       for (const u of users) {
         out.push({
@@ -81,7 +94,7 @@ async function listAllAuthUsers(): Promise<AuthUserLite[]> {
       page += 1;
     }
   } catch {
-    // ignore
+    return null;
   }
   return out;
 }
@@ -142,14 +155,17 @@ export async function listTeamMembers(): Promise<TeamMemberRow[]> {
     .in("user_id", userIds);
 
   // Email + último ingreso desde auth.users (1 listUsers paginado en vez de N getUserById)
+  const authUsers = await listAllAuthUsersOrNull();
+  const authKnown = authUsers !== null;
   const authByUser = new Map<string, AuthUserLite>();
-  for (const u of await listAllAuthUsers()) authByUser.set(u.id, u);
+  for (const u of authUsers ?? []) authByUser.set(u.id, u);
 
   return members.map((m) => ({
     ...m,
     profile: profiles?.find((p) => p.user_id === m.user_id) ?? null,
     email: authByUser.get(m.user_id)?.email ?? null,
     last_sign_in_at: authByUser.get(m.user_id)?.last_sign_in_at ?? null,
+    auth_known: authKnown,
   })) as TeamMemberRow[];
 }
 
@@ -193,6 +209,14 @@ export type InviteResult = {
   tempPassword: string | null;
   /** true si el email ya existía en auth.users y esa cuenta ya ingresó alguna vez. */
   alreadyHadAccess: boolean;
+  /**
+   * true si el email ya existía SIN haber ingresado nunca y se le regeneró la
+   * clave: la que se le había mandado antes dejó de servir. Sin esta marca el
+   * diálogo de entrega era idéntico al de una cuenta nueva y quien invitaba dos
+   * veces el mismo día no se enteraba de que la primera clave ya estaba muerta
+   * (así fue como una limpiadora "no podía entrar").
+   */
+  regenerated: boolean;
 };
 
 export async function inviteTeamMember(input: InviteInput): Promise<InviteResult> {
@@ -209,9 +233,15 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
   let userId: string;
   let tempPassword: string | null = null;
   let alreadyHadAccess = false;
+  let regenerated = false;
 
-  // Buscar por email
-  const existing = (await listAllAuthUsers()).find((u) => u.email === validated.email);
+  // Buscar por email. GoTrue guarda los emails en minúscula: comparando tal
+  // cual, "Maria@Gmail.com" no encontraba la cuenta de "maria@gmail.com" y
+  // createUser explotaba con "already registered". Normalizamos los dos lados.
+  const email = validated.email.trim().toLowerCase();
+  const existing = (await listAllAuthUsers()).find(
+    (u) => (u.email ?? "").toLowerCase() === email
+  );
 
   if (existing) {
     userId = existing.id;
@@ -247,6 +277,7 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
         alreadyHadAccess = true;
       } else {
         tempPassword = generateTempPassword();
+        regenerated = true;
         const { error } = await authAdmin.auth.admin.updateUserById(userId, {
           password: tempPassword,
         });
@@ -257,7 +288,7 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
     // Crear nuevo
     tempPassword = generateTempPassword();
     const { data: created, error } = await authAdmin.auth.admin.createUser({
-      email: validated.email,
+      email,
       password: tempPassword,
       email_confirm: true,
       user_metadata: { full_name: validated.full_name },
@@ -292,7 +323,7 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
   if (memErr) throw new Error(memErr.message);
 
   revalidatePath("/dashboard/configuracion/equipo");
-  return { userId, tempPassword, alreadyHadAccess };
+  return { userId, tempPassword, alreadyHadAccess, regenerated };
 }
 
 /**
