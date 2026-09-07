@@ -46,6 +46,11 @@ const unitSchema = z.object({
 
 export type UnitInput = z.infer<typeof unitSchema>;
 
+function logActionError(context: string, e: unknown) {
+  if (e instanceof Error) console.error(`[units:${context}]`, e.message, e.stack);
+  else console.error(`[units:${context}]`, e);
+}
+
 /**
  * Lista todas las unidades de la org con datos enriquecidos:
  * primary_owner, next_booking (si existe), open_ticket (más urgente abierto).
@@ -205,11 +210,72 @@ export async function getUnit(id: string) {
   return data;
 }
 
-export async function createUnit(input: UnitInput): Promise<Unit> {
+/**
+ * Resultado de alta/edición de unidad.
+ *
+ * Devuelve el error en vez de lanzarlo a propósito: Next.js reemplaza el
+ * mensaje de cualquier excepción de una Server Action en producción por
+ * "An error occurred in the Server Components render…", así que un `throw`
+ * con texto en castellano llega al usuario como un error en inglés que no
+ * dice nada. Pasó de verdad: dos departamentos del mismo edificio con el
+ * mismo código, y la pantalla sólo mostraba ese cartel rojo.
+ */
+export type UnitMutationResult =
+  | { ok: true; unit: Unit }
+  | { ok: false; error: string; field?: "code" };
+
+/** Traduce el único choque esperable del alta: el código repetido. */
+function traducirErrorDeUnidad(
+  message: string,
+): { error: string; field?: "code" } | null {
+  if (message.includes("units_organization_id_code_key")) {
+    return {
+      error: "Ese código ya lo usa otra unidad. Elegí uno distinto.",
+      field: "code",
+    };
+  }
+  return null;
+}
+
+/** Unidad (activa o archivada) que ya ocupa ese código dentro de la org. */
+async function unidadConEseCodigo(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  code: string,
+  exceptId?: string,
+): Promise<{ id: string; code: string; name: string; active: boolean } | null> {
+  let q = admin
+    .from("units")
+    .select("id, code, name, active")
+    .eq("organization_id", organizationId)
+    .eq("code", code)
+    .limit(1);
+  if (exceptId) q = q.neq("id", exceptId);
+  const { data } = await q.maybeSingle();
+  return (data as { id: string; code: string; name: string; active: boolean } | null) ?? null;
+}
+
+/** "Ese código ya lo usa Alto Tucumán 7B" — con nombre, para que se entienda. */
+function mensajeCodigoOcupado(otra: { name: string; active: boolean }): string {
+  return otra.active
+    ? `El código ya lo usa "${otra.name}". Poné uno distinto (por ejemplo AT-4 o AT-71).`
+    : `El código ya lo usa "${otra.name}", una unidad archivada. Poné uno distinto (por ejemplo AT-4 o AT-71).`;
+}
+
+export async function createUnit(input: UnitInput): Promise<UnitMutationResult> {
   await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = unitSchema.parse(input);
   const admin = createAdminClient();
+
+  // El código es único por organización y la unicidad incluye a las unidades
+  // archivadas (active=false), que no se ven en ningún listado. Sin este
+  // chequeo previo el choque sale como error de Postgres y el usuario no tiene
+  // forma de saber contra qué chocó.
+  const ocupado = await unidadConEseCodigo(admin, organization.id, validated.code);
+  if (ocupado) {
+    return { ok: false, error: mensajeCodigoOcupado(ocupado), field: "code" };
+  }
 
   // Posición = última + 1 dentro de su columna
   const { data: maxRow } = await admin
@@ -237,19 +303,31 @@ export async function createUnit(input: UnitInput): Promise<Unit> {
     })
     .select()
     .single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Carrera: dos pestañas guardando el mismo código a la vez.
+    const traducido = traducirErrorDeUnidad(error.message);
+    if (traducido) return { ok: false, ...traducido };
+    logActionError("createUnit", error);
+    return { ok: false, error: "No se pudo crear la unidad. Probá de nuevo." };
+  }
 
   revalidatePath("/dashboard/unidades");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
-  return data as Unit;
+  return { ok: true, unit: data as Unit };
 }
 
-export async function updateUnit(id: string, input: UnitInput): Promise<Unit> {
+export async function updateUnit(id: string, input: UnitInput): Promise<UnitMutationResult> {
   await requireSession();
   const { organization } = await getCurrentOrg();
   const validated = unitSchema.parse(input);
   const admin = createAdminClient();
+
+  const ocupado = await unidadConEseCodigo(admin, organization.id, validated.code, id);
+  if (ocupado) {
+    return { ok: false, error: mensajeCodigoOcupado(ocupado), field: "code" };
+  }
+
   const { data, error } = await admin
     .from("units")
     .update(validated)
@@ -257,13 +335,18 @@ export async function updateUnit(id: string, input: UnitInput): Promise<Unit> {
     .eq("organization_id", organization.id)
     .select()
     .single();
-  if (error) throw new Error(error.message);
+  if (error) {
+    const traducido = traducirErrorDeUnidad(error.message);
+    if (traducido) return { ok: false, ...traducido };
+    logActionError("updateUnit", error);
+    return { ok: false, error: "No se pudieron guardar los cambios. Probá de nuevo." };
+  }
 
   revalidatePath("/dashboard/unidades");
   revalidatePath(`/dashboard/unidades/${id}`);
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
-  return data as Unit;
+  return { ok: true, unit: data as Unit };
 }
 
 /**

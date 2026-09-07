@@ -34,7 +34,10 @@ export default async function UnidadesPage() {
             </Button>
           </Link>
           {canCreateUnit && (
-            <UnitFormDialog orgDefaultCommissionPct={organization.default_commission_pct}>
+            <UnitFormDialog
+              orgDefaultCommissionPct={organization.default_commission_pct}
+              existingCodes={units.map((u) => u.code)}
+            >
               <Button className="gap-2 shrink-0">
                 <Plus size={16} />
                 <span>
@@ -53,7 +56,10 @@ export default async function UnidadesPage() {
         canViewMoney={canViewMoney}
         emptyCta={
           canCreateUnit ? (
-            <UnitFormDialog orgDefaultCommissionPct={organization.default_commission_pct}>
+            <UnitFormDialog
+              orgDefaultCommissionPct={organization.default_commission_pct}
+              existingCodes={units.map((u) => u.code)}
+            >
               <Button className="gap-2">
                 <Plus size={16} /> Crear primera unidad
               </Button>

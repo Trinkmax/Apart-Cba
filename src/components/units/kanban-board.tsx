@@ -262,7 +262,7 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
             <Wifi size={10} className={cn(realtimeConnected && "animate-pulse")} />
             {realtimeConnected ? "En vivo" : "Sin conexión"}
           </div>
-          <UnitFormDialog owners={owners}>
+          <UnitFormDialog owners={owners} existingCodes={units.map((u) => u.code)}>
             <Button className="gap-2"><Plus size={16} /> Nueva unidad</Button>
           </UnitFormDialog>
         </div>

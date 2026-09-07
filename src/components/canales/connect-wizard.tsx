@@ -379,6 +379,10 @@ function DraftChecklistCard({
     startSaving(async () => {
       try {
         const r = await saveLinkFeed({ link_id: link.id, feed_url: feedUrl.trim() });
+        if (!r.ok) {
+          toast.error("No se pudo leer el calendario", { description: r.error });
+          return;
+        }
         setFeedSaved(true);
         setFeedEvents(r.events);
         toast.success(`Calendario leído correctamente (${r.events} eventos)`);
@@ -391,7 +395,11 @@ function DraftChecklistCard({
   function activate() {
     startActivating(async () => {
       try {
-        await activateLink(link.id);
+        const r = await activateLink(link.id);
+        if (!r.ok) {
+          toast.error("No se pudo activar", { description: r.error });
+          return;
+        }
         toast.success(`${link.unit.code} conectado — primera sincronización ejecutada`);
         router.refresh();
       } catch (err) {

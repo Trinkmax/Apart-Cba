@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { can } from "@/lib/permissions";
+import { resolveIssuesByDedupe } from "@/lib/channels/ingest";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 
@@ -221,6 +222,21 @@ export async function decideCancellation(input: z.infer<typeof decideSchema>) {
       decision_note: validated.note?.trim() || null,
     })
     .eq("id", request.id);
+
+  // La incidencia que abrió el barrido ("desapareció del calendario") ya está
+  // contestada: si no se cierra acá queda abierta para siempre, y la pantalla
+  // de Canales sigue mostrando en rojo algo que la persona YA decidió. Con
+  // varias reservas eso entierra las incidencias que sí necesitan acción.
+  if (request.reservation_id) {
+    await resolveIssuesByDedupe(
+      admin,
+      organization.id,
+      `missing:${request.reservation_id}`,
+      validated.decision === "cancel"
+        ? "Se confirmó la cancelación desde el PMS."
+        : "Se decidió mantener la reserva.",
+    );
+  }
 
   // El aviso ya cumplió su función: se marca leído para que no siga sonando.
   await admin

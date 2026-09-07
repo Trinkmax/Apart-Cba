@@ -27,12 +27,53 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createUnit, updateUnit, type UnitInput } from "@/lib/actions/units";
 import { UNIT_DEFAULT_MODE_META, UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
+import { cn } from "@/lib/utils";
 import type { Owner, Unit, UnitDefaultMode } from "@/lib/types/database";
+
+/** Referencia estable: un [] literal en el default rompe la memoización. */
+const EMPTY_CODES: string[] = [];
+
+/**
+ * Código sugerido a partir del nombre: iniciales de las palabras, o las
+ * primeras letras si es una sola. "Alto Tucumán 7B" → "AT7B", "Cofico" → "COF".
+ * Es sólo una propuesta: el campo sigue siendo editable.
+ */
+function codigoDesdeNombre(nombre: string): string {
+  const limpio = nombre
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9 ]/g, " ")
+    .trim();
+  if (!limpio) return "";
+  const palabras = limpio.split(/\s+/);
+  const base =
+    palabras.length === 1
+      ? palabras[0].slice(0, 3)
+      : palabras.map((p) => (/^\d/.test(p) ? p : p[0])).join("");
+  return base.toUpperCase().slice(0, 12);
+}
+
+/** Primer código libre a partir de la base: AT, AT-2, AT-3… */
+function codigoLibre(base: string, usados: Set<string>): string {
+  if (!base) return "";
+  if (!usados.has(base)) return base;
+  for (let i = 2; i < 100; i++) {
+    const intento = `${base}-${i}`;
+    if (!usados.has(intento)) return intento;
+  }
+  return base;
+}
 
 interface UnitFormDialogProps {
   children?: React.ReactNode;
   unit?: Unit;
   owners?: Owner[];
+  /**
+   * Códigos ya usados en la organización (los pasa la página, que ya tiene el
+   * listado). Con esto el formulario propone un código libre y avisa en el
+   * campo ANTES de guardar, en vez de dejar que choque contra la base.
+   */
+  existingCodes?: string[];
   /**
    * Comisión de administración por defecto de la org (Configuración →
    * Organización). Es el valor con el que nace una unidad nueva; si no llega,
@@ -48,6 +89,7 @@ export function UnitFormDialog({
   children,
   unit,
   orgDefaultCommissionPct,
+  existingCodes = EMPTY_CODES,
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
 }: UnitFormDialogProps) {
@@ -86,9 +128,38 @@ export function UnitFormDialog({
     notes: unit?.notes ?? "",
   };
   const [form, setForm] = useState<UnitInput>(initialForm);
+  // El código deja de auto-proponerse en cuanto la persona lo escribe a mano
+  // (o si está editando una unidad, que ya tiene el suyo).
+  const [codeTouched, setCodeTouched] = useState(isEdit);
+  // Error del servidor sobre el campo Código (código repetido).
+  const [codeError, setCodeError] = useState<string | null>(null);
+
+  // Sin useMemo: el React Compiler la memoiza sola y con deps manuales se
+  // saltea la optimización de todo el componente (regla del linter).
+  const takenCodes = new Set(
+    existingCodes
+      .map((c) => c.toUpperCase())
+      .filter((c) => c !== (unit?.code ?? "").toUpperCase()), // el suyo no cuenta
+  );
+
+  // Aviso instantáneo: el mismo código en dos unidades es el choque que dejaba
+  // el alta muerta con un error en inglés.
+  const codeDuplicado =
+    !isEdit || form.code.toUpperCase() !== (unit?.code ?? "").toUpperCase()
+      ? takenCodes.has(form.code.trim().toUpperCase())
+      : false;
 
   function set<K extends keyof UnitInput>(key: K, value: UnitInput[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  /** Nombre → propone un código libre mientras nadie lo haya tipeado. */
+  function onNameChange(value: string) {
+    setForm((f) => {
+      if (codeTouched) return { ...f, name: value };
+      return { ...f, name: value, code: codigoLibre(codigoDesdeNombre(value), takenCodes) };
+    });
+    setCodeError(null);
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -96,14 +167,25 @@ export function UnitFormDialog({
     const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
     startTransition(async () => {
       try {
-        if (isEdit && unit) {
-          await updateUnit(unit.id, form);
+        const r =
+          isEdit && unit ? await updateUnit(unit.id, form) : await createUnit(form);
+        if (!r.ok) {
+          // El servidor devuelve el motivo (no lo lanza): en producción una
+          // excepción llegaría acá como un texto en inglés sin información.
+          if (r.field === "code") setCodeError(r.error);
+          toast.error(isEdit ? "No se pudo guardar" : "No se pudo crear la unidad", {
+            description: r.error,
+          });
+          return;
+        }
+        if (isEdit) {
           toast.success("Unidad actualizada");
         } else {
-          await createUnit(form);
           toast.success("Unidad creada");
           setForm(initialForm);
+          setCodeTouched(false);
         }
+        setCodeError(null);
         setOpen(false);
         router.refresh();
         if (typeof window !== "undefined") {
@@ -147,11 +229,34 @@ export function UnitFormDialog({
                     id="code"
                     required
                     value={form.code}
-                    onChange={(e) => set("code", e.target.value.toUpperCase())}
+                    onChange={(e) => {
+                      setCodeTouched(true);
+                      setCodeError(null);
+                      set("code", e.target.value.toUpperCase());
+                    }}
                     placeholder="NUE-401"
-                    autoFocus
-                    className="font-mono"
+                    aria-invalid={codeDuplicado || !!codeError}
+                    aria-describedby="code-help"
+                    className={cn(
+                      "font-mono",
+                      (codeDuplicado || codeError) &&
+                        "border-rose-500 focus-visible:ring-rose-500/30",
+                    )}
                   />
+                  <p
+                    id="code-help"
+                    className={cn(
+                      "text-[11px] leading-snug",
+                      codeDuplicado || codeError
+                        ? "text-rose-600 dark:text-rose-400"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {codeError ??
+                      (codeDuplicado
+                        ? "Ese código ya está en uso. Cambialo (por ejemplo agregando el piso)."
+                        : "Nombre corto para identificarla. Se propone solo.")}
+                  </p>
                 </div>
                 <div className="space-y-1.5 col-span-2">
                   <Label htmlFor="name">Nombre *</Label>
@@ -159,8 +264,9 @@ export function UnitFormDialog({
                     id="name"
                     required
                     value={form.name}
-                    onChange={(e) => set("name", e.target.value)}
+                    onChange={(e) => onNameChange(e.target.value)}
                     placeholder="Loft Nueva Córdoba"
+                    autoFocus
                   />
                 </div>
               </div>
@@ -424,7 +530,7 @@ export function UnitFormDialog({
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Cancelar
             </Button>
-            <Button type="submit" disabled={isPending}>
+            <Button type="submit" disabled={isPending || codeDuplicado}>
               {isPending ? <Loader2 className="animate-spin" /> : null}
               {isEdit ? "Guardar cambios" : "Crear unidad"}
             </Button>

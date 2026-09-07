@@ -227,10 +227,28 @@ const feedSchema = z.object({
   feed_url: z.string().url("URL inválida").max(2000),
 });
 
+/**
+ * Resultado de guardar/activar una conexión.
+ *
+ * Devuelve el error en vez de lanzarlo: en producción Next.js reemplaza el
+ * mensaje de cualquier excepción de una Server Action por un texto genérico en
+ * inglés. Este es justo el diálogo al que se llega cuando el calendario de la
+ * OTA dejó de funcionar, así que el motivo tiene que llegar entero.
+ */
+export type LinkFeedResult =
+  | { ok: true; events: number }
+  | { ok: false; error: string };
+
 /** Carga/actualiza el calendario ENTRANTE de una conexión (URL → Vault). */
-export async function saveLinkFeed(input: z.infer<typeof feedSchema>) {
+export async function saveLinkFeed(
+  input: z.infer<typeof feedSchema>,
+): Promise<LinkFeedResult> {
   const { organization } = await requireChannelsAccess("update");
-  const validated = feedSchema.parse(input);
+  const parsed = feedSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Enlace inválido" };
+  }
+  const validated = parsed.data;
   const admin = createAdminClient();
 
   const link = await getOwnLink(admin, organization.id, validated.link_id);
@@ -239,20 +257,25 @@ export async function saveLinkFeed(input: z.infer<typeof feedSchema>) {
   try {
     await assertSafeFeedUrl(validated.feed_url);
   } catch (err) {
-    throw new Error(
-      err instanceof BlockedUrlError ? `Enlace rechazado: ${err.message}` : "Enlace inválido",
-    );
+    return {
+      ok: false,
+      error:
+        err instanceof BlockedUrlError ? `Enlace rechazado: ${err.message}` : "Enlace inválido",
+    };
   }
   let eventCount = 0;
   try {
     const res = await safeFetchFeed(validated.feed_url, { timeoutMs: 10_000 });
     if (res.status !== 200 || res.body === undefined) {
-      throw new Error(`el calendario respondió HTTP ${res.status}`);
+      return {
+        ok: false,
+        error: `El calendario respondió HTTP ${res.status}. Volvé a copiar el enlace desde la OTA.`,
+      };
     }
     eventCount = parseIcs(res.body, link.channel).length;
   } catch (err) {
     const msg = err instanceof Error ? err.message.replace(/https?:\/\/\S+/gi, "[url]") : "error";
-    throw new Error(`No se pudo leer el calendario: ${msg}`);
+    return { ok: false, error: `No se pudo leer el calendario: ${msg}` };
   }
 
   if (link.feed_secret_id) {
@@ -267,12 +290,14 @@ export async function saveLinkFeed(input: z.infer<typeof feedSchema>) {
 }
 
 /** Activa una conexión y dispara su primera sincronización inmediata. */
-export async function activateLink(linkId: string) {
+export async function activateLink(
+  linkId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const { organization } = await requireChannelsAccess("update");
   const admin = createAdminClient();
   const link = await getOwnLink(admin, organization.id, linkId);
   if (!link.feed_secret_id) {
-    throw new Error("Cargá primero el calendario entrante de la OTA");
+    return { ok: false, error: "Cargá primero el calendario entrante de la OTA" };
   }
 
   const { error } = await admin
@@ -280,7 +305,7 @@ export async function activateLink(linkId: string) {
     .update({ status: "active", next_poll_at: new Date().toISOString(), consecutive_failures: 0 })
     .eq("id", link.id)
     .eq("organization_id", organization.id);
-  if (error) throw new Error(error.message);
+  if (error) return { ok: false, error: "No se pudo activar la conexión. Probá de nuevo." };
 
   // primera sincronización ya mismo (no espera al cron)
   await runChannelDispatch(admin, "manual", {

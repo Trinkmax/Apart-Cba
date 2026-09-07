@@ -74,6 +74,11 @@ export function ChangeFeedDialog({
       setError(null);
       try {
         const r = await saveLinkFeed({ link_id: linkId, feed_url: url.trim() });
+        if (!r.ok) {
+          setEvents(null);
+          setError(r.error);
+          return;
+        }
         setEvents(r.events);
         // el tablero muestra "sin calendario cargado" / última lectura
         router.refresh();
