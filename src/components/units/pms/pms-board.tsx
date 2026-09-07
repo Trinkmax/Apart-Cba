@@ -3651,6 +3651,7 @@ export function PmsBoard({
                     {unitBookings.map((b) => (
                       <BookingBar
                         key={b.id}
+                        commissionBase={commissionBase}
                         booking={b}
                         leaseInfo={leaseGroupIndex.get(b.id) ?? null}
                         scheduleForBooking={scheduleByBooking.get(b.id) ?? []}
@@ -4268,6 +4269,8 @@ interface BookingBarProps {
   customStatusHex: string | null;
   canEditBookings: boolean;
   canViewMoney: boolean;
+  /** Base de la comisión de administración de la org. */
+  commissionBase?: CommissionBase;
 }
 
 /**
@@ -4461,6 +4464,7 @@ function BookingBar({
   customStatusHex,
   canEditBookings,
   canViewMoney,
+  commissionBase,
   justChanged = false,
 }: BookingBarProps) {
   // Un bloqueo OTA (is_block) no es una reserva: se pinta gris "Bloqueado" y no
@@ -4784,6 +4788,7 @@ function BookingBar({
           />
         ) : (
           <PmsBookingPopoverContent
+            commissionBase={commissionBase}
             booking={booking}
             unitCode={unitCode}
             unitName={unitName}

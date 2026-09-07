@@ -13,6 +13,7 @@ import {
   splitBookingSegments,
 } from "@/lib/booking-split";
 import type {
+  EffectiveCommission,
   Booking,
   BookingExtension,
   BookingListRow,
@@ -736,6 +737,65 @@ export async function listBookingsForOverlapCheck(): Promise<
  * Útil para el PMS grid: incluye reservas que arrancan antes del rango pero
  * siguen activas dentro del mismo.
  */
+/**
+ * Resuelve, para un conjunto de reservas, el % de comisión que va a usar la
+ * liquidación (migración 059/060).
+ *
+ * La reserva guarda `commission_pct` como snapshot del alta. Si después cambia
+ * el % de la unidad, o se configura uno por canal, el snapshot queda viejo y la
+ * pantalla muestra una plata que la liquidación no va a pagar. Estas pantallas
+ * muestran el número vivo; el snapshot queda como historia de la fila.
+ *
+ * Una sola consulta extra por llamada (los dueños de las unidades del lote).
+ * Con co-dueños de porcentajes distintos toma el que absorbe los cargos, igual
+ * que el resto del sistema (`pickChargeOwner`); la liquidación prorratea fino y
+ * por eso el detalle sigue diciendo que el número definitivo sale de ahí.
+ */
+async function attachEffectiveCommission<T extends BookingWithRelations>(
+  admin: ReturnType<typeof createAdminClient>,
+  organization: {
+    commission_by_source?: Partial<Record<string, number>> | null;
+    default_commission_pct: number | null;
+  },
+  rows: T[],
+  unitPctById: Map<string, number | null>,
+): Promise<T[]> {
+  if (rows.length === 0) return rows;
+  const unitIds = [...new Set(rows.map((b) => b.unit_id).filter(Boolean))];
+  const overrideByUnit = new Map<string, number | null>();
+  if (unitIds.length > 0) {
+    const { data: owners } = await admin
+      .from("unit_owners")
+      .select("unit_id, owner_id, ownership_pct, is_primary, commission_pct_override")
+      .in("unit_id", unitIds);
+    type OwnerRow = UnitOwnerLite & {
+      unit_id: string;
+      commission_pct_override: number | null;
+    };
+    const byUnit = new Map<string, OwnerRow[]>();
+    for (const uo of (owners ?? []) as OwnerRow[]) {
+      const list = byUnit.get(uo.unit_id) ?? [];
+      list.push(uo);
+      byUnit.set(uo.unit_id, list);
+    }
+    for (const [unitId, list] of byUnit) {
+      const chargeOwnerId = pickChargeOwner(list);
+      const row = list.find((o) => o.owner_id === chargeOwnerId);
+      overrideByUnit.set(unitId, row?.commission_pct_override ?? null);
+    }
+  }
+  return rows.map((b) => ({
+    ...b,
+    commission_effective: resolveCommissionPct({
+      source: b.source,
+      ownerOverride: overrideByUnit.get(b.unit_id) ?? null,
+      bySource: organization.commission_by_source,
+      unitPct: unitPctById.get(b.unit_id) ?? null,
+      orgPct: organization.default_commission_pct,
+    }),
+  }));
+}
+
 export async function listBookingsInRange(
   fromDate: string,
   toDate: string
@@ -744,14 +804,22 @@ export async function listBookingsInRange(
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("bookings")
-    .select(`*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`)
+    .select(
+      `*, unit:units(id, code, name, default_commission_pct), guest:guests(id, full_name, phone, email)`,
+    )
     .eq("organization_id", organization.id)
     .not("status", "in", "(cancelada,no_show)")
     .lt("check_in_date", toDate)
     .gt("check_out_date", fromDate)
     .order("check_in_date");
   if (error) throw new Error(error.message);
-  return (data as BookingWithRelations[]) ?? [];
+  const rows = (data as (BookingWithRelations & {
+    unit?: { default_commission_pct?: number | null } | null;
+  })[]) ?? [];
+  const unitPct = new Map<string, number | null>(
+    rows.map((b) => [b.unit_id, b.unit?.default_commission_pct ?? null]),
+  );
+  return attachEffectiveCommission(admin, organization, rows, unitPct);
 }
 
 /**
@@ -1048,7 +1116,18 @@ export async function getBooking(id: string) {
     .eq("organization_id", organization.id)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  return data;
+  if (!data) return data;
+  // El % que va a usar la liquidación, no el snapshot del alta.
+  const row = data as BookingWithRelations & {
+    unit?: { default_commission_pct?: number | null } | null;
+  };
+  const [withCommission] = await attachEffectiveCommission(
+    admin,
+    organization,
+    [row],
+    new Map([[row.unit_id, row.unit?.default_commission_pct ?? null]]),
+  );
+  return withCommission as typeof data & { commission_effective?: EffectiveCommission };
 }
 
 /**

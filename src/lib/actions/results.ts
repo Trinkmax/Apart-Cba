@@ -25,6 +25,7 @@ import {
   computeBookingEconomics,
   channelCommissionPctFor,
   resolveCommissionPct,
+  DEFAULT_COMMISSION_BASE,
   round2,
   type CommissionBase,
 } from "@/lib/finance/booking-economics";
@@ -149,7 +150,7 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
   const periodStart = ymd(y, m, 1);
   const periodEnd = ymd(y, m, daysInMonth);
 
-  const commissionBase: CommissionBase = organization.commission_base ?? "net_of_channel";
+  const commissionBase: CommissionBase = organization.commission_base ?? DEFAULT_COMMISSION_BASE;
   const channelMap = organization.channel_commissions ?? {};
   // Comisión de administración por canal (migración 059). Misma cascada que la
   // liquidación: acuerdo con el propietario → canal → unidad → org → 20.

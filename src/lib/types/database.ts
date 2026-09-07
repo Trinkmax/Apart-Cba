@@ -167,8 +167,8 @@ export interface Organization {
   channel_commissions: Partial<Record<BookingSource, number>>;
   /**
    * Sobre qué se calcula la comisión de administración: 'gross' (total del
-   * huésped) o 'net_of_channel' (total − comisión del canal). Ver
-   * src/lib/finance/booking-economics.ts. Migración 058.
+   * huésped, default desde la migración 060) o 'net_of_channel' (total −
+   * comisión del canal). Ver src/lib/finance/booking-economics.ts.
    */
   commission_base: "gross" | "net_of_channel";
   /**
@@ -1058,9 +1058,25 @@ export interface UnitWithRelations extends Unit {
   open_ticket?: Pick<MaintenanceTicket, "id" | "title" | "priority" | "status"> | null;
 }
 
+/**
+ * % de comisión que va a usar la liquidación, resuelto EN VIVO al leer
+ * (migración 059/060).
+ *
+ * `bookings.commission_pct` es un snapshot del momento en que se creó la
+ * reserva. Si después cambia el % de la unidad o se configura uno por canal,
+ * ese snapshot queda viejo y la pantalla muestra una plata que la liquidación
+ * no va a pagar — pasó con Habitana: la reserva decía 27% cuando la unidad ya
+ * estaba en 20%. Las pantallas muestran esto; el snapshot queda como historia.
+ */
+export interface EffectiveCommission {
+  pct: number;
+  origin: "propietario" | "canal" | "unidad" | "organizacion" | "default";
+}
+
 export interface BookingWithRelations extends Booking {
   unit?: Pick<Unit, "id" | "code" | "name"> | null;
   guest?: Pick<Guest, "id" | "full_name" | "phone" | "email"> | null;
+  commission_effective?: EffectiveCommission | null;
 }
 
 /**

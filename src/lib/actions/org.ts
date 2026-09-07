@@ -202,7 +202,14 @@ const commissionSettingsSchema = z.object({
       .max(100, "La comisión no puede pasar de 100%")
       .nullable()
   ),
-  commission_base: z.enum(["gross", "net_of_channel"]),
+  /**
+   * Ya no se elige desde la pantalla: la comisión se calcula SIEMPRE sobre el
+   * total que paga el huésped (migración 060). La columna sigue existiendo como
+   * salida de emergencia para soporte —se cambia por SQL— pero esta action no
+   * la toca: un valor de más acá pisaría en silencio la plata de una
+   * organización entera.
+   */
+  commission_base: z.enum(["gross", "net_of_channel"]).optional(),
   /** % que cobra la administración por canal. Vacío = se usa el de la unidad. */
   commission_by_source: z
     .record(
@@ -250,7 +257,9 @@ export async function updateCommissionSettings(
     .update({
       channel_commissions: map,
       commission_by_source: bySource,
-      commission_base: parsed.data.commission_base,
+      ...(parsed.data.commission_base !== undefined
+        ? { commission_base: parsed.data.commission_base }
+        : {}),
       ...(parsed.data.default_commission_pct !== undefined
         ? { default_commission_pct: parsed.data.default_commission_pct }
         : {}),

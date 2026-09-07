@@ -23,14 +23,19 @@ import { BookingChannelStatus } from "@/components/bookings/booking-channel-stat
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatDateLong, formatMoney, formatNights } from "@/lib/format";
-import { computeBookingEconomics } from "@/lib/finance/booking-economics";
-import type { Booking, Unit, Guest, BookingPayment } from "@/lib/types/database";
+import {
+  COMMISSION_ORIGIN_LABEL,
+  computeBookingEconomics,
+} from "@/lib/finance/booking-economics";
+import type { Booking, Unit, Guest, BookingPayment, EffectiveCommission } from "@/lib/types/database";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
 
 type BookingDetail = Booking & {
   unit: Unit;
   guest: Guest | null;
   payments: BookingPayment[];
+  /** % vigente resuelto por getBooking (no el snapshot del alta). */
+  commission_effective?: EffectiveCommission | null;
 };
 
 export default async function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -74,11 +79,15 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   // Una sola cuenta para toda la tarjeta de plata (la misma que hace el
   // server y la liquidación): total = alojamiento + limpieza; el canal y la
   // comisión se descuentan, la limpieza queda en la administración.
+  // El % NO sale de `b.commission_pct` (snapshot del alta, se queda viejo si
+  // después cambia el de la unidad) sino del resuelto en vivo por getBooking:
+  // el mismo que va a usar la liquidación.
+  const comisionVigente = b.commission_effective ?? null;
   const econ = computeBookingEconomics({
     total: b.total_amount,
     cleaningFee: esMensual ? 0 : b.cleaning_fee,
     channelPct: esMensual ? 0 : b.channel_commission_pct,
-    commissionPct: b.commission_pct,
+    commissionPct: comisionVigente?.pct ?? b.commission_pct,
     commissionBase: organization.commission_base ?? undefined,
   });
   // Defaults por canal para el form (edición y "Cargar precio"); las reservas
@@ -353,24 +362,23 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                 </div>
               )}
               <div className="flex justify-between text-xs">
-                {/* El % de acá es el que quedó guardado en la reserva; la
-                    liquidación recalcula con el del propietario o el de la
-                    unidad, así que pueden no coincidir. Lo decimos en vez de
-                    tocar el cálculo. */}
+                {/* El % es el vigente (el que va a usar la liquidación), no el
+                    que quedó guardado el día que se creó la reserva. */}
                 <span className="text-muted-foreground">Comisión de administración</span>
                 <span>
-                  {sinPrecio || b.commission_pct === null || b.commission_pct === undefined
+                  {sinPrecio
                     ? "—"
                     : `−${formatMoney(econ.commission, b.currency)} (${econ.commissionPct}%)`}
                 </span>
               </div>
               <p className="text-[11px] leading-snug text-muted-foreground/80">
-                Referencia. La comisión definitiva se calcula al generar la liquidación,
-                según la unidad y el propietario.
+                {comisionVigente
+                  ? `El ${econ.commissionPct}% ${COMMISSION_ORIGIN_LABEL[comisionVigente.origin]}.`
+                  : "Referencia."}
                 {!sinPrecio && !esMensual && econ.channelPct > 0 && (
                   econ.commissionBase === "gross"
-                    ? " Calculada sobre el total."
-                    : ` Calculada sobre el total menos lo que se lleva ${src.label}.`
+                    ? " Se calcula sobre el total."
+                    : ` Se calcula sobre el total menos lo que se lleva ${src.label}.`
                 )}
                 {esMensual && " En mensual se prorratea la renta por los días del mes."}
               </p>

@@ -347,7 +347,22 @@ function ReceptionCell({ link }: { link: ChannelLinkOverview }) {
       </span>
     );
   }
-  if (link.last_success_at) return <span>OK {timeAgo(link.last_success_at)}</span>;
+  if (link.last_success_at) {
+    // "Leído OK pero el calendario vino vacío" no es lo mismo que "leído OK".
+    // Sin esta distinción, una conexión sana cuyo anuncio todavía no vendió
+    // nada se ve idéntica a una que trae reservas, y quien mira concluye que
+    // no sincroniza (pasó con Alto Tucumán 7A el 07/09/2026).
+    const eventos = link.health?.last_events;
+    if (eventos === 0) {
+      return (
+        <span>
+          OK {timeAgo(link.last_success_at)} ·{" "}
+          <span className="text-amber-700 dark:text-amber-400">calendario vacío</span>
+        </span>
+      );
+    }
+    return <span>OK {timeAgo(link.last_success_at)}</span>;
+  }
   return <span>Pendiente de primera lectura</span>;
 }
 

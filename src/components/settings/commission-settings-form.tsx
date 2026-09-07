@@ -78,7 +78,10 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
     }
     return out;
   });
-  const [base, setBase] = useState<CommissionBase>(initial.commission_base);
+  // La base ya no se elige (ver el bloque explicativo más abajo): se calcula
+  // siempre sobre el total. Se conserva lo que tenga la organización para no
+  // pisarlo desde esta pantalla.
+  const base = initial.commission_base;
   const [adminPct, setAdminPct] = useState(String(initial.default_commission_pct));
   const [exampleSource, setExampleSource] = useState<BookingSource>("booking");
 
@@ -141,7 +144,6 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
       const r = await updateCommissionSettings({
         channel_commissions: map,
         commission_by_source: mineMap,
-        commission_base: base,
         default_commission_pct: parsedAdmin,
       });
       if (!r.ok) {
@@ -295,39 +297,19 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
             </p>
           </div>
 
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium">¿Sobre qué se calcula?</legend>
-            {(Object.keys(COMMISSION_BASE_META) as CommissionBase[]).map((k) => {
-              const meta = COMMISSION_BASE_META[k];
-              const active = base === k;
-              return (
-                <label
-                  key={k}
-                  className={cn(
-                    "flex gap-3 rounded-lg border p-3 cursor-pointer transition-colors",
-                    active
-                      ? "border-primary/50 bg-primary/5"
-                      : "hover:bg-accent/40 border-border"
-                  )}
-                >
-                  <input
-                    type="radio"
-                    name="commission-base"
-                    value={k}
-                    checked={active}
-                    onChange={() => setBase(k)}
-                    className="mt-1 accent-[var(--primary)]"
-                  />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium">{meta.label}</span>
-                    <span className="block text-[11px] text-muted-foreground leading-snug mt-0.5">
-                      {meta.description}
-                    </span>
-                  </span>
-                </label>
-              );
-            })}
-          </fieldset>
+          {/* Antes acá había un selector para calcular la comisión sobre el
+              total o sobre el total menos lo que se lleva la plataforma. Era
+              una decisión que nadie pidió y que daba números equivocados sin
+              avisar: se sacó y la regla quedó una sola. */}
+          <div className="rounded-lg border bg-muted/40 p-3 space-y-1.5">
+            <p className="text-sm font-medium">Se calcula sobre el total</p>
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Tu comisión es ese porcentaje del total que paga el huésped, sin
+              descontar antes lo que se lleva la plataforma. En una reserva de{" "}
+              {formatMoney(100_000, cur)} al 20%, tu comisión es{" "}
+              {formatMoney(20_000, cur)}, cobre lo que cobre Booking.
+            </p>
+          </div>
         </div>
       </div>
 

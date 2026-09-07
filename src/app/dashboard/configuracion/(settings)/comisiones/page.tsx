@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { isAdminLevel } from "@/lib/permissions";
 import { CommissionSettingsForm } from "@/components/settings/commission-settings-form";
+import { DEFAULT_COMMISSION_BASE } from "@/lib/finance/booking-economics";
 
 export default async function ComisionesPage() {
   const { organization, role } = await getCurrentOrg();
@@ -21,7 +22,7 @@ export default async function ComisionesPage() {
         initial={{
           channel_commissions: organization.channel_commissions ?? {},
           commission_by_source: organization.commission_by_source ?? {},
-          commission_base: organization.commission_base ?? "net_of_channel",
+          commission_base: organization.commission_base ?? DEFAULT_COMMISSION_BASE,
           default_commission_pct: organization.default_commission_pct ?? 20,
           default_currency: organization.default_currency ?? "ARS",
         }}

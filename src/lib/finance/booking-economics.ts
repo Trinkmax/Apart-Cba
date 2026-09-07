@@ -21,7 +21,12 @@
 
 export type CommissionBase = "gross" | "net_of_channel";
 
-export const DEFAULT_COMMISSION_BASE: CommissionBase = "net_of_channel";
+/**
+ * Sobre el total que paga el huésped. Es lo que hacía el sistema antes de la
+ * migración 058 y lo que la gente quiere decir con "mi comisión es el 20%"
+ * (migración 060). `net_of_channel` sigue disponible, pero se elige.
+ */
+export const DEFAULT_COMMISSION_BASE: CommissionBase = "gross";
 
 export const COMMISSION_BASE_META: Record<
   CommissionBase,

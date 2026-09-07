@@ -117,16 +117,27 @@ function assertOwnsCredentials(
   }
 }
 
-/** Formato único de contraseña temporal: legible por teléfono y pegable en WhatsApp. */
+/**
+ * Formato único de contraseña temporal: `Apart-k7m2-Rp4x-9Ttz`.
+ *
+ * NADA de signos al final. El formato anterior terminaba en "!" y en el mensaje
+ * de WhatsApp ("Contraseña: ApartMNYD6AkrSE!") ese signo se lee como el cierre
+ * de la frase: Brenda (Habitana, 07/09/2026) tipeó la clave sin él durante días
+ * y el sistema le decía, con razón, que era incorrecta. Los grupos separados
+ * por guiones se dictan por teléfono y se copian sin perder nada.
+ */
 function generateTempPassword(): string {
   // `Math.random()` no es un CSPRNG y esta clave es el ÚNICO mecanismo de acceso
   // y de recuperación del staff (no hay reset por mail): tiene que ser
   // impredecible. Alfabeto sin 0/O/1/l/I porque la clave se dicta por teléfono.
   const ALPHABET = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(10);
+  const bytes = randomBytes(12);
   let body = "";
-  for (const b of bytes) body += ALPHABET[b % ALPHABET.length];
-  return `Apart${body}!`;
+  for (let i = 0; i < bytes.length; i++) {
+    if (i > 0 && i % 4 === 0) body += "-";
+    body += ALPHABET[bytes[i] % ALPHABET.length];
+  }
+  return `Apart-${body}`;
 }
 
 export async function listTeamMembers(): Promise<TeamMemberRow[]> {

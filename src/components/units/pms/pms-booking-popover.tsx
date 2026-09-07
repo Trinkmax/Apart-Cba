@@ -47,7 +47,11 @@ import {
 } from "@/components/ui/select";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDate, formatMoney, formatNights, getInitials } from "@/lib/format";
-import { computeBookingEconomics } from "@/lib/finance/booking-economics";
+import {
+  COMMISSION_ORIGIN_LABEL,
+  computeBookingEconomics,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
 import {
   addBookingPayment,
   changeBookingStatus,
@@ -76,6 +80,8 @@ interface PmsBookingPopoverProps {
   onPaymentAdded?: (newPaid: number) => void;
   /** Si es false, esconde montos, comisiones, "Registrar pago" y demás info de plata. */
   canViewMoney?: boolean;
+  /** Base de la comisión de administración de la org (Configuración → Comisiones). */
+  commissionBase?: CommissionBase;
   /** Si es false, esconde "Editar", "Cancelar" y deshabilita los date pickers. */
   canEditBooking?: boolean;
   /**
@@ -98,6 +104,7 @@ export function PmsBookingPopoverContent({
   booking,
   unitCode,
   unitName,
+  commissionBase,
   accounts = [],
   onEdit,
   onStatusChanged,
@@ -117,11 +124,16 @@ export function PmsBookingPopoverContent({
   // guardada, con su aviso). En mensual el canal no aplica — igual que en la
   // liquidación y en Resultados.
   const esMensual = booking.mode === "mensual";
+  // El % de comisión es el VIGENTE (el que va a usar la liquidación), no el que
+  // quedó congelado al crear la reserva: si después cambió el de la unidad, el
+  // congelado muestra una plata que nadie va a cobrar.
+  const comisionVigente = booking.commission_effective ?? null;
   const econ = computeBookingEconomics({
     total: booking.total_amount,
     cleaningFee: esMensual ? 0 : booking.cleaning_fee,
     channelPct: esMensual ? 0 : booking.channel_commission_pct,
-    commissionPct: booking.commission_pct,
+    commissionPct: comisionVigente?.pct ?? booking.commission_pct,
+    commissionBase,
   });
 
   const matchingAccounts = accounts.filter((a) => a.currency === booking.currency);
@@ -425,17 +437,20 @@ export function PmsBookingPopoverContent({
             subtle
           />
         )}
-        {booking.commission_amount !== null && (
+        {(comisionVigente || booking.commission_amount !== null) && (
           <>
             <MoneyRow
               label="Comisión de administración"
-              value={formatMoney(Number(booking.commission_amount), booking.currency)}
+              value={formatMoney(
+                comisionVigente ? econ.commission : Number(booking.commission_amount),
+                booking.currency,
+              )}
               subtle
             />
-            {/* Se congeló al crear la reserva y la liquidación no la mira: la
-                recalcula con la comisión de la unidad o la del propietario. */}
             <p className="text-[10px] leading-snug text-muted-foreground/70 pl-3.5">
-              Referencia: la definitiva se calcula en la liquidación.
+              {comisionVigente
+                ? `${econ.commissionPct}% ${COMMISSION_ORIGIN_LABEL[comisionVigente.origin]}.`
+                : "Referencia: la definitiva se calcula en la liquidación."}
             </p>
           </>
         )}
