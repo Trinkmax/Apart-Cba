@@ -274,6 +274,61 @@ export async function updateCommissionSettings(
   return { ok: true };
 }
 
+// ── Checklist de limpieza ────────────────────────────────────────────────────
+
+const cleaningChecklistSchema = z.object({
+  items: z
+    .array(z.string().trim().min(1, "Un ítem no puede quedar vacío").max(120))
+    .max(40, "Máximo 40 ítems"),
+});
+
+export type CleaningChecklistInput = z.input<typeof cleaningChecklistSchema>;
+
+/**
+ * Guarda la plantilla de la checklist de limpieza (migración 062).
+ *
+ * Lista vacía = volver a la lista por defecto. Las limpiezas ya creadas NO se
+ * tocan: cada una guarda su copia y es el registro de lo que se controló ese
+ * día.
+ */
+export async function updateCleaningChecklistTemplate(
+  input: CleaningChecklistInput,
+): Promise<{ ok: true; items: string[] } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) {
+    return { ok: false, error: "Solo un administrador puede cambiar la checklist" };
+  }
+  const parsed = cleaningChecklistSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+  // Sin duplicados y sin vacíos: la checklist se tilda a mano en el teléfono,
+  // dos ítems idénticos son imposibles de distinguir.
+  const vistos = new Set<string>();
+  const items: string[] = [];
+  for (const raw of parsed.data.items) {
+    const item = raw.trim();
+    const key = item.toLowerCase();
+    if (!item || vistos.has(key)) continue;
+    vistos.add(key);
+    items.push(item);
+  }
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("organizations")
+    .update({ cleaning_checklist: items })
+    .eq("id", organization.id);
+  if (error) return { ok: false, error: "No se pudo guardar la checklist" };
+
+  revalidatePath("/", "layout");
+  revalidatePath("/dashboard/configuracion/limpieza");
+  revalidatePath("/dashboard/limpieza");
+  revalidatePath("/m/limpieza");
+  return { ok: true, items };
+}
+
 /** Toggle independiente: mostrar/ocultar el nombre junto al logo (sidebar). */
 export async function setOrgBrandShowName(value: boolean): Promise<void> {
   await requireSession();

@@ -177,6 +177,11 @@ export interface Organization {
    * con el propietario. Vacío = se usa el de la unidad. Migración 059.
    */
   commission_by_source: Partial<Record<BookingSource, number>>;
+  /**
+   * Plantilla de la checklist de limpieza (array de textos). Vacío = la lista
+   * por defecto. Se copia a cada limpieza al crearla. Migración 062.
+   */
+  cleaning_checklist: string[];
   description: string | null;
   address: string | null;
   contact_phone: string | null;

@@ -13,12 +13,13 @@ import {
   todayYmdInTz,
   zonedTimeToUtc,
 } from "@/lib/dates";
+import { DEFAULT_CHECKLIST } from "@/lib/cleaning/default-checklist";
 import type { CleaningEvent, CleaningStatus, CleaningTask } from "@/lib/types/database";
 
 // Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
-// estaba en status='limpieza' y ya no le quedan tasks pendientes/en_progreso,
-// la liberamos a 'disponible'. Esto evita el bug de "unidad bloqueada en el
-// calendario aunque ya no haya tarea de limpieza".
+// estaba en status='limpieza' y ya no le quedan tareas por hacer, la liberamos.
+// Esto evita el bug de "unidad bloqueada en el calendario aunque ya no haya
+// tarea de limpieza".
 async function releaseUnitIfNoActiveCleaning(
   unitId: string,
   organizationId: string,
@@ -35,21 +36,44 @@ async function releaseUnitIfNoActiveCleaning(
     .maybeSingle();
   if (!unit || unit.status !== "limpieza") return;
 
-  // ¿Quedan tasks pendientes/en_progreso para esa unidad?
+  const { data: org } = await admin
+    .from("organizations")
+    .select("timezone")
+    .eq("id", organizationId)
+    .maybeSingle();
+  const tz = (org?.timezone as string | null) || DEFAULT_ORG_TIMEZONE;
+
+  // ¿Quedan tareas PARA HOY (o atrasadas)? Las agendadas para más adelante no
+  // cuentan: una unidad que se limpió hoy quedaba rayada para siempre porque
+  // el próximo check-out ya tenía su limpieza creada. Le pasó a Habitana Firpo
+  // el 07/09/2026: limpiaron y el departamento seguía "en limpieza" por una
+  // tarea del día siguiente.
+  const finDeHoy = dayRangeInTz(todayYmdInTz(tz), tz).endIso;
   let q = admin
     .from("cleaning_tasks")
     .select("id", { count: "exact", head: true })
     .eq("unit_id", unitId)
     .eq("organization_id", organizationId)
-    .in("status", ["pendiente", "en_progreso"]);
+    .in("status", ["pendiente", "en_progreso"])
+    .lt("scheduled_for", finDeHoy);
   if (excludeTaskId) q = q.neq("id", excludeTaskId);
   const { count } = await q;
   if ((count ?? 0) > 0) return;
 
-  // Sin tasks activas → liberar unidad a 'disponible'.
+  // ¿Hay alguien adentro? El estado describe el AHORA: si otra reserva está en
+  // check_in, la unidad quedó ocupada, no libre (misma regla que el trigger de
+  // la migración 061).
+  const { count: conHuesped } = await admin
+    .from("bookings")
+    .select("id", { count: "exact", head: true })
+    .eq("unit_id", unitId)
+    .eq("organization_id", organizationId)
+    .eq("status", "check_in")
+    .eq("is_block", false);
+
   await admin
     .from("units")
-    .update({ status: "disponible" })
+    .update({ status: (conHuesped ?? 0) > 0 ? "ocupado" : "disponible" })
     .eq("id", unitId)
     .eq("organization_id", organizationId);
 
@@ -76,17 +100,24 @@ const cleaningSchema = z.object({
 
 export type CleaningInput = z.infer<typeof cleaningSchema>;
 
-const DEFAULT_CHECKLIST = [
-  "Cocina (vajilla, electrodomésticos)",
-  "Baño (sanitarios, ducha, espejos)",
-  "Dormitorios (cambio de sábanas)",
-  "Living / comedor",
-  "Pisos (aspirar / trapear)",
-  "Toallas y blanquería",
-  "Reposición amenities (papel, jabón, café)",
-  "Ventilación / olores",
-  "Verificación de inventario",
-];
+/**
+ * Plantilla de checklist de la organización, o la lista por defecto si todavía
+ * no la editaron. Cada limpieza guarda SU copia: cambiar la plantilla no
+ * reescribe las que ya se hicieron.
+ */
+async function checklistForOrg(
+  organizationId: string,
+): Promise<{ item: string; done: boolean }[]> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from("organizations")
+    .select("cleaning_checklist")
+    .eq("id", organizationId)
+    .maybeSingle();
+  const items = (data?.cleaning_checklist as string[] | null) ?? [];
+  const base = items.length > 0 ? items : DEFAULT_CHECKLIST;
+  return base.map((item) => ({ item, done: false }));
+}
 
 export async function listCleaningTasks(filters?: {
   status?: CleaningStatus;
@@ -205,7 +236,7 @@ export async function ensureCleaningTasksForCheckouts(
   // → idempotencia) y hacer UN insert batch. Se itera por booking (no por
   // unidad) para que un booking viejo ya limpiado no tape al checkout real
   // del día cuando ambos comparten unidad.
-  const checklist = DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
+  const checklist = await checklistForOrg(organizationId);
   const taskRows: Array<{
     organization_id: string;
     unit_id: string;
@@ -304,9 +335,10 @@ export async function createCleaningTask(input: CleaningInput) {
       DEFAULT_ORG_TIMEZONE,
     ).toISOString();
   }
-  const checklist = validated.checklist.length > 0
-    ? validated.checklist
-    : DEFAULT_CHECKLIST.map((item) => ({ item, done: false }));
+  const checklist =
+    validated.checklist.length > 0
+      ? validated.checklist
+      : await checklistForOrg(organization.id);
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("cleaning_tasks")

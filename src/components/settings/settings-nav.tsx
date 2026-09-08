@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Users, Palette, Mail, MessageSquareText, Percent } from "lucide-react";
+import { Building2, Users, Palette, Mail, MessageSquareText, Percent, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type SettingsNavItem = {
@@ -16,6 +16,7 @@ const ITEMS: SettingsNavItem[] = [
   { label: "Organización", href: "/dashboard/configuracion", icon: Building2, exact: true },
   { label: "Equipo y permisos", href: "/dashboard/configuracion/equipo", icon: Users },
   { label: "Comisiones", href: "/dashboard/configuracion/comisiones", icon: Percent },
+  { label: "Limpieza", href: "/dashboard/configuracion/limpieza", icon: Sparkles },
   { label: "Colores", href: "/dashboard/configuracion/colores", icon: Palette },
   { label: "Comunicaciones", href: "/dashboard/configuracion/comunicaciones", icon: Mail },
   { label: "Mensajería", href: "/dashboard/configuracion/mensajeria", icon: MessageSquareText },

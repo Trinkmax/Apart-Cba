@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   Cable,
+  Download,
+  Upload,
   Plus,
   ShieldCheck,
   ShieldAlert,
@@ -56,6 +58,16 @@ export default async function CanalesPage() {
     (acc, l) => (l.last_success_at && (!acc || l.last_success_at > acc) ? l.last_success_at : acc),
     null,
   );
+  // La última vez que una OTA leyó NUESTRO calendario. Es la respuesta a
+  // "cargué una reserva y Booking no la bloquea": esa dirección no la dispara
+  // ningún botón, la OTA viene sola.
+  const lastPublished = active.reduce<string | null>(
+    (acc, l) =>
+      l.last_export_access_at && (!acc || l.last_export_access_at > acc)
+        ? l.last_export_access_at
+        : acc,
+    null,
+  );
 
   const overall =
     critical > 0 || conflicts > 0 ? "critical" : degraded > 0 || issues.length > 0 ? "warning" : "ok";
@@ -92,6 +104,23 @@ export default async function CanalesPage() {
             Reservas y disponibilidad sincronizadas con Airbnb y Booking. La demora final de
             actualización depende de cada plataforma.
           </p>
+          {/* Las dos direcciones, dichas por separado: la confusión más cara de
+              esta pantalla es creer que un botón manda las reservas propias a
+              la OTA. No hay tal botón — ni puede haberlo con iCal. */}
+          {active.length > 0 && (
+            <div className="mt-2.5 flex flex-col gap-1 text-xs text-muted-foreground sm:flex-row sm:items-center sm:gap-4">
+              <span className="inline-flex items-center gap-1.5">
+                <Download size={12} className="shrink-0" />
+                Traemos sus reservas
+                {lastCheck ? ` · última lectura ${formatDistanceToNow(new Date(lastCheck), { addSuffix: true, locale: es })}` : ""}
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Upload size={12} className="shrink-0" />
+                Ellas leen tu calendario solas
+                {lastPublished ? ` · última vez ${formatDistanceToNow(new Date(lastPublished), { addSuffix: true, locale: es })}` : ""}
+              </span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <SyncNowButton disabled={active.length === 0} />
