@@ -46,7 +46,7 @@ export function ResultsSettledByUnitTable({
         <tbody className="divide-y">
           {rows.map((r) => (
             <tr key={`${r.unit_id ?? "none"}|${r.currency}`} className="hover:bg-muted/30 transition-colors">
-              <Td>
+              <Td className="whitespace-nowrap">
                 <span className="inline-flex items-center gap-2 min-w-0">
                   {r.unit_id ? (
                     <Link href={`/dashboard/unidades/${r.unit_id}`} className="font-medium hover:underline">
@@ -69,7 +69,7 @@ export function ResultsSettledByUnitTable({
                   <span className="block text-[11px] text-muted-foreground truncate max-w-[220px]">{r.unit_name}</span>
                 )}
               </Td>
-              <Td>
+              <Td className="whitespace-nowrap">
                 <span className="text-xs text-muted-foreground">
                   {r.owners.length === 0
                     ? "—"

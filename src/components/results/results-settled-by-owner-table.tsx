@@ -43,7 +43,7 @@ export function ResultsSettledByOwnerTable({
         <tbody className="divide-y">
           {rows.map((r) => (
             <tr key={r.settlement_id} className="hover:bg-muted/30 transition-colors">
-              <Td>
+              <Td className="whitespace-nowrap">
                 <span className="inline-flex items-center gap-2">
                   {r.owner_id ? (
                     <Link href={`/dashboard/propietarios/${r.owner_id}`} className="font-medium hover:underline">

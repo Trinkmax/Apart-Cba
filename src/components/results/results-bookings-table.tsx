@@ -18,7 +18,7 @@ export function ResultsBookingsTable({ rows }: { rows: ResultBookingRow[] }) {
       title="Detalle por reserva"
       subtitle="Temporario: la reserva cuenta en el mes del check-out. Mensual: se prorratea la renta por los días del mes."
     >
-      <ResultsTable className="min-w-[900px]">
+      <ResultsTable className="min-w-[900px]" height="tall">
         <thead>
           <tr>
             <Th>Fechas</Th>
