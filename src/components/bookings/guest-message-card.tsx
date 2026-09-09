@@ -30,7 +30,6 @@ export function GuestMessageCard({
   initialDeposit,
   paidAmount,
   securityDeposit,
-  listingUrl,
   phone,
   canEdit,
 }: {
@@ -48,7 +47,6 @@ export function GuestMessageCard({
   paidAmount: number;
   /** Depósito en garantía (reservas mensuales). Solo lectura acá; se carga en la reserva. */
   securityDeposit: number | null;
-  listingUrl: string | null;
   phone?: string | null;
   canEdit: boolean;
 }) {
@@ -89,7 +87,6 @@ export function GuestMessageCard({
     total,
     deposit: senaNum,
     securityDeposit,
-    listingUrl,
   });
 
   const waDigits = phone ? phone.replace(/[^\d]/g, "") : "";

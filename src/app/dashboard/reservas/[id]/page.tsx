@@ -95,12 +95,6 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   const channelCommissionDefaults = organization.channel_commissions ?? {};
   const commissionBase = organization.commission_base ?? undefined;
 
-  // Link del depto para el mensaje. .trim() + sin barra final: el env de Vercel
-  // puede traer un "\n" al final y eso parte el link ("...com⏎/u/slug").
-  const listingUrl = b.unit.slug
-    ? `${(process.env.NEXT_PUBLIC_APP_URL ?? "").trim().replace(/\/+$/, "")}/u/${b.unit.slug}`
-    : null;
-
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
       {/* Dos personas mirando la misma reserva ven lo mismo: un cobro, un
@@ -422,7 +416,6 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
             initialDeposit={b.deposit_amount != null ? Number(b.deposit_amount) : null}
             paidAmount={Number(b.paid_amount ?? 0)}
             securityDeposit={b.security_deposit != null ? Number(b.security_deposit) : null}
-            listingUrl={listingUrl}
             phone={b.guest?.phone ?? null}
             canEdit={canEditBooking}
           />

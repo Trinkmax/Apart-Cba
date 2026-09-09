@@ -9,8 +9,9 @@ import {
 } from "@/lib/email/booking-confirmation";
 
 // .trim() + sin barra final: el env de Vercel puede venir con un salto de línea
-// al final ("https://www.apartcba.com\n"), y sin esto el link del depto queda
-// partido ("...com⏎/u/slug") y WhatsApp/clientes de correo lo cortan en ".com".
+// al final ("https://www.apartcba.com\n"), y sin esto los links del mensaje
+// (/mi-cuenta/reservas/…, /buscar) quedan partidos ("...com⏎/buscar") y
+// WhatsApp/clientes de correo los cortan en ".com".
 const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001")
   .trim()
   .replace(/\/+$/, "");
@@ -120,7 +121,7 @@ async function buildConfirmationEmail(params: {
       `
         id, check_in_date, check_out_date, total_amount, currency, guests_count, organization_id, deposit_amount, paid_amount, security_deposit,
         guest:guests(full_name, email, phone),
-        unit:units(name, marketplace_title, slug),
+        unit:units(name, marketplace_title),
         organization:organizations(name, logo_url, primary_color, contact_email, contact_phone)
       `
     )
@@ -136,7 +137,6 @@ async function buildConfirmationEmail(params: {
   const unit = booking.unit as unknown as {
     name: string;
     marketplace_title: string | null;
-    slug: string | null;
   } | null;
   const org = booking.organization as unknown as {
     name: string;
@@ -149,7 +149,6 @@ async function buildConfirmationEmail(params: {
   if (!guest?.email) return null;
 
   const unitTitle = unit?.marketplace_title || unit?.name || "tu departamento";
-  const listingUrl = unit?.slug ? `${APP_URL}/u/${unit.slug}` : null;
   const currency = String(booking.currency ?? "ARS");
   const total = Number(booking.total_amount ?? 0);
   // Seña informada: la explícita (deposit_amount) o, si no hay, lo ya cobrado
@@ -171,7 +170,6 @@ async function buildConfirmationEmail(params: {
     total,
     deposit,
     securityDeposit,
-    listingUrl,
     org: {
       name: org?.name ?? "",
       logoUrl: org?.logo_url ?? null,
@@ -260,7 +258,7 @@ export async function notifyGuestRequestRejected(params: {
   const { data: req } = await admin
     .from("booking_requests")
     .select(
-      `organization_id, unit:units(marketplace_title, name, slug), organization:organizations(name)`
+      `organization_id, unit:units(marketplace_title, name), organization:organizations(name)`
     )
     .eq("id", params.requestId)
     .maybeSingle();
@@ -269,7 +267,6 @@ export async function notifyGuestRequestRejected(params: {
   const unit = req.unit as unknown as {
     marketplace_title: string | null;
     name: string;
-    slug: string | null;
   };
   const org = req.organization as unknown as { name: string };
   const title = unit.marketplace_title ?? unit.name;

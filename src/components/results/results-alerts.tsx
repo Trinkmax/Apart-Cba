@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, Percent, UserX } from "lucide-react";
+import { AlertTriangle, ArrowRight, Percent, Users, UserX } from "lucide-react";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import type { MonthlyResults } from "@/lib/actions/results";
 
@@ -41,6 +41,19 @@ export function ResultsAlerts({ results }: { results: MonthlyResults }) {
       text: `No configuraste la comisión de ${BOOKING_SOURCE_META[source]?.label ?? source}: se está contando 0%`,
       href: "/dashboard/configuracion/comisiones",
       cta: "Configurar",
+    });
+  }
+
+  for (const u of results.units_bad_shares) {
+    items.push({
+      key: `shares-${u.unit_id}`,
+      tone: "amber",
+      icon: <Users size={16} />,
+      // La proyección normaliza estas participaciones; la liquidación no. Con
+      // dos dueños al 100% cada uno, el depto aparece con el doble de ingreso.
+      text: `Las participaciones de ${u.code} suman ${u.total_pct}%, no 100%: sus números por departamento pueden salir duplicados`,
+      href: `/dashboard/unidades/${u.unit_id}`,
+      cta: "Corregir",
     });
   }
 

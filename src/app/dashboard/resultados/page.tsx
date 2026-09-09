@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowRight, CalendarX2, PieChart, Settings2 } from "lucide-react";
+import { ArrowRight, CalendarX2, FileCheck2, PieChart, Settings2, TrendingUp } from "lucide-react";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { getMonthlyResults } from "@/lib/actions/results";
 import { can } from "@/lib/permissions";
@@ -16,6 +16,9 @@ import { ResultsSummary } from "@/components/results/results-summary";
 import { ResultsByChannelTable } from "@/components/results/results-by-channel-table";
 import { ResultsByOwnerTable } from "@/components/results/results-by-owner-table";
 import { ResultsBookingsTable } from "@/components/results/results-bookings-table";
+import { ResultsSettledSummary } from "@/components/results/results-settled-summary";
+import { ResultsSettledByUnitTable } from "@/components/results/results-settled-by-unit-table";
+import { ResultsSettledByOwnerTable } from "@/components/results/results-settled-by-owner-table";
 import type { BookingSource } from "@/lib/types/database";
 
 /**
@@ -51,8 +54,10 @@ export default async function ResultadosPage({
   const monthParam = Math.trunc(Number(sp.month));
   const month = monthParam >= 1 && monthParam <= 12 ? monthParam : todayMonth;
 
-  const results = await getMonthlyResults(year, month);
+  const results = await getMonthlyResults(year, month, { withSettled: true });
   const multiCurrency = results.totals.length > 1;
+  const settled = results.settled;
+  const settledMultiCurrency = (settled?.totals.length ?? 0) > 1;
   const periodLabel = formatPeriod(year, month);
   const configuredChannels = (Object.entries(results.channel_commissions) as Array<[BookingSource, number | undefined]>)
     .filter(([, pct]) => pct !== undefined && pct !== null && pct > 0)
@@ -77,7 +82,7 @@ export default async function ResultadosPage({
 
       <ResultsAlerts results={results} />
 
-      {results.rows.length === 0 ? (
+      {results.rows.length === 0 && !settled ? (
         <Card className="p-8 sm:p-12 items-center text-center gap-3">
           <div className="size-12 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
             <CalendarX2 size={22} />
@@ -98,19 +103,67 @@ export default async function ResultadosPage({
         </Card>
       ) : (
         <>
-          <ResultsSummary totals={results.totals} />
+          {/* ── Liquidado ────────────────────────────────────────────────────
+              Va primero cuando existe: es lo que efectivamente pasó (con los
+              gastos y ajustes cargados a mano), no una estimación. La
+              proyección queda abajo como la previsión del mes. */}
+          {settled && (
+            <section className="space-y-4 sm:space-y-5">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <h2 className="text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2">
+                  <FileCheck2 className="size-4 text-emerald-600 dark:text-emerald-400" /> Liquidado
+                </h2>
+                <p className="text-xs text-muted-foreground">
+                  Lo que salió de las liquidaciones de {periodLabel} — con los gastos ya descontados.
+                </p>
+              </div>
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 md:gap-6">
-            <ResultsByChannelTable rows={results.by_channel} multiCurrency={multiCurrency} />
-            <ResultsByOwnerTable
-              rows={results.by_owner}
-              year={year}
-              month={month}
-              multiCurrency={multiCurrency}
-            />
-          </div>
+              <ResultsSettledSummary
+                totals={settled.totals}
+                pending={results.owners_pending_settlement}
+                outside={results.bookings_outside_settlements}
+                year={year}
+                month={month}
+              />
 
-          <ResultsBookingsTable rows={results.rows} />
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 md:gap-6">
+                <ResultsSettledByUnitTable rows={settled.by_unit} multiCurrency={settledMultiCurrency} />
+                <ResultsSettledByOwnerTable rows={settled.by_owner} multiCurrency={settledMultiCurrency} />
+              </div>
+            </section>
+          )}
+
+          {/* ── Proyección ───────────────────────────────────────────────────
+              Puede no haber ninguna: un mes ya liquidado cuyas reservas se
+              borraron después conserva la liquidación pero no proyecta nada. */}
+          {results.rows.length > 0 && (
+          <section className="space-y-4 sm:space-y-5">
+            {settled && (
+              <div className="flex items-baseline gap-2 flex-wrap pt-1 border-t">
+                <h2 className="text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2 mt-4">
+                  <TrendingUp className="size-4 text-violet-500" /> Proyección del mes
+                </h2>
+                <p className="text-xs text-muted-foreground mt-4">
+                  Estimado desde las reservas, antes de liquidar. Puede diferir de lo liquidado.
+                </p>
+              </div>
+            )}
+
+            <ResultsSummary totals={results.totals} />
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 md:gap-6">
+              <ResultsByChannelTable rows={results.by_channel} multiCurrency={multiCurrency} />
+              <ResultsByOwnerTable
+                rows={results.by_owner}
+                year={year}
+                month={month}
+                multiCurrency={multiCurrency}
+              />
+            </div>
+
+            <ResultsBookingsTable rows={results.rows} />
+          </section>
+          )}
         </>
       )}
 
@@ -122,6 +175,25 @@ export default async function ResultadosPage({
               <Settings2 size={14} className="text-muted-foreground" /> Cómo se calcula
             </h2>
             <ul className="text-[12px] text-muted-foreground mt-1.5 space-y-1 leading-snug">
+              {settled && (
+                <>
+                  <li>
+                    <span className="font-medium text-foreground">Liquidado:</span> sale de las liquidaciones
+                    del mes, no de las reservas. Es lo que efectivamente se le transfirió a cada propietario,
+                    con los gastos y ajustes que se cargaron en el documento.
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">Gastos:</span> todo lo que se le descuenta al
+                    propietario menos las comisiones — limpieza, mantenimiento, expensas y ajustes. Los
+                    servicios que el inquilino reembolsa (luz, gas, agua) no son un gasto: se le suman.
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">Por departamento:</span> cada cargo va al depto
+                    con el que se cargó. Un cargo sin depto en una liquidación de una sola unidad se imputa ahí;
+                    si el propietario tiene varias, queda en &ldquo;Sin asignar&rdquo; en vez de repartirse a ojo.
+                  </li>
+                </>
+              )}
               <li>
                 <span className="font-medium text-foreground">Plataformas:</span> total × % del canal
                 {configuredChannels.length > 0 ? ` (${configuredChannels.join(" · ")})` : " (ningún canal configurado)"}.

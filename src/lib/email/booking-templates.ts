@@ -7,12 +7,6 @@ import {
   renderBookingConfirmationText,
 } from "./booking-confirmation";
 
-// APP_URL para el link del depto (mismo saneo que en marketplace/notifications.ts:
-// el env de Vercel puede traer un "\n" al final y parte el link).
-const APP_URL = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001")
-  .trim()
-  .replace(/\/+$/, "");
-
 const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const MONTH_NAMES = [
   "Ene", "Feb", "Mar", "Abr", "May", "Jun",
@@ -200,7 +194,7 @@ export async function buildOwnerConfirmationDraft(
       check_in_date, check_out_date, total_amount, currency, guests_count,
       deposit_amount, paid_amount, security_deposit,
       guest:guests(full_name),
-      unit:units(name, marketplace_title, slug)
+      unit:units(name, marketplace_title)
     `
     )
     .eq("id", bookingId)
@@ -211,7 +205,6 @@ export async function buildOwnerConfirmationDraft(
   const unit = b.unit as unknown as {
     name: string;
     marketplace_title: string | null;
-    slug: string | null;
   } | null;
 
   const ci = b.check_in_date as string;
@@ -235,7 +228,6 @@ export async function buildOwnerConfirmationDraft(
   const securityDeposit =
     b.security_deposit != null ? Number(b.security_deposit) : null;
   const unitTitle = unit?.marketplace_title || unit?.name || "tu departamento";
-  const listingUrl = unit?.slug ? `${APP_URL}/u/${unit.slug}` : null;
 
   const body = renderBookingConfirmationText({
     guestName: guest?.full_name ?? "",
@@ -247,7 +239,6 @@ export async function buildOwnerConfirmationDraft(
     total,
     deposit,
     securityDeposit,
-    listingUrl,
   });
   const subject = `¡Tu reserva está confirmada! — ${unitTitle}`;
   return { subject, body };

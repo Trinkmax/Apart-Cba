@@ -30,7 +30,6 @@ export interface BookingConfirmationEmailParams {
   deposit: number | null;
   /** Depósito en garantía (reservas mensuales). Se muestra aparte del total. */
   securityDeposit: number | null;
-  listingUrl: string | null;
   org: {
     name: string;
     logoUrl: string | null;
@@ -142,7 +141,6 @@ export function renderBookingConfirmationEmail(
     total,
     deposit,
     securityDeposit,
-    listingUrl,
     org,
   } = params;
 
@@ -233,27 +231,11 @@ export function renderBookingConfirmationEmail(
         hasSecurityDeposit ? "se abonan" : "se abona"
       } al ingresar, en efectivo o por transferencia.`;
 
-  // --- CTA "cómo llegar" ---
-  const ctaBlock = listingUrl
-    ? `
-      <tr>
-        <td align="center" style="padding:8px 0 4px;">
-          <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${escapeHtml(
-            listingUrl
-          )}" style="height:48px;v-text-anchor:middle;width:320px;" arcsize="14%" strokecolor="${primary}" fillcolor="${primary}"><w:anchorlock/><center style="color:${onPrimary};font-family:${FONT};font-size:15px;font-weight:700;">Ver el depto y cómo llegar →</center></v:roundrect><![endif]-->
-          <!--[if !mso]><!-- -->
-          <a href="${escapeHtml(
-            listingUrl
-          )}" target="_blank" style="display:inline-block;background:${primary};color:${onPrimary};font-family:${FONT};font-size:15px;font-weight:700;text-decoration:none;padding:14px 30px;border-radius:12px;">Ver el depto y cómo llegar&nbsp;→</a>
-          <!--<![endif]-->
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:10px 0 4px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.muted};text-align:center;">
-          🚗&nbsp;🧭&nbsp;🗺️&nbsp; En el enlace del departamento vas a encontrar el mapa que te lleva directo al destino.
-        </td>
-      </tr>`
-    : `
+  // --- Aviso de llegada ---
+  // Sin link al listing público: la ubicación exacta se pasa al coordinar la
+  // llegada. El link mandaba al huésped ya confirmado a la página de venta y
+  // generaba confusión (pedido del dueño, 2026-09-09).
+  const ctaBlock = `
       <tr>
         <td style="padding:10px 0 4px;font-family:${FONT};font-size:13px;line-height:1.6;color:${C.muted};text-align:center;">
           🚗&nbsp;🧭&nbsp;🗺️&nbsp; Te vamos a pasar la ubicación exacta y cómo llegar cuando coordinemos tu llegada.
@@ -377,7 +359,7 @@ export function renderBookingConfirmationEmail(
                   </td>
                 </tr>
 
-                <!-- CTA -->
+                <!-- Llegada -->
                 <tr>
                   <td class="px" style="padding:24px 40px 0;">
                     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -456,15 +438,9 @@ export function renderBookingConfirmationEmail(
   textLines.push("");
   textLines.push(payNote);
   textLines.push("");
-  if (listingUrl) {
-    textLines.push(
-      `🚗 🧭 🗺️ Para facilitar la llegada, en el enlace del departamento vas a encontrar el mapa que te lleva directo al destino: ${listingUrl}`
-    );
-  } else {
-    textLines.push(
-      "🚗 🧭 🗺️ Te vamos a pasar la ubicación exacta y cómo llegar cuando coordinemos tu llegada."
-    );
-  }
+  textLines.push(
+    "🚗 🧭 🗺️ Te vamos a pasar la ubicación exacta y cómo llegar cuando coordinemos tu llegada."
+  );
   textLines.push("");
   textLines.push(
     "📅 Uno o dos días antes de tu ingreso te vamos a contactar para coordinar los últimos detalles (horario de check-in, entrega de llaves, etc.)."
@@ -494,7 +470,6 @@ export interface BookingConfirmationTextParams {
   deposit: number | null;
   /** Depósito en garantía (reservas mensuales). Se informa aparte del total. */
   securityDeposit: number | null;
-  listingUrl: string | null;
 }
 
 /** Formato de plata para el mensaje: sin decimales si es entero (más limpio en WhatsApp). */
@@ -547,9 +522,8 @@ export function renderBookingConfirmationText(
   );
   lines.push("");
   lines.push(
-    "🚗🧭🗺 Para facilitar la llegada al alojamiento, recordá que en el enlace del departamento encontrarás el link que te llevará directamente al destino."
+    "🚗🧭🗺 Te vamos a pasar la ubicación exacta y cómo llegar cuando coordinemos tu llegada."
   );
-  if (p.listingUrl) lines.push(p.listingUrl);
   lines.push("");
   lines.push(
     "📅 Uno o dos días antes de la fecha de ingreso, vamos a estar contactándote para coordinar los últimos detalles, como el horario de check-in, entrega de llaves, etc"

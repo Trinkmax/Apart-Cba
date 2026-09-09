@@ -29,7 +29,16 @@ import {
   round2,
   type CommissionBase,
 } from "@/lib/finance/booking-economics";
-import type { BookingSource, BookingStatus } from "@/lib/types/database";
+import {
+  buildSettledResults,
+  type SettledResults,
+  type SettledSettlementInput,
+} from "@/lib/settlements/settled-model";
+import type {
+  BookingSource,
+  BookingStatus,
+  SettlementStatus,
+} from "@/lib/types/database";
 
 const RESULT_BOOKING_STATUSES = ["pendiente", "confirmada", "check_in", "check_out"] as const;
 
@@ -108,6 +117,42 @@ export interface MonthlyResults {
   by_owner: ResultByOwner[];
   missing_price_count: number;
   units_without_owner: Array<{ unit_id: string; code: string; name: string }>;
+  /**
+   * Unidades cuyas participaciones no suman 100. La proyección las normaliza,
+   * pero la liquidación usa el % crudo: una unidad con dos dueños al 100% cada
+   * uno aparece en "Por departamento" con el doble de ingreso bruto el día que
+   * se liquide a los dos. Es un dato mal cargado, se arregla en la unidad.
+   */
+  units_bad_shares: Array<{ unit_id: string; code: string; total_pct: number }>;
+  /**
+   * Lo liquidado del mes: qué se le transfirió a cada propietario y a cada
+   * departamento, y qué se le descontó, leído de las liquidaciones en vez de
+   * proyectado desde las reservas. `null` cuando el mes todavía no tiene
+   * ninguna liquidación generada.
+   */
+  settled: SettledResults | null;
+  /**
+   * Propietarios con reservas en el mes pero sin liquidación todavía: lo que
+   * falta liquidar para que "Liquidado" cuente la historia completa.
+   */
+  owners_pending_settlement: Array<{
+    owner_id: string;
+    owner_name: string;
+    currency: string;
+    projected_net: number;
+  }>;
+  /**
+   * Reservas del mes que no entraron en ninguna liquidación, aunque su
+   * propietario SÍ tenga la del período. Es el hueco que explica por qué
+   * "Liquidado" puede dar menos que la proyección: alguien liquidó antes de
+   * que la reserva se cargara, o la sacó del documento a mano. Hoy es
+   * invisible; medido en producción, 10 reservas por $2,9M en un solo mes.
+   */
+  bookings_outside_settlements: {
+    count: number;
+    amount: number;
+    currency: string;
+  } | null;
 }
 
 function dayDiff(fromISO: string, toISO: string): number {
@@ -128,7 +173,22 @@ type UnitOwnerLite = {
   is_primary: boolean | null;
 };
 
-export async function getMonthlyResults(year: number, month: number): Promise<MonthlyResults> {
+export interface MonthlyResultsOptions {
+  /**
+   * Traer también el detalle de las liquidaciones (la sección "Liquidado").
+   * Cuesta una query con todas las líneas del mes — ~300 filas en la org más
+   * grande — y sólo la usa `/dashboard/resultados`. El home llama a esta misma
+   * función para una tarjeta de totales: ahí sería puro peso muerto.
+   */
+  withSettled?: boolean;
+}
+
+export async function getMonthlyResults(
+  year: number,
+  month: number,
+  options: MonthlyResultsOptions = {},
+): Promise<MonthlyResults> {
+  const withSettled = options.withSettled ?? false;
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   // Sólo quien ve la plata de la organización (admin/recepción). `settlements.view`
@@ -156,8 +216,12 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
   // liquidación: acuerdo con el propietario → canal → unidad → org → 20.
   const commissionBySource = organization.commission_by_source ?? {};
 
-  const [{ data: bookings, error: bErr }, { data: units, error: uErr }, { data: settlements }] =
-    await Promise.all([
+  const [
+    { data: bookings, error: bErr },
+    { data: units, error: uErr },
+    { data: settlements },
+    { data: settledDocs },
+  ] = await Promise.all([
       admin
         .from("bookings")
         .select(
@@ -182,6 +246,25 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
         .eq("period_year", y)
         .eq("period_month", m)
         .neq("status", "anulada"),
+      // Las liquidaciones CON sus líneas: la fuente de "Liquidado" (lo que
+      // efectivamente se transfirió y se descontó). Va en su propia query
+      // porque sólo la pide `/dashboard/resultados`; el home no la paga.
+      // `unit:units(...)` es la única forma de saber a qué departamento
+      // pertenece cada importe: `ref_id` no tiene FK y apunta a reservas ya
+      // borradas en ~1 de cada 4 líneas.
+      withSettled
+        ? admin
+            .from("owner_settlements")
+            .select(
+              `id, owner_id, status, currency, net_payable, exchange_rates, paid_at,
+               owner:owners(id, full_name),
+               lines:settlement_lines(line_type, amount, sign, currency, unit_id, ref_type, ref_id, unit:units(id, code, name))`
+            )
+            .eq("organization_id", organization.id)
+            .eq("period_year", y)
+            .eq("period_month", m)
+            .neq("status", "anulada")
+        : Promise.resolve({ data: null }),
     ]);
   if (bErr) throw new Error(bErr.message);
   if (uErr) throw new Error(uErr.message);
@@ -196,6 +279,28 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
   const unitById = new Map<string, UnitRow>();
   for (const u of (units ?? []) as unknown as UnitRow[]) unitById.set(u.id, u);
 
+  // ── Liquidado: el hecho consumado, pivoteado por depto y por propietario ──
+  // Se arma antes que la proyección porque `by_owner` lo usa para saber a qué
+  // liquidación linkear y cuánto se transfirió realmente.
+  const settledInput: SettledSettlementInput[] = !withSettled
+    ? []
+    : (settledDocs ?? []).map((s) => ({
+        id: s.id as string,
+        status: s.status as SettlementStatus,
+        currency: (s.currency as string | null) ?? "ARS",
+        exchange_rates: (s.exchange_rates as Record<string, number> | null) ?? {},
+        paid_at: (s.paid_at as string | null) ?? null,
+        owner: s.owner as unknown as { id: string; full_name: string } | null,
+        lines: (s.lines ?? []) as unknown as SettledSettlementInput["lines"],
+      }));
+  const settled = settledInput.length > 0 ? buildSettledResults(settledInput) : null;
+  // Clave por moneda además de propietario: un dueño con documentos en dos
+  // monedas colgaría el neto de uno en la fila del otro.
+  const settledNetByOwner = new Map<string, number>();
+  for (const o of settled?.by_owner ?? []) {
+    if (o.owner_id) settledNetByOwner.set(`${o.owner_id}|${o.currency}`, o.net);
+  }
+
   const settlementByOwner = new Map<string, ResultByOwner["settlement"]>();
   for (const s of settlements ?? []) {
     // Si hay más de una (multi-moneda), preferimos la no-borrador; a igualdad, la primera.
@@ -203,7 +308,12 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
     const next = {
       id: s.id as string,
       status: s.status as string,
-      net_payable: Number(s.net_payable),
+      // El neto recalculado desde las líneas, no el de la cabecera: en
+      // producción hay liquidaciones donde el total persistido quedó
+      // desincronizado de sus líneas (deductions_amount en 0 con líneas '-').
+      net_payable:
+        settledNetByOwner.get(`${s.owner_id}|${s.currency}`) ??
+        Number(s.net_payable),
       currency: s.currency as string,
     };
     if (!prev || (prev.status === "borrador" && next.status !== "borrador")) {
@@ -442,6 +552,56 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
     }
   }
 
+  // Propietarios que produjeron en el mes pero todavía no tienen liquidación:
+  // sin esto, "Liquidado" muestra un total más chico que la proyección y no se
+  // entiende por qué. Con el aviso, la diferencia tiene nombre y apellido.
+  const ownersPendingSettlement = Array.from(byOwner.values())
+    .filter((o) => o.owner_id && !settlementByOwner.has(o.owner_id))
+    .map((o) => ({
+      owner_id: o.owner_id as string,
+      owner_name: o.owner_name,
+      currency: o.currency,
+      projected_net: o.owner_net,
+    }))
+    .sort((a, b) => b.projected_net - a.projected_net);
+
+  // Reservas de propietarios YA liquidados que no figuran en ningún documento.
+  // Sólo se miran los propietarios liquidados: si el dueño no liquidó todavía,
+  // que su reserva no esté no es un hueco, es que falta generar (ya se avisa
+  // arriba). Las reservas mensuales quedan afuera: entran prorrateadas y su
+  // línea no referencia la reserva.
+  let bookingsOutside: MonthlyResults["bookings_outside_settlements"] = null;
+  if (settled) {
+    const liquidatedOwners = new Set(
+      settled.by_owner.map((o) => o.owner_id).filter(Boolean) as string[],
+    );
+    const refIds = new Set(settled.booking_ref_ids);
+    let count = 0;
+    let amount = 0;
+    let currency = settled.totals[0]?.currency ?? "ARS";
+    for (const r of rows) {
+      if (r.mode === "mensual" || r.missing_price) continue;
+      if (refIds.has(r.booking_id)) continue;
+      const ownerLiquidated = r.owners.some(
+        (o) => o.owner_id && liquidatedOwners.has(o.owner_id),
+      );
+      if (!ownerLiquidated) continue;
+      count += 1;
+      amount = round2(amount + r.total);
+      currency = r.currency;
+    }
+    if (count > 0) bookingsOutside = { count, amount, currency };
+  }
+
+  const unitsBadShares = Array.from(unitById.values())
+    .map((u) => {
+      const owners = (u.unit_owners ?? []).filter((uo) => uo.owner_id);
+      if (owners.length === 0) return null;
+      const total = round2(owners.reduce((a, uo) => a + Number(uo.ownership_pct ?? 100), 0));
+      return total === 100 ? null : { unit_id: u.id, code: u.code, total_pct: total };
+    })
+    .filter((x): x is { unit_id: string; code: string; total_pct: number } => x !== null);
+
   const unitsWithoutOwner = Array.from(unitById.values())
     .filter((u) => (u.unit_owners ?? []).length === 0)
     .map((u) => ({ unit_id: u.id, code: u.code, name: u.name }));
@@ -465,5 +625,9 @@ export async function getMonthlyResults(year: number, month: number): Promise<Mo
       .sort((a, b) => b.owner_net - a.owner_net),
     missing_price_count: rows.filter((r) => r.missing_price).length,
     units_without_owner: unitsWithoutOwner,
+    units_bad_shares: unitsBadShares,
+    settled,
+    owners_pending_settlement: ownersPendingSettlement,
+    bookings_outside_settlements: bookingsOutside,
   };
 }
