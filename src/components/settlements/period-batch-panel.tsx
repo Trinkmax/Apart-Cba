@@ -25,10 +25,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { generateSettlementsForPeriod } from "@/lib/actions/settlements";
+import {
+  generateSettlement,
+  generateSettlementsForPeriod,
+} from "@/lib/actions/settlements";
 import {
   MONTHS,
   SETTLEMENT_STATUS_META,
+  formatPeriod,
   formatPeriodCycle,
 } from "@/lib/settlements/labels";
 import { formatMoney } from "@/lib/format";
@@ -68,6 +72,9 @@ export function PeriodBatchPanel({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  // Qué fila disparó la generación en curso (null = "Generar todas"): el
+  // spinner va en ese botón; todos quedan deshabilitados mientras corre.
+  const [generatingOwnerId, setGeneratingOwnerId] = useState<string | null>(null);
   // Transición dedicada a los cambios de período: mantiene la tabla actual
   // visible (sin flash del skeleton) mientras el server trae los datos nuevos.
   const [navPending, startNav] = useTransition();
@@ -86,20 +93,26 @@ export function PeriodBatchPanel({
   }
 
   function generateAll() {
+    setGeneratingOwnerId(null);
     start(async () => {
       try {
         const res = await generateSettlementsForPeriod(year, month);
         const okRows = res.filter((r) => r.ok);
         const ok = okRows.length;
-        const skipped = res.length - ok;
         // Un propietario sin reservas en el mes NO se saltea: se le genera
         // igual una liquidación en cero (que se puede completar a mano).
         // Sólo se saltean los que no tienen unidades o ya tienen la del mes
-        // cerrada (revisada / enviada / pagada).
+        // cerrada (revisada / enviada / pagada). Se nombran: un "1 salteada" a
+        // secas no dice a quién le falta asignar la unidad.
+        const skippedRows = res.filter((r) => !r.ok);
+        const skipped = skippedRows.length;
         const empty = okRows.filter((r) => (r.lines ?? 0) === 0).length;
         const parts = [
           skipped > 0 &&
-            `${skipped} salteada${skipped === 1 ? "" : "s"} (sin unidades o ya cerrada${skipped === 1 ? "" : "s"})`,
+            `${skipped} salteada${skipped === 1 ? "" : "s"}: ${skippedRows
+              .slice(0, 3)
+              .map((r) => `${r.owner_name.trim()} (${r.skipped ?? "error"})`)
+              .join(", ")}${skipped > 3 ? ` y ${skipped - 3} más` : ""}`,
           empty > 0 &&
             `${empty} en cero (sin reservas con check-out en el mes)`,
         ].filter(Boolean);
@@ -111,6 +124,35 @@ export function PeriodBatchPanel({
           },
         );
         router.refresh();
+      } catch (e) {
+        toast.error("Error", { description: (e as Error).message });
+      }
+    });
+  }
+
+  /**
+   * Genera la liquidación de UN propietario desde su fila "Sin generar". Sin
+   * esto la única salida en esta vista era "Generar todas", que rehace los
+   * borradores de todo el período para completar uno solo.
+   */
+  function generateForOwner(owner: { id: string; full_name: string }) {
+    setGeneratingOwnerId(owner.id);
+    start(async () => {
+      try {
+        const result = await generateSettlement(owner.id, year, month);
+        if (!result.ok) {
+          toast.error("No se pudo generar la liquidación", {
+            description: result.message,
+          });
+          return;
+        }
+        toast.success(`Liquidación de ${owner.full_name.trim()} generada`, {
+          description:
+            result.lines.length === 0
+              ? `Sin reservas, mantenimientos ni gastos para liquidar en ${formatPeriod(year, month)}.`
+              : `${result.lines.length} líneas · neto: ${formatMoney(Number(result.settlement.net_payable), "ARS")}`,
+        });
+        router.push(`/dashboard/liquidaciones/${result.settlement.id}`);
       } catch (e) {
         toast.error("Error", { description: (e as Error).message });
       }
@@ -246,7 +288,7 @@ export function PeriodBatchPanel({
               disabled={pending}
               className="gap-2"
             >
-              {pending ? (
+              {pending && generatingOwnerId === null ? (
                 <Loader2 size={15} className="animate-spin" />
               ) : (
                 <Sparkles size={15} />
@@ -350,7 +392,7 @@ export function PeriodBatchPanel({
                       : "—"}
                   </TableCell>
                   <TableCell>
-                    {st && (
+                    {st ? (
                       <Link
                         href={`/dashboard/liquidaciones/${st.id}`}
                         className="text-muted-foreground hover:text-foreground inline-flex"
@@ -358,7 +400,22 @@ export function PeriodBatchPanel({
                       >
                         <ChevronRight size={16} />
                       </Link>
-                    )}
+                    ) : canCreate && d.units > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => generateForOwner(d.owner)}
+                        disabled={pending}
+                        className="h-7 gap-1.5 px-2 text-xs"
+                      >
+                        {pending && generatingOwnerId === d.owner.id ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={13} />
+                        )}
+                        Generar
+                      </Button>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               );
