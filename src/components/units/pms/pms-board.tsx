@@ -352,6 +352,10 @@ interface PmsBoardProps {
   orgCurrency?: string;
   /** % que se lleva cada canal (organizations.channel_commissions) — para los forms de reserva. */
   channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  /** % de administración por canal de venta (Configuración → Comisiones). */
+  commissionBySource?: Partial<Record<BookingSource, number>>;
+  /** % de administración por defecto de la organización. */
+  orgCommissionPct?: number | null;
   /** Cota inferior (YYYY-MM-DD) de "por completar"; la calcula el server con la tz de la org. */
   completionCutoff: string;
   /** Base de la comisión de administración (organizations.commission_base) — sólo para desgloses. */
@@ -483,6 +487,8 @@ export function PmsBoard({
   days,
   orgCurrency = "ARS",
   channelCommissionDefaults = EMPTY_CHANNEL_DEFAULTS,
+  commissionBySource,
+  orgCommissionPct,
   completionCutoff,
   commissionBase,
 }: PmsBoardProps) {
@@ -3307,6 +3313,8 @@ export function PmsBoard({
                   existingBookings={bookings}
                   channelRequests={requestOverlaps}
                   channelCommissionDefaults={channelCommissionDefaults}
+            commissionBySource={commissionBySource}
+            orgCommissionPct={orgCommissionPct}
                   commissionBase={commissionBase}
                 >
                   <Button
@@ -3822,6 +3830,8 @@ export function PmsBoard({
             existingBookings={bookings}
             channelRequests={requestOverlaps}
             channelCommissionDefaults={channelCommissionDefaults}
+            commissionBySource={commissionBySource}
+            orgCommissionPct={orgCommissionPct}
             commissionBase={commissionBase}
             open
             onOpenChange={(o) => { if (!o) setEditBooking(null); }}
@@ -3836,6 +3846,8 @@ export function PmsBoard({
             existingBookings={bookings}
             channelRequests={requestOverlaps}
             channelCommissionDefaults={channelCommissionDefaults}
+            commissionBySource={commissionBySource}
+            orgCommissionPct={orgCommissionPct}
             commissionBase={commissionBase}
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
@@ -3862,6 +3874,8 @@ export function PmsBoard({
             existingBookings={bookings}
             channelRequests={requestOverlaps}
             channelCommissionDefaults={channelCommissionDefaults}
+            commissionBySource={commissionBySource}
+            orgCommissionPct={orgCommissionPct}
             commissionBase={commissionBase}
           >
             <button
@@ -4900,6 +4914,8 @@ function QuickAddBridge({
   existingBookings,
   channelRequests,
   channelCommissionDefaults,
+  commissionBySource,
+  orgCommissionPct,
   commissionBase,
   unitId,
   checkIn,
@@ -4911,6 +4927,10 @@ function QuickAddBridge({
   existingBookings: BookingWithRelations[];
   channelRequests?: RequestOverlap[];
   channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  /** % de administración por canal de venta (Configuración → Comisiones). */
+  commissionBySource?: Partial<Record<BookingSource, number>>;
+  /** % de administración por defecto de la organización. */
+  orgCommissionPct?: number | null;
   commissionBase?: CommissionBase;
   unitId: string;
   checkIn: string;
@@ -4924,6 +4944,8 @@ function QuickAddBridge({
       existingBookings={existingBookings}
       channelRequests={channelRequests}
       channelCommissionDefaults={channelCommissionDefaults}
+            commissionBySource={commissionBySource}
+            orgCommissionPct={orgCommissionPct}
       commissionBase={commissionBase}
       defaultUnitId={unitId}
       defaultCheckIn={checkIn}
@@ -4946,6 +4968,8 @@ function LazyNewBookingTrigger({
   existingBookings,
   channelRequests,
   channelCommissionDefaults,
+  commissionBySource,
+  orgCommissionPct,
   commissionBase,
   children,
 }: {
@@ -4954,6 +4978,10 @@ function LazyNewBookingTrigger({
   existingBookings: BookingWithRelations[];
   channelRequests?: RequestOverlap[];
   channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  /** % de administración por canal de venta (Configuración → Comisiones). */
+  commissionBySource?: Partial<Record<BookingSource, number>>;
+  /** % de administración por defecto de la organización. */
+  orgCommissionPct?: number | null;
   commissionBase?: CommissionBase;
   children: React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }>;
 }) {
@@ -4976,6 +5004,8 @@ function LazyNewBookingTrigger({
           existingBookings={existingBookings}
           channelRequests={channelRequests}
           channelCommissionDefaults={channelCommissionDefaults}
+            commissionBySource={commissionBySource}
+            orgCommissionPct={orgCommissionPct}
           commissionBase={commissionBase}
           open={open}
           onOpenChange={setOpen}

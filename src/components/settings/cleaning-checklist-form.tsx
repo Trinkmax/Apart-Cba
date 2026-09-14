@@ -70,7 +70,12 @@ export function CleaningChecklistForm({
       }
       setItems(r.items);
       toast.success("Checklist guardada", {
-        description: "Las limpiezas nuevas van a salir con esta lista.",
+        description:
+          r.actualizadas > 0
+            ? `Se actualizaron ${r.actualizadas} ${
+                r.actualizadas === 1 ? "limpieza pendiente" : "limpiezas pendientes"
+              }. Las que ya empezaron conservan su lista.`
+            : "Las limpiezas nuevas van a salir con esta lista.",
       });
       router.refresh();
     });
@@ -185,8 +190,9 @@ export function CleaningChecklistForm({
         </div>
 
         <p className="text-[11px] text-muted-foreground leading-snug">
-          Cambiar esta lista no toca las limpiezas ya hechas: cada una guarda lo que se
-          controló ese día.
+          Al guardar, las limpiezas que todavía no empezaron pasan a esta lista. Las que
+          ya se hicieron o tienen ítems tildados conservan la suya: es el registro de lo
+          que se controló ese día.
         </p>
       </div>
 

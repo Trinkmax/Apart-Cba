@@ -13,6 +13,7 @@ import type {
   Owner,
 } from "@/lib/types/database";
 import { TICKET_PRIORITY_META } from "@/lib/constants";
+import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 
 const unitSchema = z.object({
   code: z.string().min(1, "Código requerido"),
@@ -172,7 +173,14 @@ export type UnitForBookingForm = Pick<
   | "base_price_currency"
   | "cleaning_fee"
   | "default_mode"
->;
+> & {
+  /**
+   * % acordado con el propietario que absorbe los cargos de esta unidad, si
+   * tiene uno propio. El form lo necesita para calcular la comisión con la
+   * misma cascada que la liquidación (migración 059).
+   */
+  owner_commission_pct_override?: number | null;
+};
 
 /**
  * Unidades activas con los campos que necesita el form de reserva (crear/editar)
@@ -187,14 +195,27 @@ export async function listUnitsForBookingForm(): Promise<UnitForBookingForm[]> {
   const { data, error } = await admin
     .from("units")
     .select(
-      "id, code, name, default_commission_pct, base_price, base_price_currency, cleaning_fee, default_mode",
+      "id, code, name, default_commission_pct, base_price, base_price_currency, cleaning_fee, default_mode, unit_owners(owner_id, ownership_pct, is_primary, commission_pct_override)",
     )
     .eq("organization_id", organization.id)
     .eq("active", true)
     .order("position")
     .order("code");
   if (error) throw new Error(error.message);
-  return (data as UnitForBookingForm[]) ?? [];
+
+  // El % acordado con el propietario que absorbe los cargos. Viaja con la
+  // unidad para que el formulario de reserva calcule la comisión igual que la
+  // liquidación (misma cascada: propietario → canal → unidad → org).
+  type OwnerRow = UnitOwnerLite & { commission_pct_override: number | null };
+  return ((data ?? []) as Array<
+    UnitForBookingForm & { unit_owners?: OwnerRow[] | null }
+  >).map(({ unit_owners, ...u }) => {
+    const owners = unit_owners ?? [];
+    const chargeOwnerId = pickChargeOwner(owners);
+    const override =
+      owners.find((o) => o.owner_id === chargeOwnerId)?.commission_pct_override ?? null;
+    return { ...u, owner_commission_pct_override: override };
+  });
 }
 
 export async function getUnit(id: string) {

@@ -129,8 +129,11 @@ export function CompleteGuestDialog({
   // La comisión de administración de una reserva de OTA suele venir vacía (la
   // resuelve el server con la de la unidad al guardar): si no la sabemos, el
   // desglose lo dice en vez de inventar un 0.
-  const knowsCommission =
-    booking.commission_pct !== null && booking.commission_pct !== undefined;
+  // Una reserva de OTA entra sin `commission_pct`, pero el server ya resuelve el
+  // % vigente y lo adjunta como `commission_effective`: con eso el desglose en
+  // vivo muestra la comisión real en vez de un hueco.
+  const comisionVigente = booking.commission_effective?.pct ?? booking.commission_pct;
+  const knowsCommission = comisionVigente !== null && comisionVigente !== undefined;
   // Misma regla de limpieza que el server al guardar: la de la reserva si la
   // tiene; si no, la de la unidad siempre que sea menor al total tipeado.
   const bookingCleaning = Number(booking.cleaning_fee ?? 0);
@@ -145,7 +148,9 @@ export function CompleteGuestDialog({
     total: totalNum,
     cleaningFee,
     channelPct: channelPctNum,
-    commissionPct: knowsCommission ? booking.commission_pct : 0,
+    // El % vigente (resuelto por el server con la cascada), no el que quedó
+    // congelado al proyectar la reserva de la OTA.
+    commissionPct: knowsCommission ? comisionVigente : 0,
     commissionBase,
   });
 

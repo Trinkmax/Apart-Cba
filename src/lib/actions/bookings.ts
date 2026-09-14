@@ -257,16 +257,29 @@ async function resolveDefaultCommissionPct(
   const admin = createAdminClient();
   const { data: unit } = await admin
     .from("units")
-    .select("default_commission_pct")
+    .select(
+      "default_commission_pct, unit_owners(owner_id, ownership_pct, is_primary, commission_pct_override)",
+    )
     .eq("id", unitId)
     .eq("organization_id", organization.id)
     .maybeSingle();
-  // Misma cascada que la liquidación (migración 059). Acá no hay propietario:
-  // el acuerdo con el dueño lo aplica la liquidación, que es la que paga.
+
+  // Exactamente la misma cascada que la liquidación y que el formulario
+  // (migración 059): acuerdo con el propietario → canal de venta → unidad →
+  // organización. Si acá faltara un escalón, el snapshot de la reserva diría
+  // una cosa y la liquidación pagaría otra.
+  type OwnerRow = UnitOwnerLite & { commission_pct_override: number | null };
+  const owners = ((unit as { unit_owners?: OwnerRow[] | null } | null)?.unit_owners ??
+    []) as OwnerRow[];
+  const chargeOwnerId = pickChargeOwner(owners);
+  const ownerOverride =
+    owners.find((o) => o.owner_id === chargeOwnerId)?.commission_pct_override ?? null;
+
   return resolveCommissionPct({
     source,
+    ownerOverride,
     bySource: organization.commission_by_source,
-    unitPct: unit?.default_commission_pct,
+    unitPct: unit?.default_commission_pct as number | null | undefined,
     orgPct: organization.default_commission_pct,
   }).pct;
 }
@@ -2961,7 +2974,9 @@ export async function listBookingsNeedingCompletion(): Promise<BookingWithRelati
   const cutoff = completionCutoffYmd(organization.timezone || DEFAULT_ORG_TIMEZONE);
   const { data, error } = await admin
     .from("bookings")
-    .select(`*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`)
+    .select(
+      `*, unit:units(id, code, name, default_commission_pct), guest:guests(id, full_name, phone, email)`,
+    )
     .eq("organization_id", organization.id)
     .or("guest_id.is.null,total_amount.lte.0")
     .eq("is_block", false)
@@ -2970,7 +2985,14 @@ export async function listBookingsNeedingCompletion(): Promise<BookingWithRelati
     .gte("check_out_date", cutoff)
     .order("check_in_date", { ascending: true });
   if (error) throw new Error(error.message);
-  return (data as BookingWithRelations[]) ?? [];
+  const rows = (data as (BookingWithRelations & {
+    unit?: { default_commission_pct?: number | null } | null;
+  })[]) ?? [];
+  // El diálogo de "cargar precio" muestra el desglose: necesita el % vigente.
+  const unitPct = new Map<string, number | null>(
+    rows.map((b) => [b.unit_id, b.unit?.default_commission_pct ?? null]),
+  );
+  return attachEffectiveCommission(admin, organization, rows, unitPct);
 }
 
 /**

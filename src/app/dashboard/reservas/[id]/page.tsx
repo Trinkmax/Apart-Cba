@@ -93,6 +93,8 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   // Defaults por canal para el form (edición y "Cargar precio"); las reservas
   // de OTA entran sin pct y el form cae al de la org según el origen.
   const channelCommissionDefaults = organization.channel_commissions ?? {};
+  const commissionBySource = organization.commission_by_source ?? {};
+  const orgCommissionPct = organization.default_commission_pct;
   const commissionBase = organization.commission_base ?? undefined;
 
   return (
@@ -154,6 +156,8 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
           {canEditBooking && (
             <BookingFormDialog booking={b} units={units} accounts={accounts} existingBookings={unitBookings}
               channelRequests={requestOverlaps} channelCommissionDefaults={channelCommissionDefaults}
+                        commissionBySource={commissionBySource}
+                        orgCommissionPct={orgCommissionPct}
               commissionBase={commissionBase}>
               <Button variant="outline" className="gap-2 flex-1 sm:flex-none"><Edit size={14} /> Editar</Button>
             </BookingFormDialog>
@@ -316,6 +320,8 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
                         existingBookings={unitBookings}
                         channelRequests={requestOverlaps}
                         channelCommissionDefaults={channelCommissionDefaults}
+                        commissionBySource={commissionBySource}
+                        orgCommissionPct={orgCommissionPct}
                         commissionBase={commissionBase}
                       >
                         <Button size="sm">Cargar precio</Button>

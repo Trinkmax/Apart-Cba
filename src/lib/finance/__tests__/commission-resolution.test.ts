@@ -105,3 +105,39 @@ describe("caso Habitana: 27,5% en las directas", () => {
     expect(econ.ownerNet).toBe(53_000);
   });
 });
+
+describe("caso Habitana 10/09: el % de la unidad no puede tapar al del canal", () => {
+  // Config real: directo 27,5 · Booking se lleva 15 · unidades al 20 · base gross.
+  const bySource = { directo: 27.5 };
+
+  it("una reserva directa de $335.000 cobra 27,5% y no el 20% de la unidad", () => {
+    const { pct, origin } = resolveCommissionPct({
+      source: "directo",
+      bySource,
+      unitPct: 20,
+      orgPct: 20,
+    });
+    expect({ pct, origin }).toEqual({ pct: 27.5, origin: "canal" });
+
+    const econ = computeBookingEconomics({
+      total: 335_000,
+      cleaningFee: 15_000,
+      channelPct: 0,
+      commissionPct: pct,
+      commissionBase: "gross",
+    });
+    expect(econ.commission).toBe(92_125); // era 67.000 (20%)
+    expect(econ.ownerNet).toBe(227_875); // 335.000 − 92.125 − 15.000
+  });
+
+  it("el acuerdo con el propietario sigue ganando sobre la política del canal", () => {
+    expect(
+      resolveCommissionPct({
+        source: "directo",
+        ownerOverride: 15,
+        bySource,
+        unitPct: 20,
+      }),
+    ).toEqual({ pct: 15, origin: "propietario" });
+  });
+});

@@ -293,7 +293,9 @@ export type CleaningChecklistInput = z.input<typeof cleaningChecklistSchema>;
  */
 export async function updateCleaningChecklistTemplate(
   input: CleaningChecklistInput,
-): Promise<{ ok: true; items: string[] } | { ok: false; error: string }> {
+): Promise<
+  { ok: true; items: string[]; actualizadas: number } | { ok: false; error: string }
+> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!isAdminLevel(role)) {
@@ -322,11 +324,57 @@ export async function updateCleaningChecklistTemplate(
     .eq("id", organization.id);
   if (error) return { ok: false, error: "No se pudo guardar la checklist" };
 
+  // Las limpiezas de hoy ya estaban creadas (el cron las arma a las 3 AM) y se
+  // quedaban con la lista vieja: editabas la checklist y las de la jornada
+  // seguían mostrando los ítems anteriores. Las que TODAVÍA NO EMPEZARON se
+  // actualizan; una con ítems tildados o ya terminada conserva la suya, que es
+  // el registro de lo que se controló ese día.
+  const actualizadas = await refrescarChecklistPendientes(admin, organization.id, items);
+
   revalidatePath("/", "layout");
   revalidatePath("/dashboard/configuracion/limpieza");
   revalidatePath("/dashboard/limpieza");
   revalidatePath("/m/limpieza");
-  return { ok: true, items };
+  return { ok: true, items, actualizadas };
+}
+
+/**
+ * Copia la lista nueva a las limpiezas que siguen `pendiente` y sin ningún ítem
+ * tildado. Devuelve cuántas cambió (0 si no había ninguna).
+ */
+async function refrescarChecklistPendientes(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  items: string[],
+): Promise<number> {
+  const { data: pendientes } = await admin
+    .from("cleaning_tasks")
+    .select("id, checklist")
+    .eq("organization_id", organizationId)
+    .eq("status", "pendiente")
+    .is("archived_at", null);
+
+  const intactas = (pendientes ?? []).filter((t) => {
+    const lista = (t.checklist as { done?: boolean }[] | null) ?? [];
+    return !lista.some((i) => i.done);
+  });
+  if (intactas.length === 0) return 0;
+
+  const checklist = items.map((item) => ({ item, done: false }));
+  const { error } = await admin
+    .from("cleaning_tasks")
+    .update({ checklist })
+    .in(
+      "id",
+      intactas.map((t) => t.id as string),
+    )
+    .eq("organization_id", organizationId)
+    .eq("status", "pendiente");
+  if (error) {
+    console.error("[org:refrescarChecklistPendientes]", error.message);
+    return 0;
+  }
+  return intactas.length;
 }
 
 /** Toggle independiente: mostrar/ocultar el nombre junto al logo (sidebar). */

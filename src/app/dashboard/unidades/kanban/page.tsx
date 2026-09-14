@@ -78,6 +78,8 @@ export default async function PmsGridPage({
       days={90}
       orgCurrency={organization.default_currency ?? "ARS"}
       channelCommissionDefaults={organization.channel_commissions ?? {}}
+      commissionBySource={organization.commission_by_source ?? {}}
+      orgCommissionPct={organization.default_commission_pct}
       completionCutoff={completionCutoffYmd(organization.timezone || DEFAULT_ORG_TIMEZONE)}
       commissionBase={organization.commission_base ?? undefined}
     />

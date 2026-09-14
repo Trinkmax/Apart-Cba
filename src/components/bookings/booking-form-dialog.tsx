@@ -47,6 +47,7 @@ import {
 } from "@/lib/booking-split";
 import {
   channelCommissionPctFor,
+  resolveCommissionPct,
   computeBookingEconomics,
   DEFAULT_COMMISSION_BASE,
   round2,
@@ -96,7 +97,11 @@ type UnitForBookingForm = Pick<
   | "base_price"
   | "base_price_currency"
   | "cleaning_fee"
-> & { default_mode?: UnitDefaultMode };
+> & {
+  default_mode?: UnitDefaultMode;
+  /** % acordado con el propietario de la unidad, si tiene uno propio. */
+  owner_commission_pct_override?: number | null;
+};
 
 type ExistingBookingForOverlap = {
   id: string;
@@ -146,6 +151,14 @@ interface BookingFormDialogProps {
    * tocado a mano. Default vacío = 0% para todo.
    */
   channelCommissionDefaults?: Partial<Record<BookingSource, number>>;
+  /**
+   * % que cobra la ADMINISTRACIÓN por canal de venta (Configuración →
+   * Comisiones). Le gana al % de la unidad — es la misma cascada que aplica la
+   * liquidación (migración 059).
+   */
+  commissionBySource?: Partial<Record<BookingSource, number>>;
+  /** % de administración por defecto de la organización. */
+  orgCommissionPct?: number | null;
   /** Base de la comisión de administración (organizations.commission_base). Sólo para el desglose. */
   commissionBase?: CommissionBase;
 }
@@ -182,6 +195,8 @@ export function BookingFormDialog({
   onOpenChange: controlledOnOpenChange,
   onClosed,
   channelCommissionDefaults = {},
+  commissionBySource,
+  orgCommissionPct,
   commissionBase = DEFAULT_COMMISSION_BASE,
 }: BookingFormDialogProps) {
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
@@ -521,9 +536,6 @@ export function BookingFormDialog({
     if (u.cleaning_fee && !form.cleaning_fee && currencyMatches) {
       set("cleaning_fee", formatMoneyValue(u.cleaning_fee));
     }
-    if (u.default_commission_pct !== null && u.default_commission_pct !== undefined && !isEdit) {
-      set("commission_pct", formatMoneyValue(u.default_commission_pct));
-    }
     // Sugerencia de modo si la unidad tiene vocación clara y no estamos editando
     if (!isEdit && u.default_mode && u.default_mode !== "mixto") {
       setMode(u.default_mode);
@@ -558,10 +570,21 @@ export function BookingFormDialog({
         (pricePerNightNum > 0 && nights > 0
           ? round2(pricePerNightNum * nights + cleaningNum)
           : 0);
-  // Comisión ya no se ingresa en este form — se decide en liquidaciones.
-  // Mantenemos el valor del state (default 20% o el que ya tenga el booking)
-  // para no perder data en edición; el server decide el fallback definitivo.
-  const commissionPctNum = parseMoneyInput(form.commission_pct);
+  // Comisión de administración: NO se tipea acá ni sale del % de la unidad.
+  // Se resuelve con la misma cascada que la liquidación —acuerdo con el
+  // propietario → canal de venta → unidad → organización— así el desglose que
+  // se ve mientras se carga la reserva es el que después se va a liquidar.
+  // Antes el form la pre-cargaba desde la unidad y ese valor tapaba la política
+  // por canal: con "Directo" al 27,5% seguía mostrando el 20% de la unidad.
+  const unidadElegida = units.find((x) => x.id === form.unit_id);
+  const comisionResuelta = resolveCommissionPct({
+    source: form.source,
+    ownerOverride: unidadElegida?.owner_commission_pct_override,
+    bySource: commissionBySource,
+    unitPct: unidadElegida?.default_commission_pct,
+    orgPct: orgCommissionPct,
+  });
+  const commissionPctNum = comisionResuelta.pct;
   // La comisión del canal aplica sólo a temporario (la liquidación y
   // Resultados la ignoran en mensual): en mensual se guarda 0 para que lo
   // que queda en la reserva sea lo mismo que ven todos los consumidores.
@@ -659,7 +682,9 @@ export function BookingFormDialog({
       currency: form.currency,
       total_amount: totalNum,
       paid_amount: paidAmount,
-      commission_pct: commissionPctNum,
+      // null a propósito: lo resuelve el server con la misma cascada. Mandar un
+      // número acá lo congelaría y taparía la política por canal.
+      commission_pct: null,
       // Snapshot del % del canal (null = sin configurar / mensual); el importe
       // lo recalcula el server siempre.
       channel_commission_pct: channelPctNum,

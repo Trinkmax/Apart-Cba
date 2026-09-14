@@ -65,6 +65,8 @@ export default async function ReservasPage({ searchParams }: PageProps) {
               existingBookings={overlapBookings}
               channelRequests={requestOverlaps}
               channelCommissionDefaults={organization.channel_commissions ?? {}}
+              commissionBySource={organization.commission_by_source ?? {}}
+              orgCommissionPct={organization.default_commission_pct}
               commissionBase={organization.commission_base ?? undefined}
             >
               <Button className="gap-2"><Plus size={16} /> <span className="hidden sm:inline">Nueva reserva</span><span className="sm:hidden">Nueva</span></Button>
