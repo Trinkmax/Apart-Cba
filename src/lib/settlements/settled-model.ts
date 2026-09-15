@@ -1,15 +1,23 @@
 import type { SettlementLine, SettlementStatus } from "@/lib/types/database";
 
 /**
- * Pivotea las liquidaciones de un mes a "lo que realmente pasó", por
- * departamento y por propietario. Es la fuente de Resultados > Liquidado.
+ * Pivotea las liquidaciones de un mes por departamento y por propietario:
+ * cuánto se le RINDE a cada propietario y cuánto se le descuenta.
  *
- * Por qué existe (y por qué no alcanza con proyectar desde `bookings`):
- * Resultados calcula el mes *estimando* desde las reservas. La liquidación es
- * el hecho consumado: lleva los ajustes manuales, los gastos que el operador
- * cargó a mano y los egresos de Caja imputados al propietario. Para responder
- * "¿cuánto le transferimos y cuánto le descontamos?" el único dato honesto es
- * el documento firmado, no la proyección.
+ * Lo que este modelo NO es: la fuente de "lo que pagó el huésped". Los
+ * operadores editan la fila de la liquidación "por común acuerdo" — el huésped
+ * paga 80.000 y al propietario se le rinde sobre 70.000 —, así que el ingreso
+ * de la liquidación es la tarifa del propietario, no la venta. Medido en Apart
+ * CBA jun–ago 2026: 90 reservas liquidadas por debajo del calendario
+ * (−$9,2M), y en 82 de 82 con cobro en Caja el cobro coincide con el total del
+ * calendario y en ninguna con la liquidación. Lo que pagó el huésped sale de
+ * `bookings`; la conciliación reserva por reserva vive en
+ * src/lib/finance/results-reconciliation.ts.
+ *
+ * Para qué sigue sirviendo: los importes que NO son de reservas (tickets,
+ * gastos cargados a mano, reintegros de servicios) sólo existen en el
+ * documento. Resultados lo llama con `lineFilter` para quedarse con esos
+ * "otros cargos del mes", y el neto sin filtro es el que imprime el documento.
  *
  * TRES REGLAS QUE NO SE PUEDEN VIOLAR (verificadas contra los datos reales):
  *
@@ -23,9 +31,11 @@ import type { SettlementLine, SettlementStatus } from "@/lib/types/database";
  *    para separar la columna: al neto entran por su signo igual que el resto.
  *
  * 2. **`settlement_lines.unit_id` es la ÚNICA fuente de la unidad.** No
- *    reconstruir desde `bookings` vía `ref_id`: no tiene FK y está roto en 132
- *    de 540 líneas (la reserva se borró y la línea quedó apuntando al vacío),
- *    y donde funciona es redundante porque esas líneas ya traen `unit_id`.
+ *    reconstruir desde `bookings` vía `ref_id`: no tiene FK y en 132 de 540
+ *    líneas no apunta a ninguna reserva. No son reservas borradas: son las
+ *    filas que crea a mano `addSettlementBookingRow`, con un `ref_id` aleatorio
+ *    y `meta.source='manual'` (las 72 reservas "fantasma" tienen esa marca).
+ *    Donde el `ref_id` sí funciona es redundante: esas líneas ya traen `unit_id`.
  *
  * 3. **Los totales de la cabecera son cache y están desincronizados** en
  *    varias liquidaciones (`deductions_amount` en 0 con líneas `-` presentes).
@@ -192,11 +202,11 @@ function roundAmounts(a: SettledAmounts): void {
  * mismo criterio que `computeTotals` en settlements.ts, así que los totales de
  * esta vista y los del documento coinciden exactamente (incluso en el error).
  */
-function convertToBase(
+export function convertToBase(
   amount: number,
   currency: string,
   baseCurrency: string,
-  rates: Record<string, number>,
+  rates: Record<string, number> | null,
 ): { value: number; missingRate: boolean } {
   if (currency === baseCurrency) return { value: amount, missingRate: false };
   const rate = Number(rates?.[currency] ?? 0);
@@ -213,16 +223,31 @@ function convertToBase(
  * Con dos o más unidades NO se prorratea ni se elige una: el importe va al
  * bucket "Sin asignar" y la UI lo muestra, porque inventar el reparto de un
  * gasto entre departamentos de un mismo dueño es peor que no saberlo.
+ *
+ * Se calcula SIEMPRE con todas las líneas del documento, aunque el llamador
+ * filtre: el ticket sin unidad de una liquidación de un solo depto es de ese
+ * depto aunque la línea de la reserva que lo delata no se esté sumando.
  */
-function soleUnitOf(lines: SettledLineInput[]): string | null {
+export function soleUnitOf(lines: Array<Pick<SettledLineInput, "unit_id">>): string | null {
   const ids = new Set<string>();
   for (const l of lines) if (l.unit_id) ids.add(l.unit_id);
   return ids.size === 1 ? [...ids][0] : null;
 }
 
+export interface BuildSettledResultsOptions {
+  /**
+   * Qué líneas suman. Resultados pasa `l => l.ref_type !== 'booking'` para
+   * quedarse con los "otros cargos del mes": las reservas ya se concilian una
+   * por una contra el calendario y sumarlas acá las contaría dos veces.
+   */
+  lineFilter?: (l: SettledLineInput) => boolean;
+}
+
 export function buildSettledResults(
   settlements: SettledSettlementInput[],
+  opts: BuildSettledResultsOptions = {},
 ): SettledResults {
+  const lineFilter = opts.lineFilter;
   const unitMap = new Map<string, SettledUnitRow>();
   const ownerRows: SettledOwnerRow[] = [];
   const totalsByCurrency = new Map<string, SettledTotals>();
@@ -237,7 +262,13 @@ export function buildSettledResults(
     const ownerId = s.owner?.id ?? null;
     const ownerName = s.owner?.full_name ?? "Propietario";
     // Con una sola unidad en el documento, lo que vino sin imputar es de ella.
+    // Con TODAS las líneas, antes de filtrar (ver soleUnitOf).
     const fallbackUnitId = soleUnitOf(s.lines);
+    // Código y nombre de cada unidad del documento, también antes de filtrar:
+    // si la única línea con `unit` embebido es la reserva que el filtro saca,
+    // el gasto inferido igual tiene que decir "BRASIL" y no "—".
+    const unitInfo = new Map<string, { id: string; code: string; name: string }>();
+    for (const l of s.lines) if (l.unit_id && l.unit) unitInfo.set(l.unit_id, l.unit);
 
     const ownerAcc: SettledOwnerRow = {
       ...emptyAmounts(),
@@ -255,6 +286,7 @@ export function buildSettledResults(
     let docUnassignedNet = 0;
 
     for (const l of s.lines) {
+      if (lineFilter && !lineFilter(l)) continue;
       const raw = Number(l.amount);
       if (!Number.isFinite(raw)) continue;
       if (l.ref_type === "booking" && l.ref_id) bookingRefIds.add(l.ref_id);
@@ -271,7 +303,7 @@ export function buildSettledResults(
       // Una línea inferida no trae su `unit` embebido: el código/nombre se
       // toman de cualquier otra línea de esa misma unidad (siempre hay una,
       // porque el fallback existe justamente porque el documento tiene una).
-      const embedded = l.unit ?? null;
+      const embedded = l.unit ?? (unitId ? unitInfo.get(unitId) ?? null : null);
 
       // Una fila por departamento y moneda: con co-propiedad la unidad viene
       // en dos documentos y las dos mitades son el mismo departamento.

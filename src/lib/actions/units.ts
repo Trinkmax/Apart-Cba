@@ -7,12 +7,15 @@ import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
 import type {
+  BookingSource,
+  BookingStatus,
   Unit,
   UnitStatus,
   UnitWithRelations,
   Owner,
 } from "@/lib/types/database";
-import { TICKET_PRIORITY_META } from "@/lib/constants";
+import { BOOKING_SOURCE_META, TICKET_PRIORITY_META } from "@/lib/constants";
+import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 
 const unitSchema = z.object({
@@ -370,47 +373,142 @@ export async function updateUnit(id: string, input: UnitInput): Promise<UnitMuta
   return { ok: true, unit: data as Unit };
 }
 
+/** Una reserva que todavía ocupa la unidad y frena el borrado. */
+export interface ArchiveBlockingBooking {
+  id: string;
+  status: BookingStatus;
+  source: BookingSource | null;
+  is_block: boolean;
+  check_in_date: string;
+  check_out_date: string;
+  guest_name: string | null;
+}
+
+/** Una conexión con Airbnb/Booking que sigue sincronizando la unidad. */
+export interface ArchiveBlockingLink {
+  id: string;
+  channel: "airbnb" | "booking";
+}
+
+export type ArchiveUnitResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: string;
+      /** Qué hay que resolver antes de borrar; ausente si el problema fue otro. */
+      blockers?: {
+        bookings: ArchiveBlockingBooking[];
+        /** Total real: `bookings` trae como mucho las primeras ARCHIVE_BLOCKERS_LISTED. */
+        bookingsTotal: number;
+        links: ArchiveBlockingLink[];
+      };
+    };
+
+const ARCHIVE_BLOCKERS_LISTED = 5;
+
 /**
  * "Borrar" unidad = soft delete. La marcamos como `active=false` para que
  * desaparezca del listado pero se conserve la historia de reservas, tickets y
  * liquidaciones que la referencian (FK).
  *
- * Refusa si hay reservas activas o futuras no canceladas. El usuario debe
- * cancelarlas o reasignarlas antes — evitamos huérfanos en el calendario.
+ * Devuelve el motivo en vez de lanzarlo: en producción un `throw` llegaba como
+ * el cartel en inglés de Next.js y nadie se enteraba de qué frenaba el borrado
+ * (TREJO1, 15/09/2026). Se niega mientras haya:
+ *
+ *  - reservas que todavía ocupan la unidad: los mismos estados que cuenta
+ *    `bookings_no_overlap` (pendiente, confirmada, check_in) con salida de hoy
+ *    en adelante. Una estadía en `check_out` ya terminó aunque su fecha de
+ *    salida sea futura (un "uso propietario" cargado hasta fin de año y cerrado
+ *    antes): no hay nada que cancelar, y contarla dejaba la unidad imposible
+ *    de borrar.
+ *  - conexiones activas con canales: el dispatcher reclama links por
+ *    `channel_links.status` sin mirar `units.active`, así que una unidad
+ *    archivada seguiría recibiendo reservas que no aparecen en ningún listado.
  */
-export async function archiveUnit(id: string) {
+export async function archiveUnit(id: string): Promise<ArchiveUnitResult> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "units", "delete")) {
-    throw new Error("Solo un administrador puede eliminar unidades");
+    return { ok: false, error: "Solo un administrador puede eliminar unidades." };
   }
   const admin = createAdminClient();
 
-  // Bloquear si hay reservas vigentes (check_out_date >= hoy, no canceladas).
-  const today = new Date().toISOString().slice(0, 10);
-  const { count, error: errCount } = await admin
-    .from("bookings")
-    .select("id", { count: "exact", head: true })
-    .eq("unit_id", id)
-    .eq("organization_id", organization.id)
-    .gte("check_out_date", today)
-    .not("status", "in", "(cancelada,no_show)");
-  if (errCount) throw new Error(errCount.message);
-  if (count && count > 0) {
-    throw new Error(
-      `No se puede eliminar: la unidad tiene ${count} reserva${count === 1 ? "" : "s"} activa${count === 1 ? "" : "s"} o futura${count === 1 ? "" : "s"}. Cancelá o reasignalas primero.`
-    );
+  const today = todayYmdInTz(organization.timezone || DEFAULT_ORG_TIMEZONE);
+  const [bookingsRes, linksRes] = await Promise.all([
+    admin
+      .from("bookings")
+      .select(
+        "id, status, source, is_block, check_in_date, check_out_date, guest:guests(full_name)",
+        { count: "exact" },
+      )
+      .eq("unit_id", id)
+      .eq("organization_id", organization.id)
+      .gte("check_out_date", today)
+      .in("status", ["pendiente", "confirmada", "check_in"])
+      .order("check_in_date")
+      .limit(ARCHIVE_BLOCKERS_LISTED),
+    admin
+      .from("channel_links")
+      .select("id, channel")
+      .eq("unit_id", id)
+      .eq("organization_id", organization.id)
+      .eq("status", "active")
+      .order("channel"),
+  ]);
+  if (bookingsRes.error || linksRes.error) {
+    logActionError("archiveUnit:blockers", bookingsRes.error ?? linksRes.error);
+    return { ok: false, error: "No se pudo revisar la unidad. Probá de nuevo." };
   }
 
-  const { error } = await admin
+  type BookingRow = Omit<ArchiveBlockingBooking, "guest_name"> & {
+    guest: { full_name: string | null } | { full_name: string | null }[] | null;
+  };
+  const bookings = ((bookingsRes.data ?? []) as BookingRow[]).map(({ guest, ...b }) => ({
+    ...b,
+    guest_name: (Array.isArray(guest) ? guest[0] : guest)?.full_name?.trim() || null,
+  }));
+  const bookingsTotal = bookingsRes.count ?? bookings.length;
+  const links = (linksRes.data ?? []) as ArchiveBlockingLink[];
+
+  if (bookingsTotal > 0 || links.length > 0) {
+    const motivos: string[] = [];
+    if (bookingsTotal > 0) {
+      motivos.push(
+        bookingsTotal === 1
+          ? "tiene 1 reserva activa o futura"
+          : `tiene ${bookingsTotal} reservas activas o futuras`,
+      );
+    }
+    if (links.length > 0) {
+      motivos.push(
+        `sigue conectada a ${links.map((l) => BOOKING_SOURCE_META[l.channel].label).join(" y ")}`,
+      );
+    }
+    return {
+      ok: false,
+      error: `No se puede eliminar todavía: ${motivos.join(" y ")}.`,
+      blockers: { bookings, bookingsTotal, links },
+    };
+  }
+
+  const { data: archived, error } = await admin
     .from("units")
     .update({ active: false })
     .eq("id", id)
-    .eq("organization_id", organization.id);
-  if (error) throw new Error(error.message);
+    .eq("organization_id", organization.id)
+    .select("id");
+  if (error) {
+    logActionError("archiveUnit", error);
+    return { ok: false, error: "No se pudo eliminar la unidad. Probá de nuevo." };
+  }
+  if (!archived || archived.length === 0) {
+    return { ok: false, error: "No encontramos la unidad. Recargá la página." };
+  }
+
   revalidatePath("/dashboard/unidades");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
+  return { ok: true };
 }
 
 /**

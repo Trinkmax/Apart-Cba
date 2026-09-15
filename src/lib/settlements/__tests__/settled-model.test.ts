@@ -252,6 +252,32 @@ describe("buildSettledResults", () => {
     expect(r.totals[0].settlements).toBe(2);
   });
 
+  it("con lineFilter sin reservas: el gasto sin unidad se imputa igual a la única unidad (S1)", () => {
+    // Resultados usa este filtro para "Otros cargos del mes": la reserva ya se
+    // concilia contra el calendario. La única línea que dice que el documento
+    // es de BRASIL es justamente la reserva que se filtra; soleUnitOf mira
+    // todas las líneas, así que el ticket sin unidad sigue siendo de BRASIL.
+    const r = buildSettledResults(
+      [
+        doc({
+          lines: [
+            line({ line_type: "booking_revenue", amount: 240_000, sign: "+", unit_id: "u-a", unit: UNIT_A, ref_type: "booking", ref_id: "b1" }),
+            line({ line_type: "maintenance_charge", amount: 30_000, sign: "-", ref_type: "maintenance", ref_id: "t1" }),
+          ],
+        }),
+      ],
+      { lineFilter: (l) => l.ref_type !== "booking" },
+    );
+    expect(r.by_unit).toHaveLength(1);
+    expect(r.by_unit[0].unit_id).toBe("u-a");
+    expect(r.by_unit[0].unit_code).toBe("BRASIL");
+    expect(r.by_unit[0].inferred).toBe(true);
+    expect(r.by_unit[0].expenses).toBe(30_000);
+    expect(r.by_unit[0].gross).toBe(0); // la reserva no suma
+    expect(r.by_owner[0].net).toBe(-30_000);
+    expect(r.unassigned_net).toBe(0);
+  });
+
   it("sin liquidaciones devuelve todo vacío, no explota", () => {
     const r = buildSettledResults([]);
     expect(r.totals).toEqual([]);

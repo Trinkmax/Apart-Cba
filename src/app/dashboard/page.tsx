@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import {
   Wrench, Sparkles, TrendingUp, PieChart,
@@ -37,17 +38,10 @@ export default async function DashboardHome() {
   const todayStr = todayYmdInTz(organization.timezone || DEFAULT_ORG_TIMEZONE);
   const curYear = Number(todayStr.slice(0, 4));
   const curMonth = Number(todayStr.slice(5, 7));
-  const [kpis, monthResults] = await Promise.all([
-    getDashboardKPIs(),
-    // Si el cálculo falla (p. ej. columnas nuevas aún no migradas) el inicio
-    // no se cae: la card muestra un aviso y el resto sigue funcionando.
-    canViewMoney
-      ? getMonthlyResults(curYear, curMonth).catch((err: unknown): MonthlyResults | null => {
-          console.error("[dashboard] getMonthlyResults falló", err);
-          return null;
-        })
-      : Promise.resolve<MonthlyResults | null>(null),
-  ]);
+  // El resultado del mes corre la conciliación entera (reservas + liquidaciones
+  // de la ventana): va en su propio <Suspense> (MonthResultCard) para que el
+  // primer byte del inicio no espere a esa carga.
+  const kpis = await getDashboardKPIs();
   const collectedEntries = Object.entries(kpis.finance.collected_30d_by_currency);
   const reservedEntries = Object.entries(kpis.finance.revenue_30d_by_currency);
   // "Por completar": huésped (requiere editar reservas) y precio (requiere ver plata).
@@ -255,53 +249,15 @@ export default async function DashboardHome() {
           </div>
         </Card>
 
-        {/* Resultado del mes — mismas reglas que la liquidación (ver
-            src/lib/actions/results.ts): temporario cuenta en el mes del
-            check-out, mensual se prorratea. */}
+        {/* Resultado del mes (ver src/lib/actions/results.ts): "Ventas" sale
+            del calendario (lo que pagó el huésped); comisión, diferencia de
+            tarifa y neto salen de las reservas ya liquidadas y conciliadas.
+            Lo sin liquidar se muestra aparte, estimado (≈). Temporario cuenta
+            en el mes del check-out; mensual, por noches del mes. */}
         {canViewMoney && (
-          <Card className="p-4 sm:p-5">
-            <div className="flex items-center justify-between mb-3 gap-2">
-              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 min-w-0">
-                <PieChart size={14} className="text-violet-500 shrink-0" />
-                <span className="truncate">Resultado · {MONTHS[curMonth - 1]}</span>
-              </h2>
-              <Link href={`/dashboard/resultados?year=${curYear}&month=${curMonth}`} className="text-xs text-muted-foreground hover:text-foreground shrink-0">
-                Ver detalle <ArrowRight className="inline" size={11} />
-              </Link>
-            </div>
-            {monthResults === null ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                No se pudo calcular el resultado del mes
-              </p>
-            ) : monthResults.totals.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                Sin reservas con check-out este mes
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {monthResults.totals.map((t) => (
-                  <div key={t.currency}>
-                    {monthResults.totals.length > 1 && (
-                      <div className="text-[10px] text-muted-foreground mb-1">{t.currency}</div>
-                    )}
-                    <div className="grid grid-cols-2 gap-2">
-                      <MonthStat label="Ventas" value={formatMoney(t.total, t.currency)} />
-                      <MonthStat label="Plataformas" value={formatMoney(t.channel_commission, t.currency)} tone="rose" />
-                      <MonthStat label="Tu comisión" value={formatMoney(t.commission, t.currency)} tone="violet" />
-                      <MonthStat label="A propietarios" value={formatMoney(t.owner_net, t.currency)} tone="emerald" />
-                    </div>
-                  </div>
-                ))}
-                {monthResults.missing_price_count > 0 && (
-                  <p className="text-[11px] text-amber-700 dark:text-amber-300 leading-snug">
-                    {monthResults.missing_price_count === 1
-                      ? "1 reserva sin importe cargado: el resultado está incompleto."
-                      : `${monthResults.missing_price_count} reservas sin importe cargado: el resultado está incompleto.`}
-                  </p>
-                )}
-              </div>
-            )}
-          </Card>
+          <Suspense fallback={<MonthResultSkeleton year={curYear} month={curMonth} />}>
+            <MonthResultCard year={curYear} month={curMonth} />
+          </Suspense>
         )}
 
         {canViewBookings && (
@@ -369,25 +325,190 @@ export default async function DashboardHome() {
   );
 }
 
+/** Encabezado de la tarjeta "Resultado · {mes}" (también en el esqueleto). */
+function MonthResultHeader({
+  year,
+  month,
+  subtitle,
+}: {
+  year: number;
+  month: number;
+  subtitle?: string | null;
+}) {
+  return (
+    <div className="flex items-start justify-between mb-3 gap-2">
+      <div className="min-w-0">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5 min-w-0">
+          <PieChart size={14} className="text-violet-500 shrink-0" />
+          <span className="truncate">Resultado · {MONTHS[month - 1]}</span>
+        </h2>
+        {subtitle && <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">{subtitle}</p>}
+      </div>
+      <Link
+        href={`/dashboard/resultados?year=${year}&month=${month}`}
+        className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+      >
+        Ver detalle <ArrowRight className="inline" size={11} />
+      </Link>
+    </div>
+  );
+}
+
+function MonthResultSkeleton({ year, month }: { year: number; month: number }) {
+  return (
+    <Card className="p-4 sm:p-5">
+      <MonthResultHeader year={year} month={month} />
+      <div className="grid grid-cols-2 gap-2" aria-hidden>
+        <div className="col-span-2 h-12 rounded-lg bg-muted/40 animate-pulse" />
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="h-12 rounded-lg bg-muted/40 animate-pulse" />
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * Resultado del mes (ver src/lib/actions/results.ts): "Ventas" sale del
+ * calendario (lo que pagó el huésped); comisión, diferencia de tarifa y neto
+ * salen de las reservas ya liquidadas y conciliadas. Lo sin liquidar se muestra
+ * aparte, estimado (≈). Temporario cuenta en el mes del check-out; mensual, por
+ * noches del mes.
+ */
+async function MonthResultCard({ year, month }: { year: number; month: number }) {
+  // Si el cálculo falla (p. ej. columnas nuevas aún no migradas) el inicio no
+  // se cae: la card muestra un aviso y el resto sigue funcionando.
+  const monthResults = await getMonthlyResults(year, month).catch((err: unknown): MonthlyResults | null => {
+    console.error("[dashboard] getMonthlyResults falló", err);
+    return null;
+  });
+  // Tarjeta de la moneda base de la org. Si la base no tiene reservas
+  // contables (todas excluidas o ninguna), la primera que sí tenga.
+  const monthTotals = monthResults?.totals ?? [];
+  const homeTotals =
+    monthTotals.find((t) => t.currency === monthResults?.base_currency && t.bookings > 0) ??
+    monthTotals.find((t) => t.bookings > 0) ??
+    monthTotals.find((t) => t.currency === monthResults?.base_currency) ??
+    monthTotals[0] ??
+    null;
+  const otherMonthTotals = monthTotals.filter(
+    (t) => t.bookings > 0 && t.currency !== homeTotals?.currency,
+  );
+
+  return (
+          <Card className="p-4 sm:p-5">
+            <MonthResultHeader
+              year={year}
+              month={month}
+              subtitle={
+                homeTotals && homeTotals.bookings > 0
+                  ? `Liquidadas ${homeTotals.settled.bookings} de ${homeTotals.bookings}`
+                  : null
+              }
+            />
+            {monthResults === null ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                No se pudo calcular el resultado del mes
+              </p>
+            ) : monthResults.totals.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4 text-center">
+                Sin reservas con check-out este mes
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {homeTotals && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <MonthStat
+                      label="Ventas"
+                      value={formatMoney(homeTotals.guest_total, homeTotals.currency)}
+                      className="col-span-2"
+                    />
+                    <MonthStat
+                      label="Plataformas"
+                      value={formatMoney(
+                        homeTotals.settled.channel + homeTotals.estimated.channel,
+                        homeTotals.currency,
+                      )}
+                      tone="rose"
+                    />
+                    <MonthStat
+                      label="Dif. tarifa"
+                      value={formatMoney(homeTotals.settled.rate_diff, homeTotals.currency)}
+                      tone="violetLight"
+                    />
+                    <MonthStat
+                      label="Tu comisión"
+                      value={formatMoney(homeTotals.settled.commission, homeTotals.currency)}
+                      tone="violet"
+                      hint={
+                        homeTotals.estimated.commission > 0
+                          ? `≈ +${formatMoney(homeTotals.estimated.commission, homeTotals.currency)} sin liquidar`
+                          : null
+                      }
+                    />
+                    <MonthStat
+                      label="A propietarios"
+                      value={formatMoney(homeTotals.settled.owner_net, homeTotals.currency)}
+                      tone="emerald"
+                      hint={
+                        homeTotals.estimated.owner_net > 0
+                          ? `≈ +${formatMoney(homeTotals.estimated.owner_net, homeTotals.currency)} sin liquidar`
+                          : null
+                      }
+                    />
+                  </div>
+                )}
+                {otherMonthTotals.length > 0 && (
+                  <p className="text-[11px] text-muted-foreground leading-snug tabular-nums">
+                    {otherMonthTotals
+                      .map(
+                        (t) =>
+                          `${t.currency} · ${t.bookings} ${t.bookings === 1 ? "reserva" : "reservas"} · Ventas ${formatMoney(t.guest_total, t.currency)}`,
+                      )
+                      .join(" · ")}
+                  </p>
+                )}
+                {monthResults.missing_price_count > 0 && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300 leading-snug">
+                    {monthResults.missing_price_count === 1
+                      ? "1 reserva sin importe cargado: el resultado está incompleto."
+                      : `${monthResults.missing_price_count} reservas sin importe cargado: el resultado está incompleto.`}
+                  </p>
+                )}
+              </div>
+            )}
+          </Card>
+  );
+}
+
 function MonthStat({
   label,
   value,
   tone = "default",
+  hint = null,
+  className,
 }: {
   label: string;
   value: string;
-  tone?: "default" | "rose" | "violet" | "emerald";
+  tone?: "default" | "rose" | "violet" | "violetLight" | "emerald";
+  /** Segunda línea gris (p. ej. "≈ +$ 120.000 sin liquidar"). */
+  hint?: string | null;
+  className?: string;
 }) {
   const tones = {
     default: "text-foreground",
     rose: "text-rose-600 dark:text-rose-400",
     violet: "text-violet-700 dark:text-violet-300",
+    violetLight: "text-violet-500 dark:text-violet-400",
     emerald: "text-emerald-700 dark:text-emerald-400",
   } as const;
   return (
-    <div className="rounded-lg bg-muted/40 px-2.5 py-2 min-w-0">
+    <div className={cn("rounded-lg bg-muted/40 px-2.5 py-2 min-w-0", className)}>
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground truncate">{label}</div>
-      <div className={cn("text-sm sm:text-base font-semibold tabular-nums truncate", tones[tone])}>{value}</div>
+      {/* Sin truncate: con el sidebar abierto la pill mide ~112 px a 1280 px y
+          el monto (o "≈ +$ 1.771.842,07 sin liquidar") se cortaba. Se envuelve. */}
+      <div className={cn("text-sm sm:text-base font-semibold tabular-nums break-words", tones[tone])}>{value}</div>
+      {hint && <div className="text-[10px] leading-snug text-muted-foreground tabular-nums break-words">{hint}</div>}
     </div>
   );
 }

@@ -1,36 +1,57 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ArrowRight, CalendarX2, FileCheck2, PieChart, Settings2, TrendingUp } from "lucide-react";
+import { ArrowRight, CalendarX2, ChevronDown, PieChart, Settings2 } from "lucide-react";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { getMonthlyResults } from "@/lib/actions/results";
 import { can } from "@/lib/permissions";
-import { BOOKING_SOURCE_META } from "@/lib/constants";
-import { COMMISSION_BASE_META } from "@/lib/finance/booking-economics";
 import { formatPeriod } from "@/lib/settlements/labels";
 import { todayYmdInTz, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 import { Card } from "@/components/ui/card";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
 import { MonthNav } from "@/components/results/month-nav";
-import { ResultsAlerts } from "@/components/results/results-alerts";
-import { ResultsSummary } from "@/components/results/results-summary";
-import { ResultsByChannelTable } from "@/components/results/results-by-channel-table";
-import { ResultsByOwnerTable } from "@/components/results/results-by-owner-table";
+import { ResultsModeNav } from "@/components/results/results-mode-nav";
+import { ResultsKpis } from "@/components/results/results-kpis";
+import { ResultsReviewPanel } from "@/components/results/results-review-panel";
+import { ResultsAggregateTable } from "@/components/results/results-aggregate-table";
 import { ResultsBookingsTable } from "@/components/results/results-bookings-table";
-import { ResultsSettledSummary } from "@/components/results/results-settled-summary";
-import { ResultsSettledByUnitTable } from "@/components/results/results-settled-by-unit-table";
-import { ResultsSettledByOwnerTable } from "@/components/results/results-settled-by-owner-table";
-import type { BookingSource } from "@/lib/types/database";
+import {
+  parseAggregateView,
+  parseResultsMode,
+  resultsHref,
+  toResultsRowView,
+} from "@/components/results/results-meta";
 
 /**
- * Resultados del mes — "¿dónde sale cuánto tengo que pagar a los propietarios,
- * cuánto cobro yo y cuánto se llevan las plataformas?". Sólo lectura: los
- * números salen de getMonthlyResults, que usa las mismas reglas que la
- * liquidación. Todo server-rendered; el mes viaja por ?year&month.
+ * Resultados del mes: cuánto pagaron los huéspedes, cuánto se le rindió a cada
+ * propietario y cuánto quedó en la administración.
+ *
+ * Lo que pagó el huésped sale SIEMPRE del calendario (bookings); lo que se le
+ * liquida al propietario sale de su liquidación. La liquidación la editan los
+ * operadores (el huésped paga 80.000 y al propietario se le rinde sobre
+ * 70.000), así que no puede ser la fuente del ingreso: la diferencia se
+ * muestra reserva por reserva, sin mezclarla con errores de carga.
+ *
+ * Todo server-rendered; mes, modo y vista viajan por la URL. El detalle de
+ * reservas es cliente (lee filtro/moneda/pestaña de la URL).
  */
+
+const HOW_IT_WORKS = [
+  "Paga el huésped sale del calendario: el total de cada reserva. En mensuales, la renta del mes prorrateada por noches.",
+  "Tarifa del propietario es el ingreso de esa reserva en su liquidación, sumando co-propietarios y todos los meses en que se liquidó.",
+  "Diferencia de tarifa = lo que pagó el huésped, sin plataformas, menos la tarifa del propietario. Solo cuenta reservas liquidadas sin errores. Lo que se liquidó de más va aparte.",
+  "Una reserva temporaria cuenta en el mes de su check-out, aunque se haya liquidado en varios meses.",
+  "Otros cargos y la columna Liquidación salen de las liquidaciones de este mes. Las reservas sin liquidar se estiman (≈) sin diferencia de tarifa.",
+];
+
+function first(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export default async function ResultadosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ year?: string; month?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { role, organization } = await getCurrentOrg();
   // Misma puerta que el sidebar y que getMonthlyResults: `settlements.view` no
@@ -46,26 +67,35 @@ export default async function ResultadosPage({
   const todayMonth = Number(todayStr.slice(5, 7));
   // La URL es editable: un año negativo o absurdo arma una fecha inválida en
   // la query y termina en el error boundary. Fuera de rango → mes actual.
-  const yearParam = Number(sp.year);
+  const yearParam = Number(first(sp.year));
   const year =
     Number.isInteger(yearParam) && yearParam >= 2000 && yearParam <= todayYear + 5
       ? yearParam
       : todayYear;
-  const monthParam = Math.trunc(Number(sp.month));
+  const monthParam = Math.trunc(Number(first(sp.month)));
   const month = monthParam >= 1 && monthParam <= 12 ? monthParam : todayMonth;
+  const mode = parseResultsMode(sp.modo);
+  const vista = parseAggregateView(sp.vista);
 
-  const results = await getMonthlyResults(year, month, { withSettled: true });
-  const multiCurrency = results.totals.length > 1;
-  const settled = results.settled;
-  const settledMultiCurrency = (settled?.totals.length ?? 0) > 1;
+  const results = await getMonthlyResults(year, month, { mode });
   const periodLabel = formatPeriod(year, month);
-  const configuredChannels = (Object.entries(results.channel_commissions) as Array<[BookingSource, number | undefined]>)
-    .filter(([, pct]) => pct !== undefined && pct !== null && pct > 0)
-    .map(([source, pct]) => `${BOOKING_SOURCE_META[source]?.label ?? source} ${pct}%`);
+  const baseCurrency = results.base_currency;
+  // Un mes sin reservas puede igual tener liquidaciones (filas manuales, un
+  // ticket): eso también es algo que mostrar. Pero puente y huérfanas no se
+  // parten por modo, así que con Temporarios/Mensuales sin filas el mensaje
+  // correcto es "sin reservas de ese tipo" (con el link a Todos).
+  const isEmpty =
+    results.rows.length === 0 &&
+    (mode !== "todos" || (results.orphans.length === 0 && results.bridges.length === 0));
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 md:space-y-6 max-w-[1400px] mx-auto">
-      <LiveRefresh tables={["bookings"]} label="reserva" labelPlural="reservas" throttleMs={5_000} />
+      <LiveRefresh
+        tables={["bookings", "cash_movements", "units"]}
+        label="reserva"
+        labelPlural="reservas"
+        throttleMs={5_000}
+      />
 
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -74,145 +104,116 @@ export default async function ResultadosPage({
             <PieChart className="size-5 text-violet-500" /> Resultados
           </h1>
           <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
-            Qué entra, qué se lleva cada uno y qué le queda a cada propietario
+            Cuánto pagaron los huéspedes, cuánto se le rinde a cada propietario y cuánto queda en la administración
           </p>
         </div>
-        <MonthNav year={year} month={month} todayYear={todayYear} todayMonth={todayMonth} />
+        <div className="flex flex-wrap items-center gap-2">
+          <ResultsModeNav year={year} month={month} mode={mode} vista={vista} />
+          <MonthNav
+            year={year}
+            month={month}
+            todayYear={todayYear}
+            todayMonth={todayMonth}
+            mode={mode}
+            vista={vista}
+          />
+        </div>
       </div>
 
-      <ResultsAlerts results={results} />
-
-      {results.rows.length === 0 && !settled ? (
+      {isEmpty ? (
         <Card className="p-8 sm:p-12 items-center text-center gap-3">
           <div className="size-12 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
             <CalendarX2 size={22} />
           </div>
           <div>
-            <p className="text-base font-semibold">Sin reservas con check-out en {periodLabel}</p>
+            <p className="text-base font-semibold">
+              {mode === "mensual"
+                ? `Sin contratos mensuales en ${periodLabel}`
+                : mode === "temporario"
+                  ? `Sin reservas temporarias con check-out en ${periodLabel}`
+                  : `Sin reservas con check-out en ${periodLabel}`}
+            </p>
             <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
-              Una reserva temporaria cuenta en el mes en que hace check-out, no en el que
-              se cobra ni en el que llega. Las mensuales se prorratean por los días del mes.
+              Una reserva temporaria cuenta en el mes en que hace check-out, no en el que se cobra ni en el
+              que llega. Las mensuales se prorratean por las noches del mes.
             </p>
           </div>
-          <Link
-            href="/dashboard/reservas"
-            className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
-          >
-            Ver reservas <ArrowRight size={12} />
-          </Link>
+          <div className="flex flex-wrap items-center justify-center gap-4">
+            {mode !== "todos" && (
+              <Link
+                href={resultsHref(year, month, { vista })}
+                className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              >
+                Ver todas <ArrowRight size={12} />
+              </Link>
+            )}
+            <Link
+              href="/dashboard/reservas"
+              className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+            >
+              Ver reservas <ArrowRight size={12} />
+            </Link>
+          </div>
         </Card>
       ) : (
         <>
-          {/* ── Liquidado ────────────────────────────────────────────────────
-              Va primero cuando existe: es lo que efectivamente pasó (con los
-              gastos y ajustes cargados a mano), no una estimación. La
-              proyección queda abajo como la previsión del mes. */}
-          {settled && (
-            <section className="space-y-4 sm:space-y-5">
-              <div className="flex items-baseline gap-2 flex-wrap">
-                <h2 className="text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2">
-                  <FileCheck2 className="size-4 text-emerald-600 dark:text-emerald-400" /> Liquidado
-                </h2>
-                <p className="text-xs text-muted-foreground">
-                  Lo que salió de las liquidaciones de {periodLabel} — con los gastos ya descontados.
-                </p>
-              </div>
+          <ResultsKpis
+            totals={results.totals}
+            close={results.close}
+            baseCurrency={baseCurrency}
+            year={year}
+            month={month}
+            mode={mode}
+            vista={vista}
+          />
 
-              <ResultsSettledSummary
-                totals={settled.totals}
-                pending={results.owners_pending_settlement}
-                outside={results.bookings_outside_settlements}
-                year={year}
-                month={month}
-              />
+          <ResultsReviewPanel review={results.review} year={year} month={month} mode={mode} vista={vista} />
 
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 md:gap-6">
-                <ResultsSettledByUnitTable rows={settled.by_unit} multiCurrency={settledMultiCurrency} />
-                <ResultsSettledByOwnerTable rows={settled.by_owner} multiCurrency={settledMultiCurrency} />
-              </div>
-            </section>
-          )}
+          <ResultsAggregateTable
+            byUnit={results.by_unit}
+            byOwner={results.by_owner}
+            byChannel={results.by_channel}
+            vista={vista}
+            year={year}
+            month={month}
+            mode={mode}
+            baseCurrency={baseCurrency}
+          />
 
-          {/* ── Proyección ───────────────────────────────────────────────────
-              Puede no haber ninguna: un mes ya liquidado cuyas reservas se
-              borraron después conserva la liquidación pero no proyecta nada. */}
-          {results.rows.length > 0 && (
-          <section className="space-y-4 sm:space-y-5">
-            {settled && (
-              <div className="flex items-baseline gap-2 flex-wrap pt-1 border-t">
-                <h2 className="text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2 mt-4">
-                  <TrendingUp className="size-4 text-violet-500" /> Proyección del mes
-                </h2>
-                <p className="text-xs text-muted-foreground mt-4">
-                  Estimado desde las reservas, antes de liquidar. Puede diferir de lo liquidado.
-                </p>
-              </div>
-            )}
-
-            <ResultsSummary totals={results.totals} />
-
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 md:gap-6">
-              <ResultsByChannelTable rows={results.by_channel} multiCurrency={multiCurrency} />
-              <ResultsByOwnerTable
-                rows={results.by_owner}
-                year={year}
-                month={month}
-                multiCurrency={multiCurrency}
-              />
-            </div>
-
-            <ResultsBookingsTable rows={results.rows} />
-          </section>
-          )}
+          {/* El ancla #detalle la pone la propia tabla (no repetirla acá). */}
+          <Suspense fallback={<div className="h-[28rem] rounded-xl border bg-card animate-pulse" />}>
+            <ResultsBookingsTable
+              rows={results.rows.map(toResultsRowView)}
+              orphans={results.orphans}
+              year={year}
+              month={month}
+              mode={mode}
+              vista={vista}
+              baseCurrency={baseCurrency}
+              firstSettlementPeriod={results.first_settlement_period}
+            />
+          </Suspense>
         </>
       )}
 
-      {/* Cómo se calcula */}
-      <Card className="p-4 sm:p-5 gap-2 bg-muted/30">
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold flex items-center gap-1.5">
-              <Settings2 size={14} className="text-muted-foreground" /> Cómo se calcula
-            </h2>
-            <ul className="text-[12px] text-muted-foreground mt-1.5 space-y-1 leading-snug">
-              {settled && (
-                <>
-                  <li>
-                    <span className="font-medium text-foreground">Liquidado:</span> sale de las liquidaciones
-                    del mes, no de las reservas. Es lo que efectivamente se le transfirió a cada propietario,
-                    con los gastos y ajustes que se cargaron en el documento.
-                  </li>
-                  <li>
-                    <span className="font-medium text-foreground">Gastos:</span> todo lo que se le descuenta al
-                    propietario menos las comisiones — limpieza, mantenimiento, expensas y ajustes. Los
-                    servicios que el inquilino reembolsa (luz, gas, agua) no son un gasto: se le suman.
-                  </li>
-                  <li>
-                    <span className="font-medium text-foreground">Por departamento:</span> cada cargo va al depto
-                    con el que se cargó. Un cargo sin depto en una liquidación de una sola unidad se imputa ahí;
-                    si el propietario tiene varias, queda en &ldquo;Sin asignar&rdquo; en vez de repartirse a ojo.
-                  </li>
-                </>
-              )}
-              <li>
-                <span className="font-medium text-foreground">Plataformas:</span> total × % del canal
-                {configuredChannels.length > 0 ? ` (${configuredChannels.join(" · ")})` : " (ningún canal configurado)"}.
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Tu comisión:</span>{" "}
-                {COMMISSION_BASE_META[results.commission_base].label.toLowerCase()} — el % es el de cada
-                unidad (o el del propietario, si tiene uno propio).
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Limpieza:</span> viene incluida en lo que paga el
-                huésped y queda en la administración, por eso se descuenta al propietario.
-              </li>
-              <li>
-                <span className="font-medium text-foreground">Cobrado:</span> lo registrado en la reserva. Lo que
-                falta cobrar no cambia el reparto: se reparte el total.
-              </li>
-            </ul>
-          </div>
+      {/* Cómo se calcula: cerrado por defecto, al pie. */}
+      <details className="group rounded-xl border bg-muted/30">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 sm:px-5 [&::-webkit-details-marker]:hidden">
+          <span className="flex items-center gap-1.5 text-sm font-semibold">
+            <Settings2 size={14} className="text-muted-foreground" aria-hidden /> Cómo se calcula
+          </span>
+          <ChevronDown
+            size={16}
+            className="text-muted-foreground transition-transform group-open:rotate-180"
+            aria-hidden
+          />
+        </summary>
+        <div className="flex flex-wrap items-end justify-between gap-3 px-4 pb-4 sm:px-5">
+          <ul className="min-w-0 max-w-3xl list-disc space-y-1.5 pl-4 text-[12px] leading-snug text-muted-foreground">
+            {HOW_IT_WORKS.map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
           <Link
             href="/dashboard/configuracion/comisiones"
             className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 shrink-0"
@@ -220,7 +221,7 @@ export default async function ResultadosPage({
             Ajustar comisiones <ArrowRight size={12} />
           </Link>
         </div>
-      </Card>
+      </details>
     </div>
   );
 }
