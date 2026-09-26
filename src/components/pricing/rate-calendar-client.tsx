@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
@@ -26,6 +27,16 @@ interface Props {
   initialBasePrice: number;
   initialCurrency: string;
   initialRules: UnitPricingRule[];
+  /** Unidad mixta: además de la noche tiene precio por mes (migración 063). */
+  isMixto: boolean;
+  /** Ya filtrado por `unitMonthlyPrice()`: null = mixta sin precio mensual cargado. */
+  monthlyPrice: number | null;
+  /**
+   * Moneda del precio por mes: la de la unidad (`base_price_currency`), que es
+   * la que usa el panel para los dos precios. La de esta pantalla es la del
+   * marketplace y se puede cambiar por separado desde "Editar precio base".
+   */
+  monthlyCurrency: string;
 }
 
 export function RateCalendarClient({
@@ -36,6 +47,9 @@ export function RateCalendarClient({
   initialBasePrice,
   initialCurrency,
   initialRules,
+  isMixto,
+  monthlyPrice,
+  monthlyCurrency,
 }: Props) {
   const [year, setYear] = useState(initialYear);
   const [month, setMonth] = useState(initialMonth);
@@ -113,7 +127,7 @@ export function RateCalendarClient({
     <div className="space-y-4">
       {/* Header: base price + navigation */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <Card className="px-4 py-2.5">
             <div className="text-xs text-muted-foreground">Precio base / noche</div>
             <div className="text-lg font-semibold">{formatCurrency(basePrice, currency)}</div>
@@ -124,6 +138,18 @@ export function RateCalendarClient({
             currentCurrency={currency}
             onSaved={refreshAll}
           />
+          {/* Sólo lectura: el mes no pasa por el motor de reglas, así que
+              editarlo acá sugeriría que las temporadas también lo mueven. */}
+          {isMixto && (
+            <Card className="px-4 py-2.5">
+              <div className="text-xs text-muted-foreground">Precio / mes</div>
+              {monthlyPrice !== null ? (
+                <div className="text-lg font-semibold">{formatCurrency(monthlyPrice, monthlyCurrency)}</div>
+              ) : (
+                <div className="text-lg font-semibold text-muted-foreground italic">Sin cargar</div>
+              )}
+            </Card>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button size="icon" variant="outline" onClick={() => goMonth(-1)} disabled={isPending}>
@@ -141,6 +167,20 @@ export function RateCalendarClient({
           </Button>
         </div>
       </div>
+
+      {isMixto && (
+        <p className="text-xs text-muted-foreground -mt-1">
+          Las reglas ajustan sólo el precio por noche; el precio por mes no cambia con la
+          temporada ni el día de la semana. Se edita en la{" "}
+          <Link
+            href={`/dashboard/unidades/${unitId}`}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            ficha de la unidad
+          </Link>{" "}
+          (Editar → Precios).
+        </p>
+      )}
 
       {/* Calendar grid */}
       <Card className="p-3 sm:p-4 overflow-x-auto">

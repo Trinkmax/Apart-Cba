@@ -87,7 +87,9 @@ export function LiveBookingAlerts() {
   /** Lo que entró con la pestaña de fondo: se resume al volver. */
   const missed = useRef<Item[]>([]);
 
-  const canSee = ctx ? can(ctx.role, "bookings", "view") : false;
+  // El propietario no recibe avisos de reservas de toda la organización:
+  // el evento en vivo no está acotado a sus unidades.
+  const canSee = ctx ? ctx.role !== "owner_view" && can(ctx.role, "bookings", "view") : false;
 
   const resolveUnits = useCallback(async (ids: string[]) => {
     const missing = ids.filter((id) => id && !unitCache.has(id));

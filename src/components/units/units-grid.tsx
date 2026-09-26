@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/dialog";
 import { UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney, getInitials } from "@/lib/format";
+import { unitMonthlyPrice } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { UnitDeleteAction } from "@/components/units/unit-delete-action";
@@ -66,7 +67,7 @@ export function UnitsGrid({
   emptyCta?: React.ReactNode;
   /** Mostrar acción "Eliminar" en cada card (sólo admin). */
   canDelete?: boolean;
-  /** Si false, esconde la tarifa por noche en cada card. */
+  /** Si false, esconde las tarifas de cada card (noche y, en mixtas, mes). */
   canViewMoney?: boolean;
 }) {
   const router = useRouter();
@@ -261,6 +262,11 @@ function SortableUnitCard({
   } = useSortable({ id: unit.id, disabled: !draggable });
 
   const meta = UNIT_STATUS_META[unit.status];
+  // PostgREST puede devolver numeric como string → Number() antes de comparar.
+  const nightlyPrice = Number(unit.base_price ?? 0);
+  // Sólo mixtas (migración 063); el helper descarta un valor viejo de otra vocación.
+  const monthlyPrice = unitMonthlyPrice(unit);
+  const currency = unit.base_price_currency ?? "ARS";
   const style = {
     transform: CSS.Translate.toString(transform),
     transition,
@@ -350,10 +356,24 @@ function SortableUnitCard({
               </div>
             )}
 
-            {canViewMoney && unit.base_price && (
-              <div className="text-sm font-semibold mt-3">
-                {formatMoney(Number(unit.base_price), unit.base_price_currency ?? "ARS")}
-                <span className="text-xs text-muted-foreground font-normal ml-1">/ noche</span>
+            {/* Comparaciones booleanas (> 0 / !== null), no `valor && (…)`: con
+                un precio en 0 eso renderiza un "0" suelto en la card. El mes va
+                en su propia línea: "· $ 1.250.000,00 / mes" al lado de la noche
+                no entra en el ancho de la card y se parte feo. */}
+            {canViewMoney && (nightlyPrice > 0 || monthlyPrice !== null) && (
+              <div className="mt-3 space-y-0.5">
+                {nightlyPrice > 0 && (
+                  <div className="text-sm font-semibold">
+                    {formatMoney(nightlyPrice, currency)}
+                    <span className="text-xs text-muted-foreground font-normal ml-1">/ noche</span>
+                  </div>
+                )}
+                {monthlyPrice !== null && (
+                  <div className="text-sm font-semibold">
+                    {formatMoney(monthlyPrice, currency)}
+                    <span className="text-xs text-muted-foreground font-normal ml-1">/ mes</span>
+                  </div>
+                )}
               </div>
             )}
 

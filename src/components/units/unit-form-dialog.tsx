@@ -25,13 +25,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DualRateFields, type RateField } from "@/components/units/dual-rate-fields";
 import { createUnit, updateUnit, type UnitInput } from "@/lib/actions/units";
 import { UNIT_DEFAULT_MODE_META, UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
+import { unitMonthlyPrice } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import type { Owner, Unit, UnitDefaultMode } from "@/lib/types/database";
 
 /** Referencia estable: un [] literal en el default rompe la memoización. */
 const EMPTY_CODES: string[] = [];
+
+/** Monedas del precio de lista (una sola para la noche y el mes). */
+const MONEDAS = [
+  { value: "ARS", label: "ARS — Pesos" },
+  { value: "USD", label: "USD — Dólares" },
+  { value: "EUR", label: "EUR — Euros" },
+  { value: "USDT", label: "USDT" },
+] as const;
 
 /**
  * Código sugerido a partir del nombre: iniciales de las palabras, o las
@@ -119,6 +129,9 @@ export function UnitFormDialog({
     size_m2: unit?.size_m2 ?? null,
     base_price: unit?.base_price ?? null,
     base_price_currency: unit?.base_price_currency ?? "ARS",
+    // Por el helper y no crudo: normaliza el numeric que PostgREST manda como
+    // string y nunca trae el precio viejo de una unidad que dejó de ser mixta.
+    monthly_price: unitMonthlyPrice(unit),
     cleaning_fee: unit?.cleaning_fee ?? null,
     default_commission_pct:
       unit?.default_commission_pct ?? orgDefaultCommissionPct ?? 20,
@@ -133,6 +146,43 @@ export function UnitFormDialog({
   const [codeTouched, setCodeTouched] = useState(isEdit);
   // Error del servidor sobre el campo Código (código repetido).
   const [codeError, setCodeError] = useState<string | null>(null);
+  // Error del servidor sobre el precio por mes (vive en la pestaña Precios).
+  const [monthlyError, setMonthlyError] = useState<string | null>(null);
+  // Precios de la tarifa doble con texto que no se puede usar: el form tiene
+  // el último número válido, no el que se ve, así que no se guarda.
+  const [preciosInvalidos, setPreciosInvalidos] = useState<Partial<Record<RateField, boolean>>>({});
+
+  // Pestañas controladas: el aviso de la vocación y un error del precio por
+  // mes tienen que poder llevar a Precios. Cada apertura arranca en Básico,
+  // como cuando no estaban controladas (el contenido se desmonta al cerrar).
+  const [tab, setTab] = useState("basico");
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setTab("basico");
+      setMonthlyError(null);
+      setPreciosInvalidos({});
+    }
+  }
+
+  /**
+   * Lleva a Precios y pone el foco en el campo. Sin esto el foco quedaba en el
+   * diálogo (el botón que se tocó se desmonta con la pestaña Básico) o en
+   * "Guardar", lejos del error.
+   */
+  function irAPrecio(campo: RateField) {
+    setTab("precios");
+    requestAnimationFrame(() => document.getElementById(campo)?.focus());
+  }
+
+  function setPrecioInvalido(campo: RateField, invalido: boolean) {
+    setPreciosInvalidos((p) => (!!p[campo] === invalido ? p : { ...p, [campo]: invalido }));
+  }
+
+  const esMixto = form.default_mode === "mixto";
+  // Una mixta sin precio por mes: se marca la pestaña para que no quede a medias.
+  const faltaPrecioMensual = esMixto && unitMonthlyPrice(form) == null;
 
   // Sin useMemo: el React Compiler la memoiza sola y con deps manuales se
   // saltea la optimización de todo el componente (regla del linter).
@@ -164,15 +214,37 @@ export function UnitFormDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (esMixto) {
+      const campo = (["base_price", "monthly_price"] as const).find((c) => preciosInvalidos[c]);
+      if (campo) {
+        irAPrecio(campo);
+        toast.error("Revisá los precios", {
+          description:
+            campo === "monthly_price"
+              ? "El precio por mes no se entiende o está en 0. Corregilo o dejalo vacío."
+              : "El precio por noche no se entiende. Corregilo antes de guardar.",
+        });
+        return;
+      }
+    }
     const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
+    // El precio por mes sobrevive en el form si se cambia la vocación (vuelve
+    // a mixto y sigue ahí), pero sólo viaja si la unidad es mixta: el servidor
+    // lo borraría igual, y así un valor a medias en un campo que ya no se ve
+    // no frena el guardado con un error que nadie puede corregir.
+    const payload: UnitInput = esMixto ? form : { ...form, monthly_price: null };
     startTransition(async () => {
       try {
         const r =
-          isEdit && unit ? await updateUnit(unit.id, form) : await createUnit(form);
+          isEdit && unit ? await updateUnit(unit.id, payload) : await createUnit(payload);
         if (!r.ok) {
           // El servidor devuelve el motivo (no lo lanza): en producción una
           // excepción llegaría acá como un texto en inglés sin información.
           if (r.field === "code") setCodeError(r.error);
+          if (r.field === "monthly_price") {
+            setMonthlyError(r.error);
+            irAPrecio("monthly_price");
+          }
           toast.error(isEdit ? "No se pudo guardar" : "No se pudo crear la unidad", {
             description: r.error,
           });
@@ -186,6 +258,7 @@ export function UnitFormDialog({
           setCodeTouched(false);
         }
         setCodeError(null);
+        setMonthlyError(null);
         setOpen(false);
         router.refresh();
         if (typeof window !== "undefined") {
@@ -203,7 +276,10 @@ export function UnitFormDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
       <DialogContent
-        className="max-w-2xl max-h-[90vh] overflow-y-auto"
+        // sm:max-w-2xl y no max-w-2xl: el primitivo trae sm:max-w-lg y a partir
+        // de sm le ganaba, así que el diálogo quedaba en 512px y los precios de
+        // la tarifa doble (1.100.000 en dos columnas) no entraban.
+        className="sm:max-w-2xl max-h-[90vh] overflow-y-auto"
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <DialogHeader>
@@ -214,11 +290,19 @@ export function UnitFormDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="mt-2">
-          <Tabs defaultValue="basico" className="w-full">
+          <Tabs value={tab} onValueChange={setTab} className="w-full">
             <TabsList className="w-full grid grid-cols-3">
               <TabsTrigger value="basico">Básico</TabsTrigger>
               <TabsTrigger value="caracteristicas">Características</TabsTrigger>
-              <TabsTrigger value="precios">Precios</TabsTrigger>
+              <TabsTrigger value="precios">
+                Precios
+                {faltaPrecioMensual && (
+                  <>
+                    <span aria-hidden className="size-1.5 rounded-full bg-violet-500" />
+                    <span className="sr-only">(falta el precio por mes)</span>
+                  </>
+                )}
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="basico" className="space-y-4 mt-4">
@@ -341,7 +425,12 @@ export function UnitFormDialog({
                   <Label htmlFor="default_mode">Vocación</Label>
                   <Select
                     value={form.default_mode}
-                    onValueChange={(v) => set("default_mode", v as UnitInput["default_mode"])}
+                    onValueChange={(v) => {
+                      set("default_mode", v as UnitInput["default_mode"]);
+                      // Fuera de mixto la tarifa doble se desmonta y el precio
+                      // por mes no viaja: sus marcas de inválido ya no aplican.
+                      if (v !== "mixto") setPreciosInvalidos({});
+                    }}
                   >
                     <SelectTrigger id="default_mode"><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -357,6 +446,18 @@ export function UnitFormDialog({
                   </Select>
                   <p className="text-[10px] text-muted-foreground leading-snug">
                     {UNIT_DEFAULT_MODE_META[form.default_mode].description}
+                    {esMixto && (
+                      <>
+                        {" "}
+                        <button
+                          type="button"
+                          onClick={() => irAPrecio("base_price")}
+                          className="whitespace-nowrap rounded-sm font-medium text-violet-700 underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:text-violet-300"
+                        >
+                          Cargar precios <span aria-hidden>→</span>
+                        </button>
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
@@ -441,41 +542,107 @@ export function UnitFormDialog({
               </div>
             </TabsContent>
 
-            <TabsContent value="precios" className="space-y-4 mt-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="base_price_currency">Moneda</Label>
-                  <Select
-                    value={form.base_price_currency}
-                    onValueChange={(v) => set("base_price_currency", v)}
-                  >
-                    <SelectTrigger id="base_price_currency"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ARS">ARS — Pesos</SelectItem>
-                      <SelectItem value="USD">USD — Dólares</SelectItem>
-                      <SelectItem value="EUR">EUR — Euros</SelectItem>
-                      <SelectItem value="USDT">USDT</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="base_price">Precio por noche</Label>
-                  <Input
-                    id="base_price"
-                    type="text"
-                    inputMode="decimal"
-                    value={form.base_price ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "") set("base_price", null);
-                      else {
-                        const n = Number(v.replace(",", "."));
-                        if (Number.isFinite(n)) set("base_price", n);
-                      }
+            {/* forceMount: lo tipeado en la tarifa doble vive en el input. Si la
+                pestaña se desmontara al ir a Básico, el texto ilegible se perdía
+                pero su marca de "inválido" no, y el form no guardaba más. */}
+            <TabsContent
+              value="precios"
+              forceMount
+              className="space-y-4 mt-4 data-[state=inactive]:hidden"
+            >
+              {/* Mixta: tarifa doble (noche + mes) con su comparador. El resto
+                  de las vocaciones sigue con el precio por noche solo. */}
+              {esMixto && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-sm font-medium leading-none">Tarifa doble</p>
+                      <p
+                        id="base_price_currency-help"
+                        className="text-[11px] text-muted-foreground leading-snug"
+                      >
+                        Un precio para estadías cortas y otro para el mes. Los dos
+                        precios van en esta moneda.
+                      </p>
+                    </div>
+                    <div className="w-full space-y-1.5 sm:w-48">
+                      <Label htmlFor="base_price_currency">Moneda</Label>
+                      <Select
+                        value={form.base_price_currency}
+                        onValueChange={(v) => set("base_price_currency", v)}
+                      >
+                        <SelectTrigger
+                          id="base_price_currency"
+                          className="w-full"
+                          aria-describedby="base_price_currency-help"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {MONEDAS.map((m) => (
+                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <DualRateFields
+                    currency={form.base_price_currency}
+                    nightly={form.base_price}
+                    monthly={form.monthly_price}
+                    onNightlyChange={(v) => {
+                      setPrecioInvalido("base_price", false);
+                      set("base_price", v);
                     }}
-                    placeholder="0"
+                    onMonthlyChange={(v) => {
+                      // Llega sólo con un número válido (tipeado o de un
+                      // descuento sugerido): lo que estaba mal ya no está.
+                      setMonthlyError(null);
+                      setPrecioInvalido("monthly_price", false);
+                      set("monthly_price", v);
+                    }}
+                    onInvalidChange={setPrecioInvalido}
+                    monthlyError={monthlyError}
                   />
                 </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                {!esMixto && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="base_price_currency">Moneda</Label>
+                      <Select
+                        value={form.base_price_currency}
+                        onValueChange={(v) => set("base_price_currency", v)}
+                      >
+                        <SelectTrigger id="base_price_currency"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {MONEDAS.map((m) => (
+                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="base_price">Precio por noche</Label>
+                      <Input
+                        id="base_price"
+                        type="text"
+                        inputMode="decimal"
+                        value={form.base_price ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === "") set("base_price", null);
+                          else {
+                            const n = Number(v.replace(",", "."));
+                            if (Number.isFinite(n)) set("base_price", n);
+                          }
+                        }}
+                        placeholder="0"
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="space-y-1.5">
                   <Label htmlFor="cleaning_fee">Fee limpieza</Label>
                   <Input

@@ -141,7 +141,7 @@ export const UNIT_DEFAULT_MODE_META: Record<
   },
   mixto: {
     label: "Mixto",
-    description: "La unidad acepta ambos modos según la temporada.",
+    description: "Se alquila por noche y por mes: tiene los dos precios.",
     color: "#94a3b8",
   },
 };

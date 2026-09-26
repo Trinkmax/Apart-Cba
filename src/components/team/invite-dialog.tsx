@@ -21,7 +21,19 @@ import {
 } from "@/components/team/access-credential-dialog";
 import { ROLE_META } from "@/lib/constants";
 
-export function InviteDialog({ orgName, children }: { orgName: string; children: React.ReactNode }) {
+/** Valor del selector que significa "buscar el propietario por email". */
+const OWNER_AUTO = "__auto";
+
+export function InviteDialog({
+  orgName,
+  owners = [],
+  children,
+}: {
+  orgName: string;
+  /** Propietarios de la org, para vincular un usuario con rol Propietario. */
+  owners?: { id: string; full_name: string }[];
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -197,6 +209,28 @@ export function InviteDialog({ orgName, children }: { orgName: string; children:
                   </SelectContent>
                 </Select>
               </div>
+
+              {form.role === "owner_view" && (
+                <div className="space-y-1.5">
+                  <Label>Propietario que representa</Label>
+                  <Select
+                    value={form.owner_id ?? OWNER_AUTO}
+                    onValueChange={(v) => set("owner_id", v === OWNER_AUTO ? null : v)}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={OWNER_AUTO}>Buscarlo por el email</SelectItem>
+                      {owners.map((o) => (
+                        <SelectItem key={o.id} value={o.id}>{o.full_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    Sólo va a ver las unidades, reservas y liquidaciones de ese propietario.
+                    Si no se encuentra por email queda sin vincular y no ve nada hasta que lo elijas en esta lista.
+                  </p>
+                </div>
+              )}
 
               <DniInvitePicker
                 frontFile={dniFront}

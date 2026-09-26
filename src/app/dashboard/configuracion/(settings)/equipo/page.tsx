@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { UserPlus } from "lucide-react";
 import { listTeamMembers } from "@/lib/actions/team";
+import { listOwners } from "@/lib/actions/owners";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { requireSession } from "@/lib/actions/auth";
 import { isAdminLevel } from "@/lib/permissions";
@@ -10,6 +11,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { InviteDialog } from "@/components/team/invite-dialog";
 import { TeamMemberActions } from "@/components/team/team-member-actions";
+import { OwnerLinkSelect } from "@/components/team/owner-link-select";
 import { ROLE_META } from "@/lib/constants";
 import { getInitials, formatTimeAgo } from "@/lib/format";
 
@@ -22,7 +24,11 @@ export default async function EquipoPage() {
   // Regenerar credenciales es sólo de admin (recepción invita pero no toca claves).
   const canResetAccess = role === "admin" || session.profile.is_superadmin;
 
-  const members = await listTeamMembers();
+  const [members, ownersRaw] = await Promise.all([listTeamMembers(), listOwners()]);
+  // Para vincular usuarios con rol "Propietario" a su ficha (ver OwnerLinkSelect).
+  const owners = ownersRaw
+    .filter((o) => o.active !== false)
+    .map((o) => ({ id: o.id, full_name: o.full_name }));
 
   return (
     <section className="space-y-5">
@@ -38,7 +44,7 @@ export default async function EquipoPage() {
             Si alguien no puede entrar, regenerale la contraseña y mandásela: la anterior deja de servir.
           </p>
         </div>
-        <InviteDialog orgName={organization.name}>
+        <InviteDialog orgName={organization.name} owners={owners}>
           <Button className="gap-2"><UserPlus size={16} /> Invitar usuario</Button>
         </InviteDialog>
       </header>
@@ -68,6 +74,13 @@ export default async function EquipoPage() {
                     )}
                   </div>
                   <div className="text-xs text-muted-foreground">{m.email ?? "—"}</div>
+                  {m.role === "owner_view" && (
+                    <OwnerLinkSelect
+                      userId={m.user_id}
+                      ownerId={m.owner_id ?? null}
+                      owners={owners}
+                    />
+                  )}
                   {m.profile?.job_title && (
                     <div className="text-xs text-muted-foreground">{m.profile.job_title}</div>
                   )}

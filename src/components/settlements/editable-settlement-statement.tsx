@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState, useTransition } from "react";
+import { createContext, useContext, useId, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -15,6 +15,8 @@ import {
   ArrowRight,
   ArrowRightLeft,
   GripVertical,
+  RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import {
   DndContext,
@@ -90,6 +92,7 @@ import {
 import {
   updateSettlementBookingRow,
   removeSettlementBookingRow,
+  refreshSettlementBookingRow,
   addSettlementLine,
   updateSettlementLine,
   deleteSettlementLine,
@@ -124,6 +127,13 @@ const num = (s: string) => {
   const n = Number(String(s).replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 };
+
+/**
+ * Reservas cuya fila quedó desactualizada (ref_id → motivos), calculado en el
+ * server por listSettlementBookingDrift. Contexto para no pasar la prop por
+ * cada bloque de unidad.
+ */
+const DriftContext = createContext<Record<string, string[]>>({});
 
 function Money({ n, c, neg }: { n: number; c: string; neg?: boolean }) {
   if (!n) return <span className="text-muted-foreground">—</span>;
@@ -244,6 +254,7 @@ function RowEditor({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const driftReasons = useContext(DriftContext)[row.ref_id ?? ""];
 
   const [guest, setGuest] = useState(row.guest === "—" ? "" : row.guest);
   const [checkIn, setCheckIn] = useState(row.check_in ?? "");
@@ -364,6 +375,30 @@ function RowEditor({
     });
   }
 
+  function refreshFromBooking() {
+    start(async () => {
+      const res = await refreshSettlementBookingRow({
+        settlement_id: settlementId,
+        ref_id: row.ref_id!,
+        impact_caja: impactCaja,
+      });
+      if (!res.ok) {
+        toast.error("No se pudo actualizar", { description: res.error });
+        return;
+      }
+      toast.success("Fila actualizada con los datos de la reserva", {
+        description:
+          res.adjustmentId != null
+            ? `Asiento de ajuste en Caja de ${formatMoney(Math.abs(res.delta), currency)}`
+            : res.keptExpenses
+              ? "Se mantuvieron los gastos que habías cargado."
+              : undefined,
+      });
+      onOpenChange(false);
+      router.refresh();
+    });
+  }
+
   function remove() {
     start(async () => {
       try {
@@ -402,6 +437,48 @@ function RowEditor({
         </DialogHeader>
 
         <div className="space-y-4">
+          {row.ref_id && (
+            <div
+              className={cn(
+                "rounded-lg border p-3 space-y-2 text-sm",
+                driftReasons
+                  ? "border-amber-500/40 bg-amber-500/10"
+                  : "bg-muted/40",
+              )}
+            >
+              {driftReasons ? (
+                <div className="space-y-1">
+                  <p className="flex items-center gap-1.5 font-medium text-amber-800 dark:text-amber-200">
+                    <AlertTriangle size={14} className="shrink-0" />
+                    La reserva cambió después de armar esta fila
+                  </p>
+                  <ul className="text-xs text-amber-900/80 dark:text-amber-100/80 list-disc pl-5">
+                    {driftReasons.map((r) => (
+                      <li key={r}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  ¿Cambiaste la reserva (total, comisión, canal, limpieza)?
+                  Traé sus datos de nuevo. Los gastos que cargaste acá se
+                  mantienen.
+                </p>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                disabled={pending}
+                onClick={refreshFromBooking}
+              >
+                <RefreshCw size={13} />
+                Traer datos de la reserva
+              </Button>
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label>Huésped</Label>
             <Input value={guest} onChange={(e) => setGuest(e.target.value)} />
@@ -1008,6 +1085,7 @@ function SortableBookingRow({
     position: "relative",
     zIndex: isDragging ? 20 : undefined,
   };
+  const driftReasons = useContext(DriftContext)[b.ref_id ?? ""];
   return (
     <TableRow
       ref={setNodeRef}
@@ -1050,6 +1128,15 @@ function SortableBookingRow({
         {b.mode === "mensual" && (
           <span className="ml-1 text-[10px] text-muted-foreground">
             mensual
+          </span>
+        )}
+        {driftReasons && (
+          <span
+            className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+            title={driftReasons.join("\n")}
+          >
+            <AlertTriangle size={10} className="shrink-0" />
+            La reserva cambió
           </span>
         )}
       </TableCell>
@@ -1617,6 +1704,7 @@ export function EditableSettlementStatement({
   audit,
   periodSuggestion = null,
   undoState,
+  drift = {},
 }: {
   model: StatementModel;
   settlementId: string;
@@ -1629,6 +1717,8 @@ export function EditableSettlementStatement({
   periodSuggestion?: PeriodCycleSuggestion | null;
   /** Qué hay para deshacer / rehacer en este documento (migración 047). */
   undoState: UndoState;
+  /** Filas cuya reserva cambió después de armarlas (ref_id → motivos). */
+  drift?: Record<string, string[]>;
 }) {
   const c = currency;
   // Columna "Canal" sólo si el documento tiene comisión de plataforma > 0.
@@ -1852,6 +1942,7 @@ export function EditableSettlementStatement({
   }
 
   return (
+    <DriftContext.Provider value={drift}>
     <Card className="overflow-hidden p-0 gap-0">
       {/* Header */}
       <div className="brand-gradient text-white px-5 sm:px-7 py-5 relative overflow-hidden">
@@ -2351,6 +2442,7 @@ export function EditableSettlementStatement({
         </AlertDialogContent>
       </AlertDialog>
     </Card>
+    </DriftContext.Provider>
   );
 }
 

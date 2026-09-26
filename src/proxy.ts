@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getProjectJwks } from "@/lib/supabase/jwks";
+import { PATHNAME_HEADER } from "@/lib/auth/route-access";
 import {
   DEADLINE,
   createSupabaseTimeoutPicker,
@@ -40,8 +41,20 @@ const PROXY_AUTH_TIMEOUT_MS = 3_000;
  */
 const PROXY_DEADLINE_MS = 5_000;
 
+/**
+ * Headers del request original (con las cookies vigentes) + la ruta pedida,
+ * que los layouts no reciben. /dashboard/layout.tsx la usa para acotar el rol
+ * "Propietario" a una lista blanca. Se pisa siempre: lo que mande el cliente
+ * en ese header no sobrevive.
+ */
+function forwardedHeaders(request: NextRequest): Headers {
+  const headers = new Headers(request.headers);
+  headers.set(PATHNAME_HEADER, request.nextUrl.pathname);
+  return headers;
+}
+
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request });
+  let supabaseResponse = NextResponse.next({ request: { headers: forwardedHeaders(request) } });
 
   // Señal de invocación: al vencer el deadline se aborta, y cualquier
   // reintento posterior de auth-js falla al instante sin abrir sockets.
@@ -63,7 +76,7 @@ export async function proxy(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          supabaseResponse = NextResponse.next({ request });
+          supabaseResponse = NextResponse.next({ request: { headers: forwardedHeaders(request) } });
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           );

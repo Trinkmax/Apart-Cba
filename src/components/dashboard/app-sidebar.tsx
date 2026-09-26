@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { can, isAdminLevel, type Resource } from "@/lib/permissions";
 import type { Organization, OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
 import { PendingRequestsBadge } from "@/components/dashboard/pending-requests-badge";
+import { isPathAllowedForOwner } from "@/lib/auth/route-access";
 
 interface NavItem {
   label: string;
@@ -130,7 +131,10 @@ export function AppSidebar({
       <SidebarContent>
         {NAV.map((group) => {
           const visibleItems = group.items.filter(
-            (item) => item.resource === "*" || can(currentRole, item.resource as Resource, "view")
+            (item) =>
+              (item.resource === "*" || can(currentRole, item.resource as Resource, "view")) &&
+              // El propietario sólo ve las pantallas de su lista blanca.
+              (currentRole !== "owner_view" || isPathAllowedForOwner(item.href))
           );
           if (visibleItems.length === 0) return null;
           // Si el grupo tiene un único ítem con el mismo nombre que el grupo,

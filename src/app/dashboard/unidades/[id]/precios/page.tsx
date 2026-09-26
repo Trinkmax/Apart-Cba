@@ -4,6 +4,7 @@ import { ArrowLeft, DollarSign } from "lucide-react";
 import { getUnit } from "@/lib/actions/units";
 import { listActiveRules, getCalendarPrices } from "@/lib/actions/pricing";
 import { RateCalendarClient } from "@/components/pricing/rate-calendar-client";
+import { unitMonthlyPrice } from "@/lib/units/pricing";
 
 export default async function UnitPricingPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -50,6 +51,9 @@ export default async function UnitPricingPage({ params }: { params: Promise<{ id
         initialBasePrice={calendar.basePrice}
         initialCurrency={calendar.currency}
         initialRules={rules}
+        isMixto={unit.default_mode === "mixto"}
+        monthlyPrice={unitMonthlyPrice(unit)}
+        monthlyCurrency={unit.base_price_currency ?? "ARS"}
       />
     </div>
   );

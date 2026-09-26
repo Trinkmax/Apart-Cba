@@ -71,15 +71,19 @@ function weighted<T extends string>(
 // Direcciones y barrios reales de Córdoba capital: el visitante tiene que
 // reconocer el mapa mental de su propio negocio, no leer "Unidad 1 / Unidad 2".
 
+// `monthly`: precio de un mes completo (migración 063). Sólo lo lleva la mixta;
+// createUnit/updateUnit lo anulan en otra vocación, pero el sembrado inserta
+// directo, así que el null va a mano. Queda bien por debajo de 30 noches
+// sueltas (87.000 × 30 = 2.610.000): el mes se cotiza con descuento.
 const UNITS = [
-  { code: "NC-4B",   name: "Rondeau 240, 4°B",              neighborhood: "Nueva Córdoba",  bedrooms: 1, bathrooms: 1, maxGuests: 3, price: 68_000,  cleaning: 12_000, mode: "temporario" },
-  { code: "NC-9A",   name: "Chacabuco 1120, 9°A",           neighborhood: "Nueva Córdoba",  bedrooms: 2, bathrooms: 2, maxGuests: 5, price: 96_000,  cleaning: 15_000, mode: "temporario" },
-  { code: "GUE-2C",  name: "Belgrano 760, 2°C",             neighborhood: "Güemes",         bedrooms: 1, bathrooms: 1, maxGuests: 2, price: 61_000,  cleaning: 11_000, mode: "temporario" },
-  { code: "GUE-PH",  name: "Achával Rodríguez 340, PH",     neighborhood: "Güemes",         bedrooms: 2, bathrooms: 1, maxGuests: 4, price: 87_000,  cleaning: 14_000, mode: "mixto"      },
-  { code: "COF-3A",  name: "Jerónimo Cortés 455, 3°A",      neighborhood: "Cofico",         bedrooms: 1, bathrooms: 1, maxGuests: 3, price: 54_000,  cleaning: 10_000, mode: "temporario" },
-  { code: "GP-1B",   name: "25 de Mayo 1580, 1°B",          neighborhood: "General Paz",    bedrooms: 2, bathrooms: 1, maxGuests: 4, price: 72_000,  cleaning: 12_500, mode: "temporario" },
-  { code: "ALB-5D",  name: "Duarte Quirós 1345, 5°D",       neighborhood: "Alberdi",        bedrooms: 1, bathrooms: 1, maxGuests: 2, price: 49_000,  cleaning: 10_000, mode: "mensual"    },
-  { code: "VBEL-DX", name: "Recta Martinoli 5820, dúplex",  neighborhood: "Villa Belgrano", bedrooms: 3, bathrooms: 2, maxGuests: 6, price: 129_000, cleaning: 19_000, mode: "temporario" },
+  { code: "NC-4B",   name: "Rondeau 240, 4°B",              neighborhood: "Nueva Córdoba",  bedrooms: 1, bathrooms: 1, maxGuests: 3, price: 68_000,  cleaning: 12_000, mode: "temporario", monthly: null      },
+  { code: "NC-9A",   name: "Chacabuco 1120, 9°A",           neighborhood: "Nueva Córdoba",  bedrooms: 2, bathrooms: 2, maxGuests: 5, price: 96_000,  cleaning: 15_000, mode: "temporario", monthly: null      },
+  { code: "GUE-2C",  name: "Belgrano 760, 2°C",             neighborhood: "Güemes",         bedrooms: 1, bathrooms: 1, maxGuests: 2, price: 61_000,  cleaning: 11_000, mode: "temporario", monthly: null      },
+  { code: "GUE-PH",  name: "Achával Rodríguez 340, PH",     neighborhood: "Güemes",         bedrooms: 2, bathrooms: 1, maxGuests: 4, price: 87_000,  cleaning: 14_000, mode: "mixto",      monthly: 1_250_000 },
+  { code: "COF-3A",  name: "Jerónimo Cortés 455, 3°A",      neighborhood: "Cofico",         bedrooms: 1, bathrooms: 1, maxGuests: 3, price: 54_000,  cleaning: 10_000, mode: "temporario", monthly: null      },
+  { code: "GP-1B",   name: "25 de Mayo 1580, 1°B",          neighborhood: "General Paz",    bedrooms: 2, bathrooms: 1, maxGuests: 4, price: 72_000,  cleaning: 12_500, mode: "temporario", monthly: null      },
+  { code: "ALB-5D",  name: "Duarte Quirós 1345, 5°D",       neighborhood: "Alberdi",        bedrooms: 1, bathrooms: 1, maxGuests: 2, price: 49_000,  cleaning: 10_000, mode: "mensual",    monthly: null      },
+  { code: "VBEL-DX", name: "Recta Martinoli 5820, dúplex",  neighborhood: "Villa Belgrano", bedrooms: 3, bathrooms: 2, maxGuests: 6, price: 129_000, cleaning: 19_000, mode: "temporario", monthly: null      },
 ] as const;
 
 /** La unidad de índice 6 (ALB-5D) va con contrato mensual, no con estadías cortas. */
@@ -301,6 +305,10 @@ export async function seedDemoData(
         cleaning_fee: u.cleaning,
         default_commission_pct: 20,
         default_mode: u.mode,
+        // Va en TODAS las filas del lote, aunque sea null: en un insert en lote
+        // PostgREST le manda NULL (no DEFAULT) a la clave que le falte a un
+        // objeto, así que todos tienen que llevar las mismas claves.
+        monthly_price: u.monthly,
         position: i,
         marketplace_published: false,
         slug: null,

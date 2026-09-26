@@ -11,6 +11,7 @@ import type {
   BookingPaymentScheduleWithBooking,
   PaymentScheduleStatus,
 } from "@/lib/types/database";
+import { getOwnerScope } from "@/lib/auth/owner-scope";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Genera/regenera cuotas de una booking mensual (delegado al RPC SQL).
@@ -46,6 +47,8 @@ export async function listScheduleForBooking(
 ): Promise<BookingPaymentSchedule[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  // Las cuotas son cobranza de la administración: un propietario no las ve.
+  if (await getOwnerScope()) return [];
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("booking_payment_schedule")
@@ -62,6 +65,8 @@ export async function listScheduleForLeaseGroup(
 ): Promise<BookingPaymentSchedule[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  // Las cuotas son cobranza de la administración: un propietario no las ve.
+  if (await getOwnerScope()) return [];
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("booking_payment_schedule")
@@ -81,6 +86,8 @@ export async function listUpcomingSchedule(
 ): Promise<BookingPaymentScheduleWithBooking[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  // Las cuotas son cobranza de la administración: un propietario no las ve.
+  if (await getOwnerScope()) return [];
   const admin = createAdminClient();
   const today = new Date();
   const horizon = new Date(today);
@@ -117,6 +124,8 @@ export async function listOverdueScheduleByBooking(): Promise<
 > {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  // Las cuotas son cobranza de la administración: un propietario no las ve.
+  if (await getOwnerScope()) return{};
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("booking_payment_schedule")
@@ -142,6 +151,8 @@ export async function listScheduleInRange(
 ): Promise<BookingPaymentSchedule[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  // Las cuotas son cobranza de la administración: un propietario no las ve.
+  if (await getOwnerScope()) return [];
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("booking_payment_schedule")

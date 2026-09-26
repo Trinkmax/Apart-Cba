@@ -18,8 +18,10 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditUnitButton } from "@/components/units/edit-unit-button";
 import { UnitOwnersManager } from "@/components/units/unit-owners-manager";
-import { UNIT_STATUS_META } from "@/lib/constants";
+import { UNIT_DEFAULT_MODE_META, UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney } from "@/lib/format";
+import { unitMonthlyPrice } from "@/lib/units/pricing";
+import { cn } from "@/lib/utils";
 import type { Unit, UnitOwner, Owner } from "@/lib/types/database";
 
 type UnitDetail = Unit & {
@@ -37,6 +39,10 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
   const u = unit as unknown as UnitDetail;
   const meta = UNIT_STATUS_META[u.status];
   const canViewMoney = can(role, "payments", "view");
+  // Sólo las mixtas llevan precio por mes (migración 063); se lee por el helper
+  // para no mostrar un valor viejo de una unidad que dejó de ser mixta.
+  const isMixto = u.default_mode === "mixto";
+  const monthlyPrice = unitMonthlyPrice(u);
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
@@ -131,12 +137,44 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
         <TabsContent value="general" className="space-y-4 mt-4">
           {canViewMoney && (
             <Card className="p-4 sm:p-5">
-              <h2 className="text-sm font-semibold mb-3">Tarifas</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4 text-sm">
+              <div className="flex items-center gap-2 mb-3">
+                <h2 className="text-sm font-semibold">Tarifas</h2>
+                {isMixto && (
+                  <Badge
+                    variant="outline"
+                    className="gap-1.5 font-normal text-[10px] text-muted-foreground"
+                    title={UNIT_DEFAULT_MODE_META.mixto.description}
+                  >
+                    <span className="status-dot" style={{ backgroundColor: UNIT_DEFAULT_MODE_META.mixto.color }} />
+                    {UNIT_DEFAULT_MODE_META.mixto.label}
+                  </Badge>
+                )}
+              </div>
+              {/* Mixta: 4 celdas. Hasta lg van de a 2 para que los dos precios
+                  queden juntos en la primera fila y "Comisión de administración"
+                  no se parta en una columna angosta (el sidebar come ancho). */}
+              <div
+                className={cn(
+                  "grid grid-cols-2 gap-3 sm:gap-4 text-sm",
+                  isMixto ? "lg:grid-cols-4" : "sm:grid-cols-3",
+                )}
+              >
                 <div>
                   <div className="text-xs text-muted-foreground">Precio / noche</div>
                   <div className="font-medium">{formatMoney(u.base_price, u.base_price_currency ?? "ARS")}</div>
                 </div>
+                {isMixto && (
+                  <div>
+                    <div className="text-xs text-muted-foreground">Precio / mes</div>
+                    {monthlyPrice !== null ? (
+                      <div className="font-medium">{formatMoney(monthlyPrice, u.base_price_currency ?? "ARS")}</div>
+                    ) : (
+                      // "Sin cargar" y no "—": una mixta sin precio mensual es un
+                      // dato faltante que el operador tiene que ver, no un cero.
+                      <div className="font-medium text-muted-foreground italic">Sin cargar</div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <div className="text-xs text-muted-foreground">Fee limpieza</div>
                   <div className="font-medium">{formatMoney(u.cleaning_fee, u.base_price_currency ?? "ARS")}</div>

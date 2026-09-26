@@ -58,6 +58,7 @@ import {
   formatMoneyValue,
   parseMoneyInput,
 } from "@/components/bookings/money-input";
+import { unitMonthlyPrice } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import {
   AlertDialog,
@@ -99,6 +100,11 @@ type UnitForBookingForm = Pick<
   | "cleaning_fee"
 > & {
   default_mode?: UnitDefaultMode;
+  /**
+   * Precio de un mes completo (sólo mixtas, migración 063). Opcional: no todos
+   * los que abren el form lo seleccionan. Leerlo siempre con unitMonthlyPrice().
+   */
+  monthly_price?: number | null;
   /** % acordado con el propietario de la unidad, si tiene uno propio. */
   owner_commission_pct_override?: number | null;
 };
@@ -263,6 +269,20 @@ export function BookingFormDialog({
     channel_commission_pct: string;
     cleaning_fee: string;
     monthly_rent: string;
+    /**
+     * De dónde salió la Renta mensual (no se persiste). "unit" = el precio
+     * mensual de la unidad mixta: sigue a la unidad, la moneda y el modo (ver
+     * withUnitRent). "user" = la tipeó alguien o es la de la reserva que se
+     * edita: no se pisa nunca. "total" = la derivó el Total mensual tipeado:
+     * sigue a ese total mientras se tipea y, como "user", ningún cambio de
+     * unidad/moneda/modo la reemplaza.
+     * Vive en el form y no en un state aparte porque el form sobrevive entre
+     * aperturas (LazyNewBookingTrigger y el botón de /reservas dejan el
+     * diálogo montado): si el origen se reseteara al cerrar y la renta no, la
+     * de la unidad anterior quedaba como si la hubieran tipeado y ya no se
+     * reemplazaba al elegir otra unidad.
+     */
+    monthly_rent_source: "unit" | "user" | "total" | null;
     monthly_expenses: string;
     security_deposit: string;
     monthly_inflation_adjustment_pct: string;
@@ -325,7 +345,13 @@ export function BookingFormDialog({
     check_out_date: booking?.check_out_date ?? defaultCheckOut ?? "",
     check_out_time: booking?.check_out_time ?? "10:00",
     guests_count: booking?.guests_count ?? 2,
-    currency: booking?.currency ?? "ARS",
+    // Alta rápida del PMS (defaultUnitId): onSelectUnit no corre, así que la
+    // moneda sale de la unidad acá. Con "ARS" fijo, una unidad en dólares
+    // recibía su precio por noche en pesos y nunca su precio mensual.
+    currency:
+      booking?.currency ??
+      units.find((u) => u.id === defaultUnitId)?.base_price_currency ??
+      "ARS",
     price_per_night: initialPricePerNight,
     total_amount: formatMoneyEditable(booking?.total_amount),
     paid_amount: formatMoneyEditable(booking?.paid_amount),
@@ -345,6 +371,9 @@ export function BookingFormDialog({
         ? formatMoneyValue(prefilledCleaning)
         : formatMoneyEditable(booking?.cleaning_fee),
     monthly_rent: formatMoneyEditable(booking?.monthly_rent),
+    // La renta guardada es una decisión, no un default: editar la reserva
+    // (cambiarle la unidad o la moneda) no la reemplaza por la de lista.
+    monthly_rent_source: Number(booking?.monthly_rent ?? 0) > 0 ? "user" : null,
     monthly_expenses: formatMoneyEditable(booking?.monthly_expenses),
     security_deposit: formatMoneyEditable(booking?.security_deposit),
     monthly_inflation_adjustment_pct: formatMoneyEditable(booking?.monthly_inflation_adjustment_pct),
@@ -387,27 +416,167 @@ export function BookingFormDialog({
     setForm((f) => ({ ...f, [k]: v }));
   }
 
-  function setMode(next: BookingMode) {
-    setForm((f) => {
+  // ─── Renta mensual desde el precio de la unidad (migración 063) ──────────
+  // Una unidad mixta puede tener, además del precio por noche, el de un mes
+  // completo. En mensual ese precio completa la Renta igual que base_price
+  // completa Precio/noche en temporario. Sólo se completa o reemplaza una
+  // renta vacía o que ya vino de la unidad; la tipeada no se toca. Temporario
+  // nunca lo usa, y sin precio mensual cargado no se inventa uno (nada de
+  // base_price × 30): la renta queda para que la cargue el staff.
+
+  /** Precio mensual aplicable a la reserva: unidad mixta con precio, en la moneda de la reserva. */
+  function unitListRent(unitId: string, currency: string): number | null {
+    const u = units.find((x) => x.id === unitId);
+    const price = unitMonthlyPrice(u);
+    if (price === null) return null;
+    // Está en la moneda de la unidad: en una reserva en otra moneda sería otra
+    // cifra (mismo guard que la limpieza de la unidad).
+    if (u?.base_price_currency && u.base_price_currency !== currency) return null;
+    return price;
+  }
+
+  function rentIsReplaceable(f: FormShape): boolean {
+    return !parseMoneyInput(f.monthly_rent) || f.monthly_rent_source === "unit";
+  }
+
+  /**
+   * Re-sincroniza la renta con la unidad, la moneda y el modo actuales. Pura:
+   * va adentro de los updaters de setForm para ver lo que cambió antes en el
+   * mismo evento (onSelectUnit encadena unidad → moneda → modo, y el `form`
+   * del closure todavía tiene la unidad vieja).
+   */
+  function withUnitRent(f: FormShape): FormShape {
+    if (!rentIsReplaceable(f)) return f;
+    const list = f.mode === "mensual" ? unitListRent(f.unit_id, f.currency) : null;
+    if (list !== null) {
+      return { ...f, monthly_rent: formatMoneyValue(list), monthly_rent_source: "unit" };
+    }
+    // Sin precio aplicable (otra unidad, otra moneda o vuelta a temporario) la
+    // renta de lista se va: el payload siempre manda monthly_rent, así que una
+    // reserva temporaria guardaba el precio mensual de la unidad. En mensual,
+    // un total que no tocó nadie salió de esa renta y se va con ella.
+    if (f.monthly_rent_source === "unit") {
+      return {
+        ...f,
+        monthly_rent: "",
+        monthly_rent_source: null,
+        ...(f.mode === "mensual" && !totalTouched ? { total_amount: "" } : null),
+      };
+    }
+    return f;
+  }
+
+  function setMode(
+    next: BookingMode,
+    restore?: Pick<FormShape, "total_amount" | "price_per_night">,
+  ) {
+    // La renta de la unidad sigue al modo: entra al pasar a mensual y se va al
+    // volver a temporario (withUnitRent).
+    setForm((prev) => {
+      const f = restore ? { ...prev, ...restore } : prev;
       // Defaults razonables al pasar a mensual: billing_day = 1
       if (next === "mensual" && f.mode !== "mensual") {
-        return {
+        return withUnitRent({
           ...f,
           mode: next,
           rent_billing_day: f.rent_billing_day ?? 1,
-        };
+        });
       }
       // Mensual guarda 0% de canal (no aplica). Al volver a temporario el %
       // vuelve al default de la org para el origen, salvo que lo hayan tipeado.
       if (next === "temporario" && f.mode === "mensual" && !channelPctTouched) {
-        return {
+        return withUnitRent({
           ...f,
           mode: next,
           channel_commission_pct: channelPctDisplay(channelCommissionDefaults, f.source),
-        };
+        });
       }
-      return { ...f, mode: next };
+      return withUnitRent({ ...f, mode: next });
     });
+  }
+
+  /**
+   * ¿Este cambio (de unidad, moneda o modo) va a completar la renta con el
+   * precio de lista? Entonces el total tiene que salir de esa renta (renta ÷ 30
+   * × noches) y no quedarse con el que había: el de temporario —precio × noches
+   * + limpieza, o el total guardado en edición— junto a la renta de lista es un
+   * par que no cierra (renta_inconsistente en Resultados). `totalTouched` es un
+   * solo flag para los dos modos y en edición arranca en true, así que se
+   * suelta acá. Un total mensual tipeado no se pierde: tipearlo convierte la
+   * renta en "total" y deja de ser reemplazable.
+   */
+  function entraRentaDeLista(unitId: string, currency: string, mode: BookingMode): boolean {
+    return mode === "mensual" && rentIsReplaceable(form) && unitListRent(unitId, currency) !== null;
+  }
+
+  /**
+   * Lo que había en temporario antes de pasar a mensual con la renta de lista.
+   * Pasar a mensual recalcula el total desde la renta, y el total es un solo
+   * campo para los dos modos: sin esto, ir a Mensual "a ver cuánto da" y volver
+   * pisaba un total negociado (500.000 → 90.000 → 320.000 desde el precio por
+   * noche). Vale mientras no cambien unidad, fechas, limpieza ni moneda.
+   * Se lee y escribe sólo en handlers.
+   */
+  const temporarioAntesDeMensualRef = useRef<{
+    key: string;
+    total_amount: string;
+    price_per_night: string;
+    totalTouched: boolean;
+    lastTouched: "price" | "total" | null;
+  } | null>(null);
+  const claveTemporario = (f: FormShape) =>
+    `${f.unit_id}|${f.check_in_date}|${f.check_out_date}|${f.cleaning_fee}|${f.currency}`;
+
+  /**
+   * Cambio de modo desde el switch. Al pasar a mensual con renta de lista el
+   * total sale de esa renta (ver entraRentaDeLista); en edición vale igual:
+   * pasar una temporaria a mensual cambia qué se cobra, y el total nuevo se ve
+   * antes de guardar. Al volver a temporario se recupera lo que había.
+   */
+  function onModeChange(next: BookingMode) {
+    if (next === form.mode) return;
+    if (next === "mensual") {
+      const entraLista = entraRentaDeLista(form.unit_id, form.currency, next);
+      // Siempre se reescribe: el snapshot describe sólo el pase que acaba de
+      // pasar, nunca uno viejo.
+      temporarioAntesDeMensualRef.current = entraLista
+        ? {
+            key: claveTemporario(form),
+            total_amount: form.total_amount,
+            price_per_night: form.price_per_night,
+            totalTouched,
+            lastTouched,
+          }
+        : null;
+      if (entraLista) setTotalTouched(false);
+      setMode(next);
+      return;
+    }
+    const antes = temporarioAntesDeMensualRef.current;
+    temporarioAntesDeMensualRef.current = null;
+    if (antes && antes.key === claveTemporario(form)) {
+      const restore = { total_amount: antes.total_amount, price_per_night: antes.price_per_night };
+      setTotalTouched(antes.totalTouched);
+      setLastTouched(antes.lastTouched);
+      // Los montos vuelven tal cual: se saltea la pasada del auto-cálculo que
+      // dispararía el cambio de modo. Re-derivar desde el precio redondeado de
+      // una edición (100.000 ÷ 3 = 33.333,33 × 3) dejaba 99.999,99.
+      setPrevAutoKey(autoKeyOf(withUnitRent({ ...form, ...restore, mode: next })));
+      setMode(next, restore);
+      return;
+    }
+    setMode(next);
+  }
+
+  /**
+   * "usar" el precio de lista: la renta pasa a ser la de la unidad y el total
+   * vuelve a salir de ella, por la misma razón que en onModeChange.
+   */
+  function applyListRent() {
+    const list = unitListRent(form.unit_id, form.currency);
+    if (list === null) return;
+    setTotalTouched(false);
+    setForm((f) => ({ ...f, monthly_rent: formatMoneyValue(list), monthly_rent_source: "unit" }));
   }
 
   // ─── Auto-cálculo de precio/total ────────────────────────────────────────
@@ -425,7 +594,11 @@ export function BookingFormDialog({
   // centavos de deuda). Al elegir unidad la limpieza cambia junto con
   // unit_id, así que ese caso sí entra por acá. Patrón "ajuste de state
   // durante render" para no violar react-hooks/set-state-in-effect.
-  const autoKey = `${form.unit_id}|${form.mode}|${form.monthly_rent}|${form.check_in_date}|${form.check_out_date}`;
+  // Una función y no sólo la cuenta: onModeChange la usa para saltear la
+  // pasada cuando restaura los montos de temporario.
+  const autoKeyOf = (f: FormShape) =>
+    `${f.unit_id}|${f.mode}|${f.monthly_rent}|${f.check_in_date}|${f.check_out_date}`;
+  const autoKey = autoKeyOf(form);
   const [prevAutoKey, setPrevAutoKey] = useState(autoKey);
   if (prevAutoKey !== autoKey) {
     setPrevAutoKey(autoKey);
@@ -438,6 +611,16 @@ export function BookingFormDialog({
         if (rent && nightsCount > 0) {
           const computed = Math.round((rent / 30) * nightsCount * 100) / 100;
           setForm((f) => ({ ...f, total_amount: formatMoneyValue(computed) }));
+        }
+      } else if (form.monthly_rent_source === "total" && nightsCount > 0) {
+        // Renta que salió del Total tipeado: el total queda fijo y la renta se
+        // re-deriva si cambian las fechas (igual que "Total fijo → re-derivar
+        // precio" en temporario). Si no, 30 noches a 1.415.700 pasadas a 59
+        // guardaban renta 1.415.700 con total 1.415.700: renta_inconsistente.
+        const totalParsed = parseMoneyInput(form.total_amount);
+        if (totalParsed && totalParsed > 0) {
+          const rent = formatMoneyValue(Math.round((totalParsed * 30) / nightsCount * 100) / 100);
+          if (rent !== form.monthly_rent) setForm((f) => ({ ...f, monthly_rent: rent }));
         }
       }
     } else if (lastTouched === "total" && totalTouched && nightsCount > 0) {
@@ -497,9 +680,21 @@ export function BookingFormDialog({
    * seguía guardando el id viejo, así que el guard de "elegí una cuenta" lo veía
    * como completo y la reserva se creaba con el cobro cargado y sin asiento en
    * Caja — la misma fuga que estos guards vienen a cerrar.
+   * La renta de la unidad está en la moneda de la unidad: si la reserva pasa a
+   * otra, se va (y vuelve si la moneda vuelve a coincidir).
    */
+  function applyCurrency(v: string) {
+    setForm((f) =>
+      f.currency === v ? f : withUnitRent({ ...f, currency: v, account_id: null })
+    );
+  }
+
+  /** Cambio de moneda desde el selector (onSelectUnit usa applyCurrency: ya evaluó el estado final). */
   function setCurrency(v: string) {
-    setForm((f) => (f.currency === v ? f : { ...f, currency: v, account_id: null }));
+    if (v !== form.currency && entraRentaDeLista(form.unit_id, v, form.mode)) {
+      setTotalTouched(false);
+    }
+    applyCurrency(v);
   }
 
   /**
@@ -522,10 +717,23 @@ export function BookingFormDialog({
   }
 
   function onSelectUnit(unitId: string) {
-    set("unit_id", unitId);
+    // La renta mensual se re-sincroniza en el mismo updater que cambia la
+    // unidad (y de nuevo en applyCurrency/setMode si cambian): con la unidad ya
+    // en mensual, una renta vacía o de la unidad anterior pasa a ser la de
+    // esta, o se vacía si esta no tiene precio mensual. La tipeada queda.
     const u = units.find((x) => x.id === unitId);
+    // Moneda y modo con los que queda la reserva después de este mismo evento
+    // (abajo se sugieren desde la unidad).
+    const monedaFinal = u?.base_price_currency && !isEdit ? u.base_price_currency : form.currency;
+    const modoFinal =
+      u && !isEdit && u.default_mode && u.default_mode !== "mixto" ? u.default_mode : form.mode;
+    if (entraRentaDeLista(unitId, monedaFinal, modoFinal)) setTotalTouched(false);
+    // Si la unidad cambia el modo, el pase a mensual del switch que guardó el
+    // snapshot ya no es el último: no se restaura.
+    if (modoFinal !== form.mode) temporarioAntesDeMensualRef.current = null;
+    setForm((f) => withUnitRent({ ...f, unit_id: unitId }));
     if (!u) return;
-    if (u.base_price_currency && !isEdit) setCurrency(u.base_price_currency);
+    if (u.base_price_currency && !isEdit) applyCurrency(u.base_price_currency);
     // La limpieza de la unidad entra al total vía el auto-cálculo (unit_id
     // está en autoKey y los dos set() se baten en el mismo render), así que
     // elegir unidad ya deja Total = precio × noches + limpieza.
@@ -636,6 +844,14 @@ export function BookingFormDialog({
     selectedUnit && unitVocation !== "mixto" && unitVocation !== form.mode
       ? `La unidad ${selectedUnit.code} tiene vocación ${unitVocation === "temporario" ? "temporaria" : "mensual"}. Igual podés cargar la reserva, pero confirmá que es lo que querés.`
       : null;
+
+  // ─── Renta mensual contra el precio de lista de la unidad ───
+  // La pista describe el VALOR (¿es el de lista?), no el origen: el origen sólo
+  // decide si un cambio de unidad/moneda/modo la puede reemplazar.
+  const listRent = form.mode === "mensual" ? unitListRent(form.unit_id, form.currency) : null;
+  const rentParsed = parseMoneyInput(form.monthly_rent);
+  const rentHint: "unit" | "list" | null =
+    listRent === null ? null : rentParsed === listRent ? "unit" : "list";
 
   // Filtrar cuentas por moneda elegida
   const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
@@ -805,7 +1021,7 @@ export function BookingFormDialog({
 
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           {/* Modo de estadía: switch tipo segmented control en top de jerarquía */}
-          <ModeSwitch mode={form.mode} onChange={setMode} disabled={isEdit && booking?.status === "check_out"} />
+          <ModeSwitch mode={form.mode} onChange={onModeChange} disabled={isEdit && booking?.status === "check_out"} />
 
           {/* Unit */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -993,11 +1209,50 @@ export function BookingFormDialog({
                     onFocus={(e) => {
                       if (parseMoneyInput(e.target.value) === 0) set("monthly_rent", "");
                     }}
-                    onChange={(e) => set("monthly_rent", e.target.value)}
-                    placeholder="Requerido en mensual"
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setForm((f) => ({ ...f, monthly_rent: v, monthly_rent_source: "user" }));
+                    }}
+                    placeholder={
+                      listRent !== null
+                        ? `Lista ${formatMoney(listRent, form.currency)}`
+                        : "Requerido en mensual"
+                    }
                     required
                     aria-required="true"
+                    aria-describedby={rentHint ? "monthly_rent_hint" : undefined}
                   />
+                  {rentHint === "unit" && (
+                    <p
+                      id="monthly_rent_hint"
+                      className="text-[10px] leading-tight text-muted-foreground"
+                    >
+                      Precio mensual de la unidad
+                    </p>
+                  )}
+                  {rentHint === "list" && listRent !== null && (
+                    <button
+                      type="button"
+                      id="monthly_rent_hint"
+                      onClick={applyListRent}
+                      aria-label={`Usar el precio de lista de la unidad: ${formatMoney(listRent, form.currency)}`}
+                      className="block rounded-sm py-0.5 text-left text-[10px] leading-tight text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {rentParsed ? (
+                        <>
+                          Lista {formatMoney(listRent, form.currency)} ·{" "}
+                          <span className="font-medium text-violet-700 underline underline-offset-2 dark:text-violet-300">
+                            usar
+                          </span>
+                        </>
+                      ) : (
+                        // Vacía: el precio ya lo muestra el placeholder.
+                        <span className="font-medium text-violet-700 underline underline-offset-2 dark:text-violet-300">
+                          Usar precio de lista
+                        </span>
+                      )}
+                    </button>
+                  )}
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="monthly_expenses">Expensas / mes</Label>
@@ -1071,7 +1326,7 @@ export function BookingFormDialog({
                     })()}
                   </div>
                   <p className="text-[10px] text-violet-700/80 dark:text-violet-300/80">
-                    {parseMoneyInput(form.monthly_rent) ?? 0 > 0
+                    {(parseMoneyInput(form.monthly_rent) ?? 0) > 0
                       ? `Renta + expensas × meses ocupados`
                       : "Cargá la renta para ver el total"}
                   </p>
@@ -1208,23 +1463,41 @@ export function BookingFormDialog({
                       }}
                       onChange={(e) => {
                         const v = e.target.value;
-                        setTotalTouched(true);
+                        // Total borrado cuando la renta es la de lista (se había
+                        // tipeado un Total antes de las fechas): la renta vuelve
+                        // a ser de lista y el total a salir de ella.
+                        const vuelveALaLista =
+                          !((parseMoneyInput(v) ?? 0) > 0) &&
+                          form.monthly_rent_source === "total" &&
+                          parseMoneyInput(form.monthly_rent) ===
+                            unitListRent(form.unit_id, form.currency);
+                        setTotalTouched(!vuelveALaLista);
                         setForm((f) => {
                           // Auto-derivar Renta mensual desde el Total si el
                           // usuario todavía no cargó renta — evita el bug de
                           // submit en mensual sin renta cuando el flujo
                           // natural fue cargar Total directo.
+                          // Y seguir derivándola mientras se tipea: con sólo
+                          // "renta vacía" el primer dígito fijaba la renta y
+                          // los siguientes ya no la movían (tipear 1415700
+                          // guardaba renta 1 — BSAS1, renta_inconsistente).
                           const totalParsed = parseMoneyInput(v);
                           const currentRent = parseMoneyInput(f.monthly_rent);
                           const nightsCount = nightsBetween(
                             f.check_in_date,
                             f.check_out_date,
                           );
+                          // La renta de lista también sigue al Total: es un
+                          // default, y el Total tipeado es lo negociado (si no,
+                          // quedaba renta de lista + total negociado, un par que
+                          // no cierra). "Lista $X · usar" la devuelve.
                           if (
                             totalParsed !== null &&
                             totalParsed > 0 &&
                             nightsCount > 0 &&
-                            !currentRent
+                            (!currentRent ||
+                              f.monthly_rent_source === "total" ||
+                              f.monthly_rent_source === "unit")
                           ) {
                             const computedRent =
                               Math.round((totalParsed * 30) / nightsCount * 100) / 100;
@@ -1232,7 +1505,31 @@ export function BookingFormDialog({
                               ...f,
                               total_amount: v,
                               monthly_rent: formatMoneyValue(computedRent),
+                              monthly_rent_source: "total",
                             };
+                          }
+                          // Sin fechas todavía no hay renta que derivar, pero el
+                          // Total tipeado ya manda sobre la de lista: queda como
+                          // "total" y se re-deriva cuando lleguen las fechas.
+                          if (
+                            totalParsed !== null &&
+                            totalParsed > 0 &&
+                            nightsCount === 0 &&
+                            f.monthly_rent_source === "unit"
+                          ) {
+                            return { ...f, total_amount: v, monthly_rent_source: "total" };
+                          }
+                          // Total borrado: la renta que salía de él se va con
+                          // él. Si no, borrar con backspace dejaba la renta del
+                          // primer dígito ("1") y se guardaba renta 1.
+                          if (
+                            (totalParsed === null || totalParsed <= 0) &&
+                            f.monthly_rent_source === "total"
+                          ) {
+                            if (vuelveALaLista) {
+                              return { ...f, total_amount: v, monthly_rent_source: "unit" };
+                            }
+                            return { ...f, total_amount: v, monthly_rent: "", monthly_rent_source: null };
                           }
                           return { ...f, total_amount: v };
                         });

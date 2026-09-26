@@ -36,6 +36,7 @@ import type {
   SettlementAuditEntry,
 } from "@/lib/types/database";
 import type { StatementInput } from "@/lib/settlements/statement-model";
+import { getOwnerScope, ownerFilter, scopeFilter } from "@/lib/auth/owner-scope";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -477,6 +478,11 @@ async function buildSettlementLines(opts: {
         commission_origin: commissionResolved.origin,
         channel_commission_pct: econ.channelPct > 0 ? econ.channelPct : null,
         commission_base: commissionBase,
+        // Huella de la reserva al armar la fila: si después la reserva cambia
+        // (total, limpieza), la liquidación lo detecta aunque la fila se haya
+        // editado a mano — ver listSettlementBookingDrift.
+        booking_total: Number(b.total_amount ?? 0),
+        booking_cleaning_fee: Number(b.cleaning_fee ?? 0),
       },
     });
     // Lo que se lleva la plataforma (Booking, Airbnb…). Sólo si hay %: así
@@ -1119,6 +1125,15 @@ export async function previewSettlement(
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "view")) {
+    return {
+      ok: false,
+      reason: "forbidden",
+      message: "No tenés permisos para ver liquidaciones",
+    };
+  }
+  // Un propietario sólo puede previsualizar lo suyo.
+  const ownerScope = await getOwnerScope();
+  if (ownerScope && ownerScope.ownerId !== ownerId) {
     return {
       ok: false,
       reason: "forbidden",
@@ -2277,6 +2292,273 @@ export async function updateSettlementBookingRow(
   });
 }
 
+/**
+ * "Traer datos de la reserva": rearma la fila de UNA reserva con lo que dice
+ * hoy el calendario (bruto, comisión, canal, limpieza), con las mismas reglas
+ * que la generación.
+ *
+ * Existe porque "Regenerar" respeta las filas editadas a mano — a propósito:
+ * ahí vive la tarifa acordada con el propietario —, y entonces una fila editada
+ * (aunque sólo se hayan tocado los gastos) ya no seguía los cambios de su
+ * reserva. Habitana 24/09/2026: Beatriz Soria quedó en $72.500 con la reserva
+ * en $120.000.
+ *
+ * Los "Gastos" cargados a mano en la fila se conservan (reemplazan a la
+ * limpieza automática, como en el editor). Si no quedan, la fila vuelve a ser
+ * automática y "Regenerar" la sigue actualizando sola.
+ */
+export async function refreshSettlementBookingRow(input: {
+  settlement_id: string;
+  ref_id: string;
+  impact_caja?: boolean;
+}): Promise<
+  | { ok: true; delta: number; adjustmentId: string | null; visualOnly: boolean; keptExpenses: boolean }
+  | { ok: false; error: string }
+> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) {
+    return { ok: false, error: "No tenés permisos para editar liquidaciones" };
+  }
+  const v = z
+    .object({
+      settlement_id: z.string().uuid(),
+      ref_id: z.string().uuid(),
+      impact_caja: z.boolean().optional(),
+    })
+    .safeParse(input);
+  if (!v.success) return { ok: false, error: "Datos inválidos" };
+  const admin = createAdminClient();
+
+  let before: EditableSettlement;
+  try {
+    before = await loadEditableSettlement(admin, organization.id, v.data.settlement_id);
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+
+  const { data: groupRaw } = await admin
+    .from("settlement_lines")
+    .select("*")
+    .eq("settlement_id", before.id)
+    .eq("ref_type", "booking")
+    .eq("ref_id", v.data.ref_id)
+    .order("display_order");
+  const group = (groupRaw ?? []) as SettlementLine[];
+  if (group.length === 0) {
+    return { ok: false, error: "Esa reserva no está en la liquidación" };
+  }
+  const { data: booking } = await admin
+    .from("bookings")
+    .select("id")
+    .eq("id", v.data.ref_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!booking) {
+    return {
+      ok: false,
+      error: "Esta fila se cargó a mano: no tiene una reserva en el calendario de donde traer datos.",
+    };
+  }
+
+  const { lines } = await buildSettlementLines({
+    admin,
+    organizationId: organization.id,
+    ownerId: before.owner_id,
+    year: before.period_year,
+    month: before.period_month,
+    commissionBase: commissionBaseOf(organization),
+    dryRun: true,
+  });
+  const fresh = lines.filter(
+    (l) => l.ref_type === "booking" && l.ref_id === v.data.ref_id,
+  );
+  if (fresh.length === 0) {
+    return {
+      ok: false,
+      error:
+        "Esta reserva ya no entra en esta liquidación: cambió de fechas o de unidad, o se canceló. Si no corresponde, quitala de la liquidación.",
+    };
+  }
+
+  const keptExpenses = group.filter(
+    (l) => l.is_manual && l.line_type === "expenses_fraction",
+  );
+  const keepIds = new Set(keptExpenses.map((l) => l.id));
+  const toInsert = fresh.filter(
+    (l) => !(keptExpenses.length > 0 && l.line_type === "cleaning_charge"),
+  );
+
+  const sumOf = (ls: Array<{ line_type: string; amount: number | string }>, types: string[]) =>
+    round2(ls.filter((l) => types.includes(l.line_type)).reduce((a, l) => a + Number(l.amount), 0));
+  const REVENUE = ["booking_revenue", "monthly_rent_fraction"];
+  const oldGross = sumOf(group, REVENUE);
+  const oldCommission = sumOf(group, ["commission"]);
+  const oldChannel = sumOf(group, ["channel_commission"]);
+  const oldExpenses = round2(
+    group
+      .filter((l) => l.sign === "-" && !["commission", "channel_commission"].includes(l.line_type))
+      .reduce((a, l) => a + Number(l.amount), 0),
+  );
+  const newGross = sumOf(toInsert, REVENUE);
+  const newCommission = sumOf(toInsert, ["commission"]);
+  const newChannel = sumOf(toInsert, ["channel_commission"]);
+  const newExpenses = round2(
+    sumOf(toInsert, ["cleaning_charge", "expenses_fraction"]) +
+      keptExpenses.reduce((a, l) => a + Number(l.amount), 0),
+  );
+
+  const toDelete = group.filter((l) => !keepIds.has(l.id)).map((l) => l.id);
+  if (toDelete.length > 0) {
+    const { error } = await admin.from("settlement_lines").delete().in("id", toDelete);
+    if (error) return { ok: false, error: error.message };
+  }
+
+  const now = new Date().toISOString();
+  const baseOrder = Math.min(...group.map((l) => Number(l.display_order ?? 0)));
+  // Mismas claves en todos los objetos: PostgREST manda NULL (no DEFAULT) a
+  // las columnas que falten en alguno de un insert en lote.
+  const rows = toInsert.map((l, i) => ({
+    settlement_id: before.id,
+    line_type: l.line_type,
+    ref_type: l.ref_type,
+    ref_id: l.ref_id,
+    unit_id: l.unit_id,
+    description: l.description,
+    amount: l.amount,
+    sign: l.sign,
+    currency: l.currency,
+    meta: l.meta,
+    // Con gastos manuales la fila sigue siendo "editada": si volviera a ser
+    // automática, Regenerar le sumaría también la limpieza.
+    is_manual: keptExpenses.length > 0,
+    display_order: baseOrder + i,
+    created_by: session.userId,
+    updated_by: session.userId,
+    updated_at: now,
+  }));
+  const { error: insErr } = await admin.from("settlement_lines").insert(rows);
+  if (insErr) return { ok: false, error: insErr.message };
+
+  const guest =
+    (fresh.find((l) => REVENUE.includes(l.line_type))?.meta?.guest_name as string | null | undefined) ??
+    null;
+  try {
+    const res = await reconcileAfterEdit({
+      admin,
+      before,
+      userId: session.userId,
+      actorName: actorNameOf(session),
+      action: "row_update",
+      changes: {
+        reserva: guest ?? "Reserva",
+        origen: "Traída de la reserva",
+        bruto: { from: oldGross, to: newGross },
+        comision: { from: oldCommission, to: newCommission },
+        ...(oldChannel !== newChannel
+          ? { comision_canal: { from: oldChannel, to: newChannel } }
+          : {}),
+        gastos: { from: oldExpenses, to: newExpenses },
+      },
+      reason: `${guest ?? "Reserva"}: datos traídos de la reserva`,
+      impactCaja: v.data.impact_caja,
+    });
+    return {
+      ok: true,
+      delta: res.delta,
+      adjustmentId: res.adjustmentId,
+      visualOnly: res.visualOnly,
+      keptExpenses: keptExpenses.length > 0,
+    };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * Filas de la liquidación cuya reserva cambió después de armarlas. Compara la
+ * huella guardada en el meta (`booking_total`, `booking_cleaning_fee`) con la
+ * reserva de hoy — así una fila editada a mano a la tarifa del propietario NO
+ * cuenta como diferencia, pero un cambio posterior de la reserva sí. Las filas
+ * automáticas además comparan fechas y canal. Filas viejas sin huella: sólo
+ * cancelación y (si son automáticas) fechas/canal.
+ */
+export async function listSettlementBookingDrift(
+  settlementId: string,
+): Promise<Array<{ ref_id: string; reasons: string[] }>> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "update")) return [];
+  const admin = createAdminClient();
+
+  const { data: s } = await admin
+    .from("owner_settlements")
+    .select("id, status")
+    .eq("id", settlementId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!s || !EDITABLE_STATUSES.includes(s.status as SettlementStatus)) return [];
+
+  const { data: linesRaw } = await admin
+    .from("settlement_lines")
+    .select("ref_id, line_type, is_manual, meta, currency")
+    .eq("settlement_id", settlementId)
+    .eq("ref_type", "booking")
+    .eq("line_type", "booking_revenue");
+  const revenue = (linesRaw ?? []) as Array<
+    Pick<SettlementLine, "ref_id" | "line_type" | "is_manual" | "meta" | "currency">
+  >;
+  const refIds = [...new Set(revenue.map((l) => l.ref_id).filter((x): x is string => !!x))];
+  if (refIds.length === 0) return [];
+
+  const { data: bookings } = await admin
+    .from("bookings")
+    .select("id, status, total_amount, cleaning_fee, check_in_date, check_out_date, source, currency")
+    .eq("organization_id", organization.id)
+    .in("id", refIds);
+  const byId = new Map((bookings ?? []).map((b) => [b.id as string, b]));
+
+  const out: Array<{ ref_id: string; reasons: string[] }> = [];
+  for (const l of revenue) {
+    if (!l.ref_id) continue;
+    const b = byId.get(l.ref_id);
+    // Sin reserva detrás = fila cargada a mano (ref_id sintético): no hay con qué comparar.
+    if (!b) continue;
+    const m = l.meta ?? {};
+    if (m.mode === "mensual") continue;
+    const cur = (b.currency as string | null) ?? l.currency;
+    const reasons: string[] = [];
+    if (b.status === "cancelada" || b.status === "no_show") {
+      reasons.push("La reserva está cancelada");
+    }
+    if (m.booking_total != null && round2(Number(b.total_amount ?? 0)) !== round2(Number(m.booking_total))) {
+      reasons.push(
+        `Total de la reserva: ${formatMoney(Number(m.booking_total), cur)} → ${formatMoney(Number(b.total_amount ?? 0), cur)}`,
+      );
+    }
+    if (
+      m.booking_cleaning_fee != null &&
+      round2(Number(b.cleaning_fee ?? 0)) !== round2(Number(m.booking_cleaning_fee))
+    ) {
+      reasons.push(
+        `Limpieza: ${formatMoney(Number(m.booking_cleaning_fee), cur)} → ${formatMoney(Number(b.cleaning_fee ?? 0), cur)}`,
+      );
+    }
+    if (!l.is_manual) {
+      if (m.check_in && m.check_out && (m.check_in !== b.check_in_date || m.check_out !== b.check_out_date)) {
+        reasons.push(`Fechas: ${b.check_in_date} → ${b.check_out_date}`);
+      }
+      if (m.source && b.source && m.source !== b.source) {
+        const label =
+          BOOKING_SOURCE_META[b.source as keyof typeof BOOKING_SOURCE_META]?.label ?? b.source;
+        reasons.push(`Canal: ${label}`);
+      }
+    }
+    if (reasons.length > 0) out.push({ ref_id: l.ref_id, reasons });
+  }
+  return out;
+}
+
 const addBookingRowSchema = z.object({
   settlement_id: z.string().uuid(),
   unit_id: z.string().uuid(),
@@ -3419,6 +3701,7 @@ export async function listSettlementAudit(
 ): Promise<SettlementAuditEntry[]> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "view")) {
     throw new Error("No tenés permisos para ver liquidaciones");
   }
@@ -3429,6 +3712,7 @@ export async function listSettlementAudit(
     .select("id")
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .maybeSingle();
   if (!s) return [];
   const { data, error } = await admin
@@ -3460,6 +3744,7 @@ export async function listSettlements(filters?: {
   includeAnuladas?: boolean;
 }) {
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "view")) {
     throw new Error("No tenés permisos para ver liquidaciones");
   }
@@ -3467,7 +3752,8 @@ export async function listSettlements(filters?: {
   let q = admin
     .from("owner_settlements")
     .select(`*, owner:owners(id, full_name, email, preferred_currency)`)
-    .eq("organization_id", organization.id);
+    .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope));
   if (filters?.ownerId) q = q.eq("owner_id", filters.ownerId);
   if (filters?.year) q = q.eq("period_year", filters.year);
   if (filters?.month) q = q.eq("period_month", filters.month);
@@ -3481,6 +3767,7 @@ export async function listSettlements(filters?: {
 
 export async function getSettlement(id: string) {
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "view")) {
     throw new Error("No tenés permisos para ver liquidaciones");
   }
@@ -3492,6 +3779,7 @@ export async function getSettlement(id: string) {
     )
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;
@@ -3507,6 +3795,9 @@ export async function listOwnerUnits(
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "view")) return [];
   const oid = z.string().uuid().parse(ownerId);
+  // Un propietario sólo puede pedir las suyas.
+  const ownerScope = await getOwnerScope();
+  if (ownerScope && ownerScope.ownerId !== oid) return [];
   const admin = createAdminClient();
   const { data } = await admin
     .from("unit_owners")
@@ -3531,6 +3822,7 @@ export async function listSettlementSiblings(
   Array<{ id: string; currency: string; status: string; net_payable: number }>
 > {
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "view")) return [];
   const id = z.string().uuid().parse(settlementId);
   const admin = createAdminClient();
@@ -3540,6 +3832,7 @@ export async function listSettlementSiblings(
     .select("owner_id, period_year, period_month")
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .maybeSingle();
   if (!base) return [];
 
@@ -3551,6 +3844,7 @@ export async function listSettlementSiblings(
     .from("owner_settlements")
     .select("id, currency, status, net_payable")
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .eq("owner_id", base.owner_id)
     .eq("period_year", base.period_year)
     .eq("period_month", base.period_month)
@@ -3585,6 +3879,7 @@ export async function listSettlementMergedSiblings(
   }>
 > {
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "view")) return [];
   const id = z.string().uuid().parse(settlementId);
   const admin = createAdminClient();
@@ -3594,6 +3889,7 @@ export async function listSettlementMergedSiblings(
     .select("owner_id, period_year, period_month")
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .maybeSingle();
   if (!base) return [];
 
@@ -3601,6 +3897,7 @@ export async function listSettlementMergedSiblings(
     .from("owner_settlements")
     .select("id, currency, net_payable, generated_at, notes")
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .eq("owner_id", base.owner_id)
     .eq("period_year", base.period_year)
     .eq("period_month", base.period_month)
@@ -3634,6 +3931,7 @@ export async function previewRegenerateMergeImpact(
   }>
 > {
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "create")) return [];
   const id = z.string().uuid().parse(settlementId);
   const admin = createAdminClient();
@@ -3643,6 +3941,7 @@ export async function previewRegenerateMergeImpact(
     .select("owner_id, period_year, period_month")
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .maybeSingle();
   if (!base) return [];
 
@@ -3651,6 +3950,7 @@ export async function previewRegenerateMergeImpact(
     .from("owner_settlements")
     .select("id, currency, status, net_payable")
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope))
     .eq("owner_id", base.owner_id)
     .eq("period_year", base.period_year)
     .eq("period_month", base.period_month)
@@ -3707,6 +4007,7 @@ export async function getSettlementByToken(token: string) {
 export async function listOwnersForPeriod(year: number, month: number) {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "settlements", "view")) {
     throw new Error("No tenés permisos para ver liquidaciones");
   }
@@ -3718,6 +4019,7 @@ export async function listOwnersForPeriod(year: number, month: number) {
         .from("owners")
         .select("id, full_name, email, cbu, alias_cbu, preferred_currency")
         .eq("organization_id", organization.id)
+        .filter(...ownerFilter(ownerScope, "id"))
         .eq("active", true)
         .order("full_name"),
       admin
@@ -3726,6 +4028,7 @@ export async function listOwnersForPeriod(year: number, month: number) {
           "id, owner_id, status, net_payable, currency, generated_at, period_index, period_cycle",
         )
         .eq("organization_id", organization.id)
+        .filter(...ownerFilter(ownerScope))
         .eq("period_year", year)
         .eq("period_month", month)
         .order("currency"),
@@ -3736,7 +4039,8 @@ export async function listOwnersForPeriod(year: number, month: number) {
       admin
         .from("units")
         .select("unit_owners(owner_id)")
-        .eq("organization_id", organization.id),
+        .eq("organization_id", organization.id)
+        .filter(...scopeFilter(ownerScope, "id")),
     ]);
 
   const unitCount = new Map<string, number>();

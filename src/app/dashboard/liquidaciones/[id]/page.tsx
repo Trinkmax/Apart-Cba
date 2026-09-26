@@ -9,6 +9,7 @@ import {
   listOwnerUnits,
   suggestSettlementPeriodCycle,
   getSettlementUndoState,
+  listSettlementBookingDrift,
 } from "@/lib/actions/settlements";
 import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
@@ -59,6 +60,7 @@ export default async function SettlementDetailPage({
     ownerUnits,
     periodSuggestion,
     undoState,
+    drift,
   ] = await Promise.all([
     getOrganizationBranding(),
     listAccounts(),
@@ -71,6 +73,8 @@ export default async function SettlementDetailPage({
       ? suggestSettlementPeriodCycle(id)
       : Promise.resolve(null),
     getSettlementUndoState(id),
+    // Reservas que cambiaron después de armar su fila (vacío si no puede editar).
+    listSettlementBookingDrift(id),
   ]);
 
   const canCreate = can(role, "settlements", "create");
@@ -287,6 +291,7 @@ export default async function SettlementDetailPage({
           audit={audit}
           periodSuggestion={periodSuggestion}
           undoState={undoState}
+          drift={Object.fromEntries(drift.map((d) => [d.ref_id, d.reasons]))}
         />
       ) : (
         <SettlementStatement model={model} />

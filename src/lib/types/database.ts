@@ -235,6 +235,8 @@ export interface OrganizationMember {
   invited_at: string | null;
   joined_at: string | null;
   active: boolean;
+  /** Sólo role = owner_view: el propietario que representa (migración 064). Sin él no ve nada. */
+  owner_id?: string | null;
 }
 
 export interface RolePermission {
@@ -306,7 +308,14 @@ export interface Unit {
   max_guests: number | null;
   size_m2: number | null;
   base_price_currency: string | null;
+  /** Precio por noche. */
   base_price: number | null;
+  /**
+   * Precio de un mes completo, en la misma moneda que base_price. Sólo para
+   * default_mode = 'mixto' (NULL en las demás). Leelo con `unitMonthlyPrice()`
+   * de `@/lib/units/pricing`. Migración 063.
+   */
+  monthly_price: number | null;
   cleaning_fee: number | null;
   default_commission_pct: number | null;
   default_mode: UnitDefaultMode;
@@ -807,6 +816,13 @@ export interface SettlementLineMeta {
   prorate_days?: number | null;
   /** Días totales del mes (prorrateo mensual). */
   prorate_of?: number | null;
+  /**
+   * Huella de la reserva cuando se armó la fila (total y limpieza tal como
+   * estaban en `bookings`). Sobrevive a la edición manual: si la reserva cambia
+   * después, la liquidación avisa "la reserva cambió". Filas viejas no la tienen.
+   */
+  booking_total?: number | null;
+  booking_cleaning_fee?: number | null;
 }
 
 export interface SettlementLine {

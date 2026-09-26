@@ -8,6 +8,7 @@ import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import type { CashAccount, CashMovement } from "@/lib/types/database";
+import { getOwnerScope } from "@/lib/auth/owner-scope";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Tipos públicos del módulo de caja
@@ -161,6 +162,8 @@ export type MovementInput = z.infer<typeof movementSchema>;
 
 export async function listAccounts(): Promise<CashAccount[]> {
   const { organization } = await getCurrentOrg();
+  // Las cuentas de Caja son de la administración: un propietario no las ve.
+  if (await getOwnerScope()) return [];
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("cash_accounts")

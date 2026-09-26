@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import type { Owner } from "@/lib/types/database";
+import { getOwnerScope, ownerFilter } from "@/lib/auth/owner-scope";
 
 export type OwnerListItem = Owner & {
   unit_owners: { unit: { id: string; code: string; name: string } }[];
@@ -30,11 +31,13 @@ export type OwnerInput = z.infer<typeof ownerSchema>;
 
 export async function listOwners(): Promise<OwnerListItem[]> {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("owners")
     .select("*, unit_owners(unit:units(id, code, name))")
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope, "id"))
     .order("full_name");
   if (error) throw new Error(error.message);
   return (data as OwnerListItem[]) ?? [];
@@ -42,12 +45,14 @@ export async function listOwners(): Promise<OwnerListItem[]> {
 
 export async function getOwner(id: string): Promise<Owner | null> {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("owners")
     .select("*")
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope, "id"))
     .maybeSingle();
   if (error) throw new Error(error.message);
   return (data as Owner) ?? null;
@@ -55,12 +60,14 @@ export async function getOwner(id: string): Promise<Owner | null> {
 
 export async function getOwnerWithUnits(id: string) {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("owners")
     .select(`*, unit_owners(id, ownership_pct, is_primary, commission_pct_override, unit:units(id, code, name, status))`)
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownerFilter(ownerScope, "id"))
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;

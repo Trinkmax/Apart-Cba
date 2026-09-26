@@ -62,14 +62,19 @@ async function releaseUnitIfNoActiveCleaning(
 
   // ¿Hay alguien adentro? El estado describe el AHORA: si otra reserva está en
   // check_in, la unidad quedó ocupada, no libre (misma regla que el trigger de
-  // la migración 061).
+  // la migración 061). Sólo cuenta una estadía que cubre HOY: un check_in
+  // viejo que nadie cerró (Habitana no marca salidas) dejaba la unidad
+  // "ocupada" para siempre — migración 065.
+  const hoy = todayYmdInTz(tz);
   const { count: conHuesped } = await admin
     .from("bookings")
     .select("id", { count: "exact", head: true })
     .eq("unit_id", unitId)
     .eq("organization_id", organizationId)
     .eq("status", "check_in")
-    .eq("is_block", false);
+    .eq("is_block", false)
+    .lte("check_in_date", hoy)
+    .gt("check_out_date", hoy);
 
   await admin
     .from("units")

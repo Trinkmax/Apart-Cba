@@ -12,6 +12,7 @@ import {
 import type { Channel, ChannelPromotionSource } from "@/lib/channels/types";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
+import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
 
 /**
  * Solicitudes de canal — el estado intermedio entre "la OTA nos avisó" y "hay
@@ -104,6 +105,7 @@ export async function listChannelRequestsInRange(
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "bookings", "view")) return [];
+  const ownerScope = await getOwnerScope();
 
   const admin = createAdminClient();
   const { data, error } = await admin
@@ -112,6 +114,7 @@ export async function listChannelRequestsInRange(
       "id, channel, unit_id, check_in, check_out, confirmation_code, guest, created_at, expired_at, external_status, units:unit_id(id, code, name)",
     )
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .eq("external_status", "pending")
     .not("unit_id", "is", null)
     .lt("check_in", toIso)
@@ -401,12 +404,14 @@ export async function listChannelRequestsForOverlapCheck(): Promise<
     await requireSession();
     const { organization, role } = await getCurrentOrg();
     if (!can(role, "bookings", "view")) return [];
+    const ownerScope = await getOwnerScope();
 
     const admin = createAdminClient();
     const { data } = await admin
       .from("channel_reservations")
       .select("id, unit_id, check_in, check_out, channel, confirmation_code")
       .eq("organization_id", organization.id)
+      .filter(...scopeFilter(ownerScope))
       .eq("external_status", "pending")
       .not("unit_id", "is", null)
       .gte("check_out", todayYmdInTz())

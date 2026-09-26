@@ -73,6 +73,9 @@ export default async function MobileLayout({ children }: { children: React.React
   const session = await getSession();
   if (!session) redirect("/login");
   const { organization, role } = await getCurrentOrg();
+  // La versión móvil es de operación (limpieza, mantenimiento, parte diario):
+  // el propietario no tiene nada que hacer acá y sus pantallas no están acotadas.
+  if (role === "owner_view") redirect("/dashboard");
 
   const visibleItems = MOBILE_NAV.filter((it) => !it.roles || it.roles.includes(role));
 

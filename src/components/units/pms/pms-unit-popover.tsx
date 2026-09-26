@@ -18,6 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, getInitials } from "@/lib/format";
+import { unitMonthlyPrice } from "@/lib/units/pricing";
 import type { UnitWithRelations } from "@/lib/types/database";
 
 interface PmsUnitPopoverProps {
@@ -27,7 +28,7 @@ interface PmsUnitPopoverProps {
   nightsTotal: number;
   revenue: number;
   currency: string;
-  /** Si es false, esconde "Ingresos" y la tarifa por noche. */
+  /** Si es false, esconde "Ingresos" y las tarifas (noche y, en mixtas, mes). */
   canViewMoney?: boolean;
 }
 
@@ -41,6 +42,8 @@ export function PmsUnitPopoverContent({
   canViewMoney = true,
 }: PmsUnitPopoverProps) {
   const meta = UNIT_STATUS_META[unit.status];
+  // Precio por mes: sólo mixtas (migración 063), misma moneda que la noche.
+  const monthlyPrice = unitMonthlyPrice(unit);
 
   return (
     <div className="w-[340px] max-w-[92vw]">
@@ -94,6 +97,12 @@ export function PmsUnitPopoverContent({
           <SpecRow
             icon={<DollarSign size={11} />}
             label={`${formatMoney(Number(unit.base_price), unit.base_price_currency ?? "ARS")} /noche`}
+          />
+        )}
+        {canViewMoney && monthlyPrice !== null && (
+          <SpecRow
+            icon={<DollarSign size={11} />}
+            label={`${formatMoney(monthlyPrice, unit.base_price_currency ?? "ARS")} /mes`}
           />
         )}
       </div>

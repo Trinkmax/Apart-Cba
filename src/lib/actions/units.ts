@@ -17,6 +17,7 @@ import type {
 import { BOOKING_SOURCE_META, TICKET_PRIORITY_META } from "@/lib/constants";
 import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
+import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
 
 const unitSchema = z.object({
   code: z.string().min(1, "Código requerido"),
@@ -27,17 +28,33 @@ const unitSchema = z.object({
   apartment: z.string().optional().nullable(),
   tower: z.string().optional().nullable(),
   internal_extra: z.string().optional().nullable(),
-  bedrooms: z.coerce.number().int().min(0).optional().nullable(),
-  bathrooms: z.coerce.number().int().min(0).optional().nullable(),
-  max_guests: z.coerce.number().int().min(1).optional().nullable(),
-  size_m2: z.coerce.number().min(0).optional().nullable(),
-  base_price: z.coerce.number().min(0).optional().nullable(),
+  // Los mensajes van en castellano: `validarUnidad` los devuelve tal cual al
+  // cartel del formulario (antes el error se lanzaba y nadie lo leía).
+  bedrooms: z.coerce.number().int("Dormitorios tiene que ser un número entero.").min(0, "Dormitorios no puede ser negativo.").optional().nullable(),
+  bathrooms: z.coerce.number().int("Baños tiene que ser un número entero.").min(0, "Baños no puede ser negativo.").optional().nullable(),
+  max_guests: z.coerce.number().int("La capacidad tiene que ser un número entero.").min(1, "La capacidad tiene que ser de al menos 1 persona.").optional().nullable(),
+  size_m2: z.coerce.number().min(0, "La superficie no puede ser negativa.").optional().nullable(),
+  base_price: z.coerce.number().min(0, "El precio por noche no puede ser negativo.").optional().nullable(),
   base_price_currency: z.string().default("ARS"),
-  cleaning_fee: z.coerce.number().min(0).optional().nullable(),
+  // Precio de un mes completo (migración 063). Sólo se guarda en unidades
+  // mixtas: `conPrecioMensual` lo deja en NULL para cualquier otra vocación.
+  // min(0.01) y no positive(): numeric(14,2) redondea 0,004 a 0,00 y el CHECK
+  // units_monthly_price_positive lo rechazaría con un error sin campo.
+  monthly_price: z.coerce
+    .number()
+    .min(0.01, "El precio por mes tiene que ser mayor a 0. Si no lo querés cargar, dejalo vacío.")
+    .max(999_999_999_999.99, "Ese precio por mes es demasiado grande.")
+    .optional()
+    .nullable(),
+  cleaning_fee: z.coerce.number().min(0, "El fee de limpieza no puede ser negativo.").optional().nullable(),
   // Sin default acá: si el form no manda nada, `createUnit` hereda el de la org
   // (Configuración → Organización). Un default fijo de 20 acá se comía siempre
   // esa preferencia.
-  default_commission_pct: z.coerce.number().min(0).max(100).optional(),
+  default_commission_pct: z.coerce
+    .number()
+    .min(0, "La comisión de administración va de 0 a 100 %.")
+    .max(100, "La comisión de administración va de 0 a 100 %.")
+    .optional(),
   default_mode: z
     .enum(["temporario", "mensual", "mixto"])
     .default("temporario"),
@@ -61,12 +78,14 @@ function logActionError(context: string, e: unknown) {
  */
 export async function listUnitsEnriched(): Promise<UnitWithRelations[]> {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
 
   const { data: units, error } = await admin
     .from("units")
     .select("*")
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope, "id"))
     .eq("active", true)
     .order("position")
     .order("code");
@@ -152,11 +171,13 @@ export type UnitOption = Pick<Unit, "id" | "code" | "name" | "marketplace_title"
 export async function listUnitRefs(): Promise<UnitOption[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("units")
     .select("id, code, name, marketplace_title")
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope, "id"))
     .eq("active", true)
     .order("code");
   if (error) throw new Error(error.message);
@@ -174,6 +195,7 @@ export type UnitForBookingForm = Pick<
   | "default_commission_pct"
   | "base_price"
   | "base_price_currency"
+  | "monthly_price"
   | "cleaning_fee"
   | "default_mode"
 > & {
@@ -194,13 +216,15 @@ export type UnitForBookingForm = Pick<
 export async function listUnitsForBookingForm(): Promise<UnitForBookingForm[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("units")
     .select(
-      "id, code, name, default_commission_pct, base_price, base_price_currency, cleaning_fee, default_mode, unit_owners(owner_id, ownership_pct, is_primary, commission_pct_override)",
+      "id, code, name, default_commission_pct, base_price, base_price_currency, monthly_price, cleaning_fee, default_mode, unit_owners(owner_id, ownership_pct, is_primary, commission_pct_override)",
     )
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope, "id"))
     .eq("active", true)
     .order("position")
     .order("code");
@@ -223,12 +247,14 @@ export async function listUnitsForBookingForm(): Promise<UnitForBookingForm[]> {
 
 export async function getUnit(id: string) {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("units")
     .select(`*, unit_owners(id, ownership_pct, is_primary, commission_pct_override, owner:owners(*))`)
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope, "id"))
     .maybeSingle();
   if (error) throw new Error(error.message);
   return data;
@@ -246,16 +272,61 @@ export async function getUnit(id: string) {
  */
 export type UnitMutationResult =
   | { ok: true; unit: Unit }
-  | { ok: false; error: string; field?: "code" };
+  | { ok: false; error: string; field?: UnitFormField };
 
-/** Traduce el único choque esperable del alta: el código repetido. */
+/** Campos del formulario que pueden recibir un error del servidor en línea. */
+export type UnitFormField = "code" | "monthly_price";
+
+type ValidatedUnit = z.infer<typeof unitSchema>;
+
+/**
+ * Valida sin lanzar: un `parse` que falla es una excepción, y en producción
+ * Next.js la muestra como un cartel en inglés sin el motivo.
+ */
+function validarUnidad(
+  input: UnitInput,
+): { ok: true; data: ValidatedUnit } | { ok: false; error: string; field?: UnitFormField } {
+  const r = unitSchema.safeParse(input);
+  if (r.success) return { ok: true, data: r.data };
+  const issue = r.error.issues[0];
+  const campo = issue?.path[0];
+  return {
+    ok: false,
+    // Un dato del tipo equivocado ("abc" donde va un número) no tiene mensaje
+    // propio: el de zod está en inglés.
+    error:
+      !issue || issue.code === "invalid_type"
+        ? "Hay un dato que no es válido. Revisá el formulario."
+        : issue.message,
+    field: campo === "code" || campo === "monthly_price" ? campo : undefined,
+  };
+}
+
+/**
+ * El precio mensual es de las mixtas y de nadie más. Si la vocación cambió a
+ * temporario o mensual se borra acá, en el servidor, para que ningún lector
+ * muestre el precio de un mes de una unidad que ya no se alquila así. (Si el
+ * pedido no trae el campo, queda `undefined`: supabase-js no lo manda y lo
+ * guardado no se toca.)
+ */
+function conPrecioMensual(v: ValidatedUnit): ValidatedUnit {
+  return v.default_mode === "mixto" ? v : { ...v, monthly_price: null };
+}
+
+/** Traduce los choques esperables contra la base: código repetido y precio por mes en 0. */
 function traducirErrorDeUnidad(
   message: string,
-): { error: string; field?: "code" } | null {
+): { error: string; field?: UnitFormField } | null {
   if (message.includes("units_organization_id_code_key")) {
     return {
       error: "Ese código ya lo usa otra unidad. Elegí uno distinto.",
       field: "code",
+    };
+  }
+  if (message.includes("units_monthly_price_positive")) {
+    return {
+      error: "El precio por mes tiene que ser mayor a 0. Si no lo querés cargar, dejalo vacío.",
+      field: "monthly_price",
     };
   }
   return null;
@@ -289,7 +360,9 @@ function mensajeCodigoOcupado(otra: { name: string; active: boolean }): string {
 export async function createUnit(input: UnitInput): Promise<UnitMutationResult> {
   await requireSession();
   const { organization } = await getCurrentOrg();
-  const validated = unitSchema.parse(input);
+  const parsed = validarUnidad(input);
+  if (!parsed.ok) return parsed;
+  const validated = conPrecioMensual(parsed.data);
   const admin = createAdminClient();
 
   // El código es único por organización y la unicidad incluye a las unidades
@@ -344,7 +417,9 @@ export async function createUnit(input: UnitInput): Promise<UnitMutationResult> 
 export async function updateUnit(id: string, input: UnitInput): Promise<UnitMutationResult> {
   await requireSession();
   const { organization } = await getCurrentOrg();
-  const validated = unitSchema.parse(input);
+  const parsed = validarUnidad(input);
+  if (!parsed.ok) return parsed;
+  const validated = conPrecioMensual(parsed.data);
   const admin = createAdminClient();
 
   const ocupado = await unidadConEseCodigo(admin, organization.id, validated.code, id);
@@ -368,9 +443,23 @@ export async function updateUnit(id: string, input: UnitInput): Promise<UnitMuta
 
   revalidatePath("/dashboard/unidades");
   revalidatePath(`/dashboard/unidades/${id}`);
+  revalidatePath(`/dashboard/unidades/${id}/precios`);
+  revalidatePath(`/dashboard/unidades/${id}/marketplace`);
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
-  return { ok: true, unit: data as Unit };
+  // El formulario de reserva lee los precios de la unidad (el mensual completa
+  // la Renta de una reserva mensual).
+  revalidatePath("/dashboard/reservas", "layout"); // incluye /reservas/[id]
+  revalidatePath("/dashboard");
+  // El precio por noche también se ve en la web pública (el mensual todavía
+  // no: por ahora es sólo del panel).
+  const actualizada = data as Unit;
+  if (actualizada.marketplace_published) {
+    revalidatePath("/");
+    revalidatePath("/buscar");
+    if (actualizada.slug) revalidatePath(`/u/${actualizada.slug}`);
+  }
+  return { ok: true, unit: actualizada };
 }
 
 /** Una reserva que todavía ocupa la unidad y frena el borrado. */

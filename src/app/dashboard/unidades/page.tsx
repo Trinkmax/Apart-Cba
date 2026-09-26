@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Plus, Hotel } from "lucide-react";
 import { listUnitsEnriched } from "@/lib/actions/units";
 import { getCurrentOrg } from "@/lib/actions/org";
@@ -13,6 +14,9 @@ export default async function UnidadesPage() {
     listUnitsEnriched(),
     getCurrentOrg(),
   ]);
+  // El propietario ve sus unidades en el Calendario; esta lista (fichas,
+  // precios, fotos) es de la administración.
+  if (role === "owner_view") redirect("/dashboard/unidades/kanban");
   const canDelete = can(role, "units", "delete");
   const canCreateUnit = can(role, "units", "create");
   const canViewMoney = can(role, "payments", "view");

@@ -14,6 +14,8 @@ const inviteSchema = z.object({
   full_name: z.string().min(2),
   role: z.enum(["admin", "recepcion", "mantenimiento", "limpieza", "owner_view"]),
   phone: z.string().optional().nullable(),
+  /** Sólo rol owner_view: el propietario que representa. Sin él no ve nada. */
+  owner_id: z.string().uuid().optional().nullable(),
 });
 
 export type InviteInput = z.infer<typeof inviteSchema>;
@@ -38,6 +40,40 @@ export type MemberProfileInput = z.infer<typeof memberProfileSchema>;
 function emptyToNull(v?: string | null): string | null {
   const t = (v ?? "").trim();
   return t.length ? t : null;
+}
+
+/**
+ * Resuelve a qué propietario queda vinculado un usuario con rol owner_view.
+ * El elegido en el formulario manda (validado contra la org); si no se eligió,
+ * se busca un propietario de la org con el mismo email — y sólo si hay uno
+ * (con dos candidatos no se adivina). null = sin vincular: no ve nada.
+ */
+async function resolveOwnerLink(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  requestedOwnerId: string | null | undefined,
+  email: string | null,
+): Promise<{ ok: true; ownerId: string | null } | { ok: false; error: string }> {
+  if (requestedOwnerId) {
+    const { data } = await admin
+      .from("owners")
+      .select("id")
+      .eq("id", requestedOwnerId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!data) return { ok: false, error: "Ese propietario no es de esta organización" };
+    return { ok: true, ownerId: data.id as string };
+  }
+  const normalized = (email ?? "").trim().toLowerCase();
+  if (!normalized) return { ok: true, ownerId: null };
+  const { data } = await admin
+    .from("owners")
+    .select("id")
+    .eq("organization_id", organizationId)
+    // ilike sin comodines: `_` es común en emails y en LIKE matchea cualquier letra.
+    .ilike("email", normalized.replace(/[\\%_]/g, (c) => `\\${c}`))
+    .limit(2);
+  return { ok: true, ownerId: data && data.length === 1 ? (data[0].id as string) : null };
 }
 
 /**
@@ -309,6 +345,15 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
     userId = created.user.id;
   }
 
+  // Rol "Propietario": a qué ficha de propietario representa. Se resuelve
+  // antes de escribir la membresía para no dejarla a medio vincular.
+  let ownerId: string | null = null;
+  if (validated.role === "owner_view") {
+    const link = await resolveOwnerLink(admin, organization.id, validated.owner_id, email);
+    if (!link.ok) throw new Error(link.error);
+    ownerId = link.ownerId;
+  }
+
   // Asegurar perfil
   await admin
     .from("user_profiles")
@@ -326,6 +371,7 @@ export async function inviteTeamMember(input: InviteInput): Promise<InviteResult
       organization_id: organization.id,
       user_id: userId,
       role: validated.role,
+      owner_id: ownerId,
       invited_by: session.userId,
       invited_at: new Date().toISOString(),
       active: true,
@@ -493,13 +539,78 @@ export async function changeMemberRole(userId: string, newRole: UserRole) {
     throw new Error("Solo los admins pueden cambiar roles");
   }
   const admin = createAdminClient();
+  const patch: { role: UserRole; owner_id?: string | null } = { role: newRole };
+  if (newRole === "owner_view") {
+    // Si todavía no está vinculado, probamos por email (mismo criterio que al
+    // invitar). Si no hay match queda "sin vincular" y no ve nada hasta que
+    // se elija el propietario en Equipo.
+    const { data: current } = await admin
+      .from("organization_members")
+      .select("owner_id")
+      .eq("organization_id", organization.id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!current?.owner_id) {
+      const authAdmin = createAuthAdminClient();
+      const { data: u } = await authAdmin.auth.admin.getUserById(userId);
+      const link = await resolveOwnerLink(admin, organization.id, null, u?.user?.email ?? null);
+      if (link.ok && link.ownerId) patch.owner_id = link.ownerId;
+    }
+  }
   const { error } = await admin
     .from("organization_members")
-    .update({ role: newRole })
+    .update(patch)
     .eq("organization_id", organization.id)
     .eq("user_id", userId);
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/configuracion/equipo");
+}
+
+/**
+ * Vincula (o desvincula, con null) un usuario con rol "Propietario" a la ficha
+ * del propietario que representa. Es lo que acota lo que ve: sin vínculo, un
+ * owner_view no ve ninguna unidad. Varios usuarios pueden apuntar al mismo
+ * propietario (por ejemplo, una pareja con dos accesos).
+ */
+export async function setMemberOwnerLink(
+  userId: string,
+  ownerId: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role) && !session.profile.is_superadmin) {
+    return { ok: false, error: "Solo los administradores pueden cambiar esto" };
+  }
+  const parsed = z
+    .object({ userId: z.string().uuid(), ownerId: z.string().uuid().nullable() })
+    .safeParse({ userId, ownerId });
+  if (!parsed.success) return { ok: false, error: "Datos inválidos" };
+
+  const admin = createAdminClient();
+  const { data: member } = await admin
+    .from("organization_members")
+    .select("role")
+    .eq("organization_id", organization.id)
+    .eq("user_id", parsed.data.userId)
+    .maybeSingle();
+  if (!member) return { ok: false, error: "Ese usuario no es de esta organización" };
+  if (member.role !== "owner_view") {
+    return { ok: false, error: "Sólo se vincula un propietario a usuarios con rol Propietario" };
+  }
+
+  if (parsed.data.ownerId) {
+    const link = await resolveOwnerLink(admin, organization.id, parsed.data.ownerId, null);
+    if (!link.ok) return link;
+  }
+
+  const { error } = await admin
+    .from("organization_members")
+    .update({ owner_id: parsed.data.ownerId })
+    .eq("organization_id", organization.id)
+    .eq("user_id", parsed.data.userId);
+  if (error) return { ok: false, error: "No se pudo guardar el cambio. Probá de nuevo." };
+  revalidatePath("/dashboard/configuracion/equipo");
+  return { ok: true };
 }
 
 /**

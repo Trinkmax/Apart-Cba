@@ -42,6 +42,7 @@ import {
   type ChannelCommissionMap,
   type CommissionBase,
 } from "@/lib/finance/booking-economics";
+import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
 
 // Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
 // en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
@@ -576,11 +577,13 @@ export async function listBookings(filters?: {
   toDate?: string;
 }): Promise<BookingWithRelations[]> {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   let q = admin
     .from("bookings")
     .select(`*, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`)
-    .eq("organization_id", organization.id);
+    .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope));
   if (filters?.status) q = q.eq("status", filters.status);
   if (filters?.unitId) q = q.eq("unit_id", filters.unitId);
   if (filters?.fromDate) q = q.gte("check_in_date", filters.fromDate);
@@ -631,6 +634,7 @@ export async function listBookingsPaged(params?: {
 }> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const page = Math.max(0, params?.page ?? 0);
   const pageSize = Math.min(100, Math.max(1, params?.pageSize ?? 50));
   if (!can(role, "bookings", "view")) {
@@ -669,6 +673,7 @@ export async function listBookingsPaged(params?: {
         .from("units")
         .select("id")
         .eq("organization_id", organization.id)
+        .filter(...scopeFilter(ownerScope, "id"))
         .or(`code.ilike.${like},name.ilike.${like}`)
         .limit(50),
     ]);
@@ -688,6 +693,7 @@ export async function listBookingsPaged(params?: {
       { count: "exact" }
     )
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .eq("is_block", false); // los bloqueos OTA no son reservas
   if (params?.status) listQ = listQ.eq("status", params.status);
   if (fromDate) listQ = listQ.gte("check_in_date", fromDate);
@@ -702,6 +708,7 @@ export async function listBookingsPaged(params?: {
       .from("bookings")
       .select("*", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...scopeFilter(ownerScope))
       .eq("is_block", false),
   ]);
   if (listRes.error) throw new Error(listRes.error.message);
@@ -727,12 +734,14 @@ export async function listBookingsForOverlapCheck(): Promise<
 > {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await admin
     .from("bookings")
     .select("id, unit_id, status, check_in_date, check_out_date")
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .gte("check_out_date", today)
     .not("status", "in", "(cancelada,no_show)")
     .order("check_in_date");
@@ -814,6 +823,7 @@ export async function listBookingsInRange(
   toDate: string
 ): Promise<BookingWithRelations[]> {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("bookings")
@@ -821,6 +831,7 @@ export async function listBookingsInRange(
       `*, unit:units(id, code, name, default_commission_pct), guest:guests(id, full_name, phone, email)`,
     )
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .not("status", "in", "(cancelada,no_show)")
     .lt("check_in_date", toDate)
     .gt("check_out_date", fromDate)
@@ -858,6 +869,7 @@ export async function searchBookingsGlobal(
   if (q.length < 2) return [];
   await requireSession();
   const { organization, role } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   if (!can(role, "bookings", "view")) return [];
 
   const admin = createAdminClient();
@@ -888,6 +900,7 @@ export async function searchBookingsGlobal(
     .from("units")
     .select("id")
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope, "id"))
     .or(`code.ilike.${like},name.ilike.${like}`)
     .limit(50);
 
@@ -896,6 +909,7 @@ export async function searchBookingsGlobal(
     .from("bookings")
     .select(bookingSelect)
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .not("status", "in", "(cancelada,no_show)")
     .ilike("external_id", like)
     .order("check_in_date", { ascending: false })
@@ -928,6 +942,7 @@ export async function searchBookingsGlobal(
           .from("bookings")
           .select(bookingSelect)
           .eq("organization_id", organization.id)
+          .filter(...scopeFilter(ownerScope))
           .not("status", "in", "(cancelada,no_show)")
           .in("guest_id", guestIds)
           .order("check_in_date", { ascending: false })
@@ -939,6 +954,7 @@ export async function searchBookingsGlobal(
           .from("bookings")
           .select(bookingSelect)
           .eq("organization_id", organization.id)
+          .filter(...scopeFilter(ownerScope))
           .not("status", "in", "(cancelada,no_show)")
           .in("unit_id", unitIds)
           .order("check_in_date", { ascending: false })
@@ -1003,6 +1019,7 @@ export async function listCurrentOccupancyByUnit(): Promise<
   Record<string, CurrentOccupancy>
 > {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const today = new Date().toISOString().slice(0, 10);
   const { data, error } = await admin
@@ -1011,6 +1028,7 @@ export async function listCurrentOccupancyByUnit(): Promise<
       "unit_id, mode, status, check_in_date, check_out_date, guest:guests(id, full_name, phone)"
     )
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .lte("check_in_date", today)
     .gt("check_out_date", today)
     .in("status", ["confirmada", "check_in"])
@@ -1121,12 +1139,14 @@ export async function getUnitReadinessForCheckIn(
 
 export async function getBooking(id: string) {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("bookings")
     .select(`*, unit:units(*), guest:guests(*), payments:booking_payments(*)`)
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!data) return data;
@@ -2462,6 +2482,7 @@ export async function listBookingsMonthlyView(
 ): Promise<MonthlyViewCell[]> {
   await requireSession();
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
 
   const fromISO = `${fromYear}-${String(fromMonth).padStart(2, "0")}-01`;
@@ -2473,6 +2494,7 @@ export async function listBookingsMonthlyView(
       .from("units")
       .select("id, code, name, position")
       .eq("organization_id", organization.id)
+      .filter(...scopeFilter(ownerScope, "id"))
       .eq("active", true)
       .order("position"),
     admin
@@ -2481,6 +2503,7 @@ export async function listBookingsMonthlyView(
         `id, organization_id, unit_id, guest_id, source, status, is_block, mode, check_in_date, check_out_date, guests_count, currency, total_amount, paid_amount, monthly_rent, monthly_expenses, unit:units(id, code, name), guest:guests(id, full_name, phone, email)`
       )
       .eq("organization_id", organization.id)
+      .filter(...scopeFilter(ownerScope))
       .not("status", "in", "(cancelada,no_show)")
       .lt("check_in_date", toISO)
       .gt("check_out_date", fromISO)
@@ -2967,6 +2990,7 @@ export async function splitBookingIntoSegments(
  */
 export async function listBookingsNeedingCompletion(): Promise<BookingWithRelations[]> {
   const { organization } = await getCurrentOrg();
+  const ownerScope = await getOwnerScope();
   const admin = createAdminClient();
   // Cota inferior: desde el mes pasado. Lo anterior ya no es "por completar"
   // sino una liquidación con datos faltantes (ver completionCutoffYmd). Misma
@@ -2978,6 +3002,7 @@ export async function listBookingsNeedingCompletion(): Promise<BookingWithRelati
       `*, unit:units(id, code, name, default_commission_pct), guest:guests(id, full_name, phone, email)`,
     )
     .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope))
     .or("guest_id.is.null,total_amount.lte.0")
     .eq("is_block", false)
     .in("source", ["airbnb", "booking"])

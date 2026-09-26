@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import { getSessionContext } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
@@ -12,6 +13,7 @@ import { CancellationDecisionDialog } from "@/components/channels/cancellation-d
 import { listPendingCancellations } from "@/lib/actions/channel-cancellations";
 import { countPendingRequestsForOrg } from "@/lib/actions/booking-requests";
 import { can } from "@/lib/permissions";
+import { PATHNAME_HEADER, isPathAllowedForOwner } from "@/lib/auth/route-access";
 
 // Techo de wall-clock para todo /dashboard/* (páginas y sus Server Actions;
 // una page puede pisarlo exportando un valor mayor). Sin esto, el default de
@@ -37,13 +39,22 @@ export default async function DashboardLayout({
   const { organization, role } = await getCurrentOrg();
   const { notifications, unreadCount } = session;
 
+  // Rol "Propietario": lista blanca de pantallas (src/lib/auth/route-access.ts).
+  // Cubre la carga completa de cualquier URL; las navegaciones con <Link> las
+  // cubre el layout de cada segmento cerrado (StaffOnly), porque este layout
+  // no se vuelve a renderizar al navegar entre páginas hijas.
+  if (role === "owner_view") {
+    const path = (await headers()).get(PATHNAME_HEADER);
+    if (path && !isPathAllowedForOwner(path)) redirect("/dashboard");
+  }
+
   // Cancelaciones que una OTA propuso y todavía nadie resolvió. Ninguna reserva
   // se cancela sola: hasta que alguien decida, siguen vivas y ocupando fechas.
   const [pendingCancellations, pendingRequests] = await Promise.all([
     listPendingCancellations(),
     // El contador del sidebar: una solicitud del marketplace que nadie ve es la
     // ventana en la que se vende dos veces la misma fecha.
-    can(role, "bookings", "view")
+    can(role, "bookings", "view") && role !== "owner_view"
       ? countPendingRequestsForOrg().catch(() => 0)
       : Promise.resolve(0),
   ]);

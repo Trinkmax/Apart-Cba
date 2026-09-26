@@ -34,6 +34,9 @@ export default async function DashboardHome() {
   // sería un deep-link muerto para owner_view (que sólo tiene bookings.view).
   const canCompleteGuests = can(role, "bookings", "update");
   const canRegisterExpense = can(role, "cash", "create");
+  // Propietario: el inicio ya viene acotado a sus unidades (getDashboardKPIs);
+  // además no ve "Atención requerida", que es operación de la administración.
+  const isOwner = role === "owner_view";
   // "Este mes" es el de la org, no el del proceso (Vercel corre en UTC).
   const todayStr = todayYmdInTz(organization.timezone || DEFAULT_ORG_TIMEZONE);
   const curYear = Number(todayStr.slice(0, 4));
@@ -179,6 +182,7 @@ export default async function DashboardHome() {
         )}
 
         {/* Atención requerida */}
+        {!isOwner && (
         <Card className="p-4 sm:p-5 space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">Atención requerida</h2>
           <div className="space-y-2">
@@ -248,6 +252,7 @@ export default async function DashboardHome() {
             ))}
           </div>
         </Card>
+        )}
 
         {/* Resultado del mes (ver src/lib/actions/results.ts): "Ventas" sale
             del calendario (lo que pagó el huésped); comisión, diferencia de

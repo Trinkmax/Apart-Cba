@@ -7,9 +7,19 @@ import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import type {
   Notification,
+  UserRole,
   NotificationSeverity,
   NotificationType,
 } from "@/lib/types/database";
+
+/**
+ * Las notificaciones de la org son operación interna. Un propietario
+ * (owner_view) sólo ve —y sólo puede marcar/descartar— las dirigidas a él.
+ * Mismo criterio que get_session_context (migración 064). Staff: no-op.
+ */
+function ownOnly(role: UserRole, userId: string): [string, string, string] {
+  return role === "owner_view" ? ["target_user_id", "eq", userId] : ["id", "not.is", "null"];
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 // Listar notificaciones (con filtro por estado).
@@ -20,13 +30,14 @@ export async function listNotifications(
   filter: NotificationFilter = "active",
   limit = 50
 ): Promise<Notification[]> {
-  await requireSession();
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   let q = admin
     .from("notifications")
     .select("*")
-    .eq("organization_id", organization.id);
+    .eq("organization_id", organization.id)
+    .filter(...ownOnly(role, session.userId));
   if (filter === "active") q = q.is("dismissed_at", null);
   if (filter === "unread")
     q = q.is("dismissed_at", null).is("read_at", null);
@@ -39,13 +50,14 @@ export async function listNotifications(
 }
 
 export async function getUnreadCount(): Promise<number> {
-  await requireSession();
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   const { count, error } = await admin
     .from("notifications")
     .select("*", { count: "exact", head: true })
     .eq("organization_id", organization.id)
+    .filter(...ownOnly(role, session.userId))
     .is("read_at", null)
     .is("dismissed_at", null);
   if (error) throw new Error(error.message);
@@ -56,28 +68,30 @@ export async function getUnreadCount(): Promise<number> {
 // Marcar como leída/dismiss.
 // ════════════════════════════════════════════════════════════════════════════
 export async function markNotificationAsRead(id: string): Promise<void> {
-  await requireSession();
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   const { error } = await admin
     .from("notifications")
     .update({ read_at: new Date().toISOString() })
     .eq("id", id)
     .eq("organization_id", organization.id)
+    .filter(...ownOnly(role, session.userId))
     .is("read_at", null);
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/alertas");
 }
 
 export async function markAllNotificationsAsRead(): Promise<number> {
-  await requireSession();
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   const nowISO = new Date().toISOString();
   const { data, error } = await admin
     .from("notifications")
     .update({ read_at: nowISO })
     .eq("organization_id", organization.id)
+    .filter(...ownOnly(role, session.userId))
     .is("read_at", null)
     .is("dismissed_at", null)
     .select("id");
@@ -87,27 +101,29 @@ export async function markAllNotificationsAsRead(): Promise<number> {
 }
 
 export async function dismissNotification(id: string): Promise<void> {
-  await requireSession();
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   const { error } = await admin
     .from("notifications")
     .update({ dismissed_at: new Date().toISOString() })
     .eq("id", id)
-    .eq("organization_id", organization.id);
+    .eq("organization_id", organization.id)
+    .filter(...ownOnly(role, session.userId));
   if (error) throw new Error(error.message);
   revalidatePath("/dashboard/alertas");
 }
 
 export async function dismissAllNotifications(): Promise<number> {
-  await requireSession();
-  const { organization } = await getCurrentOrg();
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
   const admin = createAdminClient();
   const nowISO = new Date().toISOString();
   const { data, error } = await admin
     .from("notifications")
     .update({ dismissed_at: nowISO })
     .eq("organization_id", organization.id)
+    .filter(...ownOnly(role, session.userId))
     .is("dismissed_at", null)
     .select("id");
   if (error) throw new Error(error.message);

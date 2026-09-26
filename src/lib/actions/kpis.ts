@@ -2,6 +2,7 @@
 
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
+import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
 import {
   addDaysYmd,
   dayRangeInTz,
@@ -134,6 +135,10 @@ export interface DashboardKPIs {
 export async function getDashboardKPIs(): Promise<DashboardKPIs> {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
+  // Propietario (owner_view): todo el inicio se acota a SUS unidades. Sin
+  // propietario vinculado no ve ninguna (falla cerrado). Staff: null.
+  const scope = await getOwnerScope();
+  const unitFilter = (column = "unit_id") => scopeFilter(scope, column);
   // "Hoy" es el de la organización, no el del proceso. Vercel corre en UTC:
   // desde las 21:00 en Argentina el UTC ya es mañana, así que "Próximos
   // check-in" y la ocupación se corrían un día justo en la franja en que
@@ -167,11 +172,12 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
     guestCash,
     { count: pendingPriceCount },
   ] = await Promise.all([
-    admin.from("units").select("id, status").eq("organization_id", organization.id).eq("active", true),
+    admin.from("units").select("id, status").eq("organization_id", organization.id).eq("active", true).filter(...unitFilter("id")),
     admin
       .from("bookings")
       .select(bookingFields)
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .gte("check_in_date", todayStr)
       .lte("check_in_date", in30Str)
       .in("status", ["confirmada", "check_in"])
@@ -181,6 +187,7 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .from("bookings")
       .select(bookingFields)
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .gte("check_out_date", back30Str)
       .lte("check_out_date", in30Str)
       .eq("is_block", false), // los bloqueos OTA no cuentan como reservas/check-outs
@@ -188,22 +195,26 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .from("maintenance_tickets")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .not("status", "in", "(resuelto,cerrado)"),
     admin
       .from("maintenance_tickets")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .eq("priority", "urgente")
       .not("status", "in", "(resuelto,cerrado)"),
     admin
       .from("cleaning_tasks")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .in("status", ["pendiente", "en_progreso"]),
     admin
       .from("concierge_requests")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .in("status", ["pendiente", "en_progreso"]),
     // Reservas de OTA sin huésped. Misma cota que el panel "Por completar"
     // del tablero (listBookingsNeedingCompletion): desde el mes pasado. Así el
@@ -212,6 +223,7 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .from("bookings")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .is("guest_id", null)
       .eq("is_block", false)
       .in("source", ["airbnb", "booking"])
@@ -219,13 +231,15 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
       .gte("check_out_date", completionCutoff),
     // Plata del huésped que entró en Caja en los últimos 30 días (ver
     // GUEST_CASH_CATEGORIES). Usa idx_movements_org_date.
-    fetchGuestCash(admin, organization.id, cashFromIso, cashToIso),
+    // Un propietario no ve la Caja de la administración.
+    scope ? Promise.resolve([] as GuestCashRow[]) : fetchGuestCash(admin, organization.id, cashFromIso, cashToIso),
     // Reservas de OTA sin precio (misma regla que el badge "Sin precio" del
     // listado: total <= 0, no cancelada, no bloqueo), con la misma cota.
     admin
       .from("bookings")
       .select("id", { count: "exact", head: true })
       .eq("organization_id", organization.id)
+      .filter(...unitFilter())
       .eq("is_block", false)
       .in("source", ["airbnb", "booking"])
       .in("status", ["pendiente", "confirmada", "check_in", "check_out"])
