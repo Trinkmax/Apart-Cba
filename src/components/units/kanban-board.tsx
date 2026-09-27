@@ -45,6 +45,12 @@ interface KanbanBoardProps {
   initialUnits: UnitWithRelations[];
   owners: Owner[];
   organizationId: string;
+  /**
+   * `can(role, "units", "create")`, calculado por la página. Sin él no hay
+   * "Nueva unidad": por defecto cerrado, así un rol que sólo ve unidades no
+   * encuentra un alta que el servidor le va a rechazar.
+   */
+  canCreateUnit?: boolean;
 }
 
 interface PendingStatusChange {
@@ -58,7 +64,12 @@ interface PendingStatusChange {
   snapshotUnits: UnitWithRelations[];
 }
 
-export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoardProps) {
+export function KanbanBoard({
+  initialUnits,
+  owners,
+  organizationId,
+  canCreateUnit = false,
+}: KanbanBoardProps) {
   const [units, setUnits] = useState(initialUnits);
   const [activeUnit, setActiveUnit] = useState<UnitWithRelations | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
@@ -262,9 +273,11 @@ export function KanbanBoard({ initialUnits, owners, organizationId }: KanbanBoar
             <Wifi size={10} className={cn(realtimeConnected && "animate-pulse")} />
             {realtimeConnected ? "En vivo" : "Sin conexión"}
           </div>
-          <UnitFormDialog owners={owners} existingCodes={units.map((u) => u.code)}>
-            <Button className="gap-2"><Plus size={16} /> Nueva unidad</Button>
-          </UnitFormDialog>
+          {canCreateUnit && (
+            <UnitFormDialog owners={owners} existingCodes={units.map((u) => u.code)}>
+              <Button className="gap-2"><Plus size={16} /> Nueva unidad</Button>
+            </UnitFormDialog>
+          )}
         </div>
       </div>
 

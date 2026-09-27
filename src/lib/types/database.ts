@@ -312,8 +312,8 @@ export interface Unit {
   base_price: number | null;
   /**
    * Precio de un mes completo, en la misma moneda que base_price. Sólo para
-   * default_mode = 'mixto' (NULL en las demás). Leelo con `unitMonthlyPrice()`
-   * de `@/lib/units/pricing`. Migración 063.
+   * default_mode 'mensual' o 'mixto' (NULL en temporario). Leelo con
+   * `unitMonthlyPrice()` de `@/lib/units/pricing`. Migraciones 063 y 066.
    */
   monthly_price: number | null;
   cleaning_fee: number | null;

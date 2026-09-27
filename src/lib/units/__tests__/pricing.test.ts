@@ -4,6 +4,7 @@ import {
   formatPriceInput,
   parsePriceInput,
   unitMonthlyPrice,
+  unitPriceKinds,
 } from "@/lib/units/pricing";
 
 /**
@@ -41,6 +42,12 @@ describe("parsePriceInput", () => {
     "1100.000", "1500,000", "1.100000", "1234.567",
     // Un grupo de miles no empieza en 0.
     "0.500", "0,004", "000.500",
+    // Miles bien agrupados pero con tres o más decimales: tampoco son centavos.
+    "12.345,678", "1,200.505",
+    // Ningún precio es negativo (el parser permisivo sí acepta el signo).
+    "-5", "-1.100.000",
+    // Colgando detrás de centavos: no hay nada que seguir tipeando.
+    "45,5.", "1.100.000,50,",
   ])(
     "%j → null",
     (input) => {
@@ -56,9 +63,8 @@ describe("parsePriceInput", () => {
 });
 
 /**
- * El precio mensual sólo existe para las mixtas (migración 063). Estos casos
- * fijan que ningún lector pueda mostrar un precio mensual de otra vocación,
- * aunque la fila lo traiga.
+ * El precio mensual existe para las mensuales y las mixtas (migraciones 063 y
+ * 066); una temporaria nunca lo muestra aunque la fila lo traiga.
  */
 describe("unitMonthlyPrice", () => {
   it("mixta con precio cargado → el precio", () => {
@@ -79,10 +85,21 @@ describe("unitMonthlyPrice", () => {
     expect(unitMonthlyPrice({ default_mode: "mixto", monthly_price: "abc" })).toBeNull();
   });
 
-  it("una unidad que no es mixta nunca tiene precio mensual, aunque la fila lo traiga", () => {
+  it("una mensual también tiene precio mensual (migración 066)", () => {
+    expect(unitMonthlyPrice({ default_mode: "mensual", monthly_price: 900_000 })).toBe(900_000);
+  });
+
+  it("una temporaria nunca tiene precio mensual, aunque la fila lo traiga", () => {
     expect(unitMonthlyPrice({ default_mode: "temporario", monthly_price: 900_000 })).toBeNull();
-    expect(unitMonthlyPrice({ default_mode: "mensual", monthly_price: 900_000 })).toBeNull();
     expect(unitMonthlyPrice(null)).toBeNull();
+  });
+});
+
+describe("unitPriceKinds", () => {
+  it("temporario → noche; mensual → mes; mixto → los dos", () => {
+    expect(unitPriceKinds("temporario")).toEqual({ nightly: true, monthly: false });
+    expect(unitPriceKinds("mensual")).toEqual({ nightly: false, monthly: true });
+    expect(unitPriceKinds("mixto")).toEqual({ nightly: true, monthly: true });
   });
 });
 

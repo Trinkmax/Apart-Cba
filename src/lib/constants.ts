@@ -136,7 +136,7 @@ export const UNIT_DEFAULT_MODE_META: Record<
   },
   mensual: {
     label: "Mensual",
-    description: "La unidad se alquila mensualmente a inquilinos largos.",
+    description: "Se alquila por mes: tiene precio mensual.",
     color: "#7c3aed",
   },
   mixto: {

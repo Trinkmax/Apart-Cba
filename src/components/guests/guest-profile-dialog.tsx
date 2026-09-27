@@ -117,7 +117,7 @@ export function GuestProfileDialog({ guest, children }: GuestProfileDialogProps)
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto p-0">
+      <DialogContent className="sm:max-w-4xl overflow-y-auto p-0 sm:p-0">
         <DialogHeader className="px-6 pt-6 pb-0">
           <DialogTitle className="sr-only">Perfil de {guest.full_name}</DialogTitle>
         </DialogHeader>
@@ -234,8 +234,10 @@ function ProfileHeader({
     });
   }
 
+  // pr-16 hasta md: la X del diálogo (44px de toque arriba a la derecha)
+  // tapaba el botón de la derecha y lo cerraba en vez de accionarlo.
   return (
-    <div className="px-6 pt-2 pb-4 flex items-start gap-4">
+    <div className="pl-6 pr-16 md:pr-6 pt-2 pb-4 flex items-start gap-4">
       <Avatar className="size-16 ring-2 ring-primary/15">
         <AvatarFallback className="bg-primary/10 text-primary text-lg font-semibold">
           {getInitials(guest.full_name)}

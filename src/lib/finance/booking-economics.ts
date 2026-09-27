@@ -89,9 +89,17 @@ export interface BookingEconomics {
  */
 export function round2(n: number): number {
   if (!Number.isFinite(n)) return 0;
+  // Debajo de 1e-6 String(n) ya viene en notación exponencial ("1e-7") y el
+  // truco arma "1e-7e2" → NaN. Es justo el residuo de una resta de floats
+  // (0.1 + 0.2 − 0.3 = 5.55e-17): un neto "cuadrado" salía NaN. A dos
+  // decimales todo eso es 0.
+  if (Math.abs(n) < 1e-6) return 0;
   if (Math.abs(n) >= 1e15) return Math.round(n * 100) / 100; // fuera de rango de dinero real
   const sign = n < 0 ? -1 : 1;
-  return sign * Number(Math.round(Number(Math.abs(n) + "e2")) + "e-2");
+  const r = sign * Number(Math.round(Number(Math.abs(n) + "e2")) + "e-2");
+  // -0,004 redondea a -0: se ve "-0" en Intl.NumberFormat y Object.is lo
+  // distingue de 0. Un cero es cero.
+  return r === 0 ? 0 : r;
 }
 
 function num(v: number | null | undefined): number {

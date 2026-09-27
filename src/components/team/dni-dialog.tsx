@@ -23,7 +23,7 @@ export function DniDialog({ children, userId, memberName, canEdit }: DniDialogPr
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>DNI de {memberName}</DialogTitle>
         </DialogHeader>

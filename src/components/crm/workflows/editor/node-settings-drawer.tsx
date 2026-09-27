@@ -42,7 +42,7 @@ export function NodeSettingsDrawer({ node, tags, templates, aiEnabledModels, onC
   if (!def) {
     return (
       <Sheet open onOpenChange={onClose}>
-        <SheetContent className="w-[420px] sm:max-w-[420px]">
+        <SheetContent className="sm:w-[420px] sm:max-w-[420px]">
           <SheetTitle>Nodo desconocido</SheetTitle>
           <p className="text-sm text-muted-foreground">Tipo: {data.nodeType}</p>
         </SheetContent>
@@ -52,7 +52,9 @@ export function NodeSettingsDrawer({ node, tags, templates, aiEnabledModels, onC
 
   return (
     <Sheet open onOpenChange={onClose}>
-      <SheetContent className="w-[440px] sm:max-w-[440px] overflow-y-auto">
+      {/* sm:w y no w: un w-[440px] suelto pisaba el w-[85%] del primitivo y en un
+          celular de 375px el panel se salía de la pantalla. */}
+      <SheetContent className="sm:w-[440px] sm:max-w-[440px] overflow-y-auto">
         <SheetHeader>
           <SheetTitle className="flex items-center justify-between">
             {def.label}

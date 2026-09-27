@@ -40,6 +40,11 @@ interface UnitOwnersManagerProps {
   availableOwners: Owner[];
   /** La comisión de la unidad: es la que rige si el propietario no tiene excepción. */
   unitDefaultCommissionPct: number | null;
+  /**
+   * Agregar, quitar y editar la excepción de comisión (units:update). Sin el
+   * permiso el servidor lo rechaza, así que la lista queda de sólo lectura.
+   */
+  canEdit?: boolean;
 }
 
 /** `null` = sin excepción, se usa la comisión de la unidad. */
@@ -56,6 +61,7 @@ export function UnitOwnersManager({
   unitOwners,
   availableOwners,
   unitDefaultCommissionPct,
+  canEdit = false,
 }: UnitOwnersManagerProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -67,6 +73,11 @@ export function UnitOwnersManager({
   /** Fila cuya excepción de comisión se está editando (null = dialog cerrado). */
   const [editing, setEditing] = useState<{ id: string; ownerName: string } | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
+
+  const comisionDe = (override: number | null | undefined) =>
+    override !== null && override !== undefined
+      ? `Comisión de administración: ${override}% (solo para este propietario)`
+      : `Comisión de administración: ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`;
 
   const totalPct = unitOwners.reduce((acc, uo) => acc + Number(uo.ownership_pct), 0);
   const linkedIds = new Set(unitOwners.map((uo) => uo.owner_id));
@@ -163,71 +174,73 @@ export function UnitOwnersManager({
             de la unidad: {unitDefaultCommissionPct ?? 20}%
           </p>
         </div>
-        <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger asChild>
-            <Button size="sm" variant="outline" className="gap-1.5" disabled={selectableOwners.length === 0}>
-              <Plus size={14} /> Agregar
-            </Button>
-          </DialogTrigger>
-          <DialogContent
-            className="max-w-md"
-            onCloseAutoFocus={(e) => e.preventDefault()}
-          >
-            <DialogHeader>
-              <DialogTitle>Agregar propietario</DialogTitle>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <Label>Propietario</Label>
-                <Select value={selectedOwner} onValueChange={setSelectedOwner}>
-                  <SelectTrigger><SelectValue placeholder="Seleccionar…" /></SelectTrigger>
-                  <SelectContent>
-                    {selectableOwners.map((o) => (
-                      <SelectItem key={o.id} value={o.id}>{o.full_name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>% de propiedad (resta {(100 - totalPct).toFixed(0)}%)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  max={100 - totalPct}
-                  value={pct}
-                  onChange={(e) => setPct(Number(e.target.value))}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Comisión de administración (solo para este propietario)</Label>
-                <Input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  value={override}
-                  onChange={(e) => setOverride(e.target.value)}
-                  placeholder={`Vacío = ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`}
-                />
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  Solo si con este propietario arreglaste un porcentaje distinto. Lo
-                  podés cambiar cuando quieras.
-                </p>
-              </div>
-              <div className="flex items-center justify-between pt-2">
-                <Label htmlFor="is_primary" className="cursor-pointer">Marcar como propietario principal</Label>
-                <Switch id="is_primary" checked={isPrimary} onCheckedChange={setIsPrimary} />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
-              <Button onClick={handleAdd} disabled={isPending}>
-                {isPending && <Loader2 className="animate-spin" />}
-                Agregar
+        {canEdit && (
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline" className="gap-1.5" disabled={selectableOwners.length === 0}>
+                <Plus size={14} /> Agregar
               </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+            </DialogTrigger>
+            <DialogContent
+              className="max-w-md"
+              onCloseAutoFocus={(e) => e.preventDefault()}
+            >
+              <DialogHeader>
+                <DialogTitle>Agregar propietario</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Propietario</Label>
+                  <Select value={selectedOwner} onValueChange={setSelectedOwner}>
+                    <SelectTrigger><SelectValue placeholder="Seleccionar…" /></SelectTrigger>
+                    <SelectContent>
+                      {selectableOwners.map((o) => (
+                        <SelectItem key={o.id} value={o.id}>{o.full_name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>% de propiedad (resta {(100 - totalPct).toFixed(0)}%)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max={100 - totalPct}
+                    value={pct}
+                    onChange={(e) => setPct(Number(e.target.value))}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Comisión de administración (solo para este propietario)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={override}
+                    onChange={(e) => setOverride(e.target.value)}
+                    placeholder={`Vacío = ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`}
+                  />
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    Solo si con este propietario arreglaste un porcentaje distinto. Lo
+                    podés cambiar cuando quieras.
+                  </p>
+                </div>
+                <div className="flex items-center justify-between pt-2">
+                  <Label htmlFor="is_primary" className="cursor-pointer">Marcar como propietario principal</Label>
+                  <Switch id="is_primary" checked={isPrimary} onCheckedChange={setIsPrimary} />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
+                <Button onClick={handleAdd} disabled={isPending}>
+                  {isPending && <Loader2 className="animate-spin" />}
+                  Agregar
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
       </div>
 
       {unitOwners.length === 0 ? (
@@ -252,30 +265,37 @@ export function UnitOwnersManager({
                     </Badge>
                   )}
                 </div>
-                <button
-                  type="button"
-                  className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1 hover:text-foreground transition-colors text-left"
-                  onClick={() => openEditor(uo.id, uo.owner.full_name, uo.commission_pct_override)}
-                  disabled={isPending}
-                >
-                  {uo.commission_pct_override !== null && uo.commission_pct_override !== undefined
-                    ? `Comisión de administración: ${uo.commission_pct_override}% (solo para este propietario)`
-                    : `Comisión de administración: ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`}
-                  <Pencil size={11} className="opacity-60 shrink-0" />
-                </button>
+                {canEdit ? (
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1 hover:text-foreground transition-colors text-left"
+                    onClick={() => openEditor(uo.id, uo.owner.full_name, uo.commission_pct_override)}
+                    disabled={isPending}
+                  >
+                    {comisionDe(uo.commission_pct_override)}
+                    <Pencil size={11} className="opacity-60 shrink-0" />
+                  </button>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {comisionDe(uo.commission_pct_override)}
+                  </p>
+                )}
               </div>
               <Badge variant="outline" className="font-mono text-sm font-semibold">
                 {Number(uo.ownership_pct).toFixed(0)}%
               </Badge>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="size-8 text-muted-foreground hover:text-destructive"
-                onClick={() => handleUnlink(uo.id)}
-                disabled={isPending}
-              >
-                <Trash2 size={14} />
-              </Button>
+              {canEdit && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8 text-muted-foreground hover:text-destructive"
+                  onClick={() => handleUnlink(uo.id)}
+                  disabled={isPending}
+                  aria-label={`Quitar a ${uo.owner.full_name}`}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              )}
             </div>
           ))}
         </div>

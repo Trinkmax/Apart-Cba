@@ -107,7 +107,7 @@ export function GuestFormDialog({ children, guest, onCreated }: GuestFormDialogP
       >
         {children}
       </DialogTrigger>
-      <DialogContent className="max-w-xl">
+      <DialogContent className="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar huésped" : "Nuevo huésped"}</DialogTitle>
         </DialogHeader>

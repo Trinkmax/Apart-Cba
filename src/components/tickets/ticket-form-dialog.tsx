@@ -84,7 +84,7 @@ export function TicketFormDialog({ children, ticket, units, owners, members, def
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar ticket" : "Nuevo ticket"}</DialogTitle>
         </DialogHeader>

@@ -53,7 +53,12 @@ export function PdfPreviewButton({ snapshot }: PdfPreviewButtonProps) {
           Vista previa
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-4xl h-[90vh] flex flex-col p-0 gap-0">
+      {/* Sin la X del diálogo: con p-0 caía sobre el borde del encabezado, y
+          el pie ya tiene "Cerrar" (más Esc y el clic afuera). */}
+      <DialogContent
+        className="sm:max-w-4xl h-[90svh] flex flex-col p-0 sm:p-0 gap-0"
+        showCloseButton={false}
+      >
         <DialogHeader className="px-5 py-3 border-b">
           <DialogTitle className="text-sm font-semibold">
             Vista previa · parte-diario-{snapshot.date}.pdf

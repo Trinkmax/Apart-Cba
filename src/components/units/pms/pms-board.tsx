@@ -127,7 +127,7 @@ import {
 import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { useFlashIds, useLiveTable } from "@/lib/realtime/use-live";
 import { cn } from "@/lib/utils";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, parseAmountInput } from "@/lib/format";
 import type { CommissionBase } from "@/lib/finance/booking-economics";
 import type { CompletedPatch } from "@/components/bookings/complete-guest-dialog";
 import type {
@@ -339,6 +339,12 @@ interface PmsBoardProps {
   canViewChannels?: boolean;
   /** Si false, esconde montos (total/cobrado/saldo/comisión) y "Registrar pago" en el popover. */
   canViewMoney?: boolean;
+  /**
+   * Muestra "Reordenar" (units:update). El orden es de toda la organización:
+   * sin el permiso el servidor lo rechaza, y un propietario (owner_view) que
+   * sólo ve sus unidades pisaría el orden de todas con su subconjunto.
+   */
+  canReorderUnits?: boolean;
   /** Muestra el botón "Registrar gasto" en la toolbar del calendario. */
   canRegisterExpense?: boolean;
   /** Cuenta de gastos corrientes por defecto para "Registrar gasto". */
@@ -479,6 +485,7 @@ export function PmsBoard({
   canEditBookings = true,
   canViewChannels = false,
   canViewMoney = true,
+  canReorderUnits = false,
   canRegisterExpense = false,
   expenseDefaultId = null,
   initialNeedsGuest = EMPTY_NEEDS_GUEST,
@@ -645,8 +652,9 @@ export function PmsBoard({
     let n = 0;
     if (unitFilters.availableFrom && unitFilters.availableTo) n += 1;
     if (unitFilters.minGuests) n += 1;
-    if (unitFilters.minPrice) n += 1;
-    if (unitFilters.maxPrice) n += 1;
+    // Cuenta lo que filtra de verdad: un precio ilegible no filtra nada.
+    if (parseAmountInput(unitFilters.minPrice) !== null) n += 1;
+    if (parseAmountInput(unitFilters.maxPrice) !== null) n += 1;
     if (unitFilters.minBedrooms) n += 1;
     if (unitFilters.minBathrooms) n += 1;
     if (unitFilters.neighborhood.trim()) n += 1;
@@ -1316,8 +1324,10 @@ export function PmsBoard({
   const filteredUnits = useMemo(() => {
     const f = unitFilters;
     const minGuests = f.minGuests ? Number(f.minGuests) : null;
-    const minPrice = f.minPrice ? Number(f.minPrice) : null;
-    const maxPrice = f.maxPrice ? Number(f.maxPrice) : null;
+    // Precio tipeado como importe es-AR: "80.000" son ochenta mil (con Number()
+    // era 80 y el filtro dejaba afuera casi todo). Vacío o ilegible → sin filtro.
+    const minPrice = parseAmountInput(f.minPrice);
+    const maxPrice = parseAmountInput(f.maxPrice);
     const minBedrooms = f.minBedrooms ? Number(f.minBedrooms) : null;
     const minBathrooms = f.minBathrooms ? Number(f.minBathrooms) : null;
     const neighborhood = f.neighborhood.trim().toLowerCase();
@@ -3084,7 +3094,7 @@ export function PmsBoard({
                           inputMode="decimal"
                           value={unitFilters.minPrice}
                           onChange={(e) =>
-                            setUnitFilters((f) => ({ ...f, minPrice: e.target.value.replace(",", ".") }))
+                            setUnitFilters((f) => ({ ...f, minPrice: e.target.value }))
                           }
                           placeholder="Mín"
                           className="h-8 text-xs"
@@ -3094,7 +3104,7 @@ export function PmsBoard({
                           inputMode="decimal"
                           value={unitFilters.maxPrice}
                           onChange={(e) =>
-                            setUnitFilters((f) => ({ ...f, maxPrice: e.target.value.replace(",", ".") }))
+                            setUnitFilters((f) => ({ ...f, maxPrice: e.target.value }))
                           }
                           placeholder="Máx"
                           className="h-8 text-xs"
@@ -3286,24 +3296,26 @@ export function PmsBoard({
               </Tooltip>
 
               {/* Toggle modo reordenar */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant={editMode ? "default" : "outline"}
-                    size="sm"
-                    className="h-8 gap-1.5 text-xs"
-                    onClick={editMode ? cancelEditMode : enterEditMode}
-                  >
-                    <ArrowDownUp size={12} />
-                    {editMode ? "Salir de orden" : "Reordenar"}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {editMode
-                    ? "Cancelar cambios y salir del modo de orden"
-                    : "Activar modo edición para reordenar las unidades"}
-                </TooltipContent>
-              </Tooltip>
+              {canReorderUnits && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={editMode ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 gap-1.5 text-xs"
+                      onClick={editMode ? cancelEditMode : enterEditMode}
+                    >
+                      <ArrowDownUp size={12} />
+                      {editMode ? "Salir de orden" : "Reordenar"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {editMode
+                      ? "Cancelar cambios y salir del modo de orden"
+                      : "Activar modo edición para reordenar las unidades"}
+                  </TooltipContent>
+                </Tooltip>
+              )}
 
               {/* Nueva reserva */}
               {canEditBookings && (

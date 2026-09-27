@@ -105,6 +105,14 @@ export function RecordPaymentDialog({
   }
 
   function submit() {
+    // Un importe ilegible ("1.2.3") suma 0 y su línea se filtra abajo: si el
+    // resto cuadra, el pago salía sin esa cuenta y nadie se enteraba.
+    if (splits.some((s) => s.amount.trim() !== "" && parseAmountInput(s.amount) === null)) {
+      toast.error("Hay un importe que no se entiende", {
+        description: "Escribilo como 150.000 o 150000,50.",
+      });
+      return;
+    }
     const rows = splits
       .map((s) => ({ account_id: s.account_id, amount: parseAmountInput(s.amount) ?? 0 }))
       .filter((s) => s.account_id && s.amount > 0);

@@ -82,7 +82,7 @@ export function CreateOrgDialog({ children }: { children: React.ReactNode }) {
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); else setOpen(true); }}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{done ? "Organización creada" : "Nueva organización"}</DialogTitle>
         </DialogHeader>

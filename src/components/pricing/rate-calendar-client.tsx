@@ -8,10 +8,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { getCalendarPrices, type CalendarDayPrice } from "@/lib/actions/pricing";
 import { formatCurrency } from "@/lib/marketplace/pricing";
+import { unitPriceKinds } from "@/lib/units/pricing";
 import { EditBasePriceDialog } from "./edit-base-price-dialog";
 import { ApplyRateDialog } from "./apply-rate-dialog";
 import { RulesTable } from "./rules-table";
-import type { UnitPricingRule } from "@/lib/types/database";
+import type { UnitDefaultMode, UnitPricingRule } from "@/lib/types/database";
 
 const WEEKDAY_HEADERS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
 const MONTH_NAMES = [
@@ -27,9 +28,13 @@ interface Props {
   initialBasePrice: number;
   initialCurrency: string;
   initialRules: UnitPricingRule[];
-  /** Unidad mixta: además de la noche tiene precio por mes (migración 063). */
-  isMixto: boolean;
-  /** Ya filtrado por `unitMonthlyPrice()`: null = mixta sin precio mensual cargado. */
+  /**
+   * Vocación de la unidad (migraciones 063 y 066). Mensual y mixta tienen
+   * precio por mes y se muestra al lado; en una mensual además la noche de
+   * esta pantalla es sólo la de la web pública (el panel la alquila por mes).
+   */
+  unitMode: UnitDefaultMode;
+  /** Ya filtrado por `unitMonthlyPrice()`: null = sin precio mensual cargado. */
   monthlyPrice: number | null;
   /**
    * Moneda del precio por mes: la de la unidad (`base_price_currency`), que es
@@ -47,10 +52,11 @@ export function RateCalendarClient({
   initialBasePrice,
   initialCurrency,
   initialRules,
-  isMixto,
+  unitMode,
   monthlyPrice,
   monthlyCurrency,
 }: Props) {
+  const priceKinds = unitPriceKinds(unitMode);
   const [year, setYear] = useState(initialYear);
   const [month, setMonth] = useState(initialMonth);
   const [days, setDays] = useState(initialDays);
@@ -140,7 +146,7 @@ export function RateCalendarClient({
           />
           {/* Sólo lectura: el mes no pasa por el motor de reglas, así que
               editarlo acá sugeriría que las temporadas también lo mueven. */}
-          {isMixto && (
+          {priceKinds.monthly && (
             <Card className="px-4 py-2.5">
               <div className="text-xs text-muted-foreground">Precio / mes</div>
               {monthlyPrice !== null ? (
@@ -168,10 +174,25 @@ export function RateCalendarClient({
         </div>
       </div>
 
-      {isMixto && (
+      {/* Mensual: la noche de acá no la usa el panel (ahí la unidad sólo
+          tiene precio por mes), pero sigue siendo con la que cotiza la web
+          pública — su "≈ por mes" son 30 noches a este precio. Sin decirlo,
+          esta pantalla parecía el lugar para cargar la renta. */}
+      {priceKinds.monthly && (
         <p className="text-xs text-muted-foreground -mt-1">
-          Las reglas ajustan sólo el precio por noche; el precio por mes no cambia con la
-          temporada ni el día de la semana. Se edita en la{" "}
+          {priceKinds.nightly ? (
+            <>
+              Las reglas ajustan sólo el precio por noche; el precio por mes no cambia con la
+              temporada ni el día de la semana.
+            </>
+          ) : (
+            <>
+              Unidad mensual: este calendario es el precio por noche con el que cotiza la web
+              pública (su &ldquo;≈ por mes&rdquo; son 30 noches a este precio). El precio por
+              mes de la unidad, el que usa el panel en las reservas, no cambia con estas reglas.
+            </>
+          )}{" "}
+          Se edita en la{" "}
           <Link
             href={`/dashboard/unidades/${unitId}`}
             className="underline underline-offset-2 hover:text-foreground"

@@ -15,13 +15,15 @@ npm run dev        # next dev on port 3001 (NOT 3000)
 npm run build
 npm run lint
 npx tsc --noEmit   # typecheck
+npm test           # vitest: pure-logic tests in src/**/__tests__/**/*.test.ts
+npm run test:db    # DB integration test (channels pipeline) — RUN_DB_TESTS=1
 
 # whatsapp-gateway is a separate project — work on it from its own dir:
 cd whatsapp-gateway && npm install && npm run dev   # tsx watch
 cd whatsapp-gateway && npm run typecheck
 ```
 
-There is no test runner configured. Don't claim tests pass — run `tsc --noEmit` and `lint` instead.
+Tests cover pure logic only (finance, settlements, channels, unit pricing/parsing) — there are no UI or server-action tests. Run `npm test` plus `tsc --noEmit` and `lint`; don't claim a UI flow works because the suite is green. New pure helpers get a test next to them in a `__tests__/` folder.
 
 ## Required environment
 

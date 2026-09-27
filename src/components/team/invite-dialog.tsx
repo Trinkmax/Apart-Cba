@@ -154,7 +154,7 @@ export function InviteDialog({
     <>
       <Dialog open={open} onOpenChange={(v) => { if (!v) reset(); else setOpen(true); }}>
         <DialogTrigger asChild>{children}</DialogTrigger>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{alreadyHadAccess ? "Ya estaba en el sistema" : "Invitar usuario"}</DialogTitle>
           </DialogHeader>

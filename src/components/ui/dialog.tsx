@@ -61,10 +61,14 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
+          // Para pisar ancho, alto o padding desde afuera usá la forma sm:
+          // (sm:max-w-2xl, sm:p-0, sm:max-h-…): una clase sin prefijo reemplaza
+          // sólo la de mobile y desde 640px gana la sm: de acá.
           // Mobile: el dialog ocupa casi toda la pantalla, alineado al bottom como sheet —
           // así el usuario alcanza el primer input sin estirar el pulgar.
           "fixed inset-x-0 bottom-0 sm:inset-x-auto sm:bottom-auto sm:top-[50%] sm:left-[50%] z-50",
-          "w-full sm:max-w-lg sm:translate-x-[-50%] sm:translate-y-[-50%]",
+          // sm:w-[calc…]: entre 640 y ~900px un sm:max-w-4xl tocaba los bordes de la pantalla.
+          "w-full sm:w-[calc(100%-2rem)] sm:max-w-lg sm:translate-x-[-50%] sm:translate-y-[-50%]",
           "max-h-[92svh] sm:max-h-[85svh] flex flex-col",
           "gap-4 rounded-t-2xl sm:rounded-lg border bg-background p-4 sm:p-6 shadow-lg duration-200 outline-none",
           "overflow-y-auto overscroll-contain",

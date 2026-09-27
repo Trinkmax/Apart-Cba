@@ -106,7 +106,7 @@ function CredentialDialog({
   return (
     <Dialog open onOpenChange={() => { /* la única salida es el botón de abajo */ }}>
       <DialogContent
-        className="max-w-lg"
+        className="sm:max-w-lg"
         showCloseButton={false}
         onEscapeKeyDown={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}

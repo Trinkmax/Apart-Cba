@@ -53,7 +53,10 @@ export function NodePaletteModal({ onClose, onSelect }: Props) {
 
   return (
     <Dialog open onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl bg-zinc-950 border-zinc-800 text-zinc-100 p-0">
+      <DialogContent
+        className="sm:max-w-2xl bg-zinc-950 border-zinc-800 text-zinc-100 p-0 sm:p-0"
+        showCloseButton={false}
+      >
         <DialogTitle className="sr-only">Agregar nodo al workflow</DialogTitle>
         <div className="border-b border-zinc-800 p-3">
           <div className="relative">

@@ -79,7 +79,7 @@ export function OwnerFormDialog({ children, owner }: OwnerFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Editar propietario" : "Nuevo propietario"}</DialogTitle>
           <DialogDescription>

@@ -223,7 +223,7 @@ function LibraryDialog() {
           <GitBranch className="size-4" /> Biblioteca
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Biblioteca de workflows</DialogTitle>
         </DialogHeader>

@@ -56,7 +56,7 @@ export function ConfirmBookingDialog(props: Props) {
   // — patrón recomendado por React 19 para "resetear estado al abrir".
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl overflow-y-auto">
         {props.open && <ConfirmBookingDialogBody key={props.booking.id} {...props} />}
       </DialogContent>
     </Dialog>

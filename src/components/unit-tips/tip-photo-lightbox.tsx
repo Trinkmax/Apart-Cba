@@ -23,7 +23,10 @@ export function TipPhotoLightbox({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-[100vw] sm:max-w-3xl p-0 bg-black/95 border-0"
+        className="max-w-[100vw] sm:max-w-3xl p-0 sm:p-0 bg-black/95 border-0"
+        // Tiene su propio botón de cerrar sobre la foto: la X del diálogo
+        // quedaba duplicada al lado.
+        showCloseButton={false}
         onClick={() => onOpenChange(false)}
       >
         <DialogTitle className="sr-only">{alt}</DialogTitle>
@@ -35,7 +38,7 @@ export function TipPhotoLightbox({
         >
           <X size={18} />
         </button>
-        <div className="relative w-full h-[80vh] flex items-center justify-center">
+        <div className="relative w-full h-[80svh] flex items-center justify-center">
           <Image
             src={url}
             alt={alt}

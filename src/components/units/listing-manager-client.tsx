@@ -1963,7 +1963,7 @@ function NewRuleDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Nueva regla de precio</DialogTitle>
           <DialogDescription>

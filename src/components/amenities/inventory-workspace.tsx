@@ -1284,7 +1284,7 @@ function BulkRestockDialog({
           <Sparkles size={13} /> Restock masivo
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Restock masivo</DialogTitle>
         </DialogHeader>

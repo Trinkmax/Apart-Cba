@@ -161,7 +161,7 @@ export function AddBookingRowDialog({
         if (!o) close();
       }}
     >
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Agregar reserva</DialogTitle>
           <DialogDescription>

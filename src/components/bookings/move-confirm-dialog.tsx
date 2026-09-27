@@ -243,7 +243,7 @@ function MoveConfirmDialogInner({
       }}
     >
       <DialogContent
-        className="max-w-xl"
+        className="sm:max-w-xl"
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             handleConfirm();

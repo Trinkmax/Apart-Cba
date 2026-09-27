@@ -297,9 +297,9 @@ export function ConciergeDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[92vh] overflow-y-auto p-0 gap-0">
+      <DialogContent className="sm:max-w-xl overflow-y-auto p-0 sm:p-0 gap-0">
         <div className="h-1.5 w-full" style={{ backgroundColor: meta.color }} aria-hidden />
-        <DialogHeader className="px-6 pt-5 pb-3">
+        <DialogHeader className="pl-6 pr-12 pt-5 pb-3">
           <div className="flex items-start gap-3">
             <span
               className="size-10 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
@@ -686,7 +686,7 @@ export function ConciergeDetailDialog({
 
         <Separator />
 
-        <DialogFooter className="px-6 py-4 sm:justify-between">
+        <DialogFooter className="mx-0 mb-0 px-6 sm:px-6 py-4 sm:py-4 sm:justify-between">
           {confirmDelete ? (
             <div className="flex items-center gap-2">
               <span className="text-xs text-destructive font-medium">¿Eliminar pedido?</span>

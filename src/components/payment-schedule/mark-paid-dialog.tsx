@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { markScheduleAsPaid } from "@/lib/actions/payment-schedule";
+import { parseAmountInput } from "@/lib/format";
 import type {
   BookingPaymentSchedule,
   CashAccount,
@@ -63,8 +64,16 @@ export function MarkPaidDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const num = Number(amount.replace(",", "."));
-    if (!Number.isFinite(num) || num <= 0) {
+    // Esto registra un ingreso en Caja: con Number(), "150.000" era $150 y el
+    // cobro quedaba registrado mil veces más chico.
+    const num = parseAmountInput(amount);
+    if (amount.trim() !== "" && num === null) {
+      toast.error("No se entiende el importe", {
+        description: "Escribilo como 150.000 o 150000,50.",
+      });
+      return;
+    }
+    if (num === null || num <= 0) {
       toast.error("El importe debe ser mayor a 0");
       return;
     }
@@ -98,7 +107,7 @@ export function MarkPaidDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span className="size-7 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 flex items-center justify-center">

@@ -20,7 +20,7 @@ import { EditUnitButton } from "@/components/units/edit-unit-button";
 import { UnitOwnersManager } from "@/components/units/unit-owners-manager";
 import { UNIT_DEFAULT_MODE_META, UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney } from "@/lib/format";
-import { unitMonthlyPrice } from "@/lib/units/pricing";
+import { unitMonthlyPrice, unitPriceKinds } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import type { Unit, UnitOwner, Owner } from "@/lib/types/database";
 
@@ -39,10 +39,19 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
   const u = unit as unknown as UnitDetail;
   const meta = UNIT_STATUS_META[u.status];
   const canViewMoney = can(role, "payments", "view");
-  // Sólo las mixtas llevan precio por mes (migración 063); se lee por el helper
-  // para no mostrar un valor viejo de una unidad que dejó de ser mixta.
-  const isMixto = u.default_mode === "mixto";
+  // Mantenimiento y limpieza entran a la ficha (units: view) pero no la
+  // editan: sin esto veían "Editar" y el guardado recién se frenaba en el
+  // servidor.
+  const canEditUnit = can(role, "units", "update");
+  // Cada vocación muestra sus precios (migraciones 063 y 066): temporaria →
+  // noche, mensual → mes, mixta → los dos. La noche de una mensual queda en la
+  // base sólo para la web pública: acá no describe la unidad. El mes se lee
+  // por el helper para no mostrar un valor viejo de una unidad que cambió de
+  // vocación.
+  const priceKinds = unitPriceKinds(u.default_mode);
   const monthlyPrice = unitMonthlyPrice(u);
+  const modeMeta = UNIT_DEFAULT_MODE_META[u.default_mode] ?? UNIT_DEFAULT_MODE_META.temporario;
+  const currency = u.base_price_currency ?? "ARS";
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
@@ -97,14 +106,18 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
               </span>
             ) : null}
           </Link>
-          <Link
-            href={`/dashboard/unidades/${u.id}/precios`}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
-          >
-            <DollarSign size={14} />
-            Tarifas
-          </Link>
-          <EditUnitButton unit={u} />
+          {/* Mismo corte que la tarjeta "Tarifas" y que la propia pantalla de
+              precios: sin permiso de ver plata el botón llevaba a un rebote. */}
+          {canViewMoney && (
+            <Link
+              href={`/dashboard/unidades/${u.id}/precios`}
+              className="inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium border border-input bg-background hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              <DollarSign size={14} />
+              Tarifas
+            </Link>
+          )}
+          {canEditUnit && <EditUnitButton unit={u} />}
         </div>
       </div>
 
@@ -139,45 +152,49 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
             <Card className="p-4 sm:p-5">
               <div className="flex items-center gap-2 mb-3">
                 <h2 className="text-sm font-semibold">Tarifas</h2>
-                {isMixto && (
-                  <Badge
-                    variant="outline"
-                    className="gap-1.5 font-normal text-[10px] text-muted-foreground"
-                    title={UNIT_DEFAULT_MODE_META.mixto.description}
-                  >
-                    <span className="status-dot" style={{ backgroundColor: UNIT_DEFAULT_MODE_META.mixto.color }} />
-                    {UNIT_DEFAULT_MODE_META.mixto.label}
-                  </Badge>
-                )}
+                {/* La vocación va en todas: es la que decide qué precios lleva
+                    la tarjeta (una mensual sin "Precio / noche" no es un olvido). */}
+                <Badge
+                  variant="outline"
+                  className="gap-1.5 font-normal text-[10px] text-muted-foreground"
+                  title={modeMeta.description}
+                >
+                  <span className="status-dot" style={{ backgroundColor: modeMeta.color }} />
+                  {modeMeta.label}
+                </Badge>
               </div>
               {/* Mixta: 4 celdas. Hasta lg van de a 2 para que los dos precios
                   queden juntos en la primera fila y "Comisión de administración"
-                  no se parta en una columna angosta (el sidebar come ancho). */}
+                  no se parta en una columna angosta (el sidebar come ancho).
+                  Temporaria y mensual: 3 celdas, un solo precio. */}
               <div
                 className={cn(
                   "grid grid-cols-2 gap-3 sm:gap-4 text-sm",
-                  isMixto ? "lg:grid-cols-4" : "sm:grid-cols-3",
+                  priceKinds.nightly && priceKinds.monthly ? "lg:grid-cols-4" : "sm:grid-cols-3",
                 )}
               >
-                <div>
-                  <div className="text-xs text-muted-foreground">Precio / noche</div>
-                  <div className="font-medium">{formatMoney(u.base_price, u.base_price_currency ?? "ARS")}</div>
-                </div>
-                {isMixto && (
+                {priceKinds.nightly && (
+                  <div>
+                    <div className="text-xs text-muted-foreground">Precio / noche</div>
+                    <div className="font-medium">{formatMoney(u.base_price, currency)}</div>
+                  </div>
+                )}
+                {priceKinds.monthly && (
                   <div>
                     <div className="text-xs text-muted-foreground">Precio / mes</div>
                     {monthlyPrice !== null ? (
-                      <div className="font-medium">{formatMoney(monthlyPrice, u.base_price_currency ?? "ARS")}</div>
+                      <div className="font-medium">{formatMoney(monthlyPrice, currency)}</div>
                     ) : (
-                      // "Sin cargar" y no "—": una mixta sin precio mensual es un
-                      // dato faltante que el operador tiene que ver, no un cero.
+                      // "Sin cargar" y no "—": una mensual o mixta sin precio
+                      // mensual es un dato faltante que el operador tiene que
+                      // ver, no un cero.
                       <div className="font-medium text-muted-foreground italic">Sin cargar</div>
                     )}
                   </div>
                 )}
                 <div>
                   <div className="text-xs text-muted-foreground">Fee limpieza</div>
-                  <div className="font-medium">{formatMoney(u.cleaning_fee, u.base_price_currency ?? "ARS")}</div>
+                  <div className="font-medium">{formatMoney(u.cleaning_fee, currency)}</div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground">Comisión de administración</div>
@@ -208,6 +225,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
             unitOwners={u.unit_owners}
             availableOwners={owners}
             unitDefaultCommissionPct={u.default_commission_pct}
+            canEdit={can(role, "units", "update")}
           />
         </TabsContent>
 

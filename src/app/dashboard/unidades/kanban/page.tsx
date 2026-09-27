@@ -70,6 +70,7 @@ export default async function PmsGridPage({
       canEditBookings={canEditBookings}
       canViewChannels={can(role, "channels", "view")}
       canViewMoney={canViewMoney}
+      canReorderUnits={can(role, "units", "update")}
       canRegisterExpense={canRegisterExpense}
       expenseDefaultId={expenseDefaultId}
       initialNeedsGuest={needsGuest}

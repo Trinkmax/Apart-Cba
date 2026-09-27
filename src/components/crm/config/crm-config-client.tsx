@@ -114,7 +114,7 @@ function ChannelsSection({ channels, appUrl }: { channels: CrmChannel[]; appUrl:
               <Plus className="size-4 mr-1.5" /> Conectar canal
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-xl">
+          <DialogContent className="sm:max-w-xl">
             <DialogHeader><DialogTitle>{editing ? "Editar canal" : "Conectar nuevo canal"}</DialogTitle></DialogHeader>
             <ChannelForm initial={editing} onClose={() => setShowForm(false)} />
           </DialogContent>
@@ -562,7 +562,7 @@ function TemplatesSection({ templates, channels }: { templates: CrmWhatsAppTempl
               <Plus className="size-4 mr-1.5" /> Nuevo template
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-xl">
+          <DialogContent className="sm:max-w-xl">
             <DialogHeader><DialogTitle>Nuevo template</DialogTitle></DialogHeader>
             <TemplateForm channels={waChannels} onClose={() => setCreating(false)} />
           </DialogContent>

@@ -18,6 +18,7 @@ import { BOOKING_SOURCE_META, TICKET_PRIORITY_META } from "@/lib/constants";
 import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
+import { unitPriceKinds } from "@/lib/units/pricing";
 
 const unitSchema = z.object({
   code: z.string().min(1, "Código requerido"),
@@ -36,8 +37,8 @@ const unitSchema = z.object({
   size_m2: z.coerce.number().min(0, "La superficie no puede ser negativa.").optional().nullable(),
   base_price: z.coerce.number().min(0, "El precio por noche no puede ser negativo.").optional().nullable(),
   base_price_currency: z.string().default("ARS"),
-  // Precio de un mes completo (migración 063). Sólo se guarda en unidades
-  // mixtas: `conPrecioMensual` lo deja en NULL para cualquier otra vocación.
+  // Precio de un mes completo (migraciones 063 y 066). Sólo se guarda en
+  // unidades mensuales y mixtas: `conPrecioMensual` lo anula en temporario.
   // min(0.01) y no positive(): numeric(14,2) redondea 0,004 a 0,00 y el CHECK
   // units_monthly_price_positive lo rechazaría con un error sin campo.
   monthly_price: z.coerce
@@ -260,6 +261,102 @@ export async function getUnit(id: string) {
   return data;
 }
 
+/** Última renta mensual cargada en una unidad: la sugerencia del precio por mes. */
+export type UnitRentSuggestion = {
+  amount: number;
+  currency: string;
+  /** Desde cuándo rige esa renta: el check-in de la reserva. */
+  check_in_date: string;
+};
+
+export type UnitRentSuggestionResult =
+  | { ok: true; suggestion: UnitRentSuggestion | null }
+  | { ok: false; error: string };
+
+/** Rentas que se miran antes de rendirse: las más recientes, por si alguna es basura. */
+const RENTAS_A_REVISAR = 5;
+
+/**
+ * Piso de una renta creíble por moneda, además del precio por noche. Hace
+ * falta aparte porque muchas mensuales no tienen noche cargada, y en pesos una
+ * renta de tres o cuatro cifras no existe (la mediana real ronda 600.000): hay
+ * una unidad con cinco reservas seguidas a "ARS 550", casi seguro dólares
+ * cargados en la moneda equivocada. En otras monedas, 100.
+ */
+const RENTA_MINIMA_POR_MONEDA: Record<string, number> = { ARS: 10_000 };
+const RENTA_MINIMA_OTRA_MONEDA = 100;
+
+/**
+ * Sugerencia para el precio por mes de una unidad mensual o mixta que todavía
+ * no lo tiene: la renta de su última reserva mensual. La 066 no hizo backfill
+ * a propósito — las rentas cargadas son ruidosas (hay reservas con 550 ARS de
+ * renta) —, así que el formulario la ofrece y una persona la confirma.
+ *
+ * Una renta tiene que ser creíble para sugerirse: un mes nunca cuesta menos
+ * que una noche (`base_price`, que en las mensuales sigue en la base) ni menos
+ * que el piso de su moneda. Y va en la moneda de la unidad: una renta en USD
+ * no dice nada de un precio en ARS.
+ *
+ * Son montos de contratos: sólo los ve quien puede editar la unidad. Nunca
+ * lanza — es una ayuda del formulario y, si algo falla, el campo queda vacío
+ * como siempre.
+ */
+export async function getUnitRentSuggestion(unitId: string): Promise<UnitRentSuggestionResult> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) return { ok: true, suggestion: null };
+  if (!unitId) return { ok: false, error: "No encontramos la unidad." };
+  // Hoy ningún rol con alcance de propietario edita unidades; si eso cambia,
+  // igual no lee rentas de unidades ajenas.
+  const ownerScope = await getOwnerScope();
+  const admin = createAdminClient();
+
+  const { data: unit, error: unitError } = await admin
+    .from("units")
+    .select("id, base_price, base_price_currency")
+    .eq("id", unitId)
+    .eq("organization_id", organization.id)
+    .filter(...scopeFilter(ownerScope, "id"))
+    .maybeSingle();
+  if (unitError) {
+    logActionError("getUnitRentSuggestion:unit", unitError);
+    return { ok: false, error: "No se pudo leer la unidad." };
+  }
+  if (!unit) return { ok: false, error: "No encontramos la unidad." };
+
+  const currency = (unit.base_price_currency as string | null) || "ARS";
+  // PostgREST puede devolver el numeric como string.
+  const noche = Number(unit.base_price);
+  const piso = Math.max(
+    RENTA_MINIMA_POR_MONEDA[currency] ?? RENTA_MINIMA_OTRA_MONEDA,
+    Number.isFinite(noche) && noche > 0 ? noche : 0,
+  );
+
+  const { data: rentas, error } = await admin
+    .from("bookings")
+    .select("monthly_rent, check_in_date")
+    .eq("organization_id", organization.id)
+    .eq("unit_id", unit.id)
+    .eq("mode", "mensual")
+    .eq("currency", currency)
+    .not("status", "in", "(cancelada,no_show)")
+    .gt("monthly_rent", 0)
+    .order("check_in_date", { ascending: false })
+    .limit(RENTAS_A_REVISAR);
+  if (error) {
+    logActionError("getUnitRentSuggestion:bookings", error);
+    return { ok: false, error: "No se pudo leer la última renta." };
+  }
+
+  const creible = (rentas ?? [])
+    .map((r) => ({ amount: Number(r.monthly_rent), check_in_date: r.check_in_date as string }))
+    .find((r) => Number.isFinite(r.amount) && r.amount >= piso);
+  return {
+    ok: true,
+    suggestion: creible ? { ...creible, currency } : null,
+  };
+}
+
 /**
  * Resultado de alta/edición de unidad.
  *
@@ -303,14 +400,14 @@ function validarUnidad(
 }
 
 /**
- * El precio mensual es de las mixtas y de nadie más. Si la vocación cambió a
- * temporario o mensual se borra acá, en el servidor, para que ningún lector
- * muestre el precio de un mes de una unidad que ya no se alquila así. (Si el
- * pedido no trae el campo, queda `undefined`: supabase-js no lo manda y lo
- * guardado no se toca.)
+ * El precio mensual es de las mensuales y las mixtas (migraciones 063 y 066).
+ * Si la vocación cambió a temporario se borra acá, en el servidor, para que
+ * ningún lector muestre el precio de un mes de una unidad que ya no se
+ * alquila así. (Si el pedido no trae el campo, queda `undefined`: supabase-js
+ * no lo manda y lo guardado no se toca.)
  */
 function conPrecioMensual(v: ValidatedUnit): ValidatedUnit {
-  return v.default_mode === "mixto" ? v : { ...v, monthly_price: null };
+  return unitPriceKinds(v.default_mode).monthly ? v : { ...v, monthly_price: null };
 }
 
 /** Traduce los choques esperables contra la base: código repetido y precio por mes en 0. */
@@ -359,7 +456,12 @@ function mensajeCodigoOcupado(otra: { name: string; active: boolean }): string {
 
 export async function createUnit(input: UnitInput): Promise<UnitMutationResult> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  // La UI ya esconde el alta a quien sólo ve unidades; esto es el borde real
+  // (las actions usan service_role, así que la base no frena nada).
+  if (!can(role, "units", "create")) {
+    return { ok: false, error: "No tenés permiso para crear unidades." };
+  }
   const parsed = validarUnidad(input);
   if (!parsed.ok) return parsed;
   const validated = conPrecioMensual(parsed.data);
@@ -416,7 +518,10 @@ export async function createUnit(input: UnitInput): Promise<UnitMutationResult> 
 
 export async function updateUnit(id: string, input: UnitInput): Promise<UnitMutationResult> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) {
+    return { ok: false, error: "No tenés permiso para editar unidades." };
+  }
   const parsed = validarUnidad(input);
   if (!parsed.ok) return parsed;
   const validated = conPrecioMensual(parsed.data);
@@ -610,7 +715,11 @@ export async function changeUnitStatus(
   reason: string = "Drag & drop"
 ): Promise<void> {
   const session = await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  // Lanza y no devuelve: el contrato es void y quien la llama ya maneja la
+  // excepción. Es un borde de seguridad — la UI no ofrece esto a quien no
+  // edita unidades —, no un error que alguien tenga que leer.
+  if (!can(role, "units", "update")) throw new Error("No tenés permiso para editar unidades.");
   const admin = createAdminClient();
 
   // Posición al final de la nueva columna
@@ -657,7 +766,8 @@ export async function reorderUnits(
   orderedIds: string[]
 ): Promise<void> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) throw new Error("No tenés permiso para editar unidades.");
   const admin = createAdminClient();
 
   // Update en lote — para 60 units es trivial
@@ -682,7 +792,9 @@ export async function reorderUnits(
  */
 export async function reorderUnitsGlobal(orderedIds: string[]): Promise<void> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  // El orden es de toda la org (lo ven todos en el Calendario): es editar.
+  if (!can(role, "units", "update")) throw new Error("No tenés permiso para editar unidades.");
   const admin = createAdminClient();
 
   await Promise.all(
@@ -708,8 +820,28 @@ export async function linkOwnerToUnit(
   commission_pct_override: number | null = null
 ) {
   await requireSession();
-  await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) throw new Error("No tenés permiso para editar unidades.");
   const admin = createAdminClient();
+
+  // El vínculo no tiene organization_id propio: la unidad y el propietario
+  // tienen que ser de la org activa (antes un id ajeno pasaba derecho).
+  const [{ data: unit }, { data: owner }] = await Promise.all([
+    admin
+      .from("units")
+      .select("id")
+      .eq("id", unitId)
+      .eq("organization_id", organization.id)
+      .maybeSingle(),
+    admin
+      .from("owners")
+      .select("id")
+      .eq("id", ownerId)
+      .eq("organization_id", organization.id)
+      .maybeSingle(),
+  ]);
+  if (!unit) throw new Error("Unidad no encontrada");
+  if (!owner) throw new Error("Propietario no encontrado");
 
   if (is_primary) {
     // Asegurar que no haya otro primario
@@ -782,9 +914,25 @@ export async function updateUnitOwnerCommission(
 
 export async function unlinkOwnerFromUnit(unitOwnerId: string, unitId: string) {
   await requireSession();
-  await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) throw new Error("No tenés permiso para editar unidades.");
   const admin = createAdminClient();
-  const { error } = await admin.from("unit_owners").delete().eq("id", unitOwnerId);
+
+  // Mismo acote que updateUnitOwnerCommission: la unidad es de la org activa y
+  // el vínculo es de esa unidad (antes se borraba por id, de cualquier org).
+  const { data: unit } = await admin
+    .from("units")
+    .select("id")
+    .eq("id", unitId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!unit) throw new Error("Unidad no encontrada");
+
+  const { error } = await admin
+    .from("unit_owners")
+    .delete()
+    .eq("id", unitOwnerId)
+    .eq("unit_id", unitId);
   if (error) throw new Error(error.message);
   revalidatePath(`/dashboard/unidades/${unitId}`);
 }

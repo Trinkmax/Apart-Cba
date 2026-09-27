@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { completeChannelGuest, completeChannelPrice } from "@/lib/actions/bookings";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
-import { formatDate, formatMoney, formatNights } from "@/lib/format";
+import { formatDate, formatMoney, formatNights, parsePercentInput } from "@/lib/format";
 import {
   channelCommissionPctFor,
   computeBookingEconomics,
@@ -125,7 +125,8 @@ export function CompleteGuestDialog({
   const sourceLabel = sourceMeta?.label ?? booking.source;
 
   const totalNum = parseMoneyInput(total);
-  const channelPctNum = parseMoneyInput(channelPct);
+  // Un % nunca lleva miles: "3,125" es 3,125 % (parseMoneyInput leería 3125).
+  const channelPctNum = parsePercentInput(channelPct);
   // La comisión de administración de una reserva de OTA suele venir vacía (la
   // resuelve el server con la de la unidad al guardar): si no la sabemos, el
   // desglose lo dice en vez de inventar un 0.
@@ -179,8 +180,18 @@ export function CompleteGuestDialog({
       toast.error("Ingresá el nombre del huésped");
       return;
     }
-    if (doPrice && (totalNum === null || totalNum <= 0)) {
+    if (doPrice && totalNum === null) {
+      toast.error("No se entiende el total", { description: "Escribilo como 150.000 o 150000,50." });
+      return;
+    }
+    if (doPrice && totalNum !== null && totalNum <= 0) {
       toast.error("Cargá un total mayor a 0");
+      return;
+    }
+    // Una comisión tipeada que no se entiende no puede viajar como null: el
+    // server lo toma como "sin tipear" y guardaría en silencio la del canal.
+    if (doPrice && channelPct.trim() !== "" && channelPctNum === null) {
+      toast.error("No se entiende la comisión del canal", { description: "Escribila como 15 o 15,5." });
       return;
     }
     if (doPrice && channelPctNum !== null && (channelPctNum < 0 || channelPctNum > 100)) {

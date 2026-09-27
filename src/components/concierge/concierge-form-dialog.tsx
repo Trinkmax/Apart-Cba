@@ -123,7 +123,7 @@ export function ConciergeFormDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="max-w-md max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-md overflow-y-auto">
         <DialogHeader><DialogTitle>Nueva tarea</DialogTitle></DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           <div className="space-y-1.5">

@@ -66,7 +66,7 @@ export function DifusionesClient({ broadcasts, channels, templates }: Props) {
               <Plus className="size-4 mr-1.5" /> Nueva difusión
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-w-2xl">
+          <DialogContent className="sm:max-w-2xl">
             <DialogHeader><DialogTitle>Nueva difusión</DialogTitle></DialogHeader>
             <BroadcastForm
               channels={channels}

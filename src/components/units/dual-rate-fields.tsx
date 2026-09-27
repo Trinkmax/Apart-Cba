@@ -1,23 +1,38 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarRange, Moon, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CalendarRange, History, Moon, TriangleAlert, type LucideIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { formatMoney } from "@/lib/format";
+import type { UnitRentSuggestion } from "@/lib/actions/units";
+import { formatDate, formatMoney } from "@/lib/format";
 import {
   compareMonthlyToNightly,
   DAYS_PER_MONTH,
   formatPriceInput,
   parsePriceInput,
+  unitPriceKinds,
   type MonthlyVsNightly,
 } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
+import type { UnitDefaultMode } from "@/lib/types/database";
 
 /**
- * Tarifa doble de una unidad mixta (migración 063): precio por noche y precio
- * de un mes completo, lado a lado, y abajo la cuenta que se hace el dueño al
- * ponerlos — "¿cuánto descuento doy por quedarse un mes?".
+ * Precios de una unidad según su vocación (migraciones 063 y 066).
+ *
+ * - Mixta: tarifa doble — precio por noche y precio de un mes completo, lado a
+ *   lado, y abajo la cuenta que se hace el dueño al ponerlos: "¿cuánto
+ *   descuento doy por quedarse un mes?".
+ * - Mensual: sólo el mes. Sin noche ni comparador, pero la MISMA tarjeta, el
+ *   mismo input y las mismas guardas que el "Por mes" de la mixta.
+ * - Temporaria: sólo la noche, con la misma tarjeta y las mismas guardas que
+ *   el "Por noche" de la mixta. Antes era un input suelto que leía "45.000"
+ *   como 45 y no avisaba lo que no entendía.
+ *
+ * Es un solo componente a propósito: al cambiar la vocación, la tarjeta que
+ * sigue a la vista queda en el mismo lugar del árbol (el mes entre mixta y
+ * mensual, la noche entre mixta y temporaria), así lo tipeado —y su marca de
+ * inválido, que vive en el form— no se pierde.
  */
 
 /**
@@ -53,7 +68,7 @@ const DESCUENTOS = [20, 30, 40, 50] as const;
  */
 const AHORRO_SOSPECHOSO_PCT = 75;
 
-/** Precio de la tarifa doble que puede quedar a medio escribir o mal escrito. */
+/** Precio de la unidad que puede quedar a medio escribir o mal escrito. */
 export type RateField = "base_price" | "monthly_price";
 
 /** Lo que llega del form: PostgREST puede haber dejado un `numeric` como string. */
@@ -78,12 +93,19 @@ function mesConDescuento(thirtyNights: number, pct: number): number {
 }
 
 interface DualRateFieldsProps {
-  /** Moneda de los dos precios (`base_price_currency`). */
+  /**
+   * Qué precios se cargan, según la vocación: "mixto" (noche + mes, con el
+   * comparador), "mensual" (sólo el mes) o "temporario" (sólo la noche).
+   */
+  mode?: UnitDefaultMode;
+  /** Moneda de los precios (`base_price_currency`). */
   currency: string;
-  nightly: number | null | undefined;
-  monthly: number | null | undefined;
-  onNightlyChange: (value: number | null) => void;
-  onMonthlyChange: (value: number | null) => void;
+  nightly?: number | null;
+  monthly?: number | null;
+  /** Obligatorio en "mixto" y "temporario"; en "mensual" no hay noche que editar. */
+  onNightlyChange?: (value: number | null) => void;
+  /** Obligatorio en "mixto" y "mensual"; en "temporario" no hay mes que editar. */
+  onMonthlyChange?: (value: number | null) => void;
   /** Error del servidor sobre el precio por mes. */
   monthlyError?: string | null;
   /**
@@ -92,9 +114,20 @@ interface DualRateFieldsProps {
    * último válido, no el que se ve en pantalla.
    */
   onInvalidChange?: (field: RateField, invalid: boolean) => void;
+  /**
+   * Última renta cargada en la unidad (`getUnitRentSuggestion`). Se ofrece
+   * mientras "Por mes" esté vacío y sólo si está en la moneda elegida.
+   */
+  lastRent?: UnitRentSuggestion | null;
+  /**
+   * La unidad está publicada en la web pública. Una mensual avisa que ahí se
+   * sigue mostrando "≈ noche × 30", no este precio.
+   */
+  publishedOnWeb?: boolean;
 }
 
 export function DualRateFields({
+  mode = "mixto",
   currency,
   nightly,
   monthly,
@@ -102,74 +135,198 @@ export function DualRateFields({
   onMonthlyChange,
   monthlyError,
   onInvalidChange,
+  lastRent,
+  publishedOnWeb = false,
 }: DualRateFieldsProps) {
+  // La misma regla que el resto del panel: temporaria → noche, mensual → mes,
+  // mixta → los dos (y sólo ahí, el comparador).
+  const { nightly: conNoche, monthly: conMes } = unitPriceKinds(mode);
+  const tarifaDoble = conNoche && conMes;
   const noche = aNumero(nightly);
   const mes = aNumero(monthly);
-  const comparacion = compareMonthlyToNightly(mes, noche);
-  // Un descuento elegido reemplaza lo que haya escrito en "Por mes", aunque el
-  // número sea el mismo que el form ya tenía (el input sólo sigue al valor
-  // cuando cambia): se remonta el input para que el texto y la marca de
-  // inválido, que el form limpia al elegir, digan lo mismo.
+  const comparacion = tarifaDoble ? compareMonthlyToNightly(mes, noche) : null;
+  // Un precio elegido (un descuento, la última renta) reemplaza lo que haya
+  // escrito en "Por mes", aunque el número sea el mismo que el form ya tenía
+  // (el input sólo sigue al valor cuando cambia): se remonta el input para que
+  // el texto y la marca de inválido, que el form limpia al elegir, digan lo
+  // mismo.
   const [elegido, setElegido] = useState(0);
   function elegirMes(value: number) {
     setElegido((k) => k + 1);
-    onMonthlyChange(value);
+    onMonthlyChange?.(value);
   }
+  // La última renta sólo mientras el mes esté vacío y en la moneda elegida:
+  // una renta en ARS no sirve de precio si la unidad pasó a cobrar en USD.
+  const renta = mes == null && lastRent && lastRent.currency === currency ? lastRent : null;
 
   return (
     <div className="space-y-3">
+      {/* Cada hijo tiene su lugar fijo (false ocupa el suyo): al cambiar la
+          vocación, la tarjeta que sigue a la vista no se remonta — el mes
+          entre mixta y mensual, la noche entre mixta y temporaria. */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <RateCard
-          tono="noche"
-          icon={Moon}
-          inputId="base_price"
-          title="Por noche"
-          caption="Estadías cortas"
-          currency={currency}
-        >
-          <RateInput
-            id="base_price"
+        {conNoche && (
+          <RateCard
             tono="noche"
-            value={noche}
-            onValueChange={onNightlyChange}
-            onInvalidChange={(invalid) => onInvalidChange?.("base_price", invalid)}
+            icon={Moon}
+            inputId="base_price"
+            title="Por noche"
+            caption="Estadías cortas"
             currency={currency}
-            suffix="/ noche"
-          />
-        </RateCard>
-        <RateCard
-          tono="mes"
-          icon={CalendarRange}
-          inputId="monthly_price"
-          title="Por mes"
-          caption="Un mes completo"
-          currency={currency}
-        >
-          <RateInput
-            key={elegido}
-            id="monthly_price"
+          >
+            <RateInput
+              id="base_price"
+              tono="noche"
+              value={noche}
+              onValueChange={(v) => onNightlyChange?.(v)}
+              onInvalidChange={(invalid) => onInvalidChange?.("base_price", invalid)}
+              currency={currency}
+              suffix="/ noche"
+            />
+          </RateCard>
+        )}
+        {conMes && (
+          <RateCard
             tono="mes"
-            value={mes}
-            onValueChange={onMonthlyChange}
-            onInvalidChange={(invalid) => onInvalidChange?.("monthly_price", invalid)}
+            icon={CalendarRange}
+            inputId="monthly_price"
+            title="Por mes"
+            caption="Un mes completo"
             currency={currency}
-            suffix="/ mes"
-            error={monthlyError}
-            requirePositive
-          />
-        </RateCard>
+          >
+            <RateInput
+              key={elegido}
+              id="monthly_price"
+              tono="mes"
+              value={mes}
+              onValueChange={(v) => onMonthlyChange?.(v)}
+              onInvalidChange={(invalid) => onInvalidChange?.("monthly_price", invalid)}
+              currency={currency}
+              suffix="/ mes"
+              error={monthlyError}
+              requirePositive
+            />
+            {renta && <UltimaRenta renta={renta} onPick={elegirMes} />}
+          </RateCard>
+        )}
+        {!conNoche && <AyudaMensual publishedOnWeb={publishedOnWeb} />}
+        {!conMes && <AyudaTemporaria />}
       </div>
 
-      {comparacion && mes != null ? (
-        <Comparador
-          comparacion={comparacion}
-          mes={mes}
-          currency={currency}
-          onPick={elegirMes}
-        />
-      ) : (
-        <SinComparacion noche={noche} mes={mes} currency={currency} onPick={elegirMes} />
-      )}
+      {tarifaDoble &&
+        (comparacion && mes != null ? (
+          <Comparador
+            comparacion={comparacion}
+            mes={mes}
+            currency={currency}
+            onPick={elegirMes}
+          />
+        ) : (
+          <SinComparacion noche={noche} mes={mes} currency={currency} onPick={elegirMes} />
+        ))}
+    </div>
+  );
+}
+
+/**
+ * "Última renta cargada: ARS 950.000 (desde 02/05/2026) · Usar". Entra por el
+ * mismo camino que un descuento sugerido: el input se remonta y el form limpia
+ * las marcas de inválido.
+ */
+function UltimaRenta({
+  renta,
+  onPick,
+}: {
+  renta: UnitRentSuggestion;
+  onPick: (value: number) => void;
+}) {
+  // En la forma en que se escribe en el input (igual que su eco), no la de
+  // formatMoney: es el número que va a quedar escrito.
+  const monto = `${renta.currency} ${formatPriceInput(renta.amount)}`;
+  return (
+    <div className="mt-1 flex items-center gap-2.5 rounded-lg border border-violet-200/70 bg-background/70 px-2.5 py-1.5 dark:border-violet-400/20 dark:bg-background/40">
+      <History aria-hidden className="size-3.5 shrink-0 text-violet-600 dark:text-violet-300" />
+      <p className="min-w-0 flex-1 text-[11px] leading-snug text-muted-foreground">
+        Última renta cargada:{" "}
+        <span className="font-medium tabular-nums text-foreground">{monto}</span>{" "}
+        <span className="whitespace-nowrap">(desde {formatDate(renta.check_in_date)})</span>
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          onPick(renta.amount);
+          // El recuadro se desmonta al completarse el mes y el foco caía al
+          // diálogo: va al input, que ahora muestra la renta.
+          requestAnimationFrame(() => document.getElementById("monthly_price")?.focus());
+        }}
+        className={cn(
+          "h-8 shrink-0 rounded-full border px-3 text-xs font-medium transition-colors sm:h-7 sm:px-2.5",
+          "hover:border-violet-400/60 hover:bg-violet-500/5 dark:hover:border-violet-500/50",
+          "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-violet-500/25",
+        )}
+      >
+        Usar
+        <span className="sr-only"> {monto} como precio por mes</span>
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Al lado del mes de una unidad mensual: para qué sirve el precio y, si está
+ * publicada, qué sigue mostrando la web pública (que todavía cotiza desde la
+ * noche; esa etapa no se encaró).
+ */
+function AyudaMensual({ publishedOnWeb }: { publishedOnWeb: boolean }) {
+  return (
+    <div className="flex gap-3 rounded-xl border border-dashed p-3.5 sm:p-4">
+      <span
+        aria-hidden
+        className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"
+      >
+        <CalendarRange className="size-4" />
+      </span>
+      <div className="min-w-0 space-y-2">
+        <div className="space-y-1">
+          <p className="text-sm font-medium leading-snug">Lo que sale un mes completo</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Completa la <strong className="font-medium text-foreground">Renta mensual</strong>{" "}
+            cuando cargás una reserva mensual en esta unidad. Si un contrato arregla otro
+            importe, lo cambiás en la reserva.
+          </p>
+        </div>
+        {publishedOnWeb && (
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            En la web pública se sigue viendo ≈ precio por noche × 30. Ese precio por noche se
+            cambia en <strong className="font-medium text-foreground">Listing en rentOS</strong>.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Al lado de la noche de una unidad temporaria: para qué sirve el precio. Es
+ * la pareja de AyudaMensual, así la tarjeta no queda sola en media fila.
+ */
+function AyudaTemporaria() {
+  return (
+    <div className="flex gap-3 rounded-xl border border-dashed p-3.5 sm:p-4">
+      <span
+        aria-hidden
+        className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"
+      >
+        <Moon className="size-4" />
+      </span>
+      <div className="min-w-0 space-y-1">
+        <p className="text-sm font-medium leading-snug">Lo que sale una noche</p>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Completa el <strong className="font-medium text-foreground">Precio/noche</strong>{" "}
+          cuando cargás una reserva en esta unidad. Si una estadía arregla otro precio, lo
+          cambiás en la reserva.
+        </p>
+      </div>
     </div>
   );
 }

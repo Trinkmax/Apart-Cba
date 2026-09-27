@@ -62,7 +62,7 @@ export function RapidosList({ rapidos, canEdit }: Props) {
                 <Plus className="size-4" /> Nuevo rápido
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="sm:max-w-lg">
               <DialogHeader><DialogTitle>Nuevo rápido</DialogTitle></DialogHeader>
               <RapidoForm onClose={() => setCreating(false)} />
             </DialogContent>
@@ -119,7 +119,7 @@ export function RapidosList({ rapidos, canEdit }: Props) {
                       <DialogTrigger asChild>
                         <Button size="sm" variant="ghost" className="h-8 w-8 p-0"><Pencil className="size-3.5" /></Button>
                       </DialogTrigger>
-                      <DialogContent className="max-w-lg">
+                      <DialogContent className="sm:max-w-lg">
                         <DialogHeader><DialogTitle>Editar rápido</DialogTitle></DialogHeader>
                         {editing && <RapidoForm initial={editing} onClose={() => setEditing(null)} />}
                       </DialogContent>

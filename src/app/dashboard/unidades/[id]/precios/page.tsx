@@ -1,13 +1,21 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, DollarSign } from "lucide-react";
 import { getUnit } from "@/lib/actions/units";
+import { getCurrentOrg } from "@/lib/actions/org";
 import { listActiveRules, getCalendarPrices } from "@/lib/actions/pricing";
+import { can } from "@/lib/permissions";
 import { RateCalendarClient } from "@/components/pricing/rate-calendar-client";
 import { unitMonthlyPrice } from "@/lib/units/pricing";
 
 export default async function UnitPricingPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  // Tarifas = plata: mismo corte que la tarjeta "Tarifas" de la ficha. Sin
+  // esto limpieza y mantenimiento (que sí ven unidades) llegaban por URL a los
+  // precios por noche y, en mensuales y mixtas, a la renta de lista.
+  const { role } = await getCurrentOrg();
+  if (!can(role, "payments", "view")) redirect(`/dashboard/unidades/${id}`);
 
   const now = new Date();
   const year = now.getFullYear();
@@ -51,7 +59,7 @@ export default async function UnitPricingPage({ params }: { params: Promise<{ id
         initialBasePrice={calendar.basePrice}
         initialCurrency={calendar.currency}
         initialRules={rules}
-        isMixto={unit.default_mode === "mixto"}
+        unitMode={unit.default_mode}
         monthlyPrice={unitMonthlyPrice(unit)}
         monthlyCurrency={unit.base_price_currency ?? "ARS"}
       />

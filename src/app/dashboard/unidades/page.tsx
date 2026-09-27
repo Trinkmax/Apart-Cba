@@ -58,6 +58,7 @@ export default async function UnidadesPage() {
         units={units}
         canDelete={canDelete}
         canViewMoney={canViewMoney}
+        canReorder={can(role, "units", "update")}
         emptyCta={
           canCreateUnit ? (
             <UnitFormDialog

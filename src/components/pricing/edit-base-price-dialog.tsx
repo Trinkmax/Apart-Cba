@@ -60,7 +60,7 @@ export function EditBasePriceDialog({ unitId, currentPrice, currentCurrency, onS
           <Pencil size={12} /> Editar precio base
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
           <DialogTitle>Precio base por noche</DialogTitle>
         </DialogHeader>

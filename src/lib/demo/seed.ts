@@ -71,10 +71,12 @@ function weighted<T extends string>(
 // Direcciones y barrios reales de Córdoba capital: el visitante tiene que
 // reconocer el mapa mental de su propio negocio, no leer "Unidad 1 / Unidad 2".
 
-// `monthly`: precio de un mes completo (migración 063). Sólo lo lleva la mixta;
-// createUnit/updateUnit lo anulan en otra vocación, pero el sembrado inserta
-// directo, así que el null va a mano. Queda bien por debajo de 30 noches
-// sueltas (87.000 × 30 = 2.610.000): el mes se cotiza con descuento.
+// `monthly`: precio de un mes completo (migraciones 063 y 066). Lo llevan la
+// mixta y la mensual; createUnit/updateUnit lo anulan en temporario, pero el
+// sembrado inserta directo, así que el null va a mano. El de la mixta queda
+// bien por debajo de 30 noches sueltas (87.000 × 30 = 2.610.000): el mes se
+// cotiza con descuento. El de la mensual es la renta de su contrato de ejemplo
+// (ver MONTHLY_UNIT_INDEX), así la reserva y la unidad dicen lo mismo.
 const UNITS = [
   { code: "NC-4B",   name: "Rondeau 240, 4°B",              neighborhood: "Nueva Córdoba",  bedrooms: 1, bathrooms: 1, maxGuests: 3, price: 68_000,  cleaning: 12_000, mode: "temporario", monthly: null      },
   { code: "NC-9A",   name: "Chacabuco 1120, 9°A",           neighborhood: "Nueva Córdoba",  bedrooms: 2, bathrooms: 2, maxGuests: 5, price: 96_000,  cleaning: 15_000, mode: "temporario", monthly: null      },
@@ -82,7 +84,7 @@ const UNITS = [
   { code: "GUE-PH",  name: "Achával Rodríguez 340, PH",     neighborhood: "Güemes",         bedrooms: 2, bathrooms: 1, maxGuests: 4, price: 87_000,  cleaning: 14_000, mode: "mixto",      monthly: 1_250_000 },
   { code: "COF-3A",  name: "Jerónimo Cortés 455, 3°A",      neighborhood: "Cofico",         bedrooms: 1, bathrooms: 1, maxGuests: 3, price: 54_000,  cleaning: 10_000, mode: "temporario", monthly: null      },
   { code: "GP-1B",   name: "25 de Mayo 1580, 1°B",          neighborhood: "General Paz",    bedrooms: 2, bathrooms: 1, maxGuests: 4, price: 72_000,  cleaning: 12_500, mode: "temporario", monthly: null      },
-  { code: "ALB-5D",  name: "Duarte Quirós 1345, 5°D",       neighborhood: "Alberdi",        bedrooms: 1, bathrooms: 1, maxGuests: 2, price: 49_000,  cleaning: 10_000, mode: "mensual",    monthly: null      },
+  { code: "ALB-5D",  name: "Duarte Quirós 1345, 5°D",       neighborhood: "Alberdi",        bedrooms: 1, bathrooms: 1, maxGuests: 2, price: 49_000,  cleaning: 10_000, mode: "mensual",    monthly: 520_000   },
   { code: "VBEL-DX", name: "Recta Martinoli 5820, dúplex",  neighborhood: "Villa Belgrano", bedrooms: 3, bathrooms: 2, maxGuests: 6, price: 129_000, cleaning: 19_000, mode: "temporario", monthly: null      },
 ] as const;
 

@@ -51,7 +51,7 @@ import {
 } from "@/components/ui/dialog";
 import { UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney, getInitials } from "@/lib/format";
-import { unitMonthlyPrice } from "@/lib/units/pricing";
+import { unitMonthlyPrice, unitPriceKinds } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import { reorderUnitsGlobal } from "@/lib/actions/units";
 import { UnitDeleteAction } from "@/components/units/unit-delete-action";
@@ -62,12 +62,18 @@ export function UnitsGrid({
   emptyCta,
   canDelete = false,
   canViewMoney = true,
+  canReorder = false,
 }: {
   units: UnitWithRelations[];
   emptyCta?: React.ReactNode;
   /** Mostrar acción "Eliminar" en cada card (sólo admin). */
   canDelete?: boolean;
-  /** Si false, esconde las tarifas de cada card (noche y, en mixtas, mes). */
+  /**
+   * Arrastrar para reordenar (units:update). Sin el permiso el servidor
+   * rechaza el orden nuevo, así que ni se ofrece el arrastre.
+   */
+  canReorder?: boolean;
+  /** Si false, esconde las tarifas de cada card (noche y/o mes, según la vocación). */
   canViewMoney?: boolean;
 }) {
   const router = useRouter();
@@ -107,7 +113,7 @@ export function UnitsGrid({
     });
   }, [orderedUnits, query, statusFilter]);
 
-  const dragEnabled = !query && statusFilter === "all";
+  const dragEnabled = canReorder && !query && statusFilter === "all";
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -174,7 +180,7 @@ export function UnitsGrid({
         </Select>
       </div>
 
-      {!dragEnabled && filtered.length > 0 && (
+      {canReorder && !dragEnabled && filtered.length > 0 && (
         <p className="text-xs text-muted-foreground mt-2">
           Limpiá la búsqueda y los filtros para reordenar arrastrando.
         </p>
@@ -262,10 +268,17 @@ function SortableUnitCard({
   } = useSortable({ id: unit.id, disabled: !draggable });
 
   const meta = UNIT_STATUS_META[unit.status];
+  // Cada vocación muestra sus precios (migraciones 063 y 066): temporaria →
+  // noche, mensual → mes, mixta → los dos. La noche de una mensual sólo la usa
+  // la web pública, así que acá no se muestra.
+  const priceKinds = unitPriceKinds(unit.default_mode);
   // PostgREST puede devolver numeric como string → Number() antes de comparar.
-  const nightlyPrice = Number(unit.base_price ?? 0);
-  // Sólo mixtas (migración 063); el helper descarta un valor viejo de otra vocación.
+  const nightlyPrice = priceKinds.nightly ? Number(unit.base_price ?? 0) : 0;
+  // El helper descarta un valor viejo de una unidad que cambió de vocación.
   const monthlyPrice = unitMonthlyPrice(unit);
+  // Una mensual sin precio por mes se quedaría sin ninguna tarifa en la card:
+  // parecería una unidad sin precio y no una a la que le falta cargarlo.
+  const monthlyMissing = !priceKinds.nightly && monthlyPrice === null;
   const currency = unit.base_price_currency ?? "ARS";
   const style = {
     transform: CSS.Translate.toString(transform),
@@ -360,7 +373,7 @@ function SortableUnitCard({
                 un precio en 0 eso renderiza un "0" suelto en la card. El mes va
                 en su propia línea: "· $ 1.250.000,00 / mes" al lado de la noche
                 no entra en el ancho de la card y se parte feo. */}
-            {canViewMoney && (nightlyPrice > 0 || monthlyPrice !== null) && (
+            {canViewMoney && (nightlyPrice > 0 || monthlyPrice !== null || monthlyMissing) && (
               <div className="mt-3 space-y-0.5">
                 {nightlyPrice > 0 && (
                   <div className="text-sm font-semibold">
@@ -373,6 +386,9 @@ function SortableUnitCard({
                     {formatMoney(monthlyPrice, currency)}
                     <span className="text-xs text-muted-foreground font-normal ml-1">/ mes</span>
                   </div>
+                )}
+                {monthlyMissing && (
+                  <div className="text-xs text-muted-foreground italic">Precio por mes sin cargar</div>
                 )}
               </div>
             )}

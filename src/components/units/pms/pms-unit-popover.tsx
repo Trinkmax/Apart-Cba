@@ -18,7 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, getInitials } from "@/lib/format";
-import { unitMonthlyPrice } from "@/lib/units/pricing";
+import { unitMonthlyPrice, unitPriceKinds } from "@/lib/units/pricing";
 import type { UnitWithRelations } from "@/lib/types/database";
 
 interface PmsUnitPopoverProps {
@@ -28,7 +28,7 @@ interface PmsUnitPopoverProps {
   nightsTotal: number;
   revenue: number;
   currency: string;
-  /** Si es false, esconde "Ingresos" y las tarifas (noche y, en mixtas, mes). */
+  /** Si es false, esconde "Ingresos" y las tarifas (noche y/o mes, según la vocación). */
   canViewMoney?: boolean;
 }
 
@@ -42,7 +42,11 @@ export function PmsUnitPopoverContent({
   canViewMoney = true,
 }: PmsUnitPopoverProps) {
   const meta = UNIT_STATUS_META[unit.status];
-  // Precio por mes: sólo mixtas (migración 063), misma moneda que la noche.
+  // Cada vocación muestra sus precios (migraciones 063 y 066): temporaria →
+  // noche, mensual → mes, mixta → los dos; el mes va en la moneda de la noche.
+  // La noche de una mensual sólo la usa la web pública. Sin precio por mes
+  // cargado no se muestra nada: el faltante se ve en la ficha y en la grilla.
+  const priceKinds = unitPriceKinds(unit.default_mode);
   const monthlyPrice = unitMonthlyPrice(unit);
 
   return (
@@ -93,7 +97,7 @@ export function PmsUnitPopoverContent({
         {unit.max_guests && (
           <SpecRow icon={<Users size={11} />} label={`hasta ${unit.max_guests}`} />
         )}
-        {canViewMoney && unit.base_price !== null && unit.base_price !== undefined && (
+        {canViewMoney && priceKinds.nightly && unit.base_price !== null && unit.base_price !== undefined && (
           <SpecRow
             icon={<DollarSign size={11} />}
             label={`${formatMoney(Number(unit.base_price), unit.base_price_currency ?? "ARS")} /noche`}

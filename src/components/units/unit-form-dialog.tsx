@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
@@ -26,9 +26,16 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DualRateFields, type RateField } from "@/components/units/dual-rate-fields";
-import { createUnit, updateUnit, type UnitInput } from "@/lib/actions/units";
+import {
+  createUnit,
+  getUnitRentSuggestion,
+  updateUnit,
+  type UnitInput,
+  type UnitRentSuggestion,
+} from "@/lib/actions/units";
 import { UNIT_DEFAULT_MODE_META, UNIT_STATUSES, UNIT_STATUS_META } from "@/lib/constants";
-import { unitMonthlyPrice } from "@/lib/units/pricing";
+import { parseAmountInput, parsePercentInput } from "@/lib/format";
+import { formatPriceInput, unitMonthlyPrice, unitPriceKinds } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import type { Owner, Unit, UnitDefaultMode } from "@/lib/types/database";
 
@@ -42,6 +49,65 @@ const MONEDAS = [
   { value: "EUR", label: "EUR — Euros" },
   { value: "USDT", label: "USDT" },
 ] as const;
+
+/**
+ * Encabezado de la pestaña Precios según la vocación (migración 066). La
+ * moneda va arriba en las tres, con la misma aclaración: es la de todos los
+ * precios de la unidad.
+ */
+const ENCABEZADO_PRECIOS: Record<UnitDefaultMode, { titulo: string; ayuda: string }> = {
+  temporario: {
+    titulo: "Precio por noche",
+    ayuda: "Una temporaria lleva un solo precio: el de la noche. Va en esta moneda.",
+  },
+  mensual: {
+    titulo: "Precio por mes",
+    ayuda: "Una mensual lleva un solo precio: el del mes. Va en esta moneda.",
+  },
+  mixto: {
+    titulo: "Tarifa doble",
+    ayuda: "Un precio para estadías cortas y otro para el mes. Los dos precios van en esta moneda.",
+  },
+};
+
+/**
+ * Campos de la pestaña Precios que se escriben como texto y pueden quedar
+ * ilegibles: el form tiene el último número válido, no el que se ve, así que
+ * con alguno marcado no se guarda.
+ */
+type CampoPrecio = RateField | "cleaning_fee" | "default_commission_pct";
+
+/** Por qué Guardar se frena, según el campo (el primero de la pantalla gana). */
+const MOTIVO_INVALIDO: Record<CampoPrecio, string> = {
+  base_price: "El precio por noche no se entiende. Corregilo antes de guardar.",
+  monthly_price: "El precio por mes no se entiende o está en 0. Corregilo o dejalo vacío.",
+  cleaning_fee: "El fee de limpieza no se entiende. Corregilo o dejalo vacío.",
+  default_commission_pct: "La comisión de administración tiene que ser un número de 0 a 100.",
+};
+
+/** Lo que llega del form: PostgREST puede haber dejado un `numeric` como string. */
+function aNumero(v: number | string | null | undefined): number | null {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Porcentaje → texto editable en es-AR: "20", "12,5". Sin miles (un
+ * porcentaje no los lleva) y con hasta dos decimales, los de numeric(5,2).
+ */
+function formatPorcentaje(n: number | null): string {
+  if (n == null || !Number.isFinite(n)) return "";
+  return n.toLocaleString("es-AR", { maximumFractionDigits: 2, useGrouping: false });
+}
+
+function feeFueraDeRango(n: number): string | null {
+  return n < 0 ? "No puede ser negativo." : null;
+}
+
+function comisionFueraDeRango(n: number): string | null {
+  return n < 0 || n > 100 ? "Va de 0 a 100 %." : null;
+}
 
 /**
  * Código sugerido a partir del nombre: iniciales de las palabras, o las
@@ -148,9 +214,10 @@ export function UnitFormDialog({
   const [codeError, setCodeError] = useState<string | null>(null);
   // Error del servidor sobre el precio por mes (vive en la pestaña Precios).
   const [monthlyError, setMonthlyError] = useState<string | null>(null);
-  // Precios de la tarifa doble con texto que no se puede usar: el form tiene
-  // el último número válido, no el que se ve, así que no se guarda.
-  const [preciosInvalidos, setPreciosInvalidos] = useState<Partial<Record<RateField, boolean>>>({});
+  // Campos de Precios (la noche, el mes, el fee, la comisión) con texto que no
+  // se puede usar: el form tiene el último número válido, no el que se ve, así
+  // que no se guarda.
+  const [preciosInvalidos, setPreciosInvalidos] = useState<Partial<Record<CampoPrecio, boolean>>>({});
 
   // Pestañas controladas: el aviso de la vocación y un error del precio por
   // mes tienen que poder llevar a Precios. Cada apertura arranca en Básico,
@@ -171,18 +238,48 @@ export function UnitFormDialog({
    * diálogo (el botón que se tocó se desmonta con la pestaña Básico) o en
    * "Guardar", lejos del error.
    */
-  function irAPrecio(campo: RateField) {
+  function irAPrecio(campo: CampoPrecio) {
     setTab("precios");
     requestAnimationFrame(() => document.getElementById(campo)?.focus());
   }
 
-  function setPrecioInvalido(campo: RateField, invalido: boolean) {
+  function setPrecioInvalido(campo: CampoPrecio, invalido: boolean) {
     setPreciosInvalidos((p) => (!!p[campo] === invalido ? p : { ...p, [campo]: invalido }));
   }
 
+  // Qué precios lleva la vocación elegida (migración 066): temporario, la
+  // noche; mensual, el mes; mixto, los dos.
+  const precios = unitPriceKinds(form.default_mode);
   const esMixto = form.default_mode === "mixto";
-  // Una mixta sin precio por mes: se marca la pestaña para que no quede a medias.
-  const faltaPrecioMensual = esMixto && unitMonthlyPrice(form) == null;
+  // Mensual o mixta sin precio por mes: se marca la pestaña para que no quede a medias.
+  const faltaPrecioMensual = precios.monthly && unitMonthlyPrice(form) == null;
+
+  // "Última renta cargada": al editar una unidad que se alquila por mes y que
+  // todavía no tiene el precio guardado (la 066 no hizo backfill). La clave
+  // cambia al abrir, y también si la vocación pasa a mensual/mixto con el
+  // diálogo abierto: se descarta lo anterior en render y el efecto sólo
+  // dispara la consulta (mismo patrón que GuestProfileDialog).
+  const rentaKey =
+    open && unit && precios.monthly && unitMonthlyPrice(unit) == null ? unit.id : null;
+  const [rentaKeyPrev, setRentaKeyPrev] = useState(rentaKey);
+  const [ultimaRenta, setUltimaRenta] = useState<UnitRentSuggestion | null>(null);
+  if (rentaKey !== rentaKeyPrev) {
+    setRentaKeyPrev(rentaKey);
+    setUltimaRenta(null);
+  }
+  useEffect(() => {
+    if (!rentaKey) return;
+    let cancelled = false;
+    getUnitRentSuggestion(rentaKey)
+      .then((r) => {
+        if (!cancelled && r.ok) setUltimaRenta(r.suggestion);
+      })
+      // Es una ayuda: si no llega, el campo queda vacío como siempre.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [rentaKey]);
 
   // Sin useMemo: el React Compiler la memoiza sola y con deps manuales se
   // saltea la optimización de todo el componente (regla del linter).
@@ -214,25 +311,32 @@ export function UnitFormDialog({
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (esMixto) {
-      const campo = (["base_price", "monthly_price"] as const).find((c) => preciosInvalidos[c]);
-      if (campo) {
-        irAPrecio(campo);
-        toast.error("Revisá los precios", {
-          description:
-            campo === "monthly_price"
-              ? "El precio por mes no se entiende o está en 0. Corregilo o dejalo vacío."
-              : "El precio por noche no se entiende. Corregilo antes de guardar.",
-        });
-        return;
-      }
+    // Sólo los precios que se ven en esta vocación (la noche es de la
+    // temporaria y la mixta, el mes de la mensual y la mixta), más el fee y la
+    // comisión, que están en todas. En el orden de la pantalla: se lleva al
+    // primero que esté mal.
+    const conGuarda: CampoPrecio[] = [
+      ...(precios.nightly ? (["base_price"] as const) : []),
+      ...(precios.monthly ? (["monthly_price"] as const) : []),
+      "cleaning_fee",
+      "default_commission_pct",
+    ];
+    const campo = conGuarda.find((c) => preciosInvalidos[c]);
+    if (campo) {
+      irAPrecio(campo);
+      const esPrecio = campo === "base_price" || campo === "monthly_price";
+      toast.error(
+        esPrecio ? (esMixto ? "Revisá los precios" : "Revisá el precio") : "Revisá la pestaña Precios",
+        { description: MOTIVO_INVALIDO[campo] },
+      );
+      return;
     }
     const scrollY = typeof window !== "undefined" ? window.scrollY : 0;
     // El precio por mes sobrevive en el form si se cambia la vocación (vuelve
-    // a mixto y sigue ahí), pero sólo viaja si la unidad es mixta: el servidor
-    // lo borraría igual, y así un valor a medias en un campo que ya no se ve
-    // no frena el guardado con un error que nadie puede corregir.
-    const payload: UnitInput = esMixto ? form : { ...form, monthly_price: null };
+    // a mensual o mixto y sigue ahí), pero sólo viaja si la vocación lo lleva:
+    // el servidor lo borraría igual, y así un valor a medias en un campo que ya
+    // no se ve no frena el guardado con un error que nadie puede corregir.
+    const payload: UnitInput = precios.monthly ? form : { ...form, monthly_price: null };
     startTransition(async () => {
       try {
         const r =
@@ -278,8 +382,11 @@ export function UnitFormDialog({
       <DialogContent
         // sm:max-w-2xl y no max-w-2xl: el primitivo trae sm:max-w-lg y a partir
         // de sm le ganaba, así que el diálogo quedaba en 512px y los precios de
-        // la tarifa doble (1.100.000 en dos columnas) no entraban.
-        className="sm:max-w-2xl max-h-[90vh] overflow-y-auto"
+        // la tarifa doble (1.100.000 en dos columnas) no entraban. Sin max-h
+        // propio: el primitivo ya trae max-h-[92svh] (sm: 85svh) con scroll, y
+        // un max-h-[90vh] acá le ganaba en el celular, donde 90vh puede ser
+        // más alto que lo visible con la barra del navegador a la vista.
+        className="sm:max-w-2xl"
         onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <DialogHeader>
@@ -427,9 +534,17 @@ export function UnitFormDialog({
                     value={form.default_mode}
                     onValueChange={(v) => {
                       set("default_mode", v as UnitInput["default_mode"]);
-                      // Fuera de mixto la tarifa doble se desmonta y el precio
-                      // por mes no viaja: sus marcas de inválido ya no aplican.
-                      if (v !== "mixto") setPreciosInvalidos({});
+                      // Cada marca de inválido vale mientras su input siga a la
+                      // vista. La noche queda montada, con lo tipeado, entre
+                      // temporaria y mixta, y se va en mensual; el mes queda
+                      // entre mixta y mensual, y se va en temporario, donde
+                      // además no viaja. El fee y la comisión están en todas.
+                      const kinds = unitPriceKinds(v);
+                      setPreciosInvalidos((p) => ({
+                        ...p,
+                        base_price: kinds.nightly ? p.base_price : false,
+                        monthly_price: kinds.monthly ? p.monthly_price : false,
+                      }));
                     }}
                   >
                     <SelectTrigger id="default_mode"><SelectValue /></SelectTrigger>
@@ -446,12 +561,12 @@ export function UnitFormDialog({
                   </Select>
                   <p className="text-[10px] text-muted-foreground leading-snug">
                     {UNIT_DEFAULT_MODE_META[form.default_mode].description}
-                    {esMixto && (
+                    {precios.monthly && (
                       <>
                         {" "}
                         <button
                           type="button"
-                          onClick={() => irAPrecio("base_price")}
+                          onClick={() => irAPrecio(esMixto ? "base_price" : "monthly_price")}
                           className="whitespace-nowrap rounded-sm font-medium text-violet-700 underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:text-violet-300"
                         >
                           Cargar precios <span aria-hidden>→</span>
@@ -542,143 +657,110 @@ export function UnitFormDialog({
               </div>
             </TabsContent>
 
-            {/* forceMount: lo tipeado en la tarifa doble vive en el input. Si la
-                pestaña se desmontara al ir a Básico, el texto ilegible se perdía
-                pero su marca de "inválido" no, y el form no guardaba más. */}
+            {/* forceMount: lo tipeado en los precios, el fee y la comisión vive
+                en cada input. Si la pestaña se desmontara al ir a Básico, el
+                texto ilegible se perdía pero su marca de "inválido" no, y el
+                form no guardaba más. */}
             <TabsContent
               value="precios"
               forceMount
               className="space-y-4 mt-4 data-[state=inactive]:hidden"
             >
-              {/* Mixta: tarifa doble (noche + mes) con su comparador. El resto
-                  de las vocaciones sigue con el precio por noche solo. */}
-              {esMixto && (
-                <div className="space-y-3">
-                  <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <p className="text-sm font-medium leading-none">Tarifa doble</p>
-                      <p
-                        id="base_price_currency-help"
-                        className="text-[11px] text-muted-foreground leading-snug"
-                      >
-                        Un precio para estadías cortas y otro para el mes. Los dos
-                        precios van en esta moneda.
-                      </p>
-                    </div>
-                    <div className="w-full space-y-1.5 sm:w-48">
-                      <Label htmlFor="base_price_currency">Moneda</Label>
-                      <Select
-                        value={form.base_price_currency}
-                        onValueChange={(v) => set("base_price_currency", v)}
-                      >
-                        <SelectTrigger
-                          id="base_price_currency"
-                          className="w-full"
-                          aria-describedby="base_price_currency-help"
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {MONEDAS.map((m) => (
-                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
+              {/* Cada vocación con sus precios (migración 066), las tres con el
+                  mismo componente, el mismo input y las mismas guardas.
+                  Mixta: tarifa doble (noche + mes) con su comparador. Mensual:
+                  sólo el mes — el precio por noche sigue en la base para la web
+                  pública, pero no describe la unidad. Temporaria: sólo la
+                  noche. El bloque no se monta y desmonta con la vocación: la
+                  tarjeta que sigue a la vista conserva lo tipeado. */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <p className="text-sm font-medium leading-none">
+                      {ENCABEZADO_PRECIOS[form.default_mode].titulo}
+                    </p>
+                    <p
+                      id="base_price_currency-help"
+                      className="text-[11px] text-muted-foreground leading-snug"
+                    >
+                      {ENCABEZADO_PRECIOS[form.default_mode].ayuda}
+                    </p>
                   </div>
-                  <DualRateFields
-                    currency={form.base_price_currency}
-                    nightly={form.base_price}
-                    monthly={form.monthly_price}
-                    onNightlyChange={(v) => {
-                      setPrecioInvalido("base_price", false);
-                      set("base_price", v);
-                    }}
-                    onMonthlyChange={(v) => {
-                      // Llega sólo con un número válido (tipeado o de un
-                      // descuento sugerido): lo que estaba mal ya no está.
-                      setMonthlyError(null);
-                      setPrecioInvalido("monthly_price", false);
-                      set("monthly_price", v);
-                    }}
-                    onInvalidChange={setPrecioInvalido}
-                    monthlyError={monthlyError}
-                  />
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-3">
-                {!esMixto && (
-                  <>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="base_price_currency">Moneda</Label>
-                      <Select
-                        value={form.base_price_currency}
-                        onValueChange={(v) => set("base_price_currency", v)}
+                  <div className="w-full space-y-1.5 sm:w-48">
+                    <Label htmlFor="base_price_currency">Moneda</Label>
+                    <Select
+                      value={form.base_price_currency}
+                      onValueChange={(v) => set("base_price_currency", v)}
+                    >
+                      <SelectTrigger
+                        id="base_price_currency"
+                        className="w-full"
+                        aria-describedby="base_price_currency-help"
                       >
-                        <SelectTrigger id="base_price_currency"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          {MONEDAS.map((m) => (
-                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="base_price">Precio por noche</Label>
-                      <Input
-                        id="base_price"
-                        type="text"
-                        inputMode="decimal"
-                        value={form.base_price ?? ""}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v === "") set("base_price", null);
-                          else {
-                            const n = Number(v.replace(",", "."));
-                            if (Number.isFinite(n)) set("base_price", n);
-                          }
-                        }}
-                        placeholder="0"
-                      />
-                    </div>
-                  </>
-                )}
-                <div className="space-y-1.5">
-                  <Label htmlFor="cleaning_fee">Fee limpieza</Label>
-                  <Input
-                    id="cleaning_fee"
-                    type="text"
-                    inputMode="decimal"
-                    value={form.cleaning_fee ?? ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "") set("cleaning_fee", null);
-                      else {
-                        const n = Number(v.replace(",", "."));
-                        if (Number.isFinite(n)) set("cleaning_fee", n);
-                      }
-                    }}
-                    placeholder="0"
-                  />
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {MONEDAS.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="default_commission_pct">Comisión de administración (%)</Label>
-                  <Input
-                    id="default_commission_pct"
-                    type="text"
-                    inputMode="decimal"
-                    value={form.default_commission_pct ?? ""}
-                    onChange={(e) => {
-                      const raw = e.target.value.trim();
-                      // Vacío ≠ 0%: lo dejamos sin valor para que el servidor
-                      // caiga en el default de la org.
-                      if (raw === "") return set("default_commission_pct", undefined);
-                      const n = Number(raw.replace(",", "."));
-                      if (Number.isFinite(n)) set("default_commission_pct", n);
-                    }}
-                    placeholder={String(orgDefaultCommissionPct ?? 20)}
-                  />
-                </div>
+                <DualRateFields
+                  mode={form.default_mode}
+                  currency={form.base_price_currency}
+                  nightly={form.base_price}
+                  monthly={form.monthly_price}
+                  onNightlyChange={(v) => {
+                    setPrecioInvalido("base_price", false);
+                    set("base_price", v);
+                  }}
+                  onMonthlyChange={(v) => {
+                    // Llega sólo con un número válido (tipeado o de un
+                    // descuento sugerido): lo que estaba mal ya no está.
+                    setMonthlyError(null);
+                    setPrecioInvalido("monthly_price", false);
+                    set("monthly_price", v);
+                  }}
+                  onInvalidChange={setPrecioInvalido}
+                  monthlyError={monthlyError}
+                  lastRent={ultimaRenta}
+                  // Lo usa sólo la mensual: es la que ya no ve su precio por
+                  // noche en el panel, y la web pública cotiza desde ahí.
+                  publishedOnWeb={!!unit?.marketplace_published}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <CampoNumero
+                  id="cleaning_fee"
+                  label="Fee limpieza"
+                  value={form.cleaning_fee}
+                  onValueChange={(v) => set("cleaning_fee", v)}
+                  onInvalidChange={(invalido) => setPrecioInvalido("cleaning_fee", invalido)}
+                  parse={parseAmountInput}
+                  format={formatPriceInput}
+                  fueraDeRango={feeFueraDeRango}
+                  ilegible="No se entiende el número. Escribilo como 15.000 o 15000."
+                  placeholder="0"
+                />
+                <CampoNumero
+                  id="default_commission_pct"
+                  label="Comisión de administración (%)"
+                  value={form.default_commission_pct}
+                  // Vacío ≠ 0%: lo dejamos sin valor para que el servidor
+                  // caiga en el default de la org.
+                  onValueChange={(v) => set("default_commission_pct", v ?? undefined)}
+                  onInvalidChange={(invalido) =>
+                    setPrecioInvalido("default_commission_pct", invalido)
+                  }
+                  // Un porcentaje no lleva miles: "3,125" es 3,125 %, no 3125.
+                  parse={parsePercentInput}
+                  format={formatPorcentaje}
+                  fueraDeRango={comisionFueraDeRango}
+                  ilegible="No se entiende el número. Escribilo como 20 o 12,5."
+                  placeholder={formatPorcentaje(orgDefaultCommissionPct ?? 20)}
+                />
               </div>
               <div className="rounded-md border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground space-y-1.5">
                 <p className="font-medium text-foreground">
@@ -705,5 +787,114 @@ export function UnitFormDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Fee de limpieza y comisión: un número escrito como texto, con el mismo trato
+ * que los precios (RateInput). Antes eran inputs atados al número con
+ * `Number(v.replace(",", "."))`: "45.000" quedaba en 45 —tipeado se veía 45,
+ * pegado se guardaba 45— y lo que no se entendía se descartaba sin aviso.
+ *
+ * Guarda lo tipeado como borrador y sube sólo un número que sirve (vacío es
+ * null). Lo ilegible o fuera de rango NO sube: el form se queda con el último
+ * válido y se entera por `onInvalidChange` para no guardar.
+ */
+function CampoNumero({
+  id,
+  label,
+  value,
+  onValueChange,
+  onInvalidChange,
+  parse,
+  format,
+  fueraDeRango,
+  ilegible,
+  placeholder,
+}: {
+  id: CampoPrecio;
+  label: string;
+  /** PostgREST puede mandar el numeric como string. */
+  value: number | string | null | undefined;
+  onValueChange: (value: number | null) => void;
+  onInvalidChange: (invalid: boolean) => void;
+  parse: (text: string) => number | null;
+  /** Número → texto editable, en la forma en que se guarda. */
+  format: (n: number | null) => string;
+  /** Qué tiene de malo un número que se entiende; null si sirve. */
+  fueraDeRango: (n: number) => string | null;
+  /** Aviso para lo que no se entiende, con un ejemplo de cómo escribirlo. */
+  ilegible: string;
+  placeholder?: string;
+}) {
+  const numero = aNumero(value);
+  const [draft, setDraft] = useState(() => format(numero));
+  // Último número que salió de este input. Si el del form es otro, cambió
+  // desde afuera (el reset tras crear) y el texto lo sigue. Estado derivado en
+  // render, no en un efecto (mismo patrón que RateInput).
+  const [emitido, setEmitido] = useState(numero);
+  if (numero !== emitido) {
+    setEmitido(numero);
+    setDraft(format(numero));
+  }
+  // El error se muestra al salir del campo, no mientras se tipea ("1.100." es
+  // un paso, no un error); el form igual no guarda desde el primer momento.
+  const [tipeando, setTipeando] = useState(false);
+
+  const parsed = parse(draft);
+  const error =
+    tipeando || draft.trim() === ""
+      ? null
+      : parsed === null
+        ? ilegible
+        : fueraDeRango(parsed);
+  const helpId = `${id}-help`;
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        type="text"
+        inputMode="decimal"
+        autoComplete="off"
+        value={draft}
+        onChange={(e) => {
+          // Sólo cifras y separadores: "$ 15.000" o "12 %" pegados entran igual.
+          const limpio = e.target.value.replace(/[^\d.,]/g, "");
+          const n = parse(limpio);
+          const noSirve = limpio.trim() !== "" && (n === null || fueraDeRango(n) !== null);
+          setDraft(limpio);
+          setTipeando(true);
+          onInvalidChange(noSirve);
+          if (noSirve) return;
+          setEmitido(n);
+          onValueChange(n);
+        }}
+        onBlur={() => {
+          setTipeando(false);
+          if (parsed === null || fueraDeRango(parsed) !== null) return;
+          // Toma la forma en que se guarda ("45000" → "45.000", "12.5" →
+          // "12,5"), así se ve cómo se entendió. Si esa forma redondea (los
+          // dos decimales de la base), sube ese número: el que se ve.
+          const texto = format(parsed);
+          setDraft(texto);
+          const final = parse(texto);
+          if (final !== null && final !== parsed) {
+            setEmitido(final);
+            onValueChange(final);
+          }
+        }}
+        placeholder={placeholder}
+        aria-invalid={!!error}
+        aria-describedby={error ? helpId : undefined}
+        className={cn(error && "border-rose-500 focus-visible:ring-rose-500/30")}
+      />
+      {error && (
+        <p id={helpId} className="text-[11px] leading-snug text-rose-600 dark:text-rose-400">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }

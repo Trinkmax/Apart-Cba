@@ -85,6 +85,9 @@ Es la **vista calendario** estilo timeline: filas = unidades, columnas = días (
 Lista de tus departamentos. Para cada uno: código, nombre, dirección, capacidad, propietarios y estado actual.
 
 - **Crear unidad**: botón **Nueva unidad** arriba. Cargás código (ej. `A-301`), nombre, dirección, dormitorios, capacidad, etc.
+- **Precios según la vocación**: en la pestaña **Precios** cargás los que corresponden a cómo se alquila la unidad. **Temporario**: precio por noche. **Mensual**: precio por mes. **Mixto**: los dos, y abajo ves cuánto descuento das por quedarse un mes contra 30 noches sueltas.
+  - El **precio por mes** completa solo la **Renta mensual** cuando cargás una reserva mensual en esa unidad (si el contrato dice otro importe, lo cambiás en la reserva). Si todavía no lo cargaste, el formulario te sugiere la última renta que usaste.
+  - Es un precio del panel: la web pública sigue cotizando por noche (una mensual publicada muestra ≈ precio por noche × 30, que se edita en **Listing en rentOS**).
 - **Editar / abrir detalle**: click en la fila → vas al detalle (`/dashboard/unidades/[id]`) donde podés:
   - Cambiar datos generales.
   - Asignar **propietarios** (una unidad puede tener varios, con porcentajes que tienen que sumar 100 %).

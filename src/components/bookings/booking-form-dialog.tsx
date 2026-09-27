@@ -39,7 +39,7 @@ import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { createBooking, updateBooking, type BookingInput } from "@/lib/actions/bookings";
 import { searchGuests } from "@/lib/actions/guests";
 import { BOOKING_MODE_META, BOOKING_SOURCE_META, BOOKING_STATUS_META } from "@/lib/constants";
-import { formatMoney, formatNights } from "@/lib/format";
+import { formatMoney, formatNights, parsePercentInput } from "@/lib/format";
 import {
   MAX_BOOKING_NIGHTS,
   nightsBetween,
@@ -101,8 +101,9 @@ type UnitForBookingForm = Pick<
 > & {
   default_mode?: UnitDefaultMode;
   /**
-   * Precio de un mes completo (sólo mixtas, migración 063). Opcional: no todos
-   * los que abren el form lo seleccionan. Leerlo siempre con unitMonthlyPrice().
+   * Precio de un mes completo (unidades mensuales y mixtas, migraciones 063 y
+   * 066). Opcional: no todos los que abren el form lo seleccionan. Leerlo
+   * siempre con unitMonthlyPrice().
    */
   monthly_price?: number | null;
   /** % acordado con el propietario de la unidad, si tiene uno propio. */
@@ -170,6 +171,19 @@ interface BookingFormDialogProps {
 }
 
 /**
+ * Precio mensual de lista aplicable a una reserva: unidad mensual o mixta con
+ * precio cargado, en la moneda de la reserva. Si no, null. El precio está en
+ * la moneda de la unidad: en una reserva en otra moneda sería otra cifra
+ * (mismo guard que la limpieza de la unidad).
+ */
+function listRentFor(u: UnitForBookingForm | undefined, currency: string): number | null {
+  const price = unitMonthlyPrice(u);
+  if (price === null) return null;
+  if (u?.base_price_currency && u.base_price_currency !== currency) return null;
+  return price;
+}
+
+/**
  * Qué muestra el campo "Comisión canal %" cuando nadie lo tipeó todavía:
  * el default de la org para ese origen, o VACÍO si la org no lo configuró.
  * Vacío viaja como null y el server lo deja null ("sin configurar"): si más
@@ -184,6 +198,34 @@ function channelPctDisplay(
   const raw = map[source];
   if (raw === null || raw === undefined) return "";
   return formatMoneyValue(channelCommissionPctFor(map, source));
+}
+
+/**
+ * ¿Hay algo tipeado que el parser no entiende ("1.50.000", "15%")? Vacío no
+ * cuenta: es "no cargado". El form lee null como vacío, así que sin esta
+ * distinción un importe ilegible se perdía en silencio.
+ */
+function esIlegible(
+  v: string,
+  parse: (s: string) => number | null = parseMoneyInput,
+): boolean {
+  return v.trim() !== "" && parse(v) === null;
+}
+
+/** Un importe o % visible del form, para las validaciones de doSubmit. */
+type CampoNumerico = {
+  /** id del input, para enfocarlo. */
+  id: string;
+  valor: string;
+  /** Con artículo y en minúscula: "No se entiende el total". */
+  nombre: string;
+  /** Porcentaje: se lee con parsePercentInput y va de 0 a 100. */
+  pct?: boolean;
+};
+
+/** Lleva el foco al input con problema, después de que se pinte el toast. */
+function enfocarCampo(id: string) {
+  requestAnimationFrame(() => document.getElementById(id)?.focus());
 }
 
 export function BookingFormDialog({
@@ -236,8 +278,9 @@ export function BookingFormDialog({
   // ─── State del form ────────────────────────────────────────────────────────
   // Campos monetarios y porcentajes los manejamos como STRING en el form (vacío
   // = "no cargado") para que el placeholder se vea limpio. Al submit los
-  // parseamos con parseMoneyInput. Esto resuelve el problema de "0 que no se
-  // borra" y permite ingreso con `.` o `,` como separador decimal.
+  // parseamos con parseMoneyInput (los % con parsePercentInput: "3,125" es
+  // 3,125 %, no 3125). Esto resuelve el problema de "0 que no se borra" y
+  // permite ingreso con `.` o `,` como separador decimal.
   type FormShape = Omit<
     BookingInput,
     | "total_amount"
@@ -271,7 +314,7 @@ export function BookingFormDialog({
     monthly_rent: string;
     /**
      * De dónde salió la Renta mensual (no se persiste). "unit" = el precio
-     * mensual de la unidad mixta: sigue a la unidad, la moneda y el modo (ver
+     * mensual de la unidad (mensual o mixta): sigue a la unidad, la moneda y el modo (ver
      * withUnitRent). "user" = la tipeó alguien o es la de la reserva que se
      * edita: no se pisa nunca. "total" = la derivó el Total mensual tipeado:
      * sigue a ese total mientras se tipea y, como "user", ningún cambio de
@@ -333,7 +376,50 @@ export function BookingFormDialog({
     return fee > 0 ? fee : null;
   })();
 
-  const [form, setForm] = useState<FormShape>({
+  // ─── Alta rápida del PMS ───
+  // QuickAddBridge monta el form de cero con la unidad ya elegida
+  // (defaultUnitId), así que onSelectUnit no corre nunca y el auto-cálculo
+  // tampoco (prevAutoKey arranca igual a la key). Una unidad de vocación
+  // MENSUAL se deja como la dejaría elegirla en el combo: modo mensual, día de
+  // cobro 1 y la renta de lista con su total (setMode + withUnitRent +
+  // auto-cálculo). Sin esto abría en temporario, con el aviso de vocación y la
+  // renta vacía.
+  // Temporarias y mixtas abren como siempre, sin precio, total ni limpieza, y
+  // es a propósito: desde el PMS se cargan sobre todo reservas de OTA que
+  // todavía no tienen precio; guardan total 0 y caen en "Por completar".
+  // Sembrarles base_price × noches + limpieza les inventaba un total que nadie
+  // cobró y las sacaba de esa bandeja.
+  // La limpieza sí entra en la mensual: onSelectUnit la copia para cualquier
+  // unidad (con la moneda de la unidad, que acá es la inicial) y en mensual no
+  // suma al total, así que queda la misma reserva que eligiéndola en el combo.
+  // Edición y altas sin unidad elegida no pasan por acá. Sólo se usa en el
+  // estado inicial.
+  function withQuickAddUnit(inicial: FormShape): FormShape {
+    const u = !booking && defaultUnitId ? units.find((x) => x.id === defaultUnitId) : undefined;
+    if (u?.default_mode !== "mensual") return inicial;
+    const noches = nightsBetween(inicial.check_in_date, inicial.check_out_date);
+    // PostgREST puede devolver numeric como string.
+    const limpieza = Number(u.cleaning_fee ?? 0);
+    // Canal: setMode("mensual") no lo toca (mensual guarda 0 igual).
+    const conModo: FormShape = {
+      ...inicial,
+      mode: "mensual",
+      rent_billing_day: 1,
+      ...(limpieza > 0 ? { cleaning_fee: formatMoneyValue(limpieza) } : null),
+    };
+    // Sin precio mensual cargado la renta queda vacía: no se inventa una.
+    const renta = listRentFor(u, conModo.currency);
+    if (renta === null) return conModo;
+    return {
+      ...conModo,
+      monthly_rent: formatMoneyValue(renta),
+      monthly_rent_source: "unit",
+      // Misma cuenta que el auto-cálculo: renta ÷ 30 × noches, sin limpieza.
+      total_amount: noches > 0 ? formatMoneyValue(round2((renta / 30) * noches)) : "",
+    };
+  }
+
+  const [form, setForm] = useState<FormShape>(() => withQuickAddUnit({
     unit_id: booking?.unit_id ?? defaultUnitId ?? "",
     guest_id: booking?.guest_id ?? null,
     source: booking?.source ?? "directo",
@@ -346,8 +432,9 @@ export function BookingFormDialog({
     check_out_time: booking?.check_out_time ?? "10:00",
     guests_count: booking?.guests_count ?? 2,
     // Alta rápida del PMS (defaultUnitId): onSelectUnit no corre, así que la
-    // moneda sale de la unidad acá. Con "ARS" fijo, una unidad en dólares
-    // recibía su precio por noche en pesos y nunca su precio mensual.
+    // moneda sale de la unidad acá (el resto lo completa withQuickAddUnit).
+    // Con "ARS" fijo, una unidad en dólares recibía su precio por noche en
+    // pesos y nunca su precio mensual.
     currency:
       booking?.currency ??
       units.find((u) => u.id === defaultUnitId)?.base_price_currency ??
@@ -382,7 +469,7 @@ export function BookingFormDialog({
     internal_notes: booking?.internal_notes ?? "",
     account_id: null,
     add_payment: "",
-  });
+  }));
 
   // Importe ya cobrado al abrir el form (snapshot — no muta cuando el usuario
   // tipea "Agregar pago"). Sólo aplica en modo edición.
@@ -416,23 +503,20 @@ export function BookingFormDialog({
     setForm((f) => ({ ...f, [k]: v }));
   }
 
-  // ─── Renta mensual desde el precio de la unidad (migración 063) ──────────
-  // Una unidad mixta puede tener, además del precio por noche, el de un mes
-  // completo. En mensual ese precio completa la Renta igual que base_price
-  // completa Precio/noche en temporario. Sólo se completa o reemplaza una
-  // renta vacía o que ya vino de la unidad; la tipeada no se toca. Temporario
-  // nunca lo usa, y sin precio mensual cargado no se inventa uno (nada de
-  // base_price × 30): la renta queda para que la cargue el staff.
+  // ─── Renta mensual desde el precio de la unidad (migraciones 063 y 066) ──
+  // Una unidad mensual tiene el precio de un mes completo, y una mixta lo
+  // tiene además del precio por noche. En mensual ese precio completa la Renta
+  // igual que base_price completa Precio/noche en temporario. Sólo se completa
+  // o reemplaza una renta vacía o que ya vino de la unidad; la tipeada no se
+  // toca. Temporario nunca lo usa, y sin precio mensual cargado no se inventa
+  // uno (nada de base_price × 30): la renta queda para que la cargue el staff.
 
-  /** Precio mensual aplicable a la reserva: unidad mixta con precio, en la moneda de la reserva. */
+  /** Precio mensual aplicable a la reserva: unidad mensual o mixta con precio, en la moneda de la reserva. */
   function unitListRent(unitId: string, currency: string): number | null {
-    const u = units.find((x) => x.id === unitId);
-    const price = unitMonthlyPrice(u);
-    if (price === null) return null;
-    // Está en la moneda de la unidad: en una reserva en otra moneda sería otra
-    // cifra (mismo guard que la limpieza de la unidad).
-    if (u?.base_price_currency && u.base_price_currency !== currency) return null;
-    return price;
+    return listRentFor(
+      units.find((x) => x.id === unitId),
+      currency,
+    );
   }
 
   function rentIsReplaceable(f: FormShape): boolean {
@@ -797,8 +881,17 @@ export function BookingFormDialog({
   // Resultados la ignoran en mensual): en mensual se guarda 0 para que lo
   // que queda en la reserva sea lo mismo que ven todos los consumidores.
   // null = "sin configurar" (el server no lo congela en 0; ver channelPctDisplay).
+  // parsePercentInput y no parseMoneyInput: "3,125" es 3,125 %, no 3125.
   const channelPctNum =
-    form.mode === "mensual" ? null : parseMoneyInput(form.channel_commission_pct);
+    form.mode === "mensual" ? null : parsePercentInput(form.channel_commission_pct);
+  // Algo tipeado que no se entiende se lee null (sin % / sin importe): los
+  // textos de ayuda lo dicen en vez de mostrar una cuenta que lo ignora —el
+  // total desde el precio, la limpieza en 0, "Sin comisión de canal"—.
+  const channelPctIlegible =
+    form.mode !== "mensual" && esIlegible(form.channel_commission_pct, parsePercentInput);
+  const desgloseIlegible =
+    channelPctIlegible ||
+    [form.total_amount, form.price_per_night, form.cleaning_fee].some((v) => esIlegible(v));
   // Desglose en vivo — misma fórmula que el server y la liquidación.
   const econ = computeBookingEconomics({
     total: totalNum,
@@ -852,11 +945,96 @@ export function BookingFormDialog({
   const rentParsed = parseMoneyInput(form.monthly_rent);
   const rentHint: "unit" | "list" | null =
     listRent === null ? null : rentParsed === listRent ? "unit" : "list";
+  // Con la renta o las expensas ilegibles, el "Total estimado del período"
+  // saldría sin ellas: no se muestra un total que no es.
+  const estimadoIlegible = esIlegible(form.monthly_rent) || esIlegible(form.monthly_expenses);
 
   // Filtrar cuentas por moneda elegida
   const accountsForCurrency = accounts.filter((a) => a.currency === form.currency);
 
+  /**
+   * Importes y % que se ven (y se tipean) en el modo actual, en el orden de la
+   * pantalla: el primero con problema es el que se enfoca. El Cobrado de la
+   * grilla y el Importe de "Cobrar en cuenta" son el mismo campo al crear; en
+   * edición el Cobrado es de sólo lectura y se tipea "Agregar pago".
+   */
+  function camposNumericosVisibles(): CampoNumerico[] {
+    const cobrado: CampoNumerico[] = isEdit
+      ? []
+      : [{ id: "paid_amount", valor: form.paid_amount, nombre: "el importe cobrado" }];
+    const pagoAgregado: CampoNumerico[] = isEdit
+      ? [{ id: "add_payment", valor: form.add_payment, nombre: "el importe del pago" }]
+      : [];
+    const limpieza: CampoNumerico = {
+      id: "cleaning_fee",
+      valor: form.cleaning_fee,
+      nombre: "la limpieza",
+    };
+    if (form.mode === "mensual") {
+      return [
+        { id: "monthly_rent", valor: form.monthly_rent, nombre: "la renta mensual" },
+        { id: "monthly_expenses", valor: form.monthly_expenses, nombre: "el importe de expensas" },
+        { id: "security_deposit", valor: form.security_deposit, nombre: "el depósito en garantía" },
+        {
+          id: "monthly_inflation_adjustment_pct",
+          valor: form.monthly_inflation_adjustment_pct,
+          nombre: "el ajuste por inflación",
+          pct: true,
+        },
+        { id: "total_amount", valor: form.total_amount, nombre: "el total" },
+        ...cobrado,
+        limpieza,
+        ...pagoAgregado,
+      ];
+    }
+    return [
+      { id: "price_per_night", valor: form.price_per_night, nombre: "el precio por noche" },
+      ...cobrado,
+      { id: "total_amount_temp", valor: form.total_amount, nombre: "el total" },
+      limpieza,
+      {
+        id: "channel_commission_pct",
+        valor: form.channel_commission_pct,
+        nombre: "la comisión del canal",
+        pct: true,
+      },
+      ...pagoAgregado,
+    ];
+  }
+
   function doSubmit(skipSplit: boolean) {
+    // Un importe ilegible ("1.50.000") se lee null y el form trata null como
+    // "no cargado": el cobro tipeado se perdía (sin movimiento en Caja ni
+    // cuenta obligatoria), un Total ilegible caía a precio × noches + limpieza
+    // y un % de canal al default de la org. Frena antes que todo lo demás.
+    const campos = camposNumericosVisibles();
+    const ilegible = campos.find((c) =>
+      esIlegible(c.valor, c.pct ? parsePercentInput : parseMoneyInput)
+    );
+    if (ilegible) {
+      toast.error(`No se entiende ${ilegible.nombre}`, {
+        description: ilegible.pct
+          ? "Escribilo como 15 o 3,5."
+          : "Escribilo como 150.000 o 150000,50.",
+      });
+      enfocarCampo(ilegible.id);
+      return;
+    }
+    // Un % fuera de rango lo rechaza el zod del server (min 0, max 100) con un
+    // throw, y en producción ese mensaje llega enmascarado y en inglés.
+    const fueraDeRango = campos.find((c) => {
+      if (!c.pct) return false;
+      const n = parsePercentInput(c.valor);
+      return n !== null && (n < 0 || n > 100);
+    });
+    if (fueraDeRango) {
+      const nombre = fueraDeRango.nombre;
+      toast.error(`${nombre.charAt(0).toUpperCase()}${nombre.slice(1)} tiene que estar entre 0 y 100`, {
+        description: "Para decimales usá coma: 3,5.",
+      });
+      enfocarCampo(fueraDeRango.id);
+      return;
+    }
     // En modo mensual la DB exige monthly_rent (constraint
     // bookings_monthly_requires_rent). Avisamos en español ANTES de pegarle
     // al server — sino en producción Next.js enmascara el error.
@@ -908,7 +1086,7 @@ export function BookingFormDialog({
       monthly_rent: parseMoneyInput(form.monthly_rent),
       monthly_expenses: parseMoneyInput(form.monthly_expenses),
       security_deposit: parseMoneyInput(form.security_deposit),
-      monthly_inflation_adjustment_pct: parseMoneyInput(form.monthly_inflation_adjustment_pct),
+      monthly_inflation_adjustment_pct: parsePercentInput(form.monthly_inflation_adjustment_pct),
       rent_billing_day: form.rent_billing_day ?? null,
       notes: form.notes,
       internal_notes: form.internal_notes,
@@ -1316,7 +1494,7 @@ export function BookingFormDialog({
                   </span>
                   <div className="font-mono text-base font-semibold text-violet-900 dark:text-violet-100">
                     {(() => {
-                      if (!form.check_in_date || !form.check_out_date) return "—";
+                      if (!form.check_in_date || !form.check_out_date || estimadoIlegible) return "—";
                       const days = nightsBetween(form.check_in_date, form.check_out_date);
                       const months = days / 30;
                       const rent = parseMoneyInput(form.monthly_rent) ?? 0;
@@ -1326,9 +1504,11 @@ export function BookingFormDialog({
                     })()}
                   </div>
                   <p className="text-[10px] text-violet-700/80 dark:text-violet-300/80">
-                    {(parseMoneyInput(form.monthly_rent) ?? 0) > 0
-                      ? `Renta + expensas × meses ocupados`
-                      : "Cargá la renta para ver el total"}
+                    {estimadoIlegible
+                      ? "No se entiende el importe"
+                      : (parseMoneyInput(form.monthly_rent) ?? 0) > 0
+                        ? `Renta + expensas × meses ocupados`
+                        : "Cargá la renta para ver el total"}
                   </p>
                 </div>
               </div>
@@ -1804,7 +1984,9 @@ export function BookingFormDialog({
                   <p className={helperCls}>
                     {form.mode === "mensual"
                       ? "No aplica en mensual"
-                      : econ.channelPct > 0
+                      : channelPctIlegible
+                        ? "No se entiende el %"
+                        : econ.channelPct > 0
                         ? `${sourceLabel} · −${formatMoney(econ.channelCommission, form.currency)}`
                         : "Sin comisión de canal"}
                   </p>
@@ -1817,7 +1999,9 @@ export function BookingFormDialog({
               a la vista donde se tipea. En mensual la limpieza no entra. */}
           {form.mode !== "mensual" && (
             <div className="rounded-md bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground space-y-0.5">
-              {totalNum > 0 ? (
+              {desgloseIlegible ? (
+                <p>No se entiende el importe: corregilo para ver el reparto.</p>
+              ) : totalNum > 0 ? (
                 <>
                   <p>
                     Alojamiento{" "}
@@ -1873,6 +2057,9 @@ export function BookingFormDialog({
             const addNum = isEdit
               ? parseMoneyInput(form.add_payment) ?? 0
               : parseMoneyInput(form.paid_amount) ?? 0;
+            // addNum en 0 por ilegible no es "no tipeaste nada": no se le pide
+            // que tipee un importe que ya tipeó.
+            const pagoIlegible = esIlegible(isEdit ? form.add_payment : form.paid_amount);
             const requireAccount = addNum > 0;
             return (
               <div className="rounded-lg border border-emerald-300/60 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800/40 p-3 space-y-2.5">
@@ -1957,6 +2144,7 @@ export function BookingFormDialog({
                   </Button>
                 </div>
                 <p className="text-[10px] text-emerald-800/80 dark:text-emerald-300/80">
+                  {pagoIlegible && <>No se entiende el importe.</>}
                   {!isEdit && addNum > 0 && (
                     <>
                       Se generará un movimiento en caja por {form.currency}{" "}
@@ -1972,10 +2160,10 @@ export function BookingFormDialog({
                       {Math.max(0, totalNumLocal - previousPaid - addNum).toLocaleString("es-AR", { maximumFractionDigits: 2 })}.
                     </>
                   )}
-                  {addNum === 0 && pendingBefore > 0 && (
+                  {!pagoIlegible && addNum === 0 && pendingBefore > 0 && (
                     <>Tocá &quot;Agregar pago&quot; para saldar todo, o tipeá un importe parcial.</>
                   )}
-                  {addNum === 0 && pendingBefore === 0 && totalNumLocal > 0 && (
+                  {!pagoIlegible && addNum === 0 && pendingBefore === 0 && totalNumLocal > 0 && (
                     <>La reserva ya está saldada.</>
                   )}
                 </p>

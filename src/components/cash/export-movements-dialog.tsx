@@ -196,7 +196,7 @@ export function ExportMovementsDialog({ accounts, accountId, trigger }: Props) {
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader className="shrink-0">
           <DialogTitle>Exportar movimientos</DialogTitle>
           <DialogDescription>

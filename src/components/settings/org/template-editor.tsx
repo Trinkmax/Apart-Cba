@@ -166,7 +166,7 @@ export function TemplateEditor({ template }: Props) {
       </aside>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Vista previa con datos de ejemplo</DialogTitle>
           </DialogHeader>
