@@ -1,11 +1,11 @@
 "use client";
 
 import "mapbox-gl/dist/mapbox-gl.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import Map, { Marker, NavigationControl, Popup, type MapRef } from "react-map-gl/mapbox";
-import type { LngLatBounds } from "mapbox-gl";
+import { ArrowRight, X, Zap } from "lucide-react";
+import Map, { Marker, NavigationControl, type MapRef } from "react-map-gl/mapbox";
 import type { CatalogListing } from "@/lib/marketplace/contracts";
 import {
   cardPrice,
@@ -18,6 +18,7 @@ import { formatCurrency } from "@/lib/marketplace/pricing";
 import { bedroomsLabel, guestsLabel } from "@/lib/marketplace/display";
 import { cn } from "@/lib/utils";
 import { useHoveredId, type HoverStore } from "@/components/marketplace/search/hover-store";
+import { placePreview } from "@/components/marketplace/search/map-preview-placement";
 import {
   CORDOBA_CENTER,
   MAPBOX_TOKEN,
@@ -40,39 +41,17 @@ export type ListingsMapProps = {
 type Located = CatalogListing & { latitude: number; longitude: number };
 
 /**
- * Separación del globo según de qué lado del precio lo ubique Mapbox (el
- * ancla se elige sola para que entre en el mapa). La píldora está ARRIBA del
- * punto (anchor="bottom", ~33 px de alto con la escala activa): arriba el globo
- * la esquiva; abajo casi no necesita aire; a los costados va a la altura de la
- * píldora, corrido medio ancho de píldora.
- */
-const POPUP_OFFSET: Partial<Record<PopupAnchor, [number, number]>> = {
-  bottom: [0, -40],
-  "bottom-left": [0, -40],
-  "bottom-right": [0, -40],
-  top: [0, 8],
-  "top-left": [0, 8],
-  "top-right": [0, 8],
-  left: [52, -16],
-  right: [-52, -16],
-  center: [0, 0],
-};
-type PopupAnchor =
-  | "center"
-  | "top"
-  | "bottom"
-  | "left"
-  | "right"
-  | "top-left"
-  | "top-right"
-  | "bottom-left"
-  | "bottom-right";
-
-/**
  * Cuánto sigue abierta la vista previa después de sacar el mouse de la
- * píldora: lo justo para cruzar el hueco hasta el globo y poder tocarlo.
+ * píldora: lo justo para cruzar el hueco hasta la tarjeta y poder tocarla.
  */
 const HOVER_GRACE_MS = 220;
+
+/**
+ * Por debajo de este alto de mapa la tarjeta va compacta (foto más baja): con
+ * la foto 16:10 (~267 px de alto) un mapa bajo no tiene lugar ni arriba ni
+ * abajo del precio para la mitad de los puntos; compacta (~215 px) sí.
+ */
+const COMPACT_BELOW_PX = 640;
 
 function isLocated(l: CatalogListing): l is Located {
   return (
@@ -132,8 +111,6 @@ export function ListingsMap({
   const mapRef = useRef<MapRef | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  // Lo que se ve del mapa (para no abrir una vista previa de un punto que quedó afuera).
-  const [bounds, setBounds] = useState<LngLatBounds | null>(null);
   const hovered = useHoveredId(hoverStore);
 
   const located = useMemo(() => listings.filter(isLocated), [listings]);
@@ -143,10 +120,15 @@ export function ListingsMap({
   // de la grilla o una píldora del mapa) y, si no hay nada, lo que se eligió
   // con un clic. Una tarjeta cuyo punto quedó fuera del mapa sólo resalta su
   // píldora: un globo cortado en el borde no sirve.
-  const hoveredListing = located.find((l) => l.id === hovered);
-  const hoverPreview =
-    hoveredListing && bounds?.contains([hoveredListing.longitude, hoveredListing.latitude]) ? hoveredListing : null;
-  const popupListing = popups ? (hoverPreview ?? located.find((l) => l.id === selected) ?? null) : null;
+  // Si el mouse está sobre la PÍLDORA (del mapa) o se eligió con un clic, la
+  // vista previa va siempre. Si viene de una tarjeta de la grilla y su punto
+  // quedó fuera de lo que se ve del mapa, sólo se resalta la píldora (eso lo
+  // decide `positionPreview` con la posición real en pantalla, en vivo).
+  const [pillHoverId, setPillHoverId] = useState<string | null>(null);
+  const popupListing = popups
+    ? (located.find((l) => l.id === hovered) ?? located.find((l) => l.id === selected) ?? null)
+    : null;
+  const anchored = popupListing != null && (pillHoverId === popupListing.id || selected === popupListing.id);
 
   // Al salir de una píldora la vista previa espera un instante antes de
   // cerrarse, para poder llevar el mouse hasta el globo y tocarlo; entrar al
@@ -174,6 +156,62 @@ export function ListingsMap({
     [],
   );
 
+  // La vista previa NO es un popup de Mapbox: es una tarjeta propia encima del
+  // mapa, que se ubica con `placePreview` (arriba del precio, abajo o a un
+  // costado; siempre entera adentro del mapa). El popup de Mapbox elegía el
+  // lado sin mirar si entraba (quedaba cortado) y su CSS, que no está en una
+  // capa, le ganaba a los estilos de Tailwind. Se posiciona tocando el DOM
+  // directo: al arrastrar el mapa no se re-renderiza nada.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLDivElement>(null);
+  const positionPreview = () => {
+    const map = mapRef.current;
+    const wrap = wrapRef.current;
+    const box = previewRef.current;
+    const inner = innerRef.current;
+    if (!map || !wrap || !box || !inner || !popupListing) return;
+    // Primero el tamaño (compacta en mapas bajos) y recién después se mide.
+    box.dataset.compact = wrap.clientHeight < COMPACT_BELOW_PX ? "true" : "false";
+    const p = map.project([popupListing.longitude, popupListing.latitude]);
+    // Desde la grilla, con el punto fuera del mapa: nada (una tarjeta que no
+    // señala a ningún lado confunde). Vuelve sola si se mueve el mapa.
+    const offScreen = p.x < 0 || p.y < 0 || p.x > wrap.clientWidth || p.y > wrap.clientHeight;
+    if (box.dataset.anchored !== "true" && offScreen) {
+      box.style.visibility = "hidden";
+      return;
+    }
+    const res = placePreview({
+      point: { x: p.x, y: p.y },
+      card: { width: box.offsetWidth, height: box.offsetHeight },
+      container: { width: wrap.clientWidth, height: wrap.clientHeight },
+    });
+    box.style.transform = `translate3d(${Math.round(res.left)}px, ${Math.round(res.top)}px, 0)`;
+    box.style.visibility = "visible";
+    // Sin flecha: una punta color papel quedaba suelta sobre la foto o se
+    // perdía contra las píldoras blancas. La tarjeta flota al lado del precio
+    // (que queda en coral) y su entrada "crece" desde el lado que lo mira.
+    const o = res.anchor ?? (res.side === "top" || res.side === "bottom" ? box.offsetWidth / 2 : box.offsetHeight / 2);
+    inner.style.transformOrigin =
+      res.side === "top"
+        ? `${o}px 100%`
+        : res.side === "bottom"
+          ? `${o}px 0`
+          : res.side === "left"
+            ? `100% ${o}px`
+            : `0 ${o}px`;
+  };
+  // Después de cada render (cambió la unidad, el tamaño o se abrió): antes de pintar.
+  useLayoutEffect(() => {
+    positionPreview();
+  });
+
+  const closePreview = () => {
+    cancelLeave();
+    setSelected(null);
+    hoverStore.set(null);
+  };
+
   // Encuadre inicial: los resultados que haya al montar (o el centro).
   const [initialView] = useState(() => {
     const b = boundsOf(located);
@@ -197,7 +235,7 @@ export function ListingsMap({
   if (!MAPBOX_TOKEN) return null;
 
   return (
-    <div className={cn("relative h-full w-full overflow-hidden bg-cream-200", className)}>
+    <div ref={wrapRef} className={cn("relative h-full w-full overflow-hidden bg-cream-200", className)}>
       <Map
         ref={mapRef}
         mapboxAccessToken={MAPBOX_TOKEN}
@@ -209,9 +247,9 @@ export function ListingsMap({
         onLoad={(e) => {
           paintBrand(e.target);
           setLoaded(true);
-          setBounds(e.target.getBounds());
         }}
-        onMoveEnd={(e) => setBounds(e.target.getBounds())}
+        onMove={positionPreview}
+        onResize={positionPreview}
         onClick={() => setSelected(null)}
       >
         <NavigationControl
@@ -243,6 +281,7 @@ export function ListingsMap({
                 aria-pressed={selected === l.id}
                 onPointerEnter={() => {
                   cancelLeave();
+                  setPillHoverId(l.id);
                   hoverStore.set(l.id);
                 }}
                 onPointerLeave={() => leaveSoon(l.id)}
@@ -260,36 +299,39 @@ export function ListingsMap({
           );
         })}
 
-        {popupListing ? (
-          <Popup
-            latitude={popupListing.latitude}
-            longitude={popupListing.longitude}
-            // Sin `anchor`: Mapbox elige el lado donde el globo entra en el mapa.
-            offset={POPUP_OFFSET}
-            closeButton={false}
-            closeOnClick={false}
-            // Abrirse al pasar el mouse no puede mover el foco (ni scrollear la página).
-            focusAfterOpen={false}
-            onClose={() => setSelected(null)}
-            maxWidth="264px"
-            // Siempre por encima de las píldoras (z-index 1, y 3 la activa).
-            style={{ zIndex: 20 }}
-            className={cn(
-              "[&_.mapboxgl-popup-content]:overflow-hidden [&_.mapboxgl-popup-content]:rounded-3xl [&_.mapboxgl-popup-content]:bg-paper",
-              "[&_.mapboxgl-popup-content]:p-0 [&_.mapboxgl-popup-content]:shadow-apart-lg",
-              // La punta del globo, del color de la tarjeta según hacia dónde apunte.
-              "[&.mapboxgl-popup-anchor-bottom_.mapboxgl-popup-tip]:border-t-paper! [&.mapboxgl-popup-anchor-bottom-left_.mapboxgl-popup-tip]:border-t-paper! [&.mapboxgl-popup-anchor-bottom-right_.mapboxgl-popup-tip]:border-t-paper!",
-              "[&.mapboxgl-popup-anchor-top_.mapboxgl-popup-tip]:border-b-paper! [&.mapboxgl-popup-anchor-top-left_.mapboxgl-popup-tip]:border-b-paper! [&.mapboxgl-popup-anchor-top-right_.mapboxgl-popup-tip]:border-b-paper!",
-              "[&.mapboxgl-popup-anchor-left_.mapboxgl-popup-tip]:border-r-paper! [&.mapboxgl-popup-anchor-right_.mapboxgl-popup-tip]:border-l-paper!",
-            )}
-          >
-            {/* Mientras el mouse está sobre el globo, la vista previa no se cierra. */}
-            <div onPointerEnter={cancelLeave} onPointerLeave={() => leaveSoon(popupListing.id)}>
-              <MiniCard listing={popupListing} view={view} stay={stay} />
-            </div>
-          </Popup>
-        ) : null}
       </Map>
+
+      {popupListing ? (
+        // Encima del mapa y de las píldoras (z-index 1, 3 la activa). Arranca
+        // invisible y `positionPreview` la ubica antes de pintar. Mientras el
+        // mouse está sobre la tarjeta, la vista previa no se cierra.
+        <div
+          ref={previewRef}
+          role="group"
+          aria-label={`Vista previa: ${popupListing.display_title}`}
+          className="group/preview absolute left-0 top-0 z-20 w-[15.5rem] font-apart"
+          data-anchored={anchored ? "true" : "false"}
+          style={{ visibility: "hidden" }}
+          onPointerEnter={cancelLeave}
+          onPointerLeave={() => leaveSoon(popupListing.id)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") closePreview();
+          }}
+        >
+          <div
+            key={popupListing.id}
+            ref={innerRef}
+            className="relative motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]"
+          >
+            <PreviewCard
+              listing={popupListing}
+              view={view}
+              stay={stay}
+              onClose={selected === popupListing.id ? closePreview : undefined}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -322,42 +364,96 @@ function boundsOf(list: Located[]): [[number, number], [number, number]] | null 
   ];
 }
 
-/** Tarjeta mini del popup (desktop). */
-function MiniCard({ listing, view, stay }: { listing: CatalogListing; view: SearchMode; stay?: StayInput }) {
+/**
+ * La tarjeta de la vista previa (escritorio): foto a sangre con el barrio en
+ * una pastilla, nombre, capacidad, precio y "Ver" hacia la ficha. Si se abrió
+ * con un clic (no por pasar el mouse) lleva una cruz para cerrarla.
+ */
+function PreviewCard({
+  listing,
+  view,
+  stay,
+  onClose,
+}: {
+  listing: CatalogListing;
+  view: SearchMode;
+  stay?: StayInput;
+  onClose?: () => void;
+}) {
   const price = cardPrice(listing, view, stay);
   const cover = listing.photo_urls[0] ?? listing.cover_url;
   const capacity = [bedroomsLabel(listing.bedrooms), guestsLabel(listing.max_guests)].filter(Boolean).join(" · ");
   return (
-    <Link
-      href={listingHref(listing.slug, stay)}
-      className="block w-64 font-apart outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-forest-500/40"
-    >
-      <div className="relative aspect-[4/3] w-full bg-cream-200">
-        {cover ? (
-          <Image src={cover} alt="" fill sizes="256px" className="object-cover" />
-        ) : null}
-      </div>
-      <div className="space-y-0.5 px-4 pb-4 pt-3">
-        {listing.hood ? <p className="truncate text-[0.75rem] text-ink-500">{listing.hood}</p> : null}
-        <p className="truncate text-[0.9375rem] font-bold text-forest-700">{listing.display_title}</p>
-        {capacity ? <p className="truncate text-[0.8125rem] text-ink-600">{capacity}</p> : null}
-        <p className="pt-1 text-[0.875rem] tabular-nums text-ink-900">
-          {price.kind === "total" ? (
-            <>
-              <span className="font-bold">{formatCurrency(price.total, price.currency)}</span> total ·{" "}
-              {nightsLabel(price.nights)}
-            </>
-          ) : price.kind === "amount" ? (
-            <>
-              <span className="font-bold">{formatCurrency(price.amount, price.currency)}</span>{" "}
-              {price.per === "mes" ? "mes" : "noche"}
-            </>
-          ) : (
-            <span className="font-semibold text-forest-700">Precio a consultar</span>
-          )}
-        </p>
-      </div>
-    </Link>
+    <div className="relative overflow-hidden rounded-[1.25rem] bg-paper shadow-[0_24px_48px_-16px_rgb(15_66_56/0.45),0_4px_12px_-4px_rgb(15_66_56/0.18)] ring-1 ring-forest-900/10">
+      <Link
+        href={listingHref(listing.slug, stay)}
+        className="group block outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-forest-500/40"
+      >
+        <div className="relative aspect-[16/10] overflow-hidden bg-cream-200 group-data-[compact=true]/preview:aspect-[2/1]">
+          {cover ? (
+            <Image
+              src={cover}
+              alt=""
+              fill
+              sizes="248px"
+              className="object-cover transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.05]"
+            />
+          ) : null}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-linear-to-t from-forest-950/40 to-transparent"
+          />
+          {listing.hood ? (
+            <span className="absolute left-2.5 top-2.5 max-w-[calc(100%-3.75rem)] truncate rounded-full bg-paper/95 px-2.5 py-1 text-[0.6875rem] font-bold uppercase tracking-[0.1em] text-forest-700 shadow-apart-sm backdrop-blur">
+              {listing.hood}
+            </span>
+          ) : null}
+          {listing.instant_book ? (
+            <span className="absolute bottom-2.5 left-2.5 inline-flex items-center gap-1 rounded-full bg-forest-700/90 px-2 py-0.5 text-[0.6875rem] font-semibold text-cream backdrop-blur">
+              <Zap className="size-3" aria-hidden />
+              Reserva inmediata
+            </span>
+          ) : null}
+        </div>
+        <div className="px-4 pb-3.5 pt-3 group-data-[compact=true]/preview:pb-3 group-data-[compact=true]/preview:pt-2.5">
+          <p className="truncate text-base font-extrabold leading-tight tracking-[-0.015em] text-forest-700">
+            {listing.display_title}
+          </p>
+          {capacity ? <p className="mt-1 truncate text-[0.8125rem] text-ink-500">{capacity}</p> : null}
+          <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-cream-300 pt-2.5 group-data-[compact=true]/preview:mt-2 group-data-[compact=true]/preview:pt-2">
+            <p className="min-w-0 truncate text-[0.875rem] tabular-nums text-ink-700">
+              {price.kind === "total" ? (
+                <>
+                  <span className="font-extrabold text-ink-900">{formatCurrency(price.total, price.currency)}</span> total ·{" "}
+                  {nightsLabel(price.nights)}
+                </>
+              ) : price.kind === "amount" ? (
+                <>
+                  <span className="font-extrabold text-ink-900">{formatCurrency(price.amount, price.currency)}</span>{" "}
+                  {price.per === "mes" ? "mes" : "noche"}
+                </>
+              ) : (
+                <span className="font-semibold text-forest-700">Precio a consultar</span>
+              )}
+            </p>
+            <span className="inline-flex shrink-0 items-center gap-1 text-[0.8125rem] font-bold text-coral-700">
+              Ver
+              <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden />
+            </span>
+          </div>
+        </div>
+      </Link>
+      {onClose ? (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Cerrar la vista previa"
+          className="absolute right-2.5 top-2.5 grid size-8 place-items-center rounded-full bg-paper/95 text-forest-700 shadow-apart-sm backdrop-blur transition-colors hover:bg-paper focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/40"
+        >
+          <X className="size-4" aria-hidden />
+        </button>
+      ) : null}
+    </div>
   );
 }
 
