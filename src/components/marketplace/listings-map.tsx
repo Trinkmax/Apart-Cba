@@ -116,14 +116,11 @@ export function ListingsMap({
   const located = useMemo(() => listings.filter(isLocated), [listings]);
   const idsKey = useMemo(() => located.map((l) => l.id).join(","), [located]);
 
-  // El globo muestra la vista previa de lo que está bajo el mouse (una tarjeta
-  // de la grilla o una píldora del mapa) y, si no hay nada, lo que se eligió
-  // con un clic. Una tarjeta cuyo punto quedó fuera del mapa sólo resalta su
-  // píldora: un globo cortado en el borde no sirve.
-  // Si el mouse está sobre la PÍLDORA (del mapa) o se eligió con un clic, la
-  // vista previa va siempre. Si viene de una tarjeta de la grilla y su punto
-  // quedó fuera de lo que se ve del mapa, sólo se resalta la píldora (eso lo
-  // decide `positionPreview` con la posición real en pantalla, en vivo).
+  // La vista previa muestra lo que está bajo el mouse (una tarjeta de la
+  // grilla o una píldora del mapa) y, si no hay nada, lo que se eligió con un
+  // clic. Desde la píldora o con un clic va siempre ("anclada"); desde la
+  // grilla, si el punto quedó fuera de lo que se ve del mapa, sólo se resalta
+  // la píldora (lo decide `positionPreview` con la posición real, en vivo).
   const [pillHoverId, setPillHoverId] = useState<string | null>(null);
   const popupListing = popups
     ? (located.find((l) => l.id === hovered) ?? located.find((l) => l.id === selected) ?? null)
@@ -146,6 +143,7 @@ export function ListingsMap({
     cancelLeave();
     leaveTimer.current = window.setTimeout(() => {
       leaveTimer.current = null;
+      setPillHoverId((cur) => (cur === id ? null : cur));
       if (hoverStore.get() === id) hoverStore.set(null);
     }, HOVER_GRACE_MS);
   };
