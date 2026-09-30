@@ -24,7 +24,8 @@ export function StaySummaryCard({ view }: { view: ReservationView }) {
   return (
     <Panel labelledBy="aside-stay" className="m-rise p-4 sm:p-5">
       <div className="flex gap-4">
-        <div className="relative h-24 w-20 shrink-0 overflow-hidden rounded-b-2xl rounded-t-full bg-cream-200">
+        {/* max-lg:overflow-clip: con hidden el zoom de la foto (view()) quedaría congelado. */}
+        <div className="relative h-24 w-20 shrink-0 overflow-hidden rounded-b-2xl rounded-t-full bg-cream-200 max-lg:overflow-clip">
           {unit.cover_url ? (
             <Image src={unit.cover_url} alt="" fill sizes="80px" className="m-zoom-in object-cover" />
           ) : (

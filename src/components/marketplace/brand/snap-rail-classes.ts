@@ -9,7 +9,9 @@
 /** Clases del contenedor en el riel (sólo por debajo de lg). */
 export const MOBILE_RAIL =
   "max-lg:flex max-lg:snap-x max-lg:snap-mandatory max-lg:gap-3 max-lg:overflow-x-auto max-lg:overscroll-x-contain " +
-  "max-lg:pb-1 max-lg:[scrollbar-width:none] max-lg:[&::-webkit-scrollbar]:hidden " +
+  // pt-2/pb-1: un scroller horizontal recorta en su caja; sin ese aire se comía el
+  // borde de arriba, la sombra y el anillo de foco de las tarjetas.
+  "max-lg:pt-2 max-lg:pb-1 max-lg:[scrollbar-width:none] max-lg:[&::-webkit-scrollbar]:hidden " +
   // Sangrado hasta el borde de la pantalla: mismo padding que los contenedores de página (px-4 / sm:px-6).
   "max-sm:-mx-4 max-sm:px-4 max-sm:scroll-px-4 sm:max-lg:-mx-6 sm:max-lg:px-6 sm:max-lg:scroll-px-6";
 

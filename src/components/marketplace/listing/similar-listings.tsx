@@ -2,7 +2,8 @@
 
 import { ListingCard } from "@/components/marketplace/listing-card";
 import { SectionHeading } from "@/components/marketplace/brand/brand-shapes";
-import { MOBILE_RAIL_ITEM, SnapRail } from "@/components/marketplace/brand/snap-rail";
+import { SnapRail } from "@/components/marketplace/brand/snap-rail";
+import { MOBILE_RAIL_ITEM } from "@/components/marketplace/brand/snap-rail-classes";
 import type { CatalogListing } from "@/lib/marketplace/contracts";
 import { useListingStay } from "./stay-context";
 

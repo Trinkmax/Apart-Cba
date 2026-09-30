@@ -20,10 +20,12 @@ export function ReservationListCard({ item }: { item: ReservationListItem }) {
       className={cn(
         "group flex items-center rounded-3xl bg-paper shadow-apart-sm ring-1 ring-cream-300 outline-none transition-[transform,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-0.5 hover:shadow-apart-md focus-visible:ring-[3px] focus-visible:ring-forest-500/40 motion-reduce:transition-none motion-reduce:hover:translate-y-0 lg:gap-5 lg:p-4",
         // Celular y tablet: tarjeta vertical, la foto arriba a lo ancho.
-        "max-lg:relative max-lg:h-full max-lg:flex-col max-lg:items-stretch max-lg:overflow-hidden",
+        // overflow-clip (no hidden): hidden convierte la tarjeta en "scroller" y el
+        // zoom de la foto (view()) queda congelado.
+        "max-lg:relative max-lg:h-full max-lg:flex-col max-lg:items-stretch max-lg:overflow-clip",
       )}
     >
-      <div className="relative shrink-0 overflow-hidden bg-cream-200 max-lg:aspect-[16/10] max-lg:w-full lg:h-32 lg:w-28 lg:rounded-b-2xl lg:rounded-t-full">
+      <div className="relative shrink-0 overflow-hidden bg-cream-200 max-lg:aspect-[16/10] max-lg:w-full max-lg:overflow-clip lg:h-32 lg:w-28 lg:rounded-b-2xl lg:rounded-t-full">
         {item.cover_url ? (
           <Image
             src={item.cover_url}

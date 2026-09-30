@@ -1,15 +1,10 @@
 import { Star } from "lucide-react";
 import { SnapRail } from "@/components/marketplace/brand/snap-rail";
+// Desde el módulo sin "use client" (un server component no puede tomar strings
+// de un módulo cliente: le llegarían como referencias y cn() las descartaría).
+import { MOBILE_RAIL_ITEM as RAIL_ITEM } from "@/components/marketplace/brand/snap-rail-classes";
 import { cn } from "@/lib/utils";
 import type { Review } from "@/lib/types/database";
-
-/**
- * Mismo valor que MOBILE_RAIL_ITEM (brand/snap-rail). Copiado a propósito:
- * éste es un server component y un string exportado por un módulo "use client"
- * llega al server como referencia de cliente (una función), no como texto:
- * cn() lo descartaría sin avisar y la tarjeta perdería su ancho en el riel.
- */
-const RAIL_ITEM = "max-lg:w-[80%] max-lg:max-w-[22rem] max-lg:shrink-0 max-lg:snap-start";
 
 function monthYear(iso: string): string {
   const d = new Date(iso);

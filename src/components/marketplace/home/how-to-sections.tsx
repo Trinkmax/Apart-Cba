@@ -327,7 +327,9 @@ export function LlegadaSection() {
           ]}
         />
         <figure className="mx-auto w-full max-w-[17rem]">
-          <div className="aspect-[4/5] overflow-hidden rounded-t-full rounded-b-3xl bg-cream-300 shadow-apart-md">
+          {/* max-lg:overflow-clip: con overflow-hidden la caja sería el "scroller" del
+              view() y el parallax quedaría congelado (escritorio: igual que antes). */}
+          <div className="aspect-[4/5] overflow-hidden rounded-t-full rounded-b-3xl bg-cream-300 shadow-apart-md max-lg:overflow-clip">
             {/* Celular: la foto se mueve más lento que la página dentro del arco. */}
             <div className="m-parallax size-full">
               <BrandPhoto

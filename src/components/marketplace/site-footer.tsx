@@ -18,10 +18,11 @@ type FooterLink = { href: string; label: string };
 const linkClass =
   "inline-flex min-h-11 items-center rounded-md text-[0.9375rem] text-cream/80 outline-none transition-colors hover:text-cream hover:underline hover:decoration-coral-400 hover:decoration-2 hover:underline-offset-[6px] focus-visible:ring-[3px] focus-visible:ring-leaf-300/60 lg:min-h-9";
 
-// Botón redondo de contacto (sólo en celular: la columna es angosta y el mail
-// completo se partía en dos renglones). El texto va en aria-label.
+// Pastilla de contacto (sólo en celular: la columna es angosta y el mail
+// completo se partía en dos renglones). Ícono + nombre del canal ("Mail"), para
+// que se entienda aunque haya uno solo; el dato completo va en aria-label.
 const iconLinkClass =
-  "inline-flex size-11 items-center justify-center rounded-full bg-cream/10 text-leaf-300 ring-1 ring-cream/20 outline-none transition-colors hover:bg-cream/15 focus-visible:ring-[3px] focus-visible:ring-leaf-300/60 [&_svg]:size-[1.125rem]";
+  "inline-flex h-11 items-center gap-2 rounded-full bg-cream/10 pl-3.5 pr-4 text-[0.9375rem] font-semibold text-cream ring-1 ring-cream/20 outline-none transition-colors hover:bg-cream/15 focus-visible:ring-[3px] focus-visible:ring-leaf-300/60 [&_svg]:size-[1.125rem] [&_svg]:text-leaf-300";
 
 function FooterColumn({ title, links }: { title: string; links: FooterLink[] }) {
   return (
@@ -56,6 +57,7 @@ function ContactColumn({ contact }: { contact: ShellContact }) {
                 className={iconLinkClass}
               >
                 <WhatsAppIcon />
+                WhatsApp
               </a>
             </li>
           ) : null}
@@ -63,6 +65,7 @@ function ContactColumn({ contact }: { contact: ShellContact }) {
             <li>
               <a href={contact.emailUrl} aria-label={`Mail ${contact.email ?? ""}`.trim()} className={iconLinkClass}>
                 <Mail aria-hidden />
+                Mail
               </a>
             </li>
           ) : null}
@@ -76,6 +79,7 @@ function ContactColumn({ contact }: { contact: ShellContact }) {
                 className={iconLinkClass}
               >
                 <Instagram aria-hidden />
+                Instagram
               </a>
             </li>
           ) : null}
@@ -140,7 +144,9 @@ export function SiteFooter({
   const year = new Date().getFullYear();
 
   return (
-    <footer className="relative mt-20 overflow-hidden rounded-t-[2.5rem] bg-forest-700 text-cream max-lg:mt-12 max-sm:rounded-t-[2rem]">
+    // max-lg:overflow-clip: recorta igual que hidden pero no es "scroller", así la
+    // cita puede animarse con view() en celular. Escritorio: overflow-hidden de siempre.
+    <footer className="relative mt-20 overflow-hidden rounded-t-[2.5rem] bg-forest-700 text-cream max-lg:mt-12 max-lg:overflow-clip max-sm:rounded-t-[2rem]">
       <ArcBand
         className="absolute -right-20 -top-6 w-80 text-leaf-300/20 max-sm:-right-16 max-sm:w-56 sm:-right-10 sm:w-[26rem]"
         thickness={12}
