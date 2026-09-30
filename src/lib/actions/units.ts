@@ -19,6 +19,7 @@ import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
 import { unitPriceKinds } from "@/lib/units/pricing";
+import { revalidateStorefront } from "@/lib/marketplace/storefront";
 
 const unitSchema = z.object({
   code: z.string().min(1, "Código requerido"),
@@ -560,6 +561,8 @@ export async function updateUnit(id: string, input: UnitInput): Promise<UnitMuta
   // no: por ahora es sólo del panel).
   const actualizada = data as Unit;
   if (actualizada.marketplace_published) {
+    // Catálogo cacheado de la vidriera (precios, nombre, barrio, capacidad).
+    revalidateStorefront();
     revalidatePath("/");
     revalidatePath("/buscar");
     if (actualizada.slug) revalidatePath(`/u/${actualizada.slug}`);
@@ -690,7 +693,7 @@ export async function archiveUnit(id: string): Promise<ArchiveUnitResult> {
     .update({ active: false })
     .eq("id", id)
     .eq("organization_id", organization.id)
-    .select("id");
+    .select("id, slug, marketplace_published");
   if (error) {
     logActionError("archiveUnit", error);
     return { ok: false, error: "No se pudo eliminar la unidad. Probá de nuevo." };
@@ -702,6 +705,15 @@ export async function archiveUnit(id: string): Promise<ArchiveUnitResult> {
   revalidatePath("/dashboard/unidades");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
+  // La vidriera sólo muestra unidades activas: si estaba publicada, que salga
+  // ya de la web (catálogo cacheado + home, búsqueda y su ficha).
+  const unit = archived[0] as { slug: string | null; marketplace_published: boolean | null };
+  if (unit.marketplace_published) {
+    revalidateStorefront();
+    revalidatePath("/");
+    revalidatePath("/buscar");
+    if (unit.slug) revalidatePath(`/u/${unit.slug}`);
+  }
   return { ok: true };
 }
 

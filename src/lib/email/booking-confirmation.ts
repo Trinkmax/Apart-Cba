@@ -546,12 +546,17 @@ export function renderBookingConfirmationText(
  * valor por defecto (`fallbackSena`) para que el mensaje salga siempre completo.
  *
  * Precedencia: `deposit_amount` (override) → `paid_amount` (Cobrado) → `fallbackSena` (1 noche) → null.
+ *
+ * `deposit_amount = 0` explícito es "Sin seña" (lo guardan la aprobación de un
+ * pedido web y el checkout inmediato): devuelve null sin caer a lo cobrado ni
+ * a 1 noche. `null` (nunca se cargó) sigue la cadena de arriba.
  */
 export function effectiveSena(
   depositAmount: number | null | undefined,
   paidAmount: number | null | undefined,
   fallbackSena?: number | null
 ): number | null {
+  if (depositAmount === 0) return null;
   if (depositAmount != null && depositAmount > 0) return depositAmount;
   if (paidAmount != null && paidAmount > 0) return paidAmount;
   if (fallbackSena != null && fallbackSena > 0) return fallbackSena;

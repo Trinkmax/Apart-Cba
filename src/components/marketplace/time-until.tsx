@@ -1,17 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { remainingLabel } from "@/components/marketplace/reservation/format";
 
 /**
- * Devuelve las horas restantes hasta un timestamp ISO.
- * Se recalcula cada minuto en cliente para mostrar countdown vivo.
+ * Cuenta regresiva hasta un timestamp ISO. Se recalcula cada minuto en el
+ * cliente. Antes de hidratar no muestra nada calculado (la hora del server y
+ * la del navegador no coinciden), así que conviene acompañarla SIEMPRE con la
+ * fecha absoluta ("antes del jue 2 oct a las 14 h").
+ *
+ * - compact (por defecto, panel): "en 5h", "en 12m".
+ * - friendly (web): "faltan 5 horas", "falta 1 hora", "faltan 2 días".
  */
 export function TimeUntil({
   isoDeadline,
   expiredLabel = "Expirada",
+  variant = "compact",
+  className,
 }: {
   isoDeadline: string;
   expiredLabel?: string;
+  variant?: "compact" | "friendly";
+  className?: string;
 }) {
   const [now, setNow] = useState<number | null>(null);
 
@@ -26,20 +36,28 @@ export function TimeUntil({
   }, []);
 
   if (now === null) {
-    // Render inicial server-side: solo mostramos el deadline ISO sin diff
-    return <span>—</span>;
+    // Render del server: sin diferencia calculada (evita saltos al hidratar).
+    // friendly va siempre junto a la fecha absoluta: antes de hidratar no se
+    // muestra nada (evita una pastilla vacía).
+    return variant === "friendly" ? null : <span className={className}>—</span>;
   }
+
   const diffMs = new Date(isoDeadline).getTime() - now;
-  if (diffMs <= 0) return <span>{expiredLabel}</span>;
+  if (!Number.isFinite(diffMs) || diffMs <= 0) return <span className={className}>{expiredLabel}</span>;
+
+  if (variant === "friendly") {
+    return <span className={className}>{remainingLabel(diffMs)}</span>;
+  }
+
   const hours = Math.floor(diffMs / (60 * 60 * 1000));
-  if (hours >= 1) return <span>en {hours}h</span>;
+  if (hours >= 1) return <span className={className}>en {hours}h</span>;
   const minutes = Math.floor(diffMs / (60 * 1000));
-  return <span>en {minutes}m</span>;
+  return <span className={className}>en {minutes}m</span>;
 }
 
 /**
- * Devuelve `true` si el deadline pasó. Útil para condicionales server-side
- * dentro de una expresión simple (se calcula post-hidratación).
+ * Devuelve `true` si el deadline pasó (null antes de hidratar). Se recalcula
+ * cada minuto.
  */
 export function useIsPastDeadline(iso: string): boolean | null {
   const [past, setPast] = useState<boolean | null>(null);

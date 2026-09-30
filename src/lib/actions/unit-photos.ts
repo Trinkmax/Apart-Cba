@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
+import { revalidateStorefront } from "@/lib/marketplace/storefront";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import type { UnitPhoto } from "@/lib/types/database";
@@ -72,6 +73,8 @@ async function revalidatePublicUnit(
   admin: ReturnType<typeof createAdminClient>,
   unitId: string,
 ) {
+  // Catálogo cacheado de la vidriera (home y /buscar): portada y carrusel.
+  revalidateStorefront();
   try {
     const { data } = await admin
       .from("units")

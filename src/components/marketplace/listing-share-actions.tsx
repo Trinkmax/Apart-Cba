@@ -1,77 +1,71 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Share, Heart } from "lucide-react";
-import { toast } from "sonner";
+import { useEffect, useState } from "react";
+import { Check, Share2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { toggleWishlist } from "@/lib/actions/wishlists";
+import { HeartButton } from "@/components/marketplace/wishlist/heart-button";
 
-type Props = {
-  slug: string;
+/**
+ * Compartir (Web Share API; si no hay, copia el link) y guardar en favoritos.
+ * El link compartido es siempre la ficha limpia (sin fechas ni avisos).
+ */
+export function ListingShareActions({
+  url,
+  title,
+  unitId,
+  className,
+}: {
+  /** URL absoluta de la ficha. */
+  url: string;
   title: string;
   unitId: string;
-};
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
 
-export function ListingShareActions({ slug, title, unitId }: Props) {
-  const [favorited, setFavorited] = useState(false);
-  const [, startTransition] = useTransition();
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 2400);
+    return () => window.clearTimeout(id);
+  }, [copied]);
 
   async function handleShare() {
-    const url = `${window.location.origin}/u/${slug}`;
-    if (navigator.share) {
+    // En la ficha abierta en otro dominio (preview) se comparte el de la página.
+    const shareUrl = url || window.location.href.split("?")[0];
+    if (typeof navigator.share === "function") {
       try {
-        await navigator.share({ title, url });
-      } catch {
-        // El usuario canceló el diálogo de compartir; no hacemos nada.
+        await navigator.share({ title: `${title} · apart`, url: shareUrl });
+        return;
+      } catch (err) {
+        // Canceló el diálogo: no hacemos nada. Otro error: probamos copiar.
+        if (err instanceof DOMException && err.name === "AbortError") return;
       }
-      return;
     }
     try {
-      await navigator.clipboard.writeText(url);
-      toast.success("Link copiado");
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
     } catch {
-      toast.error("No se pudo copiar el link");
+      window.prompt("Copiá el link de este lugar:", shareUrl);
     }
-  }
-
-  function handleSave() {
-    const next = !favorited;
-    setFavorited(next);
-    startTransition(async () => {
-      const result = await toggleWishlist(unitId);
-      if (!result.ok) {
-        setFavorited(!next);
-        if (result.error?.toLowerCase().includes("sesión") || result.error?.toLowerCase().includes("inicia")) {
-          toast.info("Iniciá sesión para guardar favoritos");
-        } else {
-          toast.error(result.error ?? "No se pudo guardar");
-        }
-      } else {
-        toast.success(result.added ? "Guardado en favoritos" : "Quitado de favoritos");
-      }
-    });
   }
 
   return (
-    <div className="hidden md:flex items-center gap-1">
+    <div className={cn("flex items-center gap-2", className)}>
       <button
+        type="button"
         onClick={handleShare}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100 rounded-lg"
+        className={cn(
+          "inline-flex h-11 items-center gap-2 rounded-full border px-4 font-apart text-sm font-semibold transition-colors duration-200",
+          "outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/40",
+          copied
+            ? "border-leaf-300 bg-leaf-100 text-forest-700"
+            : "border-cream-300 bg-paper text-forest-700 hover:border-cream-400 hover:bg-cream-50",
+        )}
       >
-        <Share size={14} />
-        Compartir
+        {copied ? <Check className="size-[1.15rem]" aria-hidden /> : <Share2 className="size-[1.15rem]" aria-hidden />}
+        <span aria-live="polite">{copied ? "Link copiado" : "Compartir"}</span>
       </button>
-      <button
-        onClick={handleSave}
-        aria-label={favorited ? "Quitar de favoritos" : "Guardar"}
-        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-100 rounded-lg"
-      >
-        <Heart
-          size={14}
-          className={cn("transition-all", favorited ? "fill-sage-500 stroke-sage-500" : "")}
-        />
-        Guardar
-      </button>
+      <HeartButton unitId={unitId} variant="plain" />
     </div>
   );
 }

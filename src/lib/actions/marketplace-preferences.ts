@@ -1,55 +1,39 @@
 "use server";
 
-import { cookies } from "next/headers";
-import { revalidatePath } from "next/cache";
-import {
-  type CurrencyCode,
-  DEFAULT_CURRENCY,
-  isSupportedCurrency,
-} from "@/lib/marketplace/currency-config";
+import { type CurrencyCode, DEFAULT_CURRENCY } from "@/lib/marketplace/currency-config";
 
-const CURRENCY_COOKIE = "rentos_currency";
-const LOCALE_COOKIE = "rentos_locale";
+/**
+ * Preferencias de la web pública. La web es ARS + es-AR: ya no hay selector de
+ * moneda ni de idioma (el tipo de cambio estático engañaba y el cobro es por
+ * transferencia en pesos). Estas funciones quedan por compatibilidad y NO leen
+ * cookies: así las páginas que las usan pueden seguir siendo estáticas.
+ */
 
-const SUPPORTED_LOCALES = ["es-AR", "en-US", "pt-BR"] as const;
-type LocaleCode = (typeof SUPPORTED_LOCALES)[number];
+type LocaleCode = "es-AR";
 const DEFAULT_LOCALE: LocaleCode = "es-AR";
 
-function isSupportedLocale(value: unknown): value is LocaleCode {
-  return typeof value === "string" && (SUPPORTED_LOCALES as readonly string[]).includes(value);
-}
-
-const COOKIE_OPTIONS = {
-  maxAge: 365 * 24 * 60 * 60,
-  path: "/",
-  sameSite: "lax",
-  httpOnly: false,
-} as const;
-
-/** Reads the active currency from the cookie. Falls back to ARS. */
+/** Moneda de la web: siempre ARS. */
 export async function getActiveCurrency(): Promise<CurrencyCode> {
-  const value = (await cookies()).get(CURRENCY_COOKIE)?.value;
-  return isSupportedCurrency(value) ? value : DEFAULT_CURRENCY;
+  return DEFAULT_CURRENCY;
 }
 
-/** Reads the active locale from the cookie. Falls back to es-AR. */
+/** Idioma de la web: siempre es-AR. */
 export async function getActiveLocale(): Promise<LocaleCode> {
-  const value = (await cookies()).get(LOCALE_COOKIE)?.value;
-  return isSupportedLocale(value) ? value : DEFAULT_LOCALE;
+  return DEFAULT_LOCALE;
 }
 
-export async function setMarketplaceCurrency(currency: string) {
-  if (!isSupportedCurrency(currency)) return { ok: false as const, error: "Moneda no soportada" };
-  (await cookies()).set(CURRENCY_COOKIE, currency, COOKIE_OPTIONS);
-  // Revalidate every marketplace route so server components re-fetch using
-  // the new active currency.
-  revalidatePath("/", "layout");
-  return { ok: true as const };
+/** Sin efecto: la moneda es fija. */
+export async function setMarketplaceCurrency(
+  currency: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return currency === DEFAULT_CURRENCY
+    ? { ok: true }
+    : { ok: false, error: "La web muestra los precios en pesos argentinos." };
 }
 
-export async function setMarketplaceLocale(locale: string) {
-  if (!isSupportedLocale(locale)) return { ok: false as const, error: "Idioma no soportado" };
-  (await cookies()).set(LOCALE_COOKIE, locale, COOKIE_OPTIONS);
-  revalidatePath("/", "layout");
-  return { ok: true as const };
+/** Sin efecto: el idioma es fijo. */
+export async function setMarketplaceLocale(
+  locale: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return locale === DEFAULT_LOCALE ? { ok: true } : { ok: false, error: "La web está en español." };
 }

@@ -6,17 +6,29 @@ import type {
   Review,
   UnitPricingRule,
 } from "@/lib/types/database";
-import {
-  getBlockedDates,
-  OCCUPYING_BOOKING_STATUSES,
-} from "@/lib/marketplace/availability";
+import { getBlockedDates, getUnavailableUnitIds } from "@/lib/marketplace/availability";
 import { addDaysIso, computePricing, todayIsoAR } from "@/lib/marketplace/pricing";
-import { rowToSummary, type UnitRow } from "@/lib/marketplace/listing-reads";
 import {
-  channelsHoldingAvailability,
-  getChannelRequestPolicies,
-} from "@/lib/channels/request-policy";
-import type { Channel } from "@/lib/channels/types";
+  isIsoDay,
+  rowToSummary,
+  UNIT_SUMMARY_COLUMNS,
+  type UnitRow,
+} from "@/lib/marketplace/catalog";
+import {
+  getStorefrontOrgIds,
+  getStorefrontUnitRef,
+  isUuid,
+  loadPhotosAndAmenities,
+  storefrontUnitsQuery,
+} from "@/lib/marketplace/storefront";
+
+/*
+ * Lecturas públicas del marketplace. TODAS pasan por la vidriera
+ * (`@/lib/marketplace/storefront`): unidades publicadas y activas, con slug y
+ * precio, de organizaciones que venden en la web. El mismo proyecto aloja
+ * organizaciones demo con reseñas inventadas que no pueden asomar en
+ * www.apartcba.com, ni por una página ni llamando a la acción a mano.
+ */
 
 export type SearchFilters = {
   city?: string | null;
@@ -63,21 +75,11 @@ export async function searchListings(filters: SearchFilters): Promise<{
   // materializada de "próxima fecha disponible".
   const HARD_SCAN_CAP = 500;
 
-  let q = admin
-    .from("units")
-    .select(
-      `
-        id, organization_id, slug, marketplace_title, name, marketplace_property_type,
-        neighborhood, city, address, bedrooms, bathrooms, max_guests, size_m2,
-        latitude, longitude, base_price, marketplace_currency, cleaning_fee, instant_book,
-        default_mode, marketplace_rating_avg, marketplace_rating_count, cover_image_url,
-        min_nights, max_nights
-      `
-    )
-    .eq("marketplace_published", true)
-    .eq("active", true)
-    .not("slug", "is", null)
-    .not("base_price", "is", null);
+  const orgIds = await getStorefrontOrgIds();
+  if (orgIds.length === 0) return { listings: [], total: 0 };
+
+  // Scope de vidriera + `monthly_price` (sin él la renta mensual sale null).
+  let q = storefrontUnitsQuery(admin, orgIds, UNIT_SUMMARY_COLUMNS);
 
   if (filters.city) {
     // El argumento de .or() lo parsea PostgREST: `,` `(` `)` `*` son estructurales.
@@ -148,63 +150,20 @@ export async function searchListings(filters: SearchFilters): Promise<{
 
   // 1) Filtro por disponibilidad (solo si hay rango de fechas). Se aplica ANTES
   //    de paginar para que el total y las páginas sean consistentes.
-  if (filters.checkIn && filters.checkOut) {
-    const checkIn = filters.checkIn;
-    const checkOut = filters.checkOut;
-    const ids = unitsRaw.map((u) => u.id);
-
-    const [bookingsRes, requestsRes, otaRes] = await Promise.all([
-      admin
-        .from("bookings")
-        .select("unit_id")
-        .in("unit_id", ids)
-        .in("status", OCCUPYING_BOOKING_STATUSES as unknown as string[])
-        .lt("check_in_date", checkOut)
-        .gt("check_out_date", checkIn),
-      admin
-        .from("booking_requests")
-        .select("unit_id")
-        .in("unit_id", ids)
-        .eq("status", "pendiente")
-        .gt("expires_at", new Date().toISOString())
-        .lt("check_in_date", checkOut)
-        .gt("check_out_date", checkIn),
-      // Solicitudes de OTA sin confirmar. Sin esto el buscador mostraba
-      // disponible una unidad que el date-picker bloquea y el checkout rechaza:
-      // tres superficies con dos criterios distintos.
-      admin
-        .from("channel_reservations")
-        .select("unit_id, channel")
-        .in("unit_id", ids)
-        .eq("external_status", "pending")
-        .lt("check_in", checkOut)
-        .gt("check_out", checkIn),
-    ]);
-
-    const blocked = new Set<string>();
-    for (const r of bookingsRes.data ?? []) blocked.add(r.unit_id);
-    for (const r of requestsRes.data ?? []) blocked.add(r.unit_id);
-
-    // El buscador es cross-org, así que la política de retención se resuelve
-    // por organización de la unidad (son una o dos; la lectura está cacheada).
-    const otaRows = (otaRes.data ?? []) as { unit_id: string; channel: Channel }[];
-    if (otaRows.length > 0) {
-      const orgByUnit = new Map(unitsRaw.map((u) => [u.id, u.organization_id]));
-      const holdsByOrg = new Map<string, Channel[]>();
-      for (const orgId of new Set(otaRows.map((r) => orgByUnit.get(r.unit_id)).filter(Boolean))) {
-        holdsByOrg.set(
-          orgId as string,
-          channelsHoldingAvailability(
-            await getChannelRequestPolicies(admin, orgId as string),
-          ),
-        );
-      }
-      for (const r of otaRows) {
-        const orgId = orgByUnit.get(r.unit_id);
-        if (orgId && (holdsByOrg.get(orgId) ?? []).includes(r.channel)) blocked.add(r.unit_id);
-      }
-    }
-
+  //    Misma lógica que el buscador nuevo (`getUnavailableUnitIds`): reservas
+  //    que ocupan, pedidos vigentes y solicitudes de canal que retienen según la
+  //    política de cada organización. Fechas mal formadas o invertidas = sin
+  //    filtro (como antes), en vez de reventar la página.
+  const checkIn = filters.checkIn;
+  const checkOut = filters.checkOut;
+  if (isIsoDay(checkIn) && isIsoDay(checkOut) && checkOut > checkIn) {
+    const blocked = new Set(
+      await getUnavailableUnitIds({
+        unitIds: unitsRaw.map((u) => u.id),
+        checkInIso: checkIn,
+        checkOutIso: checkOut,
+      }),
+    );
     unitsRaw = unitsRaw.filter((u) => !blocked.has(u.id));
   }
 
@@ -213,36 +172,15 @@ export async function searchListings(filters: SearchFilters): Promise<{
   }
 
   // 2) Fotos + amenities para el conjunto ya filtrado por disponibilidad.
-  const unitIds = unitsRaw.map((u) => u.id);
-  const [photosRes, amenitiesRes] = await Promise.all([
-    admin
-      .from("unit_photos")
-      .select("unit_id, public_url, sort_order, is_cover")
-      .eq("media_type", "image")
-      .in("unit_id", unitIds)
-      .order("is_cover", { ascending: false })
-      .order("sort_order", { ascending: true }),
-    admin
-      .from("unit_marketplace_amenities")
-      .select("unit_id, amenity_code")
-      .in("unit_id", unitIds),
-  ]);
-
-  const photosByUnit = new Map<string, string[]>();
-  for (const p of photosRes.data ?? []) {
-    const arr = photosByUnit.get(p.unit_id) ?? [];
-    if (arr.length < 5) arr.push(p.public_url);
-    photosByUnit.set(p.unit_id, arr);
-  }
-  const amenitiesByUnit = new Map<string, string[]>();
-  for (const a of amenitiesRes.data ?? []) {
-    const arr = amenitiesByUnit.get(a.unit_id) ?? [];
-    arr.push(a.amenity_code);
-    amenitiesByUnit.set(a.unit_id, arr);
-  }
+  //    Lectura paginada (el tope silencioso de 1000 filas de PostgREST dejaba
+  //    sin fotos a las últimas unidades), portada primero.
+  const { photos, amenities } = await loadPhotosAndAmenities(
+    admin,
+    unitsRaw.map((u) => u.id),
+  );
 
   let listings = unitsRaw.map((u) =>
-    rowToSummary(u, photosByUnit.get(u.id) ?? [], amenitiesByUnit.get(u.id) ?? [])
+    rowToSummary(u, photos.get(u.id)?.urls ?? [], amenities.get(u.id) ?? [])
   );
 
   // 3) Filtro por amenities (en memoria).
@@ -276,12 +214,20 @@ export async function getFeaturedListings(limit = 8): Promise<MarketplaceListing
   return listings;
 }
 
+/**
+ * Reseñas publicadas de una unidad de la vidriera ([] si la unidad no está en
+ * la vidriera: las organizaciones demo tienen reseñas inventadas). Un error de
+ * lectura se lanza: en una página ISR deja la versión anterior en pie.
+ */
 export async function getReviewsForUnit(unitId: string): Promise<Review[]> {
+  const unit = await getStorefrontUnitRef(unitId);
+  if (!unit) return [];
   const admin = createAdminClient();
   const { data, error } = await admin
     .from("reviews")
     .select("*")
-    .eq("unit_id", unitId)
+    .eq("unit_id", unit.id)
+    .eq("organization_id", unit.organization_id)
     .eq("published", true)
     .order("created_at", { ascending: false })
     .limit(50);
@@ -294,7 +240,13 @@ export async function getListingBlockedDates(params: {
   fromIso: string;
   toIso: string;
 }): Promise<string[]> {
-  return getBlockedDates(params);
+  // Pública: la ocupación de una unidad que no está en la vidriera no se muestra.
+  const unit = await getStorefrontUnitRef(params.unitId);
+  if (!unit) return [];
+  if (!isIsoDay(params.fromIso) || !isIsoDay(params.toIso) || params.toIso <= params.fromIso) {
+    return [];
+  }
+  return getBlockedDates({ unitId: unit.id, fromIso: params.fromIso, toIso: params.toIso });
 }
 
 /**
@@ -306,22 +258,44 @@ export async function quoteListing(params: {
   checkIn: string;
   checkOut: string;
 }) {
+  if (
+    !isIsoDay(params.checkIn) ||
+    !isIsoDay(params.checkOut) ||
+    params.checkOut <= params.checkIn ||
+    // Tope de 365 noches (como el checkout): computePricing recorre noche a noche.
+    params.checkOut > addDaysIso(params.checkIn, 365)
+  ) {
+    throw new Error("Las fechas son inválidas");
+  }
+  if (!isUuid(params.unitId)) throw new Error("La unidad no está disponible");
+
+  const orgIds = await getStorefrontOrgIds();
+  if (orgIds.length === 0) throw new Error("La unidad no está disponible");
   const admin = createAdminClient();
-  const { data: unit, error } = await admin
-    .from("units")
-    .select("base_price, cleaning_fee, marketplace_currency, min_nights, max_nights, marketplace_published, active")
+  const { data, error } = await storefrontUnitsQuery(
+    admin,
+    orgIds,
+    "base_price, cleaning_fee, marketplace_currency, min_nights, max_nights",
+  )
     .eq("id", params.unitId)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  if (!unit || !unit.marketplace_published || !unit.active) {
-    throw new Error("La unidad no está disponible");
-  }
+  if (!data) throw new Error("La unidad no está disponible");
+  const unit = data as {
+    base_price: number | null;
+    cleaning_fee: number | null;
+    marketplace_currency: string | null;
+    min_nights: number | null;
+    max_nights: number | null;
+  };
 
-  const { data: rules } = await admin
+  const { data: rules, error: rulesError } = await admin
     .from("unit_pricing_rules")
     .select("*")
     .eq("unit_id", params.unitId)
     .eq("active", true);
+  // Sin las reglas la cotización saldría de menos: mejor fallar visible.
+  if (rulesError) throw new Error(rulesError.message);
 
   const breakdown = computePricing({
     checkInIso: params.checkIn,
@@ -337,29 +311,4 @@ export async function quoteListing(params: {
     min_nights: unit.min_nights ?? 1,
     max_nights: unit.max_nights ?? null,
   };
-}
-
-/** Para la página de búsqueda: lista de ciudades únicas (chips de destinos rápidos). */
-export async function getPopularCities(): Promise<{ city: string; count: number }[]> {
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from("units")
-    .select("address, neighborhood")
-    .eq("marketplace_published", true)
-    .eq("active", true);
-
-  // Best effort: extraer "Córdoba", "Buenos Aires" del campo address por keyword
-  const known = ["Córdoba", "Buenos Aires", "Mendoza", "Rosario", "Bariloche", "Mar del Plata", "Salta", "Tucumán"];
-  const tally = new Map<string, number>();
-  for (const row of data ?? []) {
-    const hay = `${row.address ?? ""} ${row.neighborhood ?? ""}`;
-    for (const k of known) {
-      if (hay.toLowerCase().includes(k.toLowerCase())) {
-        tally.set(k, (tally.get(k) ?? 0) + 1);
-      }
-    }
-  }
-  return Array.from(tally.entries())
-    .map(([city, count]) => ({ city, count }))
-    .sort((a, b) => b.count - a.count);
 }

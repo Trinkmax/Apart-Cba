@@ -268,3 +268,183 @@ export async function getBlockedDates(params: {
   }
   return Array.from(blocked).sort();
 }
+
+// ─── Disponibilidad en lote (buscador de la web) ─────────────────────────────
+
+type AdminClient = ReturnType<typeof createAdminClient>;
+type PageResult = PromiseLike<{ data: unknown; error: { message: string } | null }>;
+
+/** Tandas para `.in()`: la lista de ids viaja en la URL. */
+const BATCH_IN_CHUNK = 150;
+/** `max_rows` de PostgREST en Supabase: una respuesta más larga se corta sin avisar. */
+const BATCH_PAGE_SIZE = 1000;
+
+function chunkIds(values: string[], size: number): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < values.length; i += size) out.push(values.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Recorre `.range()` hasta que una página vuelve incompleta. Un rango de
+ * fechas largo (hasta 365 noches) sobre toda la vidriera puede pasar las 1000
+ * reservas; cortar ahí mostraría como libres unidades que no lo están.
+ * El builder tiene que ordenar por algo único para que las páginas no se pisen.
+ */
+async function readAllRows<T>(page: (from: number, to: number) => PageResult): Promise<T[]> {
+  const out: T[] = [];
+  for (let from = 0; from < BATCH_PAGE_SIZE * 50; from += BATCH_PAGE_SIZE) {
+    const { data, error } = await page(from, from + BATCH_PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as T[];
+    out.push(...rows);
+    if (rows.length < BATCH_PAGE_SIZE) break;
+  }
+  return out;
+}
+
+/**
+ * Unidades (de `unitIds`) que NO se pueden reservar en [checkIn, checkOut).
+ * Es la versión en lote de `checkUnitAvailability` para el buscador: los
+ * mismos tres motivos, en tres consultas para toda la vidriera en vez de tres
+ * por unidad.
+ *   1. `bookings` que ocupan (OCCUPYING_BOOKING_STATUSES) y solapan.
+ *   2. `booking_requests` pendientes que todavía no vencieron y solapan.
+ *   3. Solicitudes de canal sin confirmar (`channel_reservations` pending),
+ *      sólo de los canales cuya política retiene disponibilidad en la web
+ *      propia — la política es por organización, se lee por cada una.
+ *
+ * Esto sólo decide qué se muestra como disponible; la verificación
+ * autoritativa sigue siendo `checkUnitAvailability` al pedir y, al final, los
+ * constraints de solapamiento. Un error de lectura se LANZA (no se puede leer
+ * como "todo libre"); quien llama decide cómo mostrarlo.
+ */
+export async function getUnavailableUnitIds(params: {
+  unitIds: string[];
+  checkInIso: string;
+  checkOutIso: string;
+}): Promise<string[]> {
+  const unitIds = Array.from(new Set(params.unitIds.filter(Boolean)));
+  if (unitIds.length === 0) return [];
+  // Mismo criterio que checkUnitAvailability: fechas inválidas = nada disponible.
+  if (params.checkOutIso <= params.checkInIso) return unitIds;
+
+  const admin = createAdminClient();
+  const range = { checkInIso: params.checkInIso, checkOutIso: params.checkOutIso };
+  const perChunk = await Promise.all(
+    chunkIds(unitIds, BATCH_IN_CHUNK).map(async (ids) => {
+      const [booked, requested, held] = await Promise.all([
+        bookedUnitIds(admin, ids, range),
+        requestedUnitIds(admin, ids, range),
+        channelHeldUnitIds(admin, ids, range),
+      ]);
+      return [...booked, ...requested, ...held];
+    }),
+  );
+
+  const unavailable = new Set(perChunk.flat());
+  // Mismo orden que la entrada: la respuesta es estable y fácil de comparar.
+  return unitIds.filter((id) => unavailable.has(id));
+}
+
+type BatchRange = { checkInIso: string; checkOutIso: string };
+
+/** 1) Unidades con `bookings` que ocupan el calendario y solapan el rango. */
+async function bookedUnitIds(
+  admin: AdminClient,
+  unitIds: string[],
+  range: BatchRange,
+): Promise<string[]> {
+  const rows = await readAllRows<{ unit_id: string | null }>((from, to) =>
+    admin
+      .from("bookings")
+      .select("id, unit_id")
+      .in("unit_id", unitIds)
+      .in("status", OCCUPYING_BOOKING_STATUSES as unknown as string[])
+      .lt("check_in_date", range.checkOutIso)
+      .gt("check_out_date", range.checkInIso)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  return rows.map((r) => r.unit_id).filter((id): id is string => Boolean(id));
+}
+
+/** 2) Unidades con pedidos web pendientes y vigentes que solapan el rango. */
+async function requestedUnitIds(
+  admin: AdminClient,
+  unitIds: string[],
+  range: BatchRange,
+): Promise<string[]> {
+  const nowIso = new Date().toISOString();
+  const rows = await readAllRows<{ unit_id: string | null }>((from, to) =>
+    admin
+      .from("booking_requests")
+      .select("id, unit_id")
+      .in("unit_id", unitIds)
+      .eq("status", "pendiente")
+      .gt("expires_at", nowIso)
+      .lt("check_in_date", range.checkOutIso)
+      .gt("check_out_date", range.checkInIso)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  return rows.map((r) => r.unit_id).filter((id): id is string => Boolean(id));
+}
+
+/**
+ * 3) Unidades con solicitudes de canal sin confirmar que retienen. Se leen
+ * todas las pendientes que solapan (son pocas) y se filtran por la política de
+ * SU organización: la vidriera puede mezclar organizaciones con políticas
+ * distintas. Si la política de una organización no se puede leer, sus
+ * solicitudes cuentan como retenidas (falla cerrado, igual que
+ * checkUnitAvailability: con instant_book no hay constraint que ataje el
+ * solapamiento, porque la solicitud no tiene fila en `bookings`).
+ */
+async function channelHeldUnitIds(
+  admin: AdminClient,
+  unitIds: string[],
+  range: BatchRange,
+): Promise<string[]> {
+  const rows = await readAllRows<{
+    unit_id: string | null;
+    organization_id: string;
+    channel: string;
+    last_seen_at: string | null;
+  }>((from, to) =>
+    admin
+      .from("channel_reservations")
+      .select("id, unit_id, organization_id, channel, last_seen_at")
+      .in("unit_id", unitIds)
+      .eq("external_status", "pending")
+      .lt("check_in", range.checkOutIso)
+      .gt("check_out", range.checkInIso)
+      .order("id", { ascending: true })
+      .range(from, to),
+  );
+  const fresh = rows.filter((r) => r.unit_id && isFresh(r.last_seen_at));
+  if (fresh.length === 0) return [];
+
+  const orgIds = Array.from(new Set(fresh.map((r) => r.organization_id)));
+  const holdByOrg = new Map<string, Set<string> | "all">();
+  await Promise.all(
+    orgIds.map(async (orgId) => {
+      const { policies, failed } = await readChannelRequestPolicies(admin, orgId);
+      if (failed) {
+        console.error(
+          "[marketplace/availability] política de solicitudes ilegible; se retienen todas las del canal",
+          orgId,
+        );
+        holdByOrg.set(orgId, "all");
+        return;
+      }
+      holdByOrg.set(orgId, new Set<string>(channelsHoldingAvailability(policies)));
+    }),
+  );
+
+  return fresh
+    .filter((r) => {
+      const hold = holdByOrg.get(r.organization_id);
+      return hold === "all" || (hold?.has(r.channel) ?? false);
+    })
+    .map((r) => r.unit_id as string);
+}

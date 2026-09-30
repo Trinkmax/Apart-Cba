@@ -1,45 +1,54 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { CalendarRange, ChevronLeft, ChevronRight, Heart, Star, Zap } from "lucide-react";
-import { toast } from "sonner";
+import { CalendarRange, ChevronLeft, ChevronRight, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatInCurrency } from "@/lib/marketplace/currency-config";
-import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
-import { useT } from "@/lib/i18n/use-t";
-import { toggleWishlist } from "@/lib/actions/wishlists";
-import type { MarketplaceListingSummary } from "@/lib/types/database";
+import type { CatalogListing } from "@/lib/marketplace/contracts";
+import { cardPrice, listingHref, nightsLabel } from "@/lib/marketplace/catalog-filter";
+import { formatCurrency } from "@/lib/marketplace/pricing";
+import { bedroomsLabel, guestsLabel } from "@/lib/marketplace/display";
+import { ApartLogo } from "@/components/marketplace/brand/apart-logo";
+import { HeartButton } from "@/components/marketplace/wishlist/heart-button";
 
-type Props = {
-  listing: MarketplaceListingSummary;
-  isFavorited?: boolean;
+export type ListingCardProps = {
+  listing: CatalogListing;
+  /** Qué precio mostrar (headlinePrice): por noche o por mes. */
+  view?: "noche" | "mes";
+  /** Fechas de la búsqueda: arman el link y el total. */
+  stay?: { checkIn: string; checkOut: string; guests?: number } | null;
+  /** next/image priority (las primeras 4 de una grilla). */
   priority?: boolean;
-  href?: string;
+  className?: string;
 };
 
-export function ListingCard({ listing, isFavorited = false, priority = false, href }: Props) {
-  const [photoIndex, setPhotoIndex] = useState(0);
-  // Montaje progresivo del carrusel: al render inicial sólo la foto 0 pide
-  // red; las siguientes se montan (y precargan eager) recién cuando el usuario
-  // muestra intención (hover/touch) o navega. Evita 5 requests por card.
-  const [mountedUpTo, setMountedUpTo] = useState(0);
-  const [favorited, setFavorited] = useState(isFavorited);
-  const [, startTransition] = useTransition();
-  const { currency, locale } = useMarketplacePrefs();
-  const t = useT();
+const SIZES = "(max-width: 639px) 92vw, (max-width: 1023px) 46vw, (max-width: 1279px) 30vw, 22vw";
+const EASE = "ease-[cubic-bezier(0.22,1,0.36,1)]";
 
+/**
+ * Tarjeta de un alojamiento. Todo el bloque es un link a la ficha; el corazón
+ * y las flechas del carrusel viven ENCIMA como hermanos del link (nunca un
+ * botón adentro de un <a>), así que no navegan.
+ */
+export function ListingCard({ listing, view = "noche", stay = null, priority = false, className }: ListingCardProps) {
+  const photos = listing.photo_urls.length > 0 ? listing.photo_urls : listing.cover_url ? [listing.cover_url] : [];
+  const [index, setIndex] = useState(0);
+  // Carga progresiva: al principio sólo la foto 0 pide red; las siguientes se
+  // montan (eager) recién cuando hay intención (hover, toque, swipe, flecha).
+  const [mountedUpTo, setMountedUpTo] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
 
-  const photos = listing.photo_urls.length > 0 ? listing.photo_urls : [listing.cover_url].filter(Boolean) as string[];
-  const target = href ?? `/u/${listing.slug}`;
-  const dotCount = Math.min(photos.length, 5);
-  const isMensual = listing.default_mode === "mensual";
+  const href = listingHref(listing.slug, stay);
+  const price = cardPrice(listing, view, stay);
+  const perMonth = view === "mes" ? listing.offers_monthly : !listing.offers_short;
+  const capacity = [bedroomsLabel(listing.bedrooms), guestsLabel(listing.max_guests)].filter(Boolean).join(" · ");
+  const place = listing.hood ?? listing.city ?? "Córdoba";
+  const showMinNights = view === "noche" && listing.offers_short && listing.min_nights > 2;
 
-  function warmUpTo(index: number) {
-    setMountedUpTo((m) => Math.max(m, Math.min(index, photos.length - 1)));
+  function warmUpTo(i: number) {
+    setMountedUpTo((m) => Math.max(m, Math.min(i, photos.length - 1)));
   }
 
   function handleScroll() {
@@ -50,199 +59,191 @@ export function ListingCard({ listing, isFavorited = false, priority = false, hr
       if (!el || el.clientWidth === 0) return;
       const next = Math.round(el.scrollLeft / el.clientWidth);
       warmUpTo(next + 1);
-      setPhotoIndex((prev) => (prev === next ? prev : next));
+      setIndex((prev) => (prev === next ? prev : next));
     });
   }
 
-  function scrollToSlide(i: number, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    warmUpTo(i + 1);
+  function go(dir: -1 | 1) {
     const el = trackRef.current;
     if (!el) return;
-    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
-  }
-
-  function scrollByDir(dir: -1 | 1, e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const el = trackRef.current;
-    if (!el) return;
-    const next = Math.min(Math.max(photoIndex + dir, 0), photos.length - 1);
+    const next = Math.min(Math.max(index + dir, 0), photos.length - 1);
     warmUpTo(next + 1);
     el.scrollTo({ left: next * el.clientWidth, behavior: "smooth" });
   }
 
-  function handleFavoriteClick(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const next = !favorited;
-    setFavorited(next);
-    startTransition(async () => {
-      const result = await toggleWishlist(listing.id);
-      if (!result.ok) {
-        setFavorited(!next);
-        if (result.error?.toLowerCase().includes("sesión") || result.error?.toLowerCase().includes("inicia")) {
-          toast.info("Iniciá sesión para guardar favoritos");
-        } else {
-          toast.error(result.error ?? "No se pudo guardar");
-        }
-      }
-    });
-  }
-
-  const location = listing.neighborhood || listing.address || listing.city || "";
-
   return (
-    <Link href={target} className="group block">
-      <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-neutral-100">
-        {photos.length > 0 ? (
-          <div
-            ref={trackRef}
-            onScroll={handleScroll}
-            onPointerEnter={() => warmUpTo(1)}
-            onTouchStart={() => warmUpTo(1)}
-            className="no-scrollbar absolute inset-0 flex overflow-x-auto snap-x snap-mandatory"
-          >
-            {photos.map((src, i) => (
-              <div key={i} className="relative w-full shrink-0 snap-start bg-neutral-100">
-                {i <= mountedUpTo ? (
-                  <Image
-                    src={src}
-                    alt={listing.marketplace_title}
-                    fill
-                    sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw"
-                    className="object-cover group-hover:scale-105 transition-transform duration-500"
-                    priority={i === 0 ? priority : undefined}
-                    // Los slides > 0 se montan justo para precargar: eager,
-                    // así el swipe siguiente ya tiene la foto lista.
-                    loading={i > 0 ? "eager" : undefined}
-                  />
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="absolute inset-0 grid place-items-center text-neutral-400">Sin foto</div>
-        )}
-
-        {/* Desktop hover arrows */}
-        {photos.length > 1 ? (
-          <>
-            <button
-              type="button"
-              onClick={(e) => scrollByDir(-1, e)}
-              aria-label="Foto anterior"
-              className="absolute left-2 top-1/2 z-10 hidden -translate-y-1/2 md:flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-neutral-900 shadow-md opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white disabled:opacity-0"
-              disabled={photoIndex === 0}
-            >
-              <ChevronLeft size={18} />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => scrollByDir(1, e)}
-              aria-label="Foto siguiente"
-              className="absolute right-2 top-1/2 z-10 hidden -translate-y-1/2 md:flex h-7 w-7 items-center justify-center rounded-full bg-white/90 text-neutral-900 shadow-md opacity-0 transition-opacity group-hover:opacity-100 hover:bg-white disabled:opacity-0"
-              disabled={photoIndex === photos.length - 1}
-            >
-              <ChevronRight size={18} />
-            </button>
-          </>
-        ) : null}
-
-        {/* Photo dots */}
-        {photos.length > 1 ? (
-          <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1.5 z-10">
-            {Array.from({ length: dotCount }).map((_, i) => (
-              <button
-                type="button"
-                key={i}
-                onClick={(e) => scrollToSlide(i, e)}
-                aria-label={`Ir a la foto ${i + 1}`}
-                aria-current={i === photoIndex}
-                className={cn(
-                  "h-1.5 rounded-full transition-all",
-                  i === photoIndex ? "w-4 bg-white" : "w-1.5 bg-white/60"
-                )}
-              />
-            ))}
-          </div>
-        ) : null}
-
-        {/* Wishlist heart */}
-        <button
-          onClick={handleFavoriteClick}
-          aria-label={favorited ? "Quitar de favoritos" : "Guardar"}
-          className="absolute top-3 right-3 z-10 p-1 group/heart"
+    <article
+      className={cn(
+        "group/card relative transition-transform duration-300 motion-safe:hover:-translate-y-0.5",
+        EASE,
+        className,
+      )}
+    >
+      <Link
+        href={href}
+        className="block rounded-3xl outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/40 focus-visible:ring-offset-4 focus-visible:ring-offset-cream"
+      >
+        <div
+          className={cn(
+            "relative aspect-[4/3] w-full overflow-hidden rounded-3xl bg-cream-200 shadow-apart-sm transition-shadow duration-300",
+            "group-hover/card:shadow-apart-md",
+          )}
         >
-          <Heart
-            size={26}
-            className={cn(
-              "drop-shadow-md transition-all",
-              favorited
-                ? "fill-sage-500 stroke-white stroke-[1.5px]"
-                : "fill-black/30 stroke-white group-hover/heart:scale-110"
-            )}
-          />
-        </button>
-
-        {/* Badge: mensual gana sobre instant book (a un inquilino mensual no
-            le hablamos de "reserva al toque") */}
-        {isMensual ? (
-          <div className="absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full bg-white/95 backdrop-blur px-2.5 py-1 text-[11px] font-semibold text-neutral-900 shadow-sm">
-            <CalendarRange size={11} className="text-sage-600" />
-            {t("card.badge_mensual")}
-          </div>
-        ) : listing.instant_book ? (
-          <div className="absolute top-3 left-3 z-10 inline-flex items-center gap-1 rounded-full bg-white/95 backdrop-blur px-2.5 py-1 text-[11px] font-semibold text-neutral-900 shadow-sm">
-            <Zap size={11} className="text-yellow-500 fill-yellow-500" />
-            Reserva al toque
-          </div>
-        ) : null}
-      </div>
-
-      <div className="mt-3 space-y-0.5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="font-medium text-sm text-neutral-900 line-clamp-1">
-            {location || listing.marketplace_title}
-          </div>
-          {listing.rating_count > 0 ? (
-            <div className="flex items-center gap-1 shrink-0 text-sm">
-              <Star size={12} className="fill-neutral-900 stroke-neutral-900" />
-              <span className="font-medium">{listing.rating_avg.toFixed(2)}</span>
+          {photos.length > 0 ? (
+            <div
+              ref={trackRef}
+              onScroll={handleScroll}
+              onPointerEnter={() => warmUpTo(1)}
+              onTouchStart={() => warmUpTo(1)}
+              className="no-scrollbar absolute inset-0 flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain"
+            >
+              {photos.map((src, i) => (
+                <div key={`${src}-${i}`} className="relative h-full w-full shrink-0 snap-start snap-always">
+                  {i <= mountedUpTo ? (
+                    <Image
+                      src={src}
+                      alt={i === 0 ? `Foto de ${listing.display_title}` : ""}
+                      fill
+                      sizes={SIZES}
+                      priority={i === 0 && priority}
+                      loading={i > 0 ? "eager" : undefined}
+                      draggable={false}
+                      className={cn(
+                        "object-cover transition-transform duration-700 motion-safe:group-hover/card:scale-[1.03]",
+                        EASE,
+                      )}
+                    />
+                  ) : null}
+                </div>
+              ))}
             </div>
           ) : (
-            <div className="text-xs text-neutral-500 shrink-0">Sin reseñas aún</div>
+            <div className="absolute inset-0 grid place-items-center bg-leaf-100">
+              <ApartLogo variant="symbol" title={null} className="h-12 text-leaf-400" />
+            </div>
           )}
+
+          {perMonth ? (
+            <span className="absolute left-3 top-3 z-[1] inline-flex items-center gap-1.5 rounded-full bg-paper/95 px-2.5 py-1 text-xs font-bold text-forest-700 shadow-apart-sm">
+              <CalendarRange aria-hidden className="size-3.5" />
+              Por mes
+            </span>
+          ) : listing.instant_book ? (
+            <span className="absolute left-3 top-3 z-[1] inline-flex items-center gap-1.5 rounded-full bg-forest-700 px-2.5 py-1 text-xs font-bold text-cream shadow-apart-sm">
+              <Zap aria-hidden className="size-3.5 fill-leaf-300 stroke-leaf-300" />
+              Reserva inmediata
+            </span>
+          ) : null}
+
+          {photos.length > 1 ? (
+            <span aria-hidden className="absolute inset-x-0 bottom-3 z-[1] flex justify-center gap-1.5">
+              {photos.map((_, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    "h-1.5 rounded-full bg-paper shadow-[0_0_2px_rgb(6_32_27/0.4)] transition-all duration-300",
+                    i === index ? "w-4 opacity-100" : "w-1.5 opacity-60",
+                  )}
+                />
+              ))}
+            </span>
+          ) : null}
         </div>
-        <div className="text-sm text-neutral-500 line-clamp-1">{listing.marketplace_title}</div>
-        <div className="text-sm text-neutral-500">
-          {listing.bedrooms ? `${listing.bedrooms} ${listing.bedrooms === 1 ? "ambiente" : "ambientes"}` : null}
-          {listing.max_guests ? ` · hasta ${listing.max_guests} huéspedes` : null}
+
+        <div className="mt-3.5 px-1">
+          <p className="text-[0.8125rem] font-medium text-ink-500">{place}</p>
+          <h3 className="mt-0.5 line-clamp-1 font-apart text-[1.0625rem] font-bold leading-snug tracking-[-0.01em] text-forest-700">
+            {listing.display_title}
+            {listing.display_tagline ? (
+              <span className="font-apart-serif text-[0.9375rem] font-normal italic text-ink-500">
+                {" "}
+                · {listing.display_tagline}
+              </span>
+            ) : null}
+          </h3>
+          {capacity ? <p className="mt-0.5 text-sm text-ink-600">{capacity}</p> : null}
+          <CardPriceLine price={price} />
+          {showMinNights ? (
+            <p className="mt-0.5 text-[0.8125rem] text-ink-500">Mínimo {nightsLabel(listing.min_nights)}</p>
+          ) : null}
         </div>
-        <div className="pt-1">
-          <span className="font-semibold text-neutral-900">
-            {/* Unidades de vocación mensual: estimado por mes (base × 30),
-                que es lo que costarían 30 noches a precio base. */}
-            {isMensual ? "≈ " : ""}
-            {formatInCurrency(
-              isMensual ? listing.base_price * 30 : listing.base_price,
-              listing.marketplace_currency,
-              currency,
-              locale
-            )}
-          </span>
-          <span className="text-sm text-neutral-500">
-            {" "}
-            {t(isMensual ? "featured.per_month" : "featured.per_night")}
-          </span>
-        </div>
-        {!isMensual && listing.min_nights > 1 ? (
-          <div className="text-xs text-neutral-500">
-            Mínimo {listing.min_nights} noches
-          </div>
+      </Link>
+
+      {/* Encima del link (hermanos, no hijos): corazón y flechas. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 aspect-[4/3]">
+        <HeartButton unitId={listing.id} className="pointer-events-auto absolute right-1.5 top-1.5 z-[2]" />
+        {photos.length > 1 ? (
+          <>
+            <CarouselArrow dir={-1} hidden={index === 0} onClick={() => go(-1)} />
+            <CarouselArrow dir={1} hidden={index >= photos.length - 1} onClick={() => go(1)} />
+          </>
         ) : null}
       </div>
-    </Link>
+    </article>
+  );
+}
+
+function CardPriceLine({ price }: { price: ReturnType<typeof cardPrice> }) {
+  if (price.kind === "consult") {
+    return <p className="mt-2 text-[0.9375rem] font-semibold text-forest-700">Precio a consultar</p>;
+  }
+  if (price.kind === "total") {
+    return (
+      <p className="mt-2 flex flex-wrap items-baseline gap-x-2 text-[0.9375rem] text-ink-700">
+        <span>
+          <span className="font-bold tabular-nums text-ink-900">{formatCurrency(price.total, price.currency)}</span>{" "}
+          total · {nightsLabel(price.nights)}
+        </span>
+        <span className="text-[0.8125rem] tabular-nums text-ink-500">
+          {formatCurrency(price.nightly, price.currency)} noche
+        </span>
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 text-[0.9375rem] text-ink-700">
+      <span className="font-bold tabular-nums text-ink-900">{formatCurrency(price.amount, price.currency)}</span>{" "}
+      {price.per}
+    </p>
+  );
+}
+
+function CarouselArrow({ dir, hidden, onClick }: { dir: -1 | 1; hidden: boolean; onClick: () => void }) {
+  const Icon = dir < 0 ? ChevronLeft : ChevronRight;
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label={dir < 0 ? "Foto anterior" : "Foto siguiente"}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        "pointer-events-auto absolute top-1/2 z-[2] hidden size-8 -translate-y-1/2 place-items-center rounded-full",
+        "bg-paper/95 text-forest-700 shadow-apart-md transition-opacity duration-200 hover:bg-paper md:grid",
+        "opacity-0 group-hover/card:opacity-100",
+        dir < 0 ? "left-3" : "right-3",
+        hidden && "invisible",
+      )}
+    >
+      <Icon aria-hidden className="size-4" strokeWidth={2.5} />
+    </button>
+  );
+}
+
+/** Lugar reservado para una tarjeta mientras carga (misma geometría). */
+export function ListingCardSkeleton({ className }: { className?: string }) {
+  return (
+    <div aria-hidden className={cn("motion-safe:animate-pulse", className)}>
+      <div className="aspect-[4/3] w-full rounded-3xl bg-cream-200" />
+      <div className="mt-3.5 space-y-2 px-1">
+        <div className="h-3 w-24 rounded-full bg-cream-200" />
+        <div className="h-4 w-40 rounded-full bg-cream-300/70" />
+        <div className="h-3 w-32 rounded-full bg-cream-200" />
+        <div className="h-4 w-28 rounded-full bg-cream-300/70" />
+      </div>
+    </div>
   );
 }

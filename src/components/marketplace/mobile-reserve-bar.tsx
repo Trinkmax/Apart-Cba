@@ -1,62 +1,125 @@
 "use client";
 
-import { CalendarDays } from "lucide-react";
-import { formatInCurrency } from "@/lib/marketplace/currency-config";
-import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-provider";
-import type { MarketplaceListingDetail } from "@/lib/types/database";
+import { useEffect, useState } from "react";
+import { X } from "lucide-react";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
+import { ApartButton } from "@/components/marketplace/brand/apart-button";
+import { BookingPanel } from "@/components/marketplace/listing/booking-panel";
+import { PriceHeadline } from "@/components/marketplace/listing/booking-panel-parts";
+import { useListingStay } from "@/components/marketplace/listing/stay-context";
+import { formatDayLabel } from "@/lib/marketplace/dates";
+import { formatCurrency } from "@/lib/marketplace/pricing";
+import { monthsLabel, nightsLabel } from "@/lib/marketplace/widget-quote";
 
 /**
- * Barra fija inferior sólo-mobile de la página de unidad. En celular el widget
- * de reserva queda al final del scroll; esta barra mantiene precio + CTA
- * siempre visibles y baja al calendario del widget.
+ * Barra fija inferior de la ficha en mobile: precio (o el total, si ya hay
+ * fechas) y un botón que abre la hoja con el calendario, los huéspedes, la
+ * cotización y el botón para pedir. Comparte el estado con el widget de
+ * escritorio (ListingStayProvider).
  */
-export function MobileReserveBar({ listing }: { listing: MarketplaceListingDetail }) {
-  const { currency: targetCurrency, locale } = useMarketplacePrefs();
-  const isMensual = listing.default_mode === "mensual";
-  const price = formatInCurrency(
-    isMensual ? listing.base_price * 30 : listing.base_price,
-    listing.marketplace_currency,
-    targetCurrency,
-    locale
-  );
+export function MobileReserveBar() {
+  const { evaluation, listing, view, checkIn, checkOut, months, dateRequest } = useListingStay();
+  const [open, setOpen] = useState(false);
 
-  function scrollToWidget() {
-    document
-      .getElementById("booking-widget")
-      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  // La barra es fija: el body reserva su alto (sólo < lg) para que no tape el
+  // final de la página ni el footer.
+  useEffect(() => {
+    const cls = "max-lg:pb-[calc(5.5rem+env(safe-area-inset-bottom))]";
+    document.body.classList.add(cls);
+    return () => document.body.classList.remove(cls);
+  }, []);
+
+  // "Elegí otras fechas" desde el aviso ?error= (en mobile abre la hoja).
+  const [seenRequest, setSeenRequest] = useState(dateRequest.n);
+  if (dateRequest.n !== seenRequest) {
+    setSeenRequest(dateRequest.n);
+    if (dateRequest.target === "mobile") setOpen(true);
   }
 
+  const currency = listing.marketplace_currency;
+  let summary: React.ReactNode;
+  if (evaluation.kind === "nightly") {
+    summary = (
+      <>
+        <p className="text-lg font-extrabold leading-tight tracking-[-0.02em] text-forest-700 tabular-nums">
+          {formatCurrency(evaluation.total, currency)} <span className="text-[0.8125rem] font-medium text-ink-500">total</span>
+        </p>
+        <p className="truncate text-[0.8125rem] text-ink-700">
+          {nightsLabel(evaluation.nights)} · {formatDayLabel(checkIn)} al {formatDayLabel(checkOut)}
+        </p>
+      </>
+    );
+  } else {
+    const line =
+      view === "mes" && checkIn
+        ? `Desde ${formatDayLabel(checkIn)} · ${monthsLabel(months)}`
+        : evaluation.kind === "invalid"
+          ? "Revisá tus fechas"
+          : evaluation.kind === "monthly"
+            ? "Estadías por mes: se consultan"
+            : "Elegí tus fechas";
+    summary = (
+      <>
+        <PriceHeadline compact />
+        <p className="truncate text-[0.8125rem] text-ink-700">{line}</p>
+      </>
+    );
+  }
+
+  const ctaLabel =
+    evaluation.kind === "nightly"
+      ? evaluation.cta.label
+      : evaluation.kind === "monthly" || evaluation.cta.kind === "consult"
+        ? "Consultar"
+        : evaluation.kind === "invalid"
+          ? "Cambiar fechas"
+          : "Elegir fechas";
+
   return (
-    <div
-      className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-neutral-200 bg-white/95 backdrop-blur-md
-                 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]
-                 flex items-center justify-between gap-3"
-    >
-      <div className="min-w-0">
-        <div className="font-semibold text-neutral-900 truncate">
-          {isMensual ? "≈ " : ""}
-          {price}
-          <span className="text-sm font-normal text-neutral-500">
-            {" "}
-            {isMensual ? "/mes" : "/noche"}
-          </span>
-        </div>
-        {listing.rating_count > 0 ? (
-          <div className="text-xs text-neutral-500">
-            ★ {listing.rating_avg.toFixed(2)} · {listing.rating_count} reseñas
-          </div>
-        ) : null}
-      </div>
-      <button
-        type="button"
-        onClick={scrollToWidget}
-        className="shrink-0 inline-flex items-center gap-2 h-11 px-5 rounded-xl
-                   bg-gradient-to-r from-sage-500 to-sage-600 text-white text-sm font-semibold
-                   shadow-sm active:scale-[0.98] transition-transform"
+    <>
+      <div
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-cream-300 bg-paper/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-apart-lg backdrop-blur-md lg:hidden"
+        aria-hidden={open ? true : undefined}
       >
-        <CalendarDays size={15} />
-        Ver disponibilidad
-      </button>
-    </div>
+        <div className="mx-auto flex max-w-xl items-center justify-between gap-3">
+          <div className="min-w-0" aria-live="polite">
+            {summary}
+          </div>
+          <ApartButton type="button" variant="cta" size="lg" className="shrink-0 px-5" onClick={() => setOpen(true)}>
+            {ctaLabel}
+          </ApartButton>
+        </div>
+      </div>
+
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          side="bottom"
+          showCloseButton={false}
+          className="max-h-[92dvh] gap-0 overflow-y-auto rounded-t-3xl border-cream-300 bg-cream p-0 font-apart text-ink-900"
+        >
+          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-cream-300 bg-cream/95 px-5 py-3 backdrop-blur-md">
+            <div className="min-w-0">
+              <SheetTitle className="truncate font-apart text-base font-extrabold text-forest-700">
+                {listing.display_title}
+              </SheetTitle>
+              <SheetDescription className="text-[0.8125rem] text-ink-500">
+                {view === "mes" ? "Estadía por mes" : "Elegí tus fechas y huéspedes"}
+              </SheetDescription>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Cerrar"
+              className="flex size-11 shrink-0 items-center justify-center rounded-full text-forest-700 hover:bg-forest-700/[0.06] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/40"
+            >
+              <X className="size-5" aria-hidden />
+            </button>
+          </div>
+          <div className="px-5 pt-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+            <BookingPanel variant="sheet" />
+          </div>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }

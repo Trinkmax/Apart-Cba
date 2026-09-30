@@ -195,6 +195,12 @@ export interface Organization {
   active: boolean;
   /** La org nació de un alta self-serve desde la landing de rentOS. */
   is_trial: boolean;
+  /**
+   * La org vende en la web pública (www.apartcba.com). Toda lectura pública
+   * (búsqueda, ficha, checkout, sitemap) filtra por esto además de
+   * `units.marketplace_published`. Migración 067.
+   */
+  marketplace_enabled: boolean;
   /** NOT NULL mientras conserve los datos de ejemplo del alta. NULL una vez vaciados. */
   demo_data_seeded_at: string | null;
   trial_expires_at: string | null;
@@ -2056,8 +2062,82 @@ export interface BookingRequest {
   rejection_reason: string | null;
   resulting_booking_id: string | null;
   notes: string | null;
+  /**
+   * sha256 (hex) del token del link de seguimiento `/reserva/<token>`. El
+   * huésped puede pedir sin cuenta; el token en claro nunca se guarda. Mig 067.
+   */
+  access_token_hash: string | null;
+  /** Seña estimada que se le mostró al huésped al pedir. Mig 067. */
+  deposit_estimate: number | null;
+  /** Cuándo se le recordó al equipo que la solicitud sigue sin respuesta. */
+  staff_reminded_at: string | null;
+  /** Cuándo se le avisó al huésped que su solicitud venció. */
+  guest_notified_at: string | null;
+  /** Cuándo se le avisó que la seña quedó cubierta (reserva asegurada). Mig 067b. */
+  deposit_secured_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * Cómo se calcula la seña que pide el equipo al confirmar una reserva de la web.
+ * - one_night: el valor de una noche (subtotal ÷ noches, sin limpieza).
+ * - percent:   un % del total.
+ * - none:      no se pide seña.
+ */
+export type DepositRule = "one_night" | "percent" | "none";
+
+/**
+ * Configuración de la web pública y del cobro de la seña por organización
+ * (Configuración → Web y cobros). Sin fila = defaults. Migración 067.
+ */
+export interface OrgWebSettings {
+  organization_id: string;
+  /** Sólo dígitos con código de país (wa.me). */
+  whatsapp_number: string | null;
+  public_email: string | null;
+  /** Sin @. */
+  instagram_handle: string | null;
+  /** Promesa de respuesta a una solicitud, en horas (1–48). */
+  response_hours: number;
+  deposit_rule: DepositRule;
+  deposit_percent: number | null;
+  /** Horas para transferir la seña desde la confirmación (1–168). */
+  deposit_due_hours: number;
+  transfer_holder: string | null;
+  transfer_cuit: string | null;
+  transfer_bank: string | null;
+  /** 22 dígitos. */
+  transfer_cbu: string | null;
+  transfer_alias: string | null;
+  transfer_notes: string | null;
+  cancellation_text: string | null;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export type PaymentReportStatus = "pendiente" | "registrado" | "descartado";
+
+/**
+ * Aviso del huésped de que transfirió la seña (con comprobante opcional). NO es
+ * un cobro: la plata entra a Caja cuando una persona la registra. Mig 067.
+ */
+export interface BookingPaymentReport {
+  id: string;
+  organization_id: string;
+  booking_id: string;
+  booking_request_id: string | null;
+  amount: number | null;
+  currency: string;
+  /** Ruta en el bucket privado `payment-receipts`. */
+  receipt_path: string | null;
+  receipt_mime: string | null;
+  note: string | null;
+  status: PaymentReportStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
 }
 
 export interface BookingRequestWithRelations extends BookingRequest {
@@ -2111,13 +2191,19 @@ export interface MarketplaceListingSummary {
   latitude: number | null;
   longitude: number | null;
   base_price: number;
+  /**
+   * Precio de lista por MES (units.monthly_price, migraciones 063/066) ya
+   * resuelto con `unitMonthlyPrice()`: null para unidades 'temporario' o si no
+   * está cargado. La web NUNCA inventa un mensual (nada de noche × 30): sin
+   * este valor, una estadía de 28+ noches se consulta.
+   */
+  monthly_price: number | null;
   marketplace_currency: string;
   cleaning_fee: number | null;
   instant_book: boolean;
   /**
    * Vocación de la unidad (units.default_mode): temporario | mensual | mixto.
-   * El marketplace filtra por ella (tabs Temporales/Mensuales) y las cards de
-   * unidades 'mensual' muestran precio estimado por mes en vez de por noche.
+   * El marketplace filtra por ella (tabs Temporales/Mensuales).
    */
   default_mode: UnitDefaultMode;
   /** Estadía mínima/máxima en noches. Se muestra como badge en las cards. */

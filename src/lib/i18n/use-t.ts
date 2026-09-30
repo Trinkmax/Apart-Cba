@@ -5,9 +5,9 @@ import { useMarketplacePrefs } from "@/components/marketplace/marketplace-prefs-
 import { t, type TKey } from "./dict";
 
 /**
- * Client-side translation hook. Reads the active locale from the marketplace
- * preferences context so a single React re-render (triggered by router.refresh
- * after the cookie write) flips every translated string.
+ * Traductor del cliente. La web es es-AR fija (el provider de preferencias ya
+ * no lee cookies); el hook queda por compatibilidad con los componentes que lo
+ * usan.
  */
 export function useT() {
   const { locale } = useMarketplacePrefs();

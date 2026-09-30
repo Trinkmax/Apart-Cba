@@ -1,192 +1,186 @@
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { AlertTriangle, ChevronLeft } from "lucide-react";
-import Link from "next/link";
 import { UnitGallery } from "@/components/marketplace/unit-gallery";
 import { UnitDetailInfo } from "@/components/marketplace/unit-detail-info";
 import { UnitBookingWidget } from "@/components/marketplace/unit-booking-widget";
 import { MobileReserveBar } from "@/components/marketplace/mobile-reserve-bar";
-import { UnitLocationMap } from "@/components/marketplace/unit-location-map";
-import { ListingShareActions } from "@/components/marketplace/listing-share-actions";
+import type { AmenityItem } from "@/components/marketplace/listing/amenities-block";
+import { ListingErrorBanner } from "@/components/marketplace/listing/error-banner";
+import { ListingHeader } from "@/components/marketplace/listing/listing-header";
+import { ListingJsonLd } from "@/components/marketplace/listing/listing-json-ld";
+import { SimilarListings } from "@/components/marketplace/listing/similar-listings";
 import {
-  getListingBlockedDates,
-  getReviewsForUnit,
-} from "@/lib/actions/marketplace";
-import { getListingBySlug } from "@/lib/marketplace/listing-reads";
-import { todayIsoAR } from "@/lib/marketplace/pricing";
+  ListingStayProvider,
+  type StayListing,
+  type StaySettings,
+} from "@/components/marketplace/listing/stay-context";
+import { getReviewsForUnit } from "@/lib/actions/marketplace";
 import { listMarketplaceAmenitiesCatalog } from "@/lib/actions/listings";
-import { getGuestSession } from "@/lib/actions/guest-auth";
+import { absoluteUrl } from "@/lib/app-url";
+import type { StorefrontListingDetail } from "@/lib/marketplace/contracts";
+import {
+  getStorefrontCatalog,
+  getStorefrontListingBySlug,
+  getStorefrontSlugs,
+} from "@/lib/marketplace/storefront";
+import { getResolvedWebSettings } from "@/lib/marketplace/web-settings-server";
+import {
+  BRAND_OG_IMAGE,
+  listingMetaDescription,
+  listingMetaTitle,
+  listingOgImageUrl,
+  OG_IMAGE_HEIGHT,
+  OG_IMAGE_WIDTH,
+  pickSimilarListings,
+} from "@/lib/marketplace/widget-quote";
+
+/**
+ * Ficha pública de una unidad (/u/[slug]).
+ *
+ * ISR: se regenera cada 5 minutos (y al revalidar el tag del catálogo desde el
+ * panel). El server NO lee cookies ni searchParams: `?checkin&checkout&
+ * huespedes&error` los lee el cliente (ListingStayProvider) y las noches
+ * ocupadas se piden desde el widget con getUnitBlockedDates.
+ */
+export const revalidate = 300;
+export const dynamicParams = true;
 
 type Params = Promise<{ slug: string }>;
-type SearchParams = Promise<Record<string, string | undefined>>;
 
-/**
- * `?huespedes=` puede venir malformado (ej. "abc"): parseInt daría NaN, que se
- * propaga al widget (muestra "NaN huésped") y al URL de checkout. Devolvemos
- * null salvo un entero positivo válido.
- */
-function parseGuestsParam(raw: string | undefined): number | null {
-  if (!raw) return null;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
+export async function generateStaticParams(): Promise<{ slug: string }[]> {
+  try {
+    const slugs = await getStorefrontSlugs();
+    return slugs.map((slug) => ({ slug }));
+  } catch {
+    // Sin base en el build: las fichas se generan en el primer pedido.
+    return [];
+  }
 }
 
-/**
- * Mensajes que el checkout puede mandar por `?error=` (ver
- * checkUnitAvailability y checkout/[unitId]/page.tsx). Cualquier otro texto
- * se reemplaza por un genérico para que nadie use el banner como vector de
- * mensajes falsos vía links compartidos.
- */
-const KNOWN_CHECKOUT_ERRORS = new Set<string>([
-  "Las fechas son inválidas",
-  "Esas fechas ya están reservadas",
-  "Hay una solicitud pendiente para esas fechas. Probá con otras o esperá unas horas.",
-  "No podés reservar fechas pasadas",
-]);
-
-export async function generateMetadata({ params }: { params: Params }) {
+export async function generateMetadata({ params }: { params: Params }): Promise<Metadata> {
   const { slug } = await params;
-  const listing = await getListingBySlug(slug);
-  if (!listing) return { title: "Alojamiento no encontrado · ApartCBA" };
+  const listing = await getStorefrontListingBySlug(slug);
+  if (!listing) return { title: "Lugar no encontrado", robots: { index: false } };
 
-  const title = `${listing.marketplace_title} · ApartCBA`;
-  const description =
-    listing.marketplace_description?.slice(0, 200) ??
-    `Reservá ${listing.marketplace_title} en ApartCBA.`;
-  const url = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://www.apartcba.com"}/u/${slug}`;
-  const images = listing.cover_url ? [{ url: listing.cover_url }] : undefined;
-
+  const title = listingMetaTitle(listing);
+  const description = listingMetaDescription(listing);
+  const url = absoluteUrl(`/u/${listing.slug}`);
+  // La portada recortada a 1200×630 por Supabase (el original pesa hasta 2 MB
+  // y WhatsApp no arma la vista previa). Sin portada, la imagen de marca: el
+  // openGraph de la ficha reemplaza entero al del layout, no hereda su imagen.
+  const ogCover = listingOgImageUrl(listing.cover_url);
+  const image = ogCover
+    ? {
+        url: ogCover,
+        width: OG_IMAGE_WIDTH,
+        height: OG_IMAGE_HEIGHT,
+        alt: `${listing.display_title}, ${listing.summary_line}`,
+      }
+    : BRAND_OG_IMAGE;
   return {
     title,
     description,
     alternates: { canonical: url },
     openGraph: {
-      title,
-      description,
       type: "website",
+      locale: "es_AR",
+      siteName: "apart",
       url,
-      images,
+      title: `${title} · apart`,
+      description,
+      images: [image],
     },
     twitter: {
       card: "summary_large_image",
-      title,
+      title: `${title} · apart`,
       description,
-      images: listing.cover_url ? [listing.cover_url] : undefined,
+      images: [image],
     },
   };
 }
 
-export default async function UnitPage({
-  params,
-  searchParams,
-}: {
-  params: Params;
-  searchParams: SearchParams;
-}) {
+/** Lo mínimo de la ficha que viaja al cliente para el widget. */
+function toStayListing(l: StorefrontListingDetail): StayListing {
+  return {
+    id: l.id,
+    slug: l.slug,
+    hood: l.hood,
+    display_title: l.display_title,
+    base_price: l.base_price,
+    cleaning_fee: l.cleaning_fee,
+    monthly_price: l.monthly_price,
+    marketplace_currency: l.marketplace_currency,
+    instant_book: l.instant_book,
+    default_mode: l.default_mode,
+    min_nights: l.min_nights,
+    max_nights: l.max_nights,
+    max_guests: l.max_guests,
+    pricing_rules: l.pricing_rules,
+  };
+}
+
+export default async function UnitPage({ params }: { params: Params }) {
   const { slug } = await params;
-  const sp = await searchParams;
-  const listing = await getListingBySlug(slug);
+  const listing = await getStorefrontListingBySlug(slug);
   if (!listing) notFound();
 
-  // "Hoy" en horario argentino, igual que el widget y el piso del checkout.
-  // Con UTC, de 21:00 a 24:00 AR la ventana arrancaba "mañana" y la noche de
-  // hoy ocupada se mostraba libre en el calendario.
-  const today = todayIsoAR();
-  const toIso = (() => {
-    const d = new Date(`${today}T00:00:00`);
-    d.setMonth(d.getMonth() + 12);
-    return d.toISOString().slice(0, 10);
-  })();
-
-  const [blockedDates, reviews, amenitiesCatalog, session] = await Promise.all([
-    getListingBlockedDates({ unitId: listing.id, fromIso: today, toIso }),
-    getReviewsForUnit(listing.id),
-    listMarketplaceAmenitiesCatalog(),
-    getGuestSession(),
+  // Lo accesorio no tumba la ficha: sin reseñas, catálogo o comodidades se
+  // muestra igual (en ISR queda la versión anterior si algo falla del todo).
+  const [settings, reviews, amenityCatalog, catalog] = await Promise.all([
+    getResolvedWebSettings(listing.organization_id),
+    getReviewsForUnit(listing.id).catch(() => []),
+    listMarketplaceAmenitiesCatalog().catch(() => []),
+    getStorefrontCatalog().catch(() => null),
   ]);
 
+  const codes = new Set(listing.amenities);
+  const amenities: AmenityItem[] = amenityCatalog
+    .filter((a) => codes.has(a.code))
+    .map((a) => ({ code: a.code, name: a.name, icon: a.icon, category: a.category }));
+
+  const similar = catalog ? pickSimilarListings(catalog.listings, listing, 4) : { items: [], sameHoodOnly: false };
+  const similarTitle =
+    similar.sameHoodOnly && listing.hood ? `Otros lugares en ${listing.hood}` : "Otros lugares que te pueden gustar";
+
+  const pageUrl = absoluteUrl(`/u/${listing.slug}`);
+  const staySettings: StaySettings = {
+    responseHours: settings.responseHours,
+    deposit: { rule: settings.deposit.rule, percent: settings.deposit.percent },
+    whatsappNumber: settings.whatsappNumber,
+    publicEmail: settings.publicEmail,
+  };
+
   return (
-    <div className="max-w-[1400px] mx-auto px-4 md:px-8 pt-4 md:pt-8">
-      {/* Top toolbar */}
-      <div className="flex items-center justify-between mb-4 md:mb-6">
-        <Link
-          href="/buscar"
-          className="inline-flex items-center gap-1 text-sm text-neutral-700 hover:text-neutral-900"
-        >
-          <ChevronLeft size={16} />
-          Volver
-        </Link>
-        <ListingShareActions
-          slug={listing.slug}
-          title={listing.marketplace_title}
-          unitId={listing.id}
-        />
-      </div>
+    <ListingStayProvider key={listing.id} listing={toStayListing(listing)} settings={staySettings} pageUrl={pageUrl}>
+      <ListingJsonLd listing={listing} amenityNames={amenities.map((a) => a.name)} />
+      <div className="mx-auto w-full max-w-[1280px] px-4 pt-4 pb-12 sm:px-6 md:pt-6 lg:px-8 lg:pb-20">
+        <ListingErrorBanner />
+        <ListingHeader listing={listing} pageUrl={pageUrl} />
+        <UnitGallery photos={listing.photos} title={listing.display_title} className="mt-6 md:mt-8" />
 
-      {/* El checkout redirige acá con ?error= cuando la disponibilidad cambió
-          entre la selección y el pago (otro huésped ganó las fechas). Sin este
-          banner el usuario volvía a la página sin ninguna explicación.
-          Sólo se refleja texto de la whitelist: el param viene por URL y un
-          link armado podría poner cualquier cosa dentro de un banner "oficial". */}
-      {sp.error ? (
-        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-sm text-amber-900">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-          <div>
-            {KNOWN_CHECKOUT_ERRORS.has(sp.error)
-              ? sp.error
-              : "No pudimos completar la reserva con esas fechas. Verificá la disponibilidad e intentá de nuevo."}
+        <div className="mt-8 grid grid-cols-1 gap-10 md:mt-12 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-14 xl:grid-cols-[minmax(0,1fr)_420px] xl:gap-16">
+          <div className="min-w-0">
+            <UnitDetailInfo
+              listing={listing}
+              amenities={amenities}
+              reviews={reviews}
+              settings={{ responseHours: settings.responseHours, cancellationText: settings.cancellationText }}
+            />
           </div>
-        </div>
-      ) : null}
-
-      {/* Gallery */}
-      <div className="relative">
-        <UnitGallery photos={listing.photos} title={listing.marketplace_title} />
-      </div>
-
-      {/* Two-column layout. pb extra en mobile: la MobileReserveBar fija abajo
-          no debe tapar el final del contenido. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px] gap-8 lg:gap-12 mt-8 md:mt-12 pb-28 lg:pb-12">
-        <div>
-          <UnitDetailInfo
-            listing={listing}
-            amenitiesCatalog={amenitiesCatalog}
-            reviews={reviews}
-          />
-
-          {listing.latitude !== null && listing.longitude !== null ? (
-            <section className="mt-8 pt-8 border-t border-neutral-200">
-              <h3 className="text-xl font-semibold text-neutral-900 mb-4">
-                Dónde vas a estar
-              </h3>
-              <UnitLocationMap
-                latitude={listing.latitude}
-                longitude={listing.longitude}
-                neighborhood={listing.neighborhood}
-              />
-              <p className="mt-3 text-sm text-neutral-600">
-                <strong className="text-neutral-900">
-                  {listing.neighborhood ?? "Ubicación"}
-                </strong>
-                {listing.address ? ` · ${listing.address}` : ""}
-              </p>
-            </section>
-          ) : null}
+          <aside className="hidden lg:block" aria-label="Reserva">
+            <div className="sticky top-24">
+              <UnitBookingWidget />
+            </div>
+          </aside>
         </div>
 
-        {/* Booking widget */}
-        <aside id="booking-widget" className="lg:sticky lg:top-28 self-start scroll-mt-24">
-          <UnitBookingWidget
-            listing={listing}
-            blockedDates={blockedDates}
-            isAuthenticated={Boolean(session)}
-            prefillCheckIn={sp.checkin ?? null}
-            prefillCheckOut={sp.checkout ?? null}
-            prefillGuests={parseGuestsParam(sp.huespedes)}
-          />
-        </aside>
+        {similar.items.length > 0 ? (
+          <div className="mt-14 md:mt-20">
+            <SimilarListings items={similar.items} title={similarTitle} />
+          </div>
+        ) : null}
       </div>
-
-      <MobileReserveBar listing={listing} />
-    </div>
+      <MobileReserveBar />
+    </ListingStayProvider>
   );
 }

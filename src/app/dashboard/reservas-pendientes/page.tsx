@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Clock, MapPin, Users } from "lucide-react";
+import { Clock, Inbox } from "lucide-react";
 import { listBookingRequestsForOrg } from "@/lib/actions/booking-requests";
+import { listPaymentReports } from "@/lib/actions/payment-reports";
 import {
   listDiscardedChannelRequests,
   listPendingChannelRequests,
@@ -9,49 +10,65 @@ import {
 import { ChannelRequestCard } from "@/components/channels/channel-request-card";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
+import { cn } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatMoney } from "@/lib/format";
-import { TimeUntil } from "@/components/marketplace/time-until";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
+import { WebRequestCard } from "./_components/web-request-card";
+import { PaymentReportsList } from "./_components/payment-reports-list";
 
 export const metadata = {
   title: "Solicitudes pendientes · rentOS",
 };
 
-const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
-  pendiente: { label: "Pendiente", cls: "bg-amber-100 text-amber-800 border-amber-200" },
-  aprobada: { label: "Aprobada", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-  rechazada: { label: "Rechazada", cls: "bg-rose-100 text-rose-800 border-rose-200" },
-  expirada: { label: "Expirada", cls: "bg-neutral-100 text-neutral-700 border-neutral-200" },
-  cancelada: { label: "Cancelada", cls: "bg-neutral-100 text-neutral-700 border-neutral-200" },
-};
+type SearchParams = Promise<{ tab?: string | string[] }>;
 
-export default async function ReservasPendientesPage() {
+export default async function ReservasPendientesPage({ searchParams }: { searchParams: SearchParams }) {
   const { role } = await getCurrentOrg();
   if (!can(role, "bookings", "view")) redirect("/dashboard");
+  const sp = await searchParams;
+  const tab = Array.isArray(sp.tab) ? sp.tab[0] : sp.tab;
+  const showResolved = tab === "resueltas";
+
   const canViewChannels = can(role, "channels", "view");
-  const [requests, channelRequests, discardedRequests] = await Promise.all([
+  const canViewMoney = can(role, "payments", "view");
+  const canResolvePayments = can(role, "payments", "update");
+  const canApprove = can(role, "bookings", "create");
+  const canReject = can(role, "bookings", "update");
+
+  const [requests, channelRequests, discardedRequests, paymentReports] = await Promise.all([
     listBookingRequestsForOrg(),
     canViewChannels ? listPendingChannelRequests() : Promise.resolve([]),
     canViewChannels ? listDiscardedChannelRequests() : Promise.resolve([]),
+    canViewMoney ? listPaymentReports({ status: "pendiente" }) : Promise.resolve([]),
   ]);
-  const canViewMoney = can(role, "payments", "view");
-  const pendingCount = requests.filter((r) => r.status === "pendiente").length;
-  const totalPending = pendingCount + channelRequests.length;
+
+  // Una sola lectura del reloj por request: la etiqueta de vencimiento arranca de acá.
+  const serverNow = new Date().getTime();
+  // Pendientes: primero la que vence antes (es la que corre peligro).
+  const pending = requests
+    .filter((r) => r.status === "pendiente")
+    .sort((a, b) => Date.parse(a.expires_at) - Date.parse(b.expires_at));
+  // Resueltas: la más reciente arriba (la lista ya viene por creación desc).
+  const resolved = requests.filter((r) => r.status !== "pendiente");
+  const totalPending = pending.length + channelRequests.length;
+  const visible = showResolved ? resolved : pending;
 
   return (
-    <div className="page-x page-y max-w-6xl mx-auto space-y-5">
+    <div className="page-x page-y max-w-6xl mx-auto space-y-6">
       {/* `channel_reservations` sólo con permiso de canales: su RLS es por
           organización, no por rol, así que suscribirla manda las filas enteras
           (con `guest` y `amounts`) por WebSocket a cualquiera que abra esta
-          pantalla — owner_view incluido. */}
+          pantalla — owner_view incluido. `booking_payment_reports` (avisos de
+          pago del huésped) sólo con permiso de pagos: su RLS de lectura es de
+          admin y recepción (067d), a cualquier otro rol no le emitiría nada. */}
       <LiveRefresh
-        tables={
-          canViewChannels
-            ? ["booking_requests", "bookings", "channel_reservations"]
-            : ["booking_requests", "bookings"]
-        }
+        tables={[
+          "booking_requests",
+          "bookings",
+          ...(canViewChannels ? ["channel_reservations"] : []),
+          ...(canViewMoney ? ["booking_payment_reports"] : []),
+        ]}
         label="solicitud"
         labelPlural="solicitudes"
       />
@@ -63,11 +80,66 @@ export default async function ReservasPendientesPage() {
           </p>
         </div>
         {totalPending > 0 ? (
-          <Badge className="bg-amber-100 text-amber-800 border-amber-200">
+          <Badge className="bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-900">
             {totalPending} esperando respuesta
           </Badge>
         ) : null}
       </header>
+
+      <PaymentReportsList reports={paymentReports} canResolve={canResolvePayments} />
+
+      <section className="space-y-3" aria-labelledby="pedidos-web">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap items-baseline gap-2">
+            <h2 id="pedidos-web" className="text-lg font-semibold tracking-tight">
+              De la web propia
+            </h2>
+            <span className="text-xs text-muted-foreground">
+              Huéspedes esperando tu respuesta · vencen solos a las 48 h
+            </span>
+          </div>
+          <nav aria-label="Pedidos de la web" className="inline-flex rounded-lg border bg-muted/40 p-0.5">
+            <TabLink href="/dashboard/reservas-pendientes" active={!showResolved}>
+              Pendientes
+              {pending.length > 0 ? <span className="tabular-nums text-muted-foreground"> · {pending.length}</span> : null}
+            </TabLink>
+            <TabLink href="/dashboard/reservas-pendientes?tab=resueltas" active={showResolved}>
+              Resueltas
+            </TabLink>
+          </nav>
+        </div>
+
+        {visible.length === 0 ? (
+          <Card className="p-10 text-center">
+            {showResolved ? (
+              <Inbox className="mx-auto mb-3 size-10 text-muted-foreground/40" aria-hidden />
+            ) : (
+              <Clock className="mx-auto mb-3 size-10 text-muted-foreground/40" aria-hidden />
+            )}
+            <h3 className="font-semibold text-lg">
+              {showResolved ? "Todavía no hay pedidos resueltos" : "No hay pedidos esperando respuesta"}
+            </h3>
+            <p className="text-sm text-muted-foreground mt-1">
+              {showResolved
+                ? "Acá quedan los pedidos que confirmaste, rechazaste o vencieron."
+                : "Cuando un huésped pide fechas desde la web, aparece acá. Tenés 48 h para responder."}
+            </p>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {visible.map((r) => (
+              <WebRequestCard
+                key={r.id}
+                request={r}
+                serverNow={serverNow}
+                canViewMoney={canViewMoney}
+                canApprove={canApprove}
+                canReject={canReject}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       {canViewChannels ? (
         <section className="space-y-3">
@@ -91,78 +163,6 @@ export default async function ReservasPendientesPage() {
         </section>
       ) : null}
 
-      <div className="flex items-baseline gap-2 pt-1">
-        <h2 className="text-lg font-semibold tracking-tight">De la web propia</h2>
-        <span className="text-xs text-muted-foreground">
-          Huéspedes esperando tu respuesta para unidades sin reserva al toque
-        </span>
-      </div>
-
-      {requests.length === 0 ? (
-        <Card className="p-12 text-center">
-          <Clock size={40} className="mx-auto text-muted-foreground/40 mb-3" />
-          <h3 className="font-semibold text-lg">Sin solicitudes pendientes</h3>
-          <p className="text-sm text-muted-foreground mt-1">
-            Cuando los huéspedes soliciten reservar tus unidades aparecen acá.
-          </p>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {requests.map((r) => {
-            const status = STATUS_LABEL[r.status] ?? STATUS_LABEL.pendiente;
-            const isPending = r.status === "pendiente";
-            return (
-              <Link
-                key={r.id}
-                href={`/dashboard/reservas-pendientes/${r.id}`}
-                className="block"
-              >
-                <Card className="p-4 hover:shadow-md transition-shadow h-full">
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-neutral-900 line-clamp-1">
-                        {r.unit?.marketplace_title ?? r.unit?.name ?? "Unidad"}
-                      </div>
-                      <div className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                        <MapPin size={11} />
-                        {r.unit?.slug ? `/u/${r.unit.slug}` : `Unidad ${r.unit?.code ?? ""}`}
-                      </div>
-                    </div>
-                    <Badge className={status.cls + " text-xs"}>{status.label}</Badge>
-                  </div>
-
-                  <div className="text-sm space-y-1.5">
-                    <div className="font-medium text-neutral-900">
-                      {r.guest_full_name}
-                    </div>
-                    <div className="text-muted-foreground text-xs flex items-center gap-3">
-                      <span className="inline-flex items-center gap-1">
-                        <Users size={11} /> {r.guests_count}
-                      </span>
-                      <span>
-                        {r.check_in_date} → {r.check_out_date}
-                      </span>
-                      <span>{r.nights}n</span>
-                    </div>
-                    <div className="pt-2 flex items-end justify-between">
-                      <div className="font-semibold text-base">
-                        {canViewMoney ? formatMoney(Number(r.total_amount), r.currency) : ""}
-                      </div>
-                      {isPending ? (
-                        <div className="text-xs font-medium flex items-center gap-1 text-amber-700">
-                          <Clock size={11} />
-                          Expira <TimeUntil isoDeadline={r.expires_at} />
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                </Card>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-
       {canViewChannels && discardedRequests.length > 0 ? (
         <details className="rounded-lg border p-4">
           <summary className="cursor-pointer text-sm font-medium">
@@ -176,5 +176,22 @@ export default async function ReservasPendientesPage() {
         </details>
       ) : null}
     </div>
+  );
+}
+
+function TabLink({ href, active, children }: { href: string; active: boolean; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      scroll={false}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "inline-flex min-h-10 items-center rounded-md px-3 text-sm font-medium transition-colors sm:min-h-8",
+        "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+        active ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </Link>
   );
 }

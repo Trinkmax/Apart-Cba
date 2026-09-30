@@ -19,6 +19,7 @@ import { QuickPayCard } from "@/components/bookings/quick-pay-card";
 import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { GuestMessageCard } from "@/components/bookings/guest-message-card";
+import { PaymentReportsCard } from "@/components/bookings/payment-reports-card";
 import { BookingChannelStatus } from "@/components/bookings/booking-channel-status";
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
@@ -101,9 +102,16 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
       {/* Dos personas mirando la misma reserva ven lo mismo: un cobro, un
           cambio de estado o una cancelación aparecen sin recargar. La compuerta
-          evita que un refresh borre un formulario a medio llenar. */}
+          evita que un refresh borre un formulario a medio llenar. Los avisos
+          de pago del huésped (`booking_payment_reports`) sólo con permiso de
+          pagos: su RLS de lectura es de admin y recepción (067d). */}
       <LiveRefresh
-        tables={["bookings", "booking_payment_schedule", "cash_movements"]}
+        tables={[
+          "bookings",
+          "booking_payment_schedule",
+          "cash_movements",
+          ...(canViewMoney ? ["booking_payment_reports"] : []),
+        ]}
         label="cambio"
         labelPlural="cambios"
       />
@@ -407,6 +415,8 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
         </Card>
         )}
       </div>
+
+      <PaymentReportsCard bookingId={b.id} />
 
       {canViewMoney && (
         <Card className="p-4 sm:p-5">

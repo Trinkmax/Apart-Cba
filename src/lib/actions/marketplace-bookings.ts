@@ -1,17 +1,43 @@
 "use server";
 
+import { createHash, randomUUID } from "node:crypto";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
-import { getGuestSession } from "./guest-auth";
+import { getGuestSession, type GuestSession } from "./guest-auth";
+import { cancelReservationRequest } from "./reservation-status";
 import { checkUnitAvailability } from "@/lib/marketplace/availability";
-import { computePricing, countNights, todayIsoAR } from "@/lib/marketplace/pricing";
+import { computePricing, countNights, todayIsoAR, type PricingBreakdown } from "@/lib/marketplace/pricing";
+import { getStorefrontListingById } from "@/lib/marketplace/storefront";
+import { getResolvedWebSettings } from "@/lib/marketplace/web-settings-server";
+import { deriveAccessToken, hashAccessToken, reservationPath } from "@/lib/marketplace/access-token";
+import { computeSena } from "@/lib/marketplace/sena";
+import { isMonthlyStay } from "@/lib/marketplace/stay";
+import { emailIlikePattern, GUEST_MATCH_CANDIDATES, pickReusableGuest } from "@/lib/marketplace/guest-match";
+import {
+  notifyRequestExpired,
+  notifyRequestReceived,
+  notifyReservationConfirmed,
+} from "@/lib/marketplace/notifications";
+import {
+  DATES_TAKEN_MESSAGE,
+  effectiveMinNights,
+  isOverlapError,
+  isValidIsoDate,
+  MAX_PENDING_REQUESTS_PER_CONTACT,
+  MONTHLY_STAY_MESSAGE,
+  normalizeEmail,
+  normalizeWhatsapp,
+  reservationCode,
+} from "@/lib/marketplace/reservation-view";
 import type {
-  Booking,
-  BookingRequest,
-  UnitPricingRule,
-} from "@/lib/types/database";
-import { notifyHostNewBooking, notifyGuestBookingConfirmed } from "@/lib/marketplace/notifications";
+  CheckoutField,
+  CheckoutInput as ContractCheckoutInput,
+  CheckoutResult as ContractCheckoutResult,
+  StorefrontListingDetail,
+} from "@/lib/marketplace/contracts";
+import type { UnitPricingRule } from "@/lib/types/database";
 import {
   channelCommissionAmount,
   channelCommissionPctFor,
@@ -22,207 +48,151 @@ import {
 } from "@/lib/finance/booking-economics";
 
 /**
- * Techo absoluto de noches para cualquier reserva del marketplace, aun cuando la
- * unidad no tenga `max_nights` (41/42 unidades lo tienen en null). Sin esto un
- * huésped autenticado podía crear una reserva confirmada de años (instant_book)
- * que bloquea el calendario de la unidad gratis, o una solicitud absurda.
+ * Pedido de reserva desde la web (lead-first, SPEC 20 · D4/D5).
+ *
+ * No hace falta cuenta: con nombre, email y WhatsApp alcanza. Con sesión se
+ * vincula al usuario (`guest_user_id` / `marketplace_user_id`) y se usa el
+ * email de la cuenta; sin sesión el pedido queda sin usuario y su llave es el
+ * link `/reserva/<token>` que ve al terminar y que va en todos los mails.
+ * NUNCA se vincula un pedido a una cuenta por coincidencia de email.
+ *
+ * Todo lo que importa se recalcula acá (precio, seña, disponibilidad): del
+ * cliente sólo se toman fechas, huéspedes y los datos de contacto.
+ */
+
+// Tipos del contrato (alias locales: un archivo "use server" sólo exporta
+// funciones async en runtime; los tipos se borran al compilar).
+export type CheckoutInput = ContractCheckoutInput;
+export type CheckoutResult = ContractCheckoutResult;
+
+/**
+ * Techo absoluto de noches, aun cuando la unidad no tenga `max_nights` (casi
+ * ninguna lo tiene). Sin esto se podía crear una reserva confirmada de años
+ * (reserva inmediata) que bloquea el calendario gratis.
  */
 const HARD_MAX_NIGHTS = 365;
 
 const checkoutSchema = z.object({
-  unit_id: z.string().uuid(),
-  check_in_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  check_out_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  guests_count: z.coerce.number().int().min(1).max(30),
-  // Datos del huésped (snapshot)
-  full_name: z.string().min(2).max(120),
-  email: z.string().email(),
-  phone: z.string().min(6).max(30),
-  document: z.string().max(40).optional().nullable(),
-  special_requests: z.string().max(1000).optional().nullable(),
-  agreed_to_rules: z.boolean().refine((v) => v === true, "Tenés que aceptar las reglas"),
+  unit_id: z.string().uuid("No encontramos el departamento."),
+  check_in_date: z.string().refine(isValidIsoDate, "Elegí la fecha de llegada."),
+  check_out_date: z.string().refine(isValidIsoDate, "Elegí la fecha de salida."),
+  guests_count: z.coerce
+    .number({ invalid_type_error: "Indicá cuántos huéspedes son." })
+    .int("Indicá cuántos huéspedes son.")
+    .min(1, "Tiene que haber al menos 1 huésped.")
+    .max(30, "Indicá cuántos huéspedes son."),
+  full_name: z
+    .string({ required_error: "Escribí tu nombre y apellido." })
+    .trim()
+    .min(2, "Escribí tu nombre y apellido.")
+    .max(120, "El nombre es demasiado largo."),
+  email: z
+    .string({ required_error: "Escribí tu email." })
+    .trim()
+    .min(1, "Escribí tu email.")
+    .max(200, "Revisá el email: es demasiado largo.")
+    .email("Revisá el email: parece que falta algo."),
+  phone: z
+    .string({ required_error: "Dejanos tu WhatsApp para poder confirmarte." })
+    .trim()
+    .min(1, "Dejanos tu WhatsApp para poder confirmarte.")
+    .max(40, "Revisá el número de WhatsApp."),
+  document: z.string().trim().max(40, "El documento es demasiado largo.").optional().nullable(),
+  special_requests: z
+    .string()
+    .trim()
+    .max(1000, "El mensaje puede tener hasta 1000 caracteres.")
+    .optional()
+    .nullable(),
+  agreed_to_rules: z.literal(true, {
+    errorMap: () => ({ message: "Para seguir, confirmá que leíste las reglas y la política de cancelación." }),
+  }),
+  website: z.string().optional().nullable(),
 });
 
-export type CheckoutInput = z.infer<typeof checkoutSchema>;
+type ParsedCheckout = z.infer<typeof checkoutSchema>;
 
-export type CheckoutResult =
-  | {
-      ok: true;
-      kind: "booking";
-      booking_id: string;
-      slug: string;
-      total: number;
-    }
-  | {
-      ok: true;
-      kind: "request";
-      request_id: string;
-      slug: string;
-      total: number;
-      expires_at: string;
-    }
-  | { ok: false; error: string };
-
-/**
- * Punto de entrada del checkout marketplace.
- * Decide automáticamente si crear booking (instant_book) o booking_request.
- * Requiere sesión de huésped.
- */
-export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResult> {
-  const session = await getGuestSession();
-  if (!session) return { ok: false, error: "Iniciá sesión para reservar" };
-
-  const parsed = checkoutSchema.safeParse(input);
-  if (!parsed.success) {
-    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
-  }
-  const data = parsed.data;
-
-  // Validaciones de fecha básicas
-  if (data.check_out_date <= data.check_in_date) {
-    return { ok: false, error: "El check-out debe ser posterior al check-in" };
-  }
-  // Piso: no se pueden reservar fechas pasadas. El date-picker lo impide en el
-  // cliente, pero submitCheckout es un server action y las fechas llegan por URL,
-  // así que hay que validarlo del lado servidor (usamos "hoy" en horario AR).
-  if (data.check_in_date < todayIsoAR()) {
-    return { ok: false, error: "No podés reservar fechas pasadas" };
-  }
-  const nights = countNights(data.check_in_date, data.check_out_date);
-  if (nights < 1) {
-    return { ok: false, error: "Estadía mínima de 1 noche" };
-  }
-  if (nights > HARD_MAX_NIGHTS) {
-    return { ok: false, error: `La estadía no puede superar ${HARD_MAX_NIGHTS} noches` };
-  }
-
-  const admin = createAdminClient();
-
-  // Traer la unidad con todos los datos necesarios
-  const { data: unit, error: unitErr } = await admin
-    .from("units")
-    .select(
-      `
-        id, organization_id, slug, marketplace_published, active, marketplace_title,
-        base_price, cleaning_fee, marketplace_currency, max_guests, min_nights, max_nights,
-        instant_book, check_in_window_start, check_in_window_end, default_commission_pct
-      `
-    )
-    .eq("id", data.unit_id)
-    .maybeSingle();
-  if (unitErr) {
-    console.error("[marketplace-bookings] fetch unidad:", unitErr);
-    return { ok: false, error: "No se pudo procesar la reserva. Probá de nuevo." };
-  }
-  if (!unit || !unit.marketplace_published || !unit.active) {
-    return { ok: false, error: "La unidad no está disponible" };
-  }
-  if (unit.max_guests && data.guests_count > unit.max_guests) {
-    return { ok: false, error: `Esta propiedad acepta hasta ${unit.max_guests} huéspedes` };
-  }
-  if (nights < (unit.min_nights ?? 1)) {
-    return { ok: false, error: `Mínimo de ${unit.min_nights} noche(s)` };
-  }
-  if (unit.max_nights && nights > unit.max_nights) {
-    return { ok: false, error: `Máximo de ${unit.max_nights} noches` };
-  }
-
-  // Disponibilidad
-  const avail = await checkUnitAvailability({
-    unitId: data.unit_id,
-    checkInIso: data.check_in_date,
-    checkOutIso: data.check_out_date,
-  });
-  if (!avail.available) {
-    return { ok: false, error: avail.reason ?? "Sin disponibilidad" };
-  }
-
-  // Calcular precio server-side (nunca confiar en el cliente)
-  const { data: rules } = await admin
-    .from("unit_pricing_rules")
-    .select("*")
-    .eq("unit_id", data.unit_id)
-    .eq("active", true);
-
-  const breakdown = computePricing({
-    checkInIso: data.check_in_date,
-    checkOutIso: data.check_out_date,
-    basePrice: Number(unit.base_price ?? 0),
-    cleaningFee: unit.cleaning_fee !== null ? Number(unit.cleaning_fee) : null,
-    rules: (rules ?? []) as UnitPricingRule[],
-  });
-  const currency = unit.marketplace_currency ?? "ARS";
-
-  // Guarda de precio: una unidad sin base_price (nullable) o con reglas que dan
-  // total <= 0 es alcanzable por /checkout/[unitId] directo (searchListings la
-  // esconde con `.not(base_price is null)`, pero el checkout no filtra). Sin esto
-  // se crearía una reserva confirmada de $0 (o negativa) que ocupa el calendario.
-  if (unit.base_price == null || Number(unit.base_price) <= 0 || breakdown.total <= 0) {
-    return { ok: false, error: "Esta unidad todavía no tiene un precio configurado" };
-  }
-
-  // Camino A: instant_book → crear booking real directamente
-  if (unit.instant_book) {
-    return await createMarketplaceBooking({
-      session,
-      unit: {
-        id: unit.id,
-        organization_id: unit.organization_id,
-        slug: unit.slug ?? unit.id,
-        marketplace_title: unit.marketplace_title ?? "",
-        check_in_window_start: unit.check_in_window_start ?? "15:00",
-        check_in_window_end: unit.check_in_window_end ?? "22:00",
-        default_commission_pct:
-          unit.default_commission_pct === null || unit.default_commission_pct === undefined
-            ? null
-            : Number(unit.default_commission_pct),
-      },
-      data,
-      total: breakdown.total,
-      cleaningFee: breakdown.cleaning_fee,
-      currency,
-      nights,
-    });
-  }
-
-  // Camino B: request-to-book → crear booking_request
-  return await createBookingRequest({
-    session,
-    unit: {
-      id: unit.id,
-      organization_id: unit.organization_id,
-      slug: unit.slug ?? unit.id,
-      marketplace_title: unit.marketplace_title ?? "",
-      check_in_window_start: unit.check_in_window_start ?? "15:00",
-      check_in_window_end: unit.check_in_window_end ?? "22:00",
-    },
-    data,
-    total: breakdown.total,
-    cleaningFee: breakdown.cleaning_fee,
-    currency,
-    nights,
-  });
-}
-
-type SessionLite = { userId: string; email: string };
-type UnitLite = {
-  id: string;
-  organization_id: string;
-  slug: string;
-  marketplace_title: string;
-  check_in_window_start: string;
-  check_in_window_end: string;
-  /** Sólo lo usa el camino instant_book (la solicitud no crea booking). */
-  default_commission_pct?: number | null;
+const FIELD_BY_PATH: Record<string, CheckoutField | undefined> = {
+  check_in_date: "dates",
+  check_out_date: "dates",
+  guests_count: "guests_count",
+  full_name: "full_name",
+  email: "email",
+  phone: "phone",
+  document: "document",
+  special_requests: "special_requests",
+  agreed_to_rules: "agreed_to_rules",
 };
 
+const GENERIC_ERROR = "No pudimos enviar tu pedido. Probá de nuevo en un momento.";
+const RATE_LIMITED = "Recibimos varios pedidos seguidos desde tu conexión. Esperá un rato o escribinos por WhatsApp.";
+const RATE_LIMITED_CONTACT = "Hoy ya recibimos varios pedidos con estos datos. Escribinos por WhatsApp y lo vemos juntos.";
+
+type Fail = Extract<CheckoutResult, { ok: false }>;
+const fail = (error: string, field?: CheckoutField): Fail => (field ? { ok: false, error, field } : { ok: false, error });
+
+// ─── Helpers internos ────────────────────────────────────────────────────────
+
+/** IP real del cliente (Vercel la pone en x-forwarded-for). */
+async function clientIp(): Promise<string> {
+  try {
+    const h = await headers();
+    return h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Rate limit best-effort y FAIL-OPEN (como `allowAuthAttempt` de guest-auth). */
+/** Hash corto (sha256, 24 hex) para usar un email/teléfono como clave del limitador. */
+function contactKey(value: string): string {
+  return createHash("sha256").update(value.trim().toLowerCase(), "utf8").digest("hex").slice(0, 24);
+}
+
+async function allowAttempt(bucket: string, max: number, windowSecs: number): Promise<boolean> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin.rpc("hit_auth_rate_limit", {
+      p_bucket: bucket,
+      p_max: max,
+      p_window_secs: windowSecs,
+    });
+    if (error) return true;
+    return data !== false;
+  } catch {
+    return true;
+  }
+}
+
 /**
- * Defaults de dinero de la org dueña de la unidad. Acá no hay `getCurrentOrg()`
- * (la sesión es de huésped, no de staff), así que se leen por
- * `unit.organization_id`. Un fallo de lectura cae a los defaults del modelo
- * (canal sin configurar → null, base net_of_channel): la reserva se confirma
- * igual — el precio ya está calculado — y el snapshot se puede corregir
- * editándola.
+ * ¿Ya hay demasiados pedidos esperando respuesta con este email o teléfono?
+ * (en cualquier unidad; un pedido vencido sin barrer no cuenta). Fail-open.
+ */
+async function tooManyPendingRequests(email: string, phone: string): Promise<boolean> {
+  try {
+    const admin = createAdminClient();
+    const nowIso = new Date().toISOString();
+    const count = (column: "guest_email" | "guest_phone", value: string) =>
+      admin
+        .from("booking_requests")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pendiente")
+        .gt("expires_at", nowIso)
+        .eq(column, value);
+    const [byEmail, byPhone] = await Promise.all([count("guest_email", email), count("guest_phone", phone)]);
+    return (
+      (byEmail.count ?? 0) >= MAX_PENDING_REQUESTS_PER_CONTACT ||
+      (byPhone.count ?? 0) >= MAX_PENDING_REQUESTS_PER_CONTACT
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Defaults de dinero de la org dueña de la unidad (no hay `getCurrentOrg()`:
+ * quien reserva es un huésped). Un fallo de lectura cae a los defaults del
+ * modelo: la reserva se confirma igual y el snapshot se corrige editándola.
  */
 async function readOrgMoneyDefaults(organizationId: string): Promise<{
   channelCommissions: ChannelCommissionMap;
@@ -252,274 +222,434 @@ async function readOrgMoneyDefaults(organizationId: string): Promise<{
   };
 }
 
+/**
+ * Ficha del huésped en el PMS (para la reserva inmediata). El email del
+ * pedido web NO está verificado, así que una ficha existente se reusa sólo si
+ * coinciden el email (sin mayúsculas) Y el WhatsApp (últimos 8 dígitos), y
+ * NUNCA se le pisan datos con lo que vino de la web (`guest-match.ts`). Si no,
+ * ficha nueva. `guests` NO tiene unique(org, email) —la operación usa emails
+ * de relleno compartidos—: se miran varias candidatas, la más vieja primero.
+ * La identidad real del huésped de la web viaja por `marketplace_user_id` /
+ * el token, no por acá. Nunca lanza: null si no se pudo.
+ */
 async function findOrCreateGuestForOrg(params: {
   organizationId: string;
   guest: { full_name: string; email: string; phone: string; document?: string | null };
-}): Promise<string> {
-  const admin = createAdminClient();
-  // Match por email + org. Ojo: `guests` NO tiene unique(org,email) —la operación
-  // usa emails placeholder compartidos por varios huéspedes distintos— así que
-  // puede haber >1 fila. `.limit(1).maybeSingle()` evita el throw de `.maybeSingle()`
-  // ante múltiples matches (antes rompía el checkout). La identidad real del
-  // huésped del marketplace viaja por `bookings.marketplace_user_id`, no por acá.
-  const { data: existing } = await admin
-    .from("guests")
-    .select("id, phone, document_number")
-    .eq("organization_id", params.organizationId)
-    .eq("email", params.guest.email)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+}): Promise<string | null> {
+  try {
+    const admin = createAdminClient();
+    const { data: candidates, error: findErr } = await admin
+      .from("guests")
+      .select("id, email, phone")
+      .eq("organization_id", params.organizationId)
+      .ilike("email", emailIlikePattern(params.guest.email))
+      .order("created_at", { ascending: true })
+      .limit(GUEST_MATCH_CANDIDATES);
+    if (findErr) console.error("[marketplace-bookings] buscar huésped:", findErr.message);
 
-  if (existing) {
-    // Actualizar phone/document si vienen y faltaban
-    const update: Record<string, unknown> = {};
-    if (params.guest.phone && !existing.phone) update.phone = params.guest.phone;
-    if (params.guest.document && !existing.document_number) {
-      update.document_number = params.guest.document;
+    const existing = pickReusableGuest(candidates, params.guest);
+    if (existing) return existing.id;
+
+    const { data: created, error } = await admin
+      .from("guests")
+      .insert({
+        organization_id: params.organizationId,
+        full_name: params.guest.full_name,
+        email: params.guest.email,
+        phone: params.guest.phone,
+        document_number: params.guest.document || null,
+      })
+      .select("id")
+      .single();
+    if (error || !created) {
+      console.error("[marketplace-bookings] crear huésped:", error?.message);
+      return null;
     }
-    if (Object.keys(update).length > 0) {
-      await admin.from("guests").update(update).eq("id", existing.id);
-    }
-    return existing.id;
+    return created.id as string;
+  } catch (e) {
+    console.error("[marketplace-bookings] huésped:", e);
+    return null;
   }
-
-  const { data: created, error } = await admin
-    .from("guests")
-    .insert({
-      organization_id: params.organizationId,
-      full_name: params.guest.full_name,
-      email: params.guest.email,
-      phone: params.guest.phone,
-      document_number: params.guest.document || null,
-    })
-    .select("id")
-    .single();
-  if (error) throw new Error(`No se pudo crear el huésped: ${error.message}`);
-  return created.id;
 }
 
-async function createMarketplaceBooking(params: {
-  session: SessionLite;
-  unit: UnitLite;
-  data: CheckoutInput;
-  total: number;
-  cleaningFee: number;
-  currency: string;
+// ─── Checkout ────────────────────────────────────────────────────────────────
+
+interface CheckoutContext {
+  /** Id generado acá para derivar el token del link en el mismo insert. */
+  id: string;
+  token: string;
+  data: ParsedCheckout;
+  listing: StorefrontListingDetail;
+  session: GuestSession | null;
+  email: string;
+  phone: string;
   nights: number;
-}): Promise<CheckoutResult> {
-  const admin = createAdminClient();
+  breakdown: PricingBreakdown;
+  currency: string;
+  sena: number | null;
+}
 
-  // Identidad de confianza = la sesión autenticada, no el email tipeado en el form
-  // (evita mandar la confirmación a un destinatario arbitrario y atribuir mal la reserva).
-  const guestEmail = params.session.email;
+/** Hasta dónde se aceptan pedidos (evita fechas tipeadas mal, "2062"). */
+const MAX_DAYS_AHEAD = 730;
 
-  const guestId = await findOrCreateGuestForOrg({
-    organizationId: params.unit.organization_id,
-    guest: {
-      full_name: params.data.full_name,
-      email: guestEmail,
-      phone: params.data.phone,
-      document: params.data.document ?? null,
-    },
-  });
+/**
+ * Punto de entrada del checkout de la web. Sesión OPCIONAL.
+ * - Con confirmación (instant_book = false): crea el pedido `pendiente`.
+ * - Inmediata: crea la solicitud ya `aprobada` + la reserva confirmada.
+ * En los dos casos devuelve el link de seguimiento `/reserva/<token>`.
+ */
+export async function submitCheckout(input: CheckoutInput): Promise<CheckoutResult> {
+  // Con sesión manda el email de la cuenta: el tipeado se ignora.
+  const session = await getGuestSession();
+  const raw = input && typeof input === "object" ? input : ({} as CheckoutInput);
+  const parsed = checkoutSchema.safeParse(session ? { ...raw, email: session.email } : raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return fail(issue?.message ?? GENERIC_ERROR, FIELD_BY_PATH[String(issue?.path?.[0] ?? "")]);
+  }
+  const data = parsed.data;
 
-  // Snapshot de dinero igual al de una reserva cargada a mano. `params.total`
-  // ya incluye la limpieza (pricing.ts). Antes esta ruta dejaba la comisión
-  // de administración en null y la reserva aparecía "sin comisión".
-  const orgMoney = await readOrgMoneyDefaults(params.unit.organization_id);
-  const commissionPct = Number(
-    params.unit.default_commission_pct ?? orgMoney.defaultCommissionPct ?? 20,
-  );
-  // null (no 0) si la org no configuró 'directo': mismo criterio que el resto
-  // de los caminos de escritura — un 0 escrito es un snapshot que gana sobre
-  // el default de la org; null deja que el default aplique cuando exista.
-  const channelPct =
-    orgMoney.channelCommissions.directo === null ||
-    orgMoney.channelCommissions.directo === undefined
-      ? null
-      : channelCommissionPctFor(orgMoney.channelCommissions, "directo");
-  const commissionAmount = managementCommissionAmount({
-    total: params.total,
-    commissionPct,
-    channelPct,
-    commissionBase: orgMoney.commissionBase,
-  });
-
-  const { data: created, error } = await admin
-    .from("bookings")
-    .insert({
-      organization_id: params.unit.organization_id,
-      unit_id: params.unit.id,
-      guest_id: guestId,
-      marketplace_user_id: params.session.userId,
-      source: "directo",
-      status: "confirmada",
-      mode: "temporario",
-      check_in_date: params.data.check_in_date,
-      check_in_time: params.unit.check_in_window_start,
-      check_out_date: params.data.check_out_date,
-      check_out_time: "11:00",
-      guests_count: params.data.guests_count,
-      currency: params.currency,
-      total_amount: params.total,
-      paid_amount: 0,
-      cleaning_fee: params.cleaningFee,
-      commission_pct: commissionPct,
-      commission_amount: commissionAmount,
-      channel_commission_pct: channelPct,
-      channel_commission_amount: channelCommissionAmount(params.total, channelPct),
-      notes: params.data.special_requests || null,
-      internal_notes: `Reserva marketplace por ${params.data.full_name} (${params.data.email})`,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    if (error.message.includes("bookings_no_overlap")) {
-      return { ok: false, error: "Justo se reservaron esas fechas. Probá con otras." };
-    }
-    console.error("[marketplace-bookings] insert booking:", error);
-    return { ok: false, error: "No se pudo confirmar la reserva. Probá de nuevo." };
+  // Honeypot: una persona nunca ve ni completa este campo.
+  if (data.website && data.website.trim() !== "") {
+    console.warn("[marketplace-bookings] honeypot completado: pedido descartado");
+    return fail(GENERIC_ERROR);
   }
 
-  const booking = created as Booking;
+  // ── Fechas ──
+  const today = todayIsoAR();
+  if (data.check_out_date <= data.check_in_date) {
+    return fail("La salida tiene que ser después de la llegada.", "dates");
+  }
+  if (data.check_in_date < today) return fail("Esa fecha de llegada ya pasó. Elegí otra.", "dates");
+  if (countNights(today, data.check_in_date) > MAX_DAYS_AHEAD) {
+    return fail("Todavía no tomamos pedidos con tanta anticipación. Escribinos y lo vemos.", "dates");
+  }
+  const nights = countNights(data.check_in_date, data.check_out_date);
+  if (!Number.isFinite(nights) || nights < 1) return fail("Elegí al menos 1 noche.", "dates");
+  // 28+ noches se consultan (y eso cubre también el techo de 365).
+  if (isMonthlyStay(nights)) return fail(MONTHLY_STAY_MESSAGE, "dates");
+  if (nights > HARD_MAX_NIGHTS) return fail(`La estadía no puede superar ${HARD_MAX_NIGHTS} noches.`, "dates");
 
-  // Notificaciones (best-effort)
+  // ── Contacto ──
+  const email = normalizeEmail(data.email);
+  const phone = normalizeWhatsapp(data.phone);
+  if (!phone) {
+    return fail("Revisá el WhatsApp: escribilo con código de área, por ejemplo 351 555 1234.", "phone");
+  }
+
+  // ── Anti-abuso por conexión (fail-open). El cupo por contacto va más abajo. ──
+  const ip = await clientIp();
+  if (ip !== "unknown" && !(await allowAttempt(`checkout:ip:${ip}`, 8, 60 * 60))) {
+    return fail(RATE_LIMITED);
+  }
+
+  // ── Unidad de la vidriera ──
+  let listing: StorefrontListingDetail | null;
   try {
-    await notifyGuestBookingConfirmed({ bookingId: booking.id });
-    await notifyHostNewBooking({
-      organizationId: params.unit.organization_id,
-      bookingId: booking.id,
-      unitId: params.unit.id,
-      guestName: params.data.full_name,
-      checkIn: params.data.check_in_date,
-      checkOut: params.data.check_out_date,
-      total: params.total,
-      currency: params.currency,
-    });
+    listing = await getStorefrontListingById(data.unit_id);
   } catch (e) {
-    console.warn("[marketplace-bookings] notificaciones fallaron:", e);
+    console.error("[marketplace-bookings] leer la unidad:", e);
+    return fail(GENERIC_ERROR);
+  }
+  if (!listing) return fail("Este departamento ya no está disponible en la web.");
+  if (!listing.offers_short) {
+    return fail("Este departamento se alquila por mes: escribinos y te pasamos el precio.", "dates");
+  }
+  if (listing.max_guests && data.guests_count > listing.max_guests) {
+    const max = listing.max_guests;
+    return fail(`Este departamento es para hasta ${max} ${max === 1 ? "huésped" : "huéspedes"}.`, "guests_count");
   }
 
+  // ── Precio (siempre en el server) y estadía mínima/máxima ──
+  const rules = ((listing.pricing_rules ?? []) as UnitPricingRule[]).filter((r) => r.active);
+  const breakdown = computePricing({
+    checkInIso: data.check_in_date,
+    checkOutIso: data.check_out_date,
+    basePrice: Number(listing.base_price ?? 0),
+    cleaningFee: listing.cleaning_fee != null ? Number(listing.cleaning_fee) : null,
+    rules,
+  });
+  if (!(Number(listing.base_price) > 0) || !(breakdown.total > 0)) {
+    return fail("Este departamento todavía no tiene precio para esas fechas. Escribinos y te pasamos uno.");
+  }
+  const minNights = effectiveMinNights({ unitMinNights: listing.min_nights, rules, pricedNights: breakdown.nights });
+  if (nights < minNights) return fail(`Para esas fechas la estadía mínima es de ${minNights} noches.`, "dates");
+  if (listing.max_nights && nights > listing.max_nights) {
+    return fail(`En este departamento la estadía máxima es de ${listing.max_nights} noches.`, "dates");
+  }
+
+  // ── Disponibilidad, política de seña y pedidos abiertos del contacto ──
+  let avail: Awaited<ReturnType<typeof checkUnitAvailability>>;
+  let settings: Awaited<ReturnType<typeof getResolvedWebSettings>>;
+  let busyContact: boolean;
+  try {
+    [avail, settings, busyContact] = await Promise.all([
+      checkUnitAvailability({ unitId: listing.id, checkInIso: data.check_in_date, checkOutIso: data.check_out_date }),
+      getResolvedWebSettings(listing.organization_id),
+      listing.instant_book ? Promise.resolve(false) : tooManyPendingRequests(email, phone),
+    ]);
+  } catch (e) {
+    console.error("[marketplace-bookings] verificar disponibilidad:", e);
+    return fail(GENERIC_ERROR);
+  }
+  if (!avail.available) {
+    // Los errores de lectura ("Error verificando…") no son para el huésped.
+    if (!avail.reason || avail.reason.startsWith("Error")) return fail(GENERIC_ERROR);
+    return fail(avail.reason, "dates");
+  }
+  if (busyContact) {
+    return fail(
+      `Ya tenés ${MAX_PENDING_REQUESTS_PER_CONTACT} pedidos esperando respuesta. Te contestamos enseguida; si querés cambiar algo, escribinos.`,
+    );
+  }
+
+  // Cupo diario por contacto (fail-open). Recién acá: sólo cuentan los pedidos
+  // que pasaron todas las validaciones, así probar fechas no gasta el cupo.
+  const [emailOk, phoneOk] = await Promise.all([
+    // Las claves del limitador no guardan PII en claro: hash corto del contacto.
+    allowAttempt(`checkout:contact:${contactKey(email)}`, 5, 24 * 60 * 60),
+    allowAttempt(`checkout:contact:${contactKey(phone.slice(1))}`, 5, 24 * 60 * 60),
+  ]);
+  if (!emailOk || !phoneOk) return fail(RATE_LIMITED_CONTACT);
+
+  const currency = listing.marketplace_currency || "ARS";
+  const sena = computeSena({
+    policy: settings.deposit,
+    nights,
+    subtotal: breakdown.subtotal,
+    total: breakdown.total,
+    currency,
+  });
+
+  let id: string;
+  let token: string;
+  try {
+    id = randomUUID();
+    token = deriveAccessToken(id);
+  } catch (e) {
+    // Sólo falla si falta el secreto de los links (configuración del server).
+    console.error("[marketplace-bookings] no se pudo firmar el link de seguimiento:", e);
+    return fail(GENERIC_ERROR);
+  }
+
+  const ctx: CheckoutContext = { id, token, data, listing, session, email, phone, nights, breakdown, currency, sena };
+  return listing.instant_book ? createInstantBooking(ctx) : createRequest(ctx);
+}
+
+/** Snapshot del pedido: lo mismo en la solicitud pendiente y en la inmediata. */
+function requestSnapshot(ctx: CheckoutContext) {
+  const { data, listing } = ctx;
+  return {
+    id: ctx.id,
+    organization_id: listing.organization_id,
+    unit_id: listing.id,
+    // Sólo la sesión vincula el pedido a una cuenta (nunca el email tipeado).
+    guest_user_id: ctx.session?.userId ?? null,
+    guest_full_name: data.full_name,
+    guest_email: ctx.email,
+    guest_phone: ctx.phone,
+    guest_document: data.document || null,
+    check_in_date: data.check_in_date,
+    check_in_time: listing.check_in_window_start || "15:00",
+    check_out_date: data.check_out_date,
+    check_out_time: "11:00",
+    guests_count: data.guests_count,
+    currency: ctx.currency,
+    total_amount: ctx.breakdown.total,
+    cleaning_fee: ctx.breakdown.cleaning_fee,
+    nights: ctx.nights,
+    special_requests: data.special_requests || null,
+    access_token_hash: hashAccessToken(ctx.token),
+    // 0 = "sin seña" explícito; NULL haría que después se recalcule con la política vigente.
+    deposit_estimate: ctx.sena ?? 0,
+  };
+}
+
+function revalidateAfterCheckout(slug: string) {
+  revalidatePath("/dashboard/reservas-pendientes");
   revalidatePath("/dashboard/reservas");
   revalidatePath("/dashboard/unidades/kanban");
   revalidatePath("/dashboard/unidades/calendario/mensual");
   revalidatePath("/dashboard/resultados");
   revalidatePath("/mi-cuenta");
-  revalidatePath(`/u/${params.unit.slug}`);
-
-  return {
-    ok: true,
-    kind: "booking",
-    booking_id: booking.id,
-    slug: params.unit.slug,
-    total: params.total,
-  };
+  revalidatePath(`/u/${slug}`);
 }
 
-async function createBookingRequest(params: {
-  session: SessionLite;
-  unit: UnitLite;
-  data: CheckoutInput;
-  total: number;
-  cleaningFee: number;
-  currency: string;
-  nights: number;
-}): Promise<CheckoutResult> {
+/** Pedido con confirmación: queda `pendiente` hasta que el equipo responda. */
+async function createRequest(ctx: CheckoutContext): Promise<CheckoutResult> {
   const admin = createAdminClient();
+  const { data, listing, id } = ctx;
 
-  // Cierra la ventana entre lectura y constraint: la disponibilidad filtra
-  // `expires_at > now` (una solicitud vencida NO bloquea), pero el constraint
-  // booking_requests_no_overlap NO mira expires_at (dispara con cualquier
-  // status='pendiente'). El barrido de vencidas corre en daily-dispatch (1x/día),
-  // así que una solicitud vencida sin barrer haría que una fecha mostrada como
-  // libre rechace el insert. Expiramos acá las pendientes vencidas que solapan.
-  await admin
+  // La disponibilidad ignora las pendientes vencidas, pero el constraint
+  // booking_requests_no_overlap no mira expires_at: si el barrido todavía no
+  // pasó, una fecha que se ve libre rechazaría el insert. Se vencen acá las que
+  // se superponen (y se le avisa a ese huésped, como haría el barrido).
+  const { data: expired } = await admin
     .from("booking_requests")
     .update({ status: "expirada" })
-    .eq("unit_id", params.unit.id)
+    .eq("unit_id", listing.id)
     .eq("status", "pendiente")
     .lt("expires_at", new Date().toISOString())
-    .lt("check_in_date", params.data.check_out_date)
-    .gt("check_out_date", params.data.check_in_date);
-
-  const { data: created, error } = await admin
-    .from("booking_requests")
-    .insert({
-      organization_id: params.unit.organization_id,
-      unit_id: params.unit.id,
-      guest_user_id: params.session.userId,
-      guest_full_name: params.data.full_name,
-      guest_email: params.session.email,
-      guest_phone: params.data.phone,
-      guest_document: params.data.document || null,
-      check_in_date: params.data.check_in_date,
-      check_in_time: params.unit.check_in_window_start,
-      check_out_date: params.data.check_out_date,
-      check_out_time: "11:00",
-      guests_count: params.data.guests_count,
-      currency: params.currency,
-      total_amount: params.total,
-      cleaning_fee: params.cleaningFee,
-      nights: params.nights,
-      special_requests: params.data.special_requests || null,
-      status: "pendiente",
-    })
-    .select()
-    .single();
-
-  if (error) {
-    if (error.message.includes("booking_requests_no_overlap")) {
-      return {
-        ok: false,
-        error: "Ya hay una solicitud pendiente para esas fechas. Probá con otras.",
-      };
-    }
-    console.error("[marketplace-bookings] insert solicitud:", error);
-    return { ok: false, error: "No se pudo enviar la solicitud. Probá de nuevo." };
+    .lt("check_in_date", data.check_out_date)
+    .gt("check_out_date", data.check_in_date)
+    .select("id");
+  if (expired && expired.length > 0) {
+    await Promise.allSettled(expired.map((r) => notifyRequestExpired({ requestId: r.id as string })));
   }
 
-  const request = created as BookingRequest;
+  const { error } = await admin
+    .from("booking_requests")
+    .insert({ ...requestSnapshot(ctx), status: "pendiente" });
+  if (error) {
+    if (isOverlapError(error.message)) return fail(DATES_TAKEN_MESSAGE, "dates");
+    console.error("[marketplace-bookings] insert pedido:", error.message);
+    return fail(GENERIC_ERROR);
+  }
 
   try {
-    await notifyHostNewBooking({
-      organizationId: params.unit.organization_id,
-      bookingId: request.id,
-      unitId: params.unit.id,
-      guestName: params.data.full_name,
-      checkIn: params.data.check_in_date,
-      checkOut: params.data.check_out_date,
-      total: params.total,
-      currency: params.currency,
-      isRequest: true,
-    });
+    await notifyRequestReceived({ requestId: id });
   } catch (e) {
-    console.warn("[marketplace-bookings] notificación host falló:", e);
+    console.warn("[marketplace-bookings] avisos del pedido fallaron:", e);
   }
-
-  revalidatePath("/dashboard/reservas-pendientes");
-  revalidatePath("/mi-cuenta");
-
-  return {
-    ok: true,
-    kind: "request",
-    request_id: request.id,
-    slug: params.unit.slug,
-    total: params.total,
-    expires_at: request.expires_at,
-  };
+  revalidateAfterCheckout(listing.slug);
+  return { ok: true, kind: "request", request_id: id, status_path: reservationPath(id) };
 }
 
-/** Lista los bookings de un huésped autenticado (su historial). */
+/**
+ * Reserva inmediata, en este orden (SPEC 30 · B):
+ *   1. solicitud ya `aprobada` con su token (una aprobada no choca con
+ *      booking_requests_no_overlap) → mismo seguimiento que un pedido;
+ *   2. la reserva confirmada, con la seña de la política en `deposit_amount`;
+ *   3. se vinculan (`resulting_booking_id`).
+ * Si (2) falla (p. ej. se ocuparon las fechas), la solicitud queda `cancelada`.
+ */
+async function createInstantBooking(ctx: CheckoutContext): Promise<CheckoutResult> {
+  const admin = createAdminClient();
+  const { data, listing, id } = ctx;
+  const code = reservationCode(id);
+
+  const { error: reqErr } = await admin
+    .from("booking_requests")
+    .insert({ ...requestSnapshot(ctx), status: "aprobada", approved_at: new Date().toISOString() });
+  if (reqErr) {
+    console.error("[marketplace-bookings] insert solicitud inmediata:", reqErr.message);
+    return fail(GENERIC_ERROR);
+  }
+
+  const abandon = async (why: string) => {
+    const { error } = await admin
+      .from("booking_requests")
+      .update({ status: "cancelada", notes: why })
+      .eq("id", id)
+      .eq("status", "aprobada");
+    if (error) console.error("[marketplace-bookings] no se pudo anular la solicitud", id, error.message);
+  };
+
+  const guestId = await findOrCreateGuestForOrg({
+    organizationId: listing.organization_id,
+    guest: { full_name: data.full_name, email: ctx.email, phone: ctx.phone, document: data.document ?? null },
+  });
+  if (!guestId) {
+    await abandon("No se pudo registrar al huésped en el PMS.");
+    return fail(GENERIC_ERROR);
+  }
+
+  // Snapshot de dinero igual al de una reserva cargada a mano (el total ya
+  // incluye la limpieza). null (no 0) si la org no configuró 'directo'.
+  const [orgMoney, unitRes] = await Promise.all([
+    readOrgMoneyDefaults(listing.organization_id),
+    admin
+      .from("units")
+      .select("default_commission_pct")
+      .eq("id", listing.id)
+      .eq("organization_id", listing.organization_id)
+      .maybeSingle(),
+  ]);
+  const unitPct = unitRes.data?.default_commission_pct;
+  const commissionPct = Number(unitPct ?? orgMoney.defaultCommissionPct ?? 20);
+  const channelPct =
+    orgMoney.channelCommissions.directo === null || orgMoney.channelCommissions.directo === undefined
+      ? null
+      : channelCommissionPctFor(orgMoney.channelCommissions, "directo");
+  const total = ctx.breakdown.total;
+
+  const { data: booking, error: bkErr } = await admin
+    .from("bookings")
+    .insert({
+      organization_id: listing.organization_id,
+      unit_id: listing.id,
+      guest_id: guestId,
+      marketplace_user_id: ctx.session?.userId ?? null,
+      source: "directo",
+      status: "confirmada",
+      mode: "temporario",
+      check_in_date: data.check_in_date,
+      check_in_time: listing.check_in_window_start || "15:00",
+      check_out_date: data.check_out_date,
+      check_out_time: "11:00",
+      guests_count: data.guests_count,
+      currency: ctx.currency,
+      total_amount: total,
+      paid_amount: 0,
+      cleaning_fee: ctx.breakdown.cleaning_fee,
+      deposit_amount: ctx.sena ?? 0,
+      commission_pct: commissionPct,
+      commission_amount: managementCommissionAmount({
+        total,
+        commissionPct,
+        channelPct,
+        commissionBase: orgMoney.commissionBase,
+      }),
+      channel_commission_pct: channelPct,
+      channel_commission_amount: channelCommissionAmount(total, channelPct),
+      notes: data.special_requests || null,
+      internal_notes: `Reserva web inmediata ${code} · ${data.full_name} · ${ctx.email} · ${ctx.phone}`,
+    })
+    .select("id")
+    .single();
+
+  if (bkErr || !booking) {
+    const overlap = isOverlapError(bkErr?.message);
+    if (!overlap) console.error("[marketplace-bookings] insert reserva inmediata:", bkErr?.message);
+    await abandon(overlap ? "Las fechas se ocuparon antes de crear la reserva." : "No se pudo crear la reserva.");
+    return overlap ? fail(DATES_TAKEN_MESSAGE, "dates") : fail(GENERIC_ERROR);
+  }
+  const bookingId = booking.id as string;
+
+  // Sin este vínculo el seguimiento no encuentra la reserva: un reintento.
+  const link = () =>
+    admin.from("booking_requests").update({ resulting_booking_id: bookingId }).eq("id", id);
+  let { error: linkErr } = await link();
+  if (linkErr) ({ error: linkErr } = await link());
+  if (linkErr) {
+    console.error("[marketplace-bookings] CRÍTICO: reserva inmediata sin vincular", { requestId: id, bookingId, error: linkErr.message });
+  }
+
+  try {
+    await notifyReservationConfirmed({ requestId: id, bookingId });
+  } catch (e) {
+    console.warn("[marketplace-bookings] avisos de la reserva inmediata fallaron:", e);
+  }
+  revalidateAfterCheckout(listing.slug);
+  revalidatePath(`/dashboard/reservas/${bookingId}`);
+  return { ok: true, kind: "booking", request_id: id, status_path: reservationPath(id) };
+}
+
+// ─── Compatibilidad ──────────────────────────────────────────────────────────
+
+/**
+ * Historial crudo del huésped (bookings + solicitudes). Lo sigue usando la
+ * versión anterior de /mi-cuenta; lo nuevo es `listGuestReservations()`
+ * (reservation-status.ts), que ya devuelve etapas y links de seguimiento.
+ */
 export async function listGuestBookings() {
   const session = await getGuestSession();
   if (!session) return { bookings: [], requests: [] };
   const admin = createAdminClient();
 
-  // Identidad = marketplace_user_id (auth.users), NUNCA match por email: la
-  // operación reutiliza emails placeholder para huéspedes distintos, así que un
-  // match por email filtraría reservas/PII de terceros entre organizaciones.
+  // Identidad = marketplace_user_id / guest_user_id (auth.users), NUNCA match
+  // por email: la operación reutiliza emails placeholder para huéspedes
+  // distintos, así que un match por email filtraría reservas de terceros.
   const [bookingsRes, requestsRes] = await Promise.all([
     admin
       .from("bookings")
@@ -548,17 +678,7 @@ export async function listGuestBookings() {
   };
 }
 
-export async function cancelGuestBookingRequest(requestId: string) {
-  const session = await getGuestSession();
-  if (!session) return { ok: false, error: "No autenticado" };
-  const admin = createAdminClient();
-  const { error } = await admin
-    .from("booking_requests")
-    .update({ status: "cancelada" })
-    .eq("id", requestId)
-    .eq("guest_user_id", session.userId)
-    .eq("status", "pendiente");
-  if (error) return { ok: false, error: error.message };
-  revalidatePath("/mi-cuenta");
-  return { ok: true };
+/** @deprecated Usá `cancelReservationRequest({ requestId })` (reservation-status.ts). */
+export async function cancelGuestBookingRequest(requestId: string): Promise<{ ok: boolean; error?: string }> {
+  return cancelReservationRequest({ requestId });
 }

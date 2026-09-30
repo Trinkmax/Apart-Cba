@@ -1,11 +1,14 @@
 import type { MetadataRoute } from "next";
+import { getAppUrl } from "@/lib/app-url";
 
 /**
- * robots.txt del marketplace público. Permitimos el crawl general pero
- * bloqueamos las rutas privadas del huésped y del staff.
+ * robots.txt de la web pública. Se rastrea la vidriera (home, búsqueda,
+ * fichas, páginas informativas) y se bloquea todo lo privado: cuenta del
+ * huésped, pedidos y links de seguimiento (llevan un token), panel del
+ * equipo, links de liquidación y autenticación.
  */
 export default function robots(): MetadataRoute.Robots {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.apartcba.com";
+  const base = getAppUrl();
 
   return {
     rules: {
@@ -13,15 +16,24 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       disallow: [
         "/mi-cuenta",
+        "/favoritos",
         "/checkout",
+        "/reserva/",
+        "/liquidacion/",
         "/dashboard",
         "/superadmin",
-        "/m",
-        "/api",
+        "/m/",
+        "/api/",
+        "/auth/",
+        "/login",
         "/ingresar",
         "/registrarse",
         "/reset-password",
-        // El alta de rentOS no aporta nada al índice y compite con la landing.
+        "/setup",
+        "/sin-acceso",
+        "/cancel-email-change",
+        "/confirm-email-change",
+        // El alta de rentOS no aporta nada al índice y compite con su landing.
         "/rentos/probar",
       ],
     },

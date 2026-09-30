@@ -1,146 +1,151 @@
+import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { createAdminClient } from "@/lib/supabase/server";
-import { computePricing, countNights } from "@/lib/marketplace/pricing";
-import { CheckoutForm } from "@/components/marketplace/checkout-form";
-import { requireGuestSession } from "@/lib/actions/guest-auth";
+import { ArrowLeft } from "lucide-react";
+import { getGuestSession } from "@/lib/actions/guest-auth";
 import { checkUnitAvailability } from "@/lib/marketplace/availability";
-import type { MarketplaceListingDetail, UnitPhoto, UnitPricingRule } from "@/lib/types/database";
+import { cancellationCopy, checkInWindowLabel } from "@/lib/marketplace/display";
+import { todayIsoAR } from "@/lib/marketplace/pricing";
+import { computeSena, depositRuleLabel, restoAlLlegar } from "@/lib/marketplace/sena";
+import { getStorefrontListingById } from "@/lib/marketplace/storefront";
+import { getResolvedWebSettings } from "@/lib/marketplace/web-settings-server";
+import { hoursLabel } from "@/lib/marketplace/web-settings";
+import { CheckoutForm } from "@/components/marketplace/checkout-form";
+import { BrandDot } from "@/components/marketplace/brand/brand-shapes";
+import {
+  availabilityRedirectCode,
+  evaluateCheckoutStay,
+  listingReturnPath,
+} from "@/components/marketplace/reservation/checkout-guard";
+import type { CheckoutSummaryData } from "@/components/marketplace/reservation/checkout-summary";
 
-export const metadata = {
-  title: "Confirmar reserva · ApartCBA",
+// Lee la sesión (opcional) y valida disponibilidad en cada visita.
+export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Pedí tu reserva",
+  robots: { index: false, follow: false },
 };
 
 type Params = Promise<{ unitId: string }>;
-type SearchParams = Promise<Record<string, string | undefined>>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-export default async function CheckoutPage({
-  params,
-  searchParams,
-}: {
-  params: Params;
-  searchParams: SearchParams;
-}) {
-  const { unitId } = await params;
-  const sp = await searchParams;
+/**
+ * Checkout de la web (`/checkout/<unitId>?checkin&checkout&huespedes`). Antes
+ * de mostrar el formulario valida la estadía en el servidor (fechas, mínimo y
+ * máximo de noches, huéspedes, 28+ noches = consulta, disponibilidad): si algo
+ * no da, vuelve a la ficha con el aviso correspondiente. No exige cuenta.
+ */
+export default async function CheckoutPage({ params, searchParams }: { params: Params; searchParams: SearchParams }) {
+  const [{ unitId }, sp] = await Promise.all([params, searchParams]);
 
-  const checkIn = sp.checkin ?? "";
-  const checkOut = sp.checkout ?? "";
-  const guestsCount = sp.huespedes ? parseInt(sp.huespedes, 10) : 1;
+  const listing = await getStorefrontListingById(unitId);
+  if (!listing) notFound();
 
-  if (!checkIn || !checkOut || checkOut <= checkIn) {
-    redirect(`/u/${unitId}`);
-  }
-  if (countNights(checkIn, checkOut) < 1) {
-    redirect(`/u/${unitId}`);
-  }
-
-  // Requiere sesión de huésped (redirige a /ingresar si no hay)
-  const session = await requireGuestSession();
-
-  const admin = createAdminClient();
-  const { data: unit } = await admin
-    .from("units")
-    .select(
-      `
-        *,
-        organization:organizations(id, name, logo_url)
-      `
-    )
-    .eq("id", unitId)
-    .eq("marketplace_published", true)
-    .eq("active", true)
-    .maybeSingle();
-  if (!unit) notFound();
-
-  // Re-validar disponibilidad server-side
-  const avail = await checkUnitAvailability({ unitId, checkInIso: checkIn, checkOutIso: checkOut });
-  if (!avail.available) {
-    redirect(`/u/${unit.slug ?? unitId}?error=${encodeURIComponent(avail.reason ?? "")}`);
-  }
-
-  const [photosRes, rulesRes, amenitiesRes] = await Promise.all([
-    admin
-      .from("unit_photos")
-      .select("*")
-      .eq("unit_id", unitId)
-      .eq("media_type", "image")
-      .order("is_cover", { ascending: false })
-      .order("sort_order"),
-    admin
-      .from("unit_pricing_rules")
-      .select("*")
-      .eq("unit_id", unitId)
-      .eq("active", true),
-    admin
-      .from("unit_marketplace_amenities")
-      .select("amenity_code")
-      .eq("unit_id", unitId),
-  ]);
-
-  const photos = (photosRes.data ?? []) as UnitPhoto[];
-  const rules = (rulesRes.data ?? []) as UnitPricingRule[];
-  const currency = unit.marketplace_currency ?? "ARS";
-
-  const pricing = computePricing({
-    checkInIso: checkIn,
-    checkOutIso: checkOut,
-    basePrice: Number(unit.base_price ?? 0),
-    cleaningFee: unit.cleaning_fee !== null ? Number(unit.cleaning_fee) : null,
-    rules,
+  const stay = evaluateCheckoutStay({
+    checkIn: sp.checkin,
+    checkOut: sp.checkout,
+    guests: sp.huespedes,
+    todayIso: todayIsoAR(),
+    listing,
   });
+  if (!stay.ok) redirect(listingReturnPath(listing.slug, stay.keep, stay.code));
 
-  const listing: MarketplaceListingDetail = {
-    id: unit.id,
-    organization_id: unit.organization_id,
-    slug: unit.slug ?? unit.id,
-    marketplace_title: unit.marketplace_title ?? unit.name,
-    marketplace_property_type: unit.marketplace_property_type ?? "apartamento",
-    neighborhood: unit.neighborhood,
-    city: null,
-    address: unit.address,
-    bedrooms: unit.bedrooms,
-    bathrooms: unit.bathrooms,
-    max_guests: unit.max_guests,
-    size_m2: unit.size_m2 ? Number(unit.size_m2) : null,
-    latitude: unit.latitude !== null ? Number(unit.latitude) : null,
-    longitude: unit.longitude !== null ? Number(unit.longitude) : null,
-    base_price: Number(unit.base_price ?? 0),
-    marketplace_currency: currency,
-    cleaning_fee: unit.cleaning_fee !== null ? Number(unit.cleaning_fee) : null,
-    instant_book: unit.instant_book,
-    default_mode: unit.default_mode ?? "temporario",
-    rating_avg: Number(unit.marketplace_rating_avg ?? 0),
-    rating_count: unit.marketplace_rating_count ?? 0,
-    cover_url: photos[0]?.public_url ?? unit.cover_image_url,
-    photo_urls: photos.map((p) => p.public_url),
-    amenities: (amenitiesRes.data ?? []).map((a) => a.amenity_code),
-    marketplace_description: unit.marketplace_description,
-    house_rules: unit.house_rules,
-    cancellation_policy: (unit.cancellation_policy ?? "flexible") as MarketplaceListingDetail["cancellation_policy"],
-    min_nights: unit.min_nights ?? 1,
-    max_nights: unit.max_nights ?? null,
-    check_in_window_start: unit.check_in_window_start ?? "15:00",
-    check_in_window_end: unit.check_in_window_end ?? "22:00",
-    photos,
-    pricing_rules: rules,
-    organization_name: (unit.organization as { name?: string } | null)?.name ?? "",
-    organization_logo_url: (unit.organization as { logo_url?: string | null } | null)?.logo_url ?? null,
+  const keep = { checkIn: stay.checkIn, checkOut: stay.checkOut, guests: stay.guests };
+  const [availability, settings, session] = await Promise.all([
+    checkUnitAvailability({ unitId: listing.id, checkInIso: stay.checkIn, checkOutIso: stay.checkOut }).catch(
+      (e: unknown) => {
+        console.error("[checkout] disponibilidad:", e);
+        return null;
+      },
+    ),
+    getResolvedWebSettings(listing.organization_id),
+    getGuestSession(),
+  ]);
+  if (availability && !availability.available) {
+    // Un error de lectura no frena el checkout: submitCheckout vuelve a chequear.
+    const code = availabilityRedirectCode(availability.reason);
+    if (code) redirect(listingReturnPath(listing.slug, keep, code));
+  }
+
+  const currency = listing.marketplace_currency || "ARS";
+  const { pricing } = stay;
+  const sena = computeSena({
+    policy: settings.deposit,
+    nights: stay.nights,
+    subtotal: pricing.subtotal,
+    total: pricing.total,
+    currency,
+  });
+  const prices = new Set(pricing.nights.map((n) => n.price));
+
+  const summary: CheckoutSummaryData = {
+    unit: {
+      id: listing.id,
+      slug: listing.slug,
+      title: listing.display_title,
+      tagline: listing.display_tagline,
+      hood: listing.hood,
+      summaryLine: listing.summary_line,
+      coverUrl: listing.cover_url,
+      instant: listing.instant_book,
+    },
+    stay: { checkIn: stay.checkIn, checkOut: stay.checkOut, nights: stay.nights, guests: stay.guests },
+    money: {
+      currency,
+      subtotal: pricing.subtotal,
+      cleaningFee: pricing.cleaning_fee,
+      total: pricing.total,
+      avgNightly: pricing.avg_price_per_night,
+      variableNightly: prices.size > 1,
+      sena,
+      senaRuleLabel: sena ? depositRuleLabel(settings.deposit) : null,
+      resto: restoAlLlegar(pricing.total, sena),
+    },
+    changeDatesHref: listingReturnPath(listing.slug, keep, null),
   };
 
+  const profile = session?.profile ?? null;
+  const guest = session
+    ? {
+        fullName: profile?.full_name ?? "",
+        email: session.email,
+        phone: profile?.phone ?? "",
+        document: profile?.document_number ?? "",
+      }
+    : null;
+
+  const selfPath = `/checkout/${listing.id}?checkin=${stay.checkIn}&checkout=${stay.checkOut}&huespedes=${stay.guests}`;
+  const instant = listing.instant_book;
+
   return (
-    <div className="max-w-[1200px] mx-auto px-4 md:px-8 py-8 md:py-12">
-      <h1 className="text-3xl md:text-4xl font-semibold text-neutral-900 mb-8 md:mb-12">
-        Confirmá y reservá
-      </h1>
+    <div className="mx-auto w-full max-w-6xl px-4 pb-40 pt-6 sm:px-6 sm:pt-10 lg:px-8 lg:pb-24">
+      <Link
+        href={summary.changeDatesHref}
+        className="-ml-2 mb-4 inline-flex min-h-11 items-center gap-1.5 rounded-full px-2 text-sm font-semibold text-forest-700 outline-none hover:bg-forest-700/[0.06] focus-visible:ring-[3px] focus-visible:ring-forest-500/30"
+      >
+        <ArrowLeft className="size-4" aria-hidden />
+        Volver a {listing.display_title}
+      </Link>
+      <header className="mb-8 max-w-3xl sm:mb-10">
+        <h1 className="font-apart text-[2rem] font-extrabold leading-[1.05] tracking-[-0.025em] text-forest-700 text-balance sm:text-[2.75rem]">
+          {instant ? "Confirmá tu reserva" : "Pedí tu reserva"}
+          <BrandDot />
+        </h1>
+        <p className="mt-3 font-apart-serif text-lg italic leading-snug text-forest-600 sm:text-xl">
+          {instant
+            ? "Queda confirmada al instante. Todavía no pagás nada."
+            : `Te confirmamos en menos de ${hoursLabel(settings.responseHours)}. Todavía no pagás nada.`}
+        </p>
+      </header>
       <CheckoutForm
-        listing={listing}
-        guest={session.profile}
-        guestEmail={session.email}
-        pricing={pricing}
-        currency={currency}
-        checkIn={checkIn}
-        checkOut={checkOut}
-        guestsCount={guestsCount}
+        summary={summary}
+        responseHours={settings.responseHours}
+        houseRules={listing.house_rules}
+        checkInWindow={checkInWindowLabel(listing.check_in_window_start, listing.check_in_window_end)}
+        cancellation={cancellationCopy(listing.cancellation_policy, settings.cancellationText)}
+        guest={guest}
+        signInHref={`/ingresar?redirect=${encodeURIComponent(selfPath)}`}
       />
     </div>
   );

@@ -66,9 +66,13 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             richColors
             position="bottom-right"
             closeButton
+            containerAriaLabel="Notificaciones"
             toastOptions={{
+              closeButtonAriaLabel: "Cerrar aviso",
               style: {
-                fontFamily: "var(--font-geist-sans)",
+                // La web pública define --toast-font (tipografía de la marca);
+                // el panel no, y sigue con Geist.
+                fontFamily: "var(--toast-font, var(--font-geist-sans))",
               },
             }}
           />

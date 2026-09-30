@@ -1,33 +1,33 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import { Logo } from "@/components/brand/logo";
 import { GuestSignUpForm } from "@/components/marketplace/auth-forms";
+import { AuthShell } from "@/components/marketplace/shell/auth-shell";
+import { DEFAULT_AFTER_LOGIN, safeRedirectPath } from "@/components/marketplace/shell/safe-redirect";
 import { getGuestSession } from "@/lib/actions/guest-auth";
 
-export const metadata = {
-  title: "Crear cuenta · ApartCBA",
+export const metadata: Metadata = {
+  title: "Crear cuenta",
+  description: "Creá tu cuenta de apart para seguir tus reservas y guardar tus favoritos.",
+  robots: { index: false, follow: true },
 };
 
-export default async function RegistrarsePage() {
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+function first(value: string | string[] | undefined): string | null {
+  return (Array.isArray(value) ? value[0] : value) ?? null;
+}
+
+export default async function RegistrarsePage({ searchParams }: { searchParams: SearchParams }) {
+  const sp = await searchParams;
+  const redirectParam = safeRedirectPath(first(sp.redirect), "") || null;
+  const redirectTo = redirectParam ?? DEFAULT_AFTER_LOGIN;
+
   const session = await getGuestSession();
-  if (session) redirect("/mi-cuenta");
+  if (session) redirect(redirectTo);
 
   return (
-    <div className="max-w-md mx-auto px-4 py-12 md:py-20">
-      <div className="text-center mb-8">
-        <Link
-          href="/"
-          aria-label="ApartCBA — Inicio"
-          className="inline-flex items-center justify-center transition-opacity hover:opacity-80"
-        >
-          <Logo size="lg" showWordmark={false} variant="dark" brand="apart" />
-        </Link>
-        <h2 className="text-2xl font-semibold mt-6 text-neutral-900 tracking-[-0.01em]">Empezá a explorar</h2>
-        <p className="text-sm text-neutral-500 mt-2">
-          Creá tu cuenta para reservar tu próxima estadía.
-        </p>
-      </div>
-      <GuestSignUpForm />
-    </div>
+    <AuthShell quote="Sentite como en casa.">
+      <GuestSignUpForm redirectTo={redirectTo} redirectParam={redirectParam} />
+    </AuthShell>
   );
 }

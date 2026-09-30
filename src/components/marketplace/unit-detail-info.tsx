@@ -1,327 +1,81 @@
-import {
-  Accessibility,
-  AirVent,
-  Armchair,
-  ArrowUpDown,
-  Baby,
-  Bath,
-  Bed,
-  Building,
-  CalendarCheck,
-  Camera,
-  Car,
-  Check,
-  ChefHat,
-  Coffee,
-  Droplets,
-  Flame,
-  Home,
-  Laptop,
-  Lock,
-  MapPin,
-  Maximize2,
-  Mountain,
-  PawPrint,
-  PlayCircle,
-  Shield,
-  ShieldCheck,
-  Shirt,
-  Siren,
-  Smile,
-  Sparkles,
-  Star,
-  TreePalm,
-  Trees,
-  Tv,
-  Users,
-  WashingMachine,
-  Waves,
-  Wifi,
-  Wind,
-  Zap,
-  type LucideIcon,
-} from "lucide-react";
-import type {
-  MarketplaceAmenity,
-  MarketplaceListingDetail,
-  Review,
-} from "@/lib/types/database";
+import type { StorefrontListingDetail } from "@/lib/marketplace/contracts";
+import type { Review } from "@/lib/types/database";
+import { AmenitiesBlock, type AmenityItem } from "@/components/marketplace/listing/amenities-block";
+import { DescriptionBlock } from "@/components/marketplace/listing/description-block";
+import { DetailSection } from "@/components/marketplace/listing/detail-section";
+import { BookingModeNote } from "@/components/marketplace/listing/booking-mode-note";
+import { KeyFacts } from "@/components/marketplace/listing/key-facts";
+import { LocationBlock } from "@/components/marketplace/listing/location-block";
+import { PaymentSteps } from "@/components/marketplace/listing/payment-steps";
+import { ReviewsBlock } from "@/components/marketplace/listing/reviews-block";
+import { RulesBlock } from "@/components/marketplace/listing/rules-block";
+import { TeamCard } from "@/components/marketplace/listing/team-card";
 
-// Mapa explícito de íconos del catálogo: marketplace_amenities.icon guarda el
-// nombre lucide en PascalCase (seed en migración 016). `import * as Icons`
-// impide el tree-shaking de lucide-react, así que registramos solo los usados.
-const AMENITY_ICON_MAP: Record<string, LucideIcon> = {
-  Accessibility,
-  AirVent,
-  Armchair,
-  ArrowUpDown,
-  Baby,
-  Bath,
-  Bed,
-  Building,
-  Camera,
-  Car,
-  ChefHat,
-  Coffee,
-  Droplets,
-  Flame,
-  Home,
-  Laptop,
-  Lock,
-  Mountain,
-  PawPrint,
-  PlayCircle,
-  Shield,
-  Shirt,
-  Siren,
-  Smile,
-  Sparkles,
-  TreePalm,
-  Trees,
-  Tv,
-  WashingMachine,
-  Waves,
-  Wifi,
-  Wind,
-};
-
-function getIcon(name: string): LucideIcon {
-  return AMENITY_ICON_MAP[name] ?? Check;
-}
-
-type Props = {
-  listing: MarketplaceListingDetail;
-  amenitiesCatalog: MarketplaceAmenity[];
-  reviews: Review[];
-};
-
-export function UnitDetailInfo({ listing, amenitiesCatalog, reviews }: Props) {
-  const amenitiesByCode = new Map(amenitiesCatalog.map((a) => [a.code, a]));
-  const selectedAmenities = listing.amenities
-    .map((c) => amenitiesByCode.get(c))
-    .filter((a): a is MarketplaceAmenity => Boolean(a));
-
-  return (
-    <div className="space-y-10 md:space-y-12">
-      {/* Header */}
-      <header>
-        <h1 className="text-2xl md:text-3xl font-semibold text-neutral-900 leading-tight">
-          {listing.marketplace_title}
-        </h1>
-        <div className="mt-2 text-sm text-neutral-600 flex flex-wrap items-center gap-x-1 gap-y-1">
-          {listing.rating_count > 0 ? (
-            <>
-              <Star size={14} className="fill-neutral-900 stroke-neutral-900" />
-              <span className="font-medium text-neutral-900">{listing.rating_avg.toFixed(2)}</span>
-              <span>·</span>
-              <span className="underline underline-offset-2">
-                {listing.rating_count} {listing.rating_count === 1 ? "reseña" : "reseñas"}
-              </span>
-            </>
-          ) : (
-            <span className="text-neutral-500">Sin reseñas todavía</span>
-          )}
-          {(listing.neighborhood || listing.address) ? (
-            <>
-              <span>·</span>
-              <MapPin size={12} />
-              <span>{listing.neighborhood ?? listing.address}</span>
-            </>
-          ) : null}
-        </div>
-      </header>
-
-      {/* Quick stats */}
-      <section className="pb-8 border-b border-neutral-200">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-neutral-900">
-              {capitalize(listing.marketplace_property_type)} en {listing.organization_name}
-            </h2>
-            <div className="mt-2 flex items-center gap-3 text-sm text-neutral-700 flex-wrap">
-              {listing.max_guests ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Users size={14} /> {listing.max_guests} huéspedes
-                </span>
-              ) : null}
-              {listing.bedrooms !== null ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Bed size={14} /> {listing.bedrooms} {listing.bedrooms === 1 ? "ambiente" : "ambientes"}
-                </span>
-              ) : null}
-              {listing.bathrooms !== null ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Bath size={14} /> {listing.bathrooms} {listing.bathrooms === 1 ? "baño" : "baños"}
-                </span>
-              ) : null}
-              {listing.size_m2 !== null ? (
-                <span className="inline-flex items-center gap-1.5">
-                  <Maximize2 size={14} /> {listing.size_m2} m²
-                </span>
-              ) : null}
-            </div>
-          </div>
-        </div>
-
-        {/* Highlights */}
-        <div className="mt-6 space-y-4">
-          {listing.instant_book ? (
-            <Highlight
-              icon={<Zap size={20} className="text-yellow-500 fill-yellow-500" />}
-              title="Reserva al toque"
-              body="Confirmación inmediata, sin esperar al anfitrión."
-            />
-          ) : (
-            <Highlight
-              icon={<CalendarCheck size={20} className="text-neutral-700" />}
-              title="Solicitar y confirmar"
-              body="El anfitrión revisa y aprueba tu solicitud en menos de 48 horas."
-            />
-          )}
-          <Highlight
-            icon={<ShieldCheck size={20} className="text-emerald-600" />}
-            title={`Cancelación ${listing.cancellation_policy}`}
-            body={cancelLabel(listing.cancellation_policy)}
-          />
-        </div>
-      </section>
-
-      {/* Description */}
-      {listing.marketplace_description ? (
-        <section className="pb-8 border-b border-neutral-200">
-          <h3 className="text-xl font-semibold text-neutral-900 mb-3">Acerca de este lugar</h3>
-          <p className="text-neutral-700 whitespace-pre-wrap leading-relaxed">
-            {listing.marketplace_description}
-          </p>
-        </section>
-      ) : null}
-
-      {/* Amenities */}
-      {selectedAmenities.length > 0 ? (
-        <section className="pb-8 border-b border-neutral-200">
-          <h3 className="text-xl font-semibold text-neutral-900 mb-5">Servicios y comodidades</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
-            {selectedAmenities.map((a) => {
-              const Icon = getIcon(a.icon);
-              return (
-                <div key={a.code} className="flex items-center gap-3 py-2">
-                  <Icon size={20} className="text-neutral-700 shrink-0" />
-                  <span className="text-sm text-neutral-900">{a.name}</span>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      ) : null}
-
-      {/* House rules */}
-      {listing.house_rules ? (
-        <section className="pb-8 border-b border-neutral-200">
-          <h3 className="text-xl font-semibold text-neutral-900 mb-3">Reglas de la casa</h3>
-          <p className="text-neutral-700 whitespace-pre-wrap leading-relaxed">
-            {listing.house_rules}
-          </p>
-        </section>
-      ) : null}
-
-      {/* Reviews */}
-      <section className="pb-8 border-b border-neutral-200">
-        <div className="flex items-baseline gap-2 mb-5">
-          <h3 className="text-xl font-semibold text-neutral-900">
-            {listing.rating_count > 0 ? (
-              <>
-                <Star size={18} className="inline fill-neutral-900 stroke-neutral-900 -mt-0.5" />{" "}
-                {listing.rating_avg.toFixed(2)} · {listing.rating_count}{" "}
-                {listing.rating_count === 1 ? "reseña" : "reseñas"}
-              </>
-            ) : (
-              "Aún no hay reseñas"
-            )}
-          </h3>
-        </div>
-        {reviews.length === 0 ? (
-          <p className="text-sm text-neutral-500">
-            Sé el primero en compartir tu experiencia en este lugar.
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-            {reviews.slice(0, 6).map((r) => (
-              <article key={r.id}>
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="h-10 w-10 rounded-full bg-sage-100 grid place-items-center text-sage-700 font-semibold text-sm">
-                    {r.guest_name_snapshot[0]?.toUpperCase()}
-                  </div>
-                  <div>
-                    <div className="font-medium text-sm">{r.guest_name_snapshot}</div>
-                    <div className="text-xs text-neutral-500">
-                      {new Date(r.created_at).toLocaleDateString("es-AR", {
-                        year: "numeric",
-                        month: "long",
-                      })}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-0.5 mb-1.5">
-                  {Array.from({ length: 5 }).map((_, i) => (
-                    <Star
-                      key={i}
-                      size={12}
-                      className={i < r.rating ? "fill-neutral-900 stroke-neutral-900" : "stroke-neutral-300"}
-                    />
-                  ))}
-                </div>
-                <p className="text-sm text-neutral-700 leading-relaxed line-clamp-6">
-                  {r.comment ?? "Sin comentario"}
-                </p>
-                {r.host_response ? (
-                  <div className="mt-3 pl-4 border-l-2 border-neutral-200">
-                    <div className="text-xs font-medium text-neutral-900 mb-1">
-                      Respuesta del anfitrión
-                    </div>
-                    <p className="text-xs text-neutral-600 line-clamp-4">{r.host_response}</p>
-                  </div>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function Highlight({
-  icon,
-  title,
-  body,
+/**
+ * Columna izquierda de la ficha: lo importante, cómo se reserva, descripción,
+ * comodidades, cómo se paga, reglas y cancelación, ubicación, el equipo y las
+ * reseñas (sólo si hay). Server component: las partes interactivas (Leer más,
+ * comodidades, pasos con la seña, WhatsApp) son clientes y leen el estado de
+ * la estadía de ListingStayProvider.
+ */
+export function UnitDetailInfo({
+  listing,
+  amenities,
+  reviews,
+  settings,
 }: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
+  listing: StorefrontListingDetail;
+  amenities: AmenityItem[];
+  reviews: Review[];
+  settings: { responseHours: number; cancellationText: string | null };
 }) {
+  const description = listing.marketplace_description?.trim() ? listing.marketplace_description : null;
   return (
-    <div className="flex items-start gap-3">
-      <div className="mt-0.5">{icon}</div>
-      <div>
-        <div className="font-medium text-neutral-900">{title}</div>
-        <div className="text-sm text-neutral-600">{body}</div>
+    <div className="space-y-8 md:space-y-10">
+      <DetailSection id="lo-importante" title="Lo importante" className="border-t-0 pt-0 md:pt-0">
+        <KeyFacts listing={listing} />
+        <div className="mt-7">
+          <BookingModeNote />
+        </div>
+      </DetailSection>
+
+      {description ? (
+        <DetailSection id="sobre-este-lugar" title="Sobre este lugar">
+          <DescriptionBlock text={description} />
+        </DetailSection>
+      ) : null}
+
+      {amenities.length > 0 ? (
+        <DetailSection id="comodidades" title="Comodidades">
+          <AmenitiesBlock amenities={amenities} />
+        </DetailSection>
+      ) : null}
+
+      <DetailSection id="como-se-paga" title="Cómo se paga" accent="Llegar debe sentirse simple.">
+        <PaymentSteps />
+      </DetailSection>
+
+      <DetailSection id="reglas" title="Reglas y cancelación" accent="Cuidemos el lugar.">
+        <RulesBlock
+          houseRules={listing.house_rules}
+          policy={listing.cancellation_policy}
+          cancellationText={settings.cancellationText}
+        />
+      </DetailSection>
+
+      <DetailSection id="ubicacion" title="Dónde vas a estar">
+        <LocationBlock latitude={listing.latitude} longitude={listing.longitude} hood={listing.hood} city={listing.city} />
+      </DetailSection>
+
+      <div className="border-t border-cream-300 pt-8 md:pt-10">
+        <TeamCard />
       </div>
+
+      {reviews.length > 0 ? (
+        <DetailSection id="resenas" title="Reseñas">
+          <ReviewsBlock reviews={reviews} />
+        </DetailSection>
+      ) : null}
     </div>
   );
-}
-
-function capitalize(s: string) {
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-function cancelLabel(p: MarketplaceListingDetail["cancellation_policy"]) {
-  switch (p) {
-    case "flexible":
-      return "Cancelá gratis hasta 24 hs antes del check-in.";
-    case "moderada":
-      return "Cancelación gratuita hasta 5 días antes. Después se cobra el 50%.";
-    case "estricta":
-      return "Cancelación con cargo total. Asegurate de tus fechas.";
-    default:
-      return "";
-  }
 }

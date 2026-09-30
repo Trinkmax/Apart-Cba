@@ -2,231 +2,94 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Heart, LogOut, Search, User } from "lucide-react";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Logo } from "@/components/brand/logo";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { CompactSearchBar } from "./search-bar";
-import { CurrencySwitcher } from "./currency-switcher";
-import { signOutGuest } from "@/lib/actions/guest-auth";
-import type { GuestSession } from "@/lib/actions/guest-auth";
+import { Heart } from "lucide-react";
+import { ApartLogo } from "@/components/marketplace/brand/apart-logo";
+import { apartButtonVariants } from "@/components/marketplace/brand/apart-button";
+import { AccountMenu } from "@/components/marketplace/shell/account-menu";
+import { EMPTY_SHELL_CONTACT, type ShellContact } from "@/components/marketplace/shell/contact";
+import { MainNav } from "@/components/marketplace/shell/main-nav";
+import { MobileMenu } from "@/components/marketplace/shell/mobile-menu";
+import { useGuestIdentity } from "@/components/marketplace/shell/use-guest-identity";
+import { WhatsAppIcon } from "@/components/marketplace/shell/whatsapp-icon";
 import { cn } from "@/lib/utils";
-import { useT } from "@/lib/i18n/use-t";
 
-type Props = {
-  session: GuestSession | null;
-};
-
-export function SiteHeader({ session }: Props) {
-  const pathname = usePathname();
-  const t = useT();
+/**
+ * Header de la web (cliente, sticky). No recibe sesión: el layout es estático
+ * y la cuenta se resuelve en el navegador (`useGuestIdentity`). El contacto sí
+ * llega del server (layout → getSiteContact, sin cookies).
+ *
+ * Alto: h-16 / lg:h-[72px]. Las barras sticky de otras páginas se pegan debajo
+ * con `top-16 lg:top-[72px]`.
+ */
+export function SiteHeader({ contact = EMPTY_SHELL_CONTACT }: { contact?: ShellContact }) {
+  const identity = useGuestIdentity();
   const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 80);
-    const tick = setTimeout(onScroll, 0);
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    // Estado inicial (p. ej. al volver atrás con la página scrolleada), fuera del render.
+    const frame = requestAnimationFrame(onScroll);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => {
-      clearTimeout(tick);
+      cancelAnimationFrame(frame);
       window.removeEventListener("scroll", onScroll);
     };
   }, []);
 
-  // Sólo el home tiene hero a pantalla completa con foto de fondo. Las demás
-  // páginas siempre muestran el header sólido.
-  const isHome = pathname === "/";
-  const hero = isHome && !scrolled;
-
-  const initials = session
-    ? session.profile.full_name
-        .split(" ")
-        .map((w) => w[0])
-        .slice(0, 2)
-        .join("")
-        .toUpperCase()
-    : null;
-
   return (
     <header
       className={cn(
-        "sticky top-0 z-40 transition-all duration-300",
-        hero
-          ? "bg-gradient-to-b from-black/35 via-black/15 to-transparent border-b border-transparent"
-          : "bg-white/95 backdrop-blur-md border-b border-neutral-200 shadow-sm"
+        "sticky top-0 z-40 border-b transition-[background-color,border-color,backdrop-filter] duration-300",
+        scrolled
+          ? "border-cream-300 bg-cream/90 backdrop-blur-md supports-[backdrop-filter]:bg-cream/80"
+          : "border-transparent bg-cream",
       )}
     >
-      <div className="max-w-[1400px] mx-auto px-4 md:px-8 h-20 grid grid-cols-[auto_1fr_auto] md:grid-cols-[1fr_auto_1fr] items-center gap-4 md:gap-8">
+      <div className="mx-auto flex h-16 max-w-7xl items-center gap-2 px-4 sm:px-6 lg:h-[72px] lg:gap-6 lg:px-8">
         <Link
           href="/"
-          aria-label="ApartCBA — Inicio"
-          className="flex items-center transition-opacity hover:opacity-80 justify-self-start"
+          aria-label="apart, ir al inicio"
+          className="-ml-1 shrink-0 rounded-lg p-1 outline-none transition-opacity hover:opacity-85 focus-visible:ring-[3px] focus-visible:ring-forest-500/40"
         >
-          <span className="md:hidden">
-            <Logo size="sm" variant={hero ? "light" : "dark"} brand="apart" />
-          </span>
-          <span className="hidden md:flex">
-            <Logo size="lg" variant={hero ? "light" : "dark"} brand="apart" />
-          </span>
+          <ApartLogo variant="lockup" className="h-7 text-forest-700 lg:h-8" title={null} />
         </Link>
 
-        {/* Center — compact search bar SOLO cuando no estamos sobre el hero */}
-        <div className="hidden md:block w-full max-w-xl justify-self-center">
-          {hero ? null : <CompactSearchBar />}
-        </div>
+        <nav aria-label="Principal" className="hidden lg:ml-4 lg:block">
+          <MainNav variant="desktop" />
+        </nav>
 
-        {/* Right — currency + auth area */}
-        <div className="flex items-center gap-1.5 md:gap-2 justify-self-end">
-          {/* Mobile search button cuando no estamos en hero */}
-          {!hero ? (
-            <Link
-              href="/buscar"
-              className="md:hidden inline-flex items-center justify-center h-10 w-10 rounded-full border border-neutral-200 text-neutral-700"
-              aria-label="Buscar"
+        <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
+          {contact.whatsappUrl ? (
+            <a
+              href={contact.whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Escribinos por WhatsApp"
+              className={cn(
+                apartButtonVariants({ variant: "ghost", size: "sm" }),
+                "hidden h-11 min-w-11 px-3 lg:inline-flex xl:px-4",
+              )}
             >
-              <Search size={18} />
-            </Link>
+              <WhatsAppIcon className="size-[1.2rem]" />
+              <span className="hidden xl:inline">Escribinos</span>
+            </a>
           ) : null}
 
-          <CurrencySwitcher variant={hero ? "hero" : "solid"} />
+          <Link
+            href="/favoritos"
+            aria-label="Favoritos"
+            className={cn(apartButtonVariants({ variant: "ghost", size: "icon" }), "text-forest-700")}
+          >
+            <Heart className="size-[1.3rem]" aria-hidden />
+          </Link>
 
-          {session ? (
-            <>
-              {!hero ? (
-                <Link
-                  href="/favoritos"
-                  className="hidden md:inline-flex items-center gap-1.5 text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
-                >
-                  <Heart size={16} />
-                  {t("header.favorites")}
-                </Link>
-              ) : null}
-              <UserAvatarMenu session={session} variant={hero ? "hero" : "solid"} initials={initials!} />
-            </>
-          ) : (
-            <AuthCtas variant={hero ? "hero" : "solid"} />
-          )}
+          <div className="hidden lg:ml-1 lg:block">
+            <AccountMenu identity={identity} />
+          </div>
+
+          <MobileMenu identity={identity} contact={contact} className="lg:hidden" />
         </div>
       </div>
     </header>
   );
 }
-
-function AuthCtas({ variant }: { variant: "hero" | "solid" }) {
-  const t = useT();
-  if (variant === "hero") {
-    return (
-      <>
-        <Link
-          href="/ingresar"
-          className="hidden sm:inline-flex items-center text-sm font-medium text-white hover:text-sage-100 px-3 py-2"
-        >
-          {t("header.signin")}
-        </Link>
-        <Link
-          href="/registrarse"
-          className="inline-flex items-center justify-center text-sm font-semibold rounded-full bg-white text-neutral-900 px-4 h-10 hover:bg-sage-50 transition-colors shadow-sm"
-        >
-          {t("header.signup")}
-        </Link>
-      </>
-    );
-  }
-  return (
-    <>
-      <Link
-        href="/ingresar"
-        className="hidden sm:inline-flex items-center text-sm font-medium text-neutral-700 hover:text-neutral-900 px-3 py-2"
-      >
-        {t("header.signin")}
-      </Link>
-      <Link
-        href="/registrarse"
-        className="inline-flex items-center justify-center text-sm font-semibold rounded-full bg-sage-600 text-white px-4 h-10 hover:bg-sage-700 transition-colors shadow-sm"
-      >
-        {t("header.signup")}
-      </Link>
-    </>
-  );
-}
-
-function UserAvatarMenu({
-  session,
-  variant,
-  initials,
-}: {
-  session: GuestSession;
-  variant: "hero" | "solid";
-  initials: string;
-}) {
-  const t = useT();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          className={cn(
-            "flex items-center gap-2 rounded-full pl-1.5 pr-1.5 py-1 transition-all border",
-            variant === "hero"
-              ? "border-white/30 bg-white/10 hover:bg-white/20 backdrop-blur-md"
-              : "border-neutral-200 bg-white hover:border-neutral-300 hover:shadow-sm"
-          )}
-          aria-label={t("header.account")}
-        >
-          <Avatar className="h-8 w-8">
-            {session.profile.avatar_url ? (
-              <AvatarImage src={session.profile.avatar_url} alt={session.profile.full_name} />
-            ) : null}
-            <AvatarFallback className="bg-neutral-900 text-white text-xs font-medium">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={8} className="w-56">
-        <div className="px-3 py-2 text-xs text-neutral-500">
-          {t("header.signed_in_as")}
-          <div className="text-sm font-medium text-neutral-900 truncate">
-            {session.profile.full_name}
-          </div>
-        </div>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <Link href="/mi-cuenta">{t("header.account")}</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href="/mi-cuenta">{t("header.bookings")}</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href="/favoritos">{t("header.favorites")}</Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link href="/mi-cuenta/perfil">{t("header.profile")}</Link>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <form action={signOutGuest}>
-          <button
-            type="submit"
-            className="w-full text-left px-2 py-1.5 text-sm hover:bg-neutral-50 flex items-center gap-2 rounded-sm"
-          >
-            <LogOut size={14} />
-            {t("header.signout")}
-          </button>
-        </form>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <Link href="/login" className="text-xs text-neutral-500">
-            {t("header.host_panel")}
-          </Link>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-void User; // keep import parity

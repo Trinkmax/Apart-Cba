@@ -5,6 +5,7 @@ import { runWorkflow } from "@/lib/crm/workflows/executor";
 import { dispatchEvent } from "@/lib/crm/workflows/dispatcher";
 import { getProviderForChannel } from "@/lib/crm/providers/factory";
 import { getTranscriberForOrg } from "@/lib/crm/ai/factory";
+import { sweepWebRequests } from "@/lib/marketplace/request-sweeper";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +55,19 @@ export async function POST(req: Request) {
 
   // Default: dispatcher loop (cada 5min de pg_cron o immediate desde Server Action)
   const result = await runDispatcherTick();
-  return NextResponse.json({ ok: true, ...result });
+
+  // Pedidos de la web: vencer, avisar al huésped y recordar al equipo. Sólo en
+  // el tick de pg_cron (no en los disparos inmediatos de las acciones). Nunca
+  // tira el cron: el barrido atrapa sus propios errores.
+  let webRequests: Awaited<ReturnType<typeof sweepWebRequests>> | null = null;
+  if (url.searchParams.get("immediate") !== "1") {
+    try {
+      webRequests = await sweepWebRequests();
+    } catch (err) {
+      console.error("[from-pg/web-requests]", err);
+    }
+  }
+  return NextResponse.json({ ok: true, ...result, web_requests: webRequests });
 }
 
 export async function GET(req: Request) {

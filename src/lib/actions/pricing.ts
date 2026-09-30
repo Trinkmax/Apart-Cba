@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import { priceForNight, addDaysIso, computePricing } from "@/lib/marketplace/pricing";
+import { revalidateStorefront } from "@/lib/marketplace/storefront";
 import type { UnitPricingRule } from "@/lib/types/database";
 
 export async function listActiveRules(unitId: string): Promise<UnitPricingRule[]> {
@@ -33,17 +34,27 @@ export async function updateUnitBasePrice(input: z.infer<typeof basePriceSchema>
   const { organization } = await getCurrentOrg();
   const parsed = basePriceSchema.parse(input);
   const admin = createAdminClient();
-  const { error } = await admin
+  const { data, error } = await admin
     .from("units")
     .update({
       base_price: parsed.base_price,
       marketplace_currency: parsed.marketplace_currency,
     })
     .eq("id", parsed.unit_id)
-    .eq("organization_id", organization.id);
+    .eq("organization_id", organization.id)
+    .select("slug, marketplace_published")
+    .maybeSingle();
   if (error) throw new Error(error.message);
   revalidatePath(`/dashboard/unidades/${parsed.unit_id}`);
   revalidatePath(`/dashboard/unidades/${parsed.unit_id}/precios`);
+  // El precio por noche y la moneda se ven en la web pública: catálogo
+  // cacheado (tag) + las páginas que lo muestran.
+  if (data?.marketplace_published) {
+    revalidateStorefront();
+    revalidatePath("/");
+    revalidatePath("/buscar");
+    if (data.slug) revalidatePath(`/u/${data.slug}`);
+  }
 }
 
 export interface CalendarDayPrice {

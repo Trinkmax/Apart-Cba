@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
@@ -43,6 +44,7 @@ import {
   type CommissionBase,
 } from "@/lib/finance/booking-economics";
 import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
+import { secureDepositIfCovered } from "@/lib/marketplace/deposit-events";
 
 // Defensa contra fechas con años absurdos (ej. "0004-05-08" tipeado por error
 // en el form). Aceptamos sólo años entre 2020 y 2100 — más allá es claramente
@@ -1702,7 +1704,7 @@ export async function addBookingPayment(
   amount: number,
   accountId: string
 ): Promise<Booking> {
-  await requireSession();
+  const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "payments", "create")) {
     throw new Error("No tenés permisos para registrar pagos");
@@ -1752,6 +1754,14 @@ export async function addBookingPayment(
   // El inicio y Resultados muestran lo cobrado del mes.
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/resultados");
+  // Reserva de la web: si con este cobro la seña quedó cubierta, se cierran los
+  // avisos del huésped y se le avisa "Reserva asegurada" (una sola vez). Corre
+  // después de responder para no demorar la carga del cobro.
+  after(() =>
+    secureDepositIfCovered({ bookingId, organizationId: organization.id, actorUserId: session.userId }).then(
+      () => undefined,
+    ),
+  );
   return data as Booking;
 }
 

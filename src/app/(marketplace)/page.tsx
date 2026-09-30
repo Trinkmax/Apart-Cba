@@ -1,337 +1,98 @@
-import Image from "next/image";
-import Link from "next/link";
-import { Suspense } from "react";
-import type { Viewport } from "next";
-import { ArrowRight, BadgeCheck, MessageCircle, Sparkles } from "lucide-react";
-import { ModeTabs } from "@/components/marketplace/mode-tabs";
-import { HomeHero } from "@/components/marketplace/home-hero";
-import { HomeInspiration } from "@/components/marketplace/home-inspiration";
-import { HomeHowItWorks } from "@/components/marketplace/home-how-it-works";
-import { HomeHostCta } from "@/components/marketplace/home-host-cta";
-import { ListingCard } from "@/components/marketplace/listing-card";
-import { Reveal } from "@/components/marketplace/reveal";
-import { getFeaturedListings } from "@/lib/actions/marketplace";
-import { listWishlistUnitIds } from "@/lib/actions/wishlists";
-import { getServerT } from "@/lib/i18n/server";
-import type { TKey } from "@/lib/i18n/dict";
+import type { Metadata } from "next";
+import { HomeFaq } from "@/components/marketplace/home/home-faq";
+import { HomeFeatured } from "@/components/marketplace/home/home-featured";
+import { HomeHero } from "@/components/marketplace/home/home-hero";
+import { HomeHoods } from "@/components/marketplace/home/home-hoods";
+import { HomeMonthly } from "@/components/marketplace/home/home-monthly";
+import { HomeOwnersBand } from "@/components/marketplace/home/home-owners-band";
+import { HomePillars } from "@/components/marketplace/home/home-pillars";
+import { HomeProcess } from "@/components/marketplace/home/home-process";
+import { HomeStory } from "@/components/marketplace/home/home-story";
+import { homeFaqItems, processFacts } from "@/components/marketplace/home/faq-content";
+import {
+  catalogStats,
+  hoodTiles,
+  pickFeaturedListings,
+  unitsInHoodsLabel,
+} from "@/components/marketplace/home/home-data";
+import { absoluteUrl, getAppUrl } from "@/lib/app-url";
+import { whatsappLink } from "@/lib/marketplace/display";
+import { getStorefrontCatalog } from "@/lib/marketplace/storefront";
+import { resolveWebSettings } from "@/lib/marketplace/web-settings";
+import { consultMailto } from "@/lib/marketplace/widget-quote";
+import { getResolvedWebSettings, getSiteContact } from "@/lib/marketplace/web-settings-server";
 
-// Theme-color override solo para el home: la franja Safari arriba/abajo
-// matchea el wash oscuro del hero en vez de mostrar bg-blanco del layout.
-export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#1a201a" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
-  ],
+/**
+ * Home de la web pública. ISR: se arma en el server cada 5 minutos a partir
+ * del catálogo cacheado; no lee cookies, headers ni searchParams (el estado
+ * del huésped lo resuelve el header en el cliente).
+ */
+export const revalidate = 300;
+
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
 };
 
 export default async function MarketplaceHome() {
+  const [catalog, contact] = await Promise.all([getStorefrontCatalog(), getSiteContact()]);
+  const settings = contact.organizationId
+    ? await getResolvedWebSettings(contact.organizationId)
+    : resolveWebSettings(null);
+
+  const stats = catalogStats(catalog);
+  const facts = processFacts(
+    settings,
+    whatsappLink(contact.whatsappNumber, "Hola, tengo una consulta sobre cómo reservar."),
+  );
+  const monthlyText = "Hola, quiero consultar por una estadía por mes en Córdoba.";
+  const monthlyWhatsapp = whatsappLink(contact.whatsappNumber, monthlyText);
+  // Sin WhatsApp configurado, las consultas van por mail (nunca un botón sin destino).
+  const monthlyMailto = consultMailto(contact.publicEmail, "Consulta por una estadía por mes", monthlyText);
+  const faqMailto = consultMailto(
+    contact.publicEmail,
+    "Consulta sobre cómo reservar",
+    "Hola, tengo una consulta sobre cómo reservar.",
+  );
+
   return (
     <>
-      <ModeTabs basePath="/buscar" />
-      <HomeHero />
-
-      <Suspense fallback={<FeaturedSkeleton />}>
-        <FeaturedListings />
-      </Suspense>
-
-      <CordobaDestinations />
-
-      <HomeInspiration />
-
-      <HomeHowItWorks />
-
-      <TrustSection />
-
-      <HomeHostCta />
+      <HomeJsonLd instagram={contact.instagramHandle} />
+      <HomeHero
+        responseHours={facts.responseHours}
+        senaLabel={facts.senaLabel}
+        // Lleva a /buscar ("Por noche"): cuenta lo mismo que muestra ese destino.
+        statsLabel={unitsInHoodsLabel(stats.shortStays, stats.shortHoods)}
+      />
+      <HomePillars />
+      <HomeFeatured listings={pickFeaturedListings(catalog.listings)} total={stats.shortStays} />
+      <HomeProcess responseHours={facts.responseHours} senaLabel={facts.senaLabel} />
+      <HomeHoods tiles={hoodTiles(catalog, { limit: 10 })} />
+      <HomeMonthly monthlyCount={stats.monthly} whatsappUrl={monthlyWhatsapp} mailtoUrl={monthlyMailto} />
+      <HomeStory />
+      <HomeOwnersBand />
+      <HomeFaq items={homeFaqItems(facts)} whatsappUrl={facts.whatsappUrl} mailtoUrl={faqMailto} />
     </>
   );
 }
 
-/* ─────────────────────────── Skeleton ─────────────────────────── */
-
-function FeaturedSkeleton() {
+/** Datos estructurados de la marca (sin inventar: sólo lo que está configurado). */
+function HomeJsonLd({ instagram }: { instagram: string | null }) {
+  const data = {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    name: "apart",
+    alternateName: "Apart CBA",
+    description: "Alquileres temporarios en Córdoba, por noches o por meses.",
+    url: getAppUrl(),
+    logo: absoluteUrl("/apart/icons/apart-512.png"),
+    areaServed: { "@type": "City", name: "Córdoba, Argentina" },
+    ...(instagram ? { sameAs: [`https://www.instagram.com/${instagram}`] } : {}),
+  };
   return (
-    <section className="max-w-[1400px] mx-auto px-4 md:px-8 py-12 md:py-20">
-      <div className="mb-10 md:mb-12 space-y-3">
-        <div className="h-3.5 w-24 bg-neutral-100 rounded-full animate-pulse" />
-        <div className="h-9 w-72 bg-neutral-100 rounded-md animate-pulse" />
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="space-y-3">
-            <div className="aspect-[4/3] bg-neutral-100 rounded-2xl animate-pulse" />
-            <div className="space-y-1.5">
-              <div className="h-3 w-2/3 bg-neutral-100 rounded animate-pulse" />
-              <div className="h-3 w-1/2 bg-neutral-100 rounded animate-pulse" />
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/* ───────────────────────── Featured ─────────────────────────── */
-
-async function FeaturedListings() {
-  const [listings, favSet, t] = await Promise.all([
-    getFeaturedListings(8),
-    listWishlistUnitIds(),
-    getServerT(),
-  ]);
-
-  if (listings.length === 0) {
-    return (
-      <section className="max-w-[1400px] mx-auto px-4 md:px-8 py-20 md:py-28">
-        <Reveal>
-          <div className="text-center max-w-md mx-auto">
-            <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-sage-100 text-sage-700">
-              <Sparkles size={20} strokeWidth={1.75} />
-            </div>
-            <h2 className="mt-6 text-2xl md:text-3xl font-bold text-neutral-900 tracking-[-0.015em]">
-              {t("featured.empty.title.part1")} <span className="italic font-serif">{t("featured.empty.title.part2")}</span>
-            </h2>
-            <p className="mt-3 text-neutral-600 leading-relaxed">
-              {t("featured.empty.body")}
-            </p>
-            <Link
-              href="/buscar"
-              className="mt-6 inline-flex items-center gap-2 rounded-full bg-neutral-900 text-white px-5 py-2.5 text-sm font-semibold hover:bg-neutral-800 transition-colors"
-            >
-              {t("featured.empty.cta")}
-              <ArrowRight size={14} strokeWidth={2.5} />
-            </Link>
-          </div>
-        </Reveal>
-      </section>
-    );
-  }
-
-  return (
-    <section className="max-w-[1400px] mx-auto px-4 md:px-8 py-12 md:py-20">
-      <Reveal className="block mb-10 md:mb-12">
-        <div className="flex items-end justify-between gap-6">
-          <div>
-            <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-              {t("featured.eyebrow")}
-            </span>
-            <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-              {t("featured.title.part1")} <span className="italic font-serif font-medium">{t("featured.title.part2")}</span>
-            </h2>
-            <p className="hidden md:block text-sm text-neutral-500 mt-2 max-w-md">
-              {t("featured.subtitle")}
-            </p>
-          </div>
-          <Link
-            href="/buscar"
-            className="group hidden md:inline-flex items-center gap-1 text-sm font-medium text-neutral-900 hover:gap-2 transition-all whitespace-nowrap"
-          >
-            {t("featured.see_all")}
-            <ArrowRight
-              size={14}
-              strokeWidth={2.25}
-              className="transition-transform group-hover:translate-x-0.5"
-            />
-          </Link>
-        </div>
-      </Reveal>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8">
-        {listings.map((listing, i) => (
-          <Reveal key={listing.id} delay={Math.min(i * 60, 360)} y={20}>
-            <ListingCard
-              listing={listing}
-              isFavorited={favSet.has(listing.id)}
-              priority={i < 4}
-            />
-          </Reveal>
-        ))}
-      </div>
-      <div className="mt-8 md:hidden text-center">
-        <Link
-          href="/buscar"
-          className="group inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-5 py-2.5 text-sm font-semibold text-neutral-900 hover:border-neutral-900 transition-colors"
-        >
-          {t("featured.see_all_mobile")}
-          <ArrowRight
-            size={14}
-            strokeWidth={2.5}
-            className="transition-transform group-hover:translate-x-0.5"
-          />
-        </Link>
-      </div>
-    </section>
-  );
-}
-
-/* ───────────────────── Tres caras de Córdoba ───────────────────── */
-
-const CORDOBA_DESTINATIONS: Array<{
-  eyebrowKey: TKey;
-  titleKey: TKey;
-  subtitleKey: TKey;
-  image: string;
-  href: string;
-}> = [
-  {
-    eyebrowKey: "destinos.centro.eyebrow",
-    titleKey: "destinos.centro.title",
-    subtitleKey: "destinos.centro.body",
-    image: "/cordoba/buenpastor.webp",
-    href: "/buscar?ciudad=C%C3%B3rdoba&barrio=Centro",
-  },
-  {
-    eyebrowKey: "destinos.capital.eyebrow",
-    titleKey: "destinos.capital.title",
-    subtitleKey: "destinos.capital.body",
-    image: "/cordoba/ciudad.webp",
-    href: "/buscar?ciudad=C%C3%B3rdoba",
-  },
-  {
-    eyebrowKey: "destinos.sierras.eyebrow",
-    titleKey: "destinos.sierras.title",
-    subtitleKey: "destinos.sierras.body",
-    image: "/cordoba/sierras.webp",
-    // "ciudad=Sierras" matchea 0 unidades publicadas hoy: mandar a la
-    // búsqueda completa hasta que haya inventario serrano.
-    href: "/buscar",
-  },
-];
-
-async function CordobaDestinations() {
-  const t = await getServerT();
-  return (
-    <section className="max-w-[1400px] mx-auto px-4 md:px-8 py-12 md:py-20">
-      <Reveal className="block mb-10 md:mb-12">
-        <div className="flex items-end justify-between gap-6">
-          <div>
-            <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-              {t("destinos.eyebrow")}
-            </span>
-            <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-              {t("destinos.title.part1")} <span className="italic font-serif font-medium">{t("destinos.title.part2")}</span>
-            </h2>
-            <p className="hidden md:block text-sm text-neutral-500 mt-2 max-w-md">
-              {t("destinos.subtitle")}
-            </p>
-          </div>
-          <Link
-            href="/buscar?ciudad=C%C3%B3rdoba"
-            className="group hidden md:inline-flex items-center gap-1 text-sm font-medium text-neutral-900 hover:gap-2 transition-all whitespace-nowrap"
-          >
-            {t("destinos.explore_cordoba")}
-            <ArrowRight
-              size={14}
-              strokeWidth={2.25}
-              className="transition-transform group-hover:translate-x-0.5"
-            />
-          </Link>
-        </div>
-      </Reveal>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5 md:gap-6">
-        {CORDOBA_DESTINATIONS.map((dest, i) => (
-          <Reveal key={dest.titleKey} delay={i * 120} y={28}>
-            <Link
-              href={dest.href}
-              className="group relative block overflow-hidden rounded-3xl bg-neutral-100 aspect-[4/5]
-                         transition-shadow duration-500
-                         hover:shadow-[0_30px_60px_-20px_rgb(0_0_0/0.35)]"
-            >
-              <Image
-                src={dest.image}
-                alt=""
-                fill
-                sizes="(max-width: 768px) 100vw, 33vw"
-                className="object-cover transition-transform duration-[1200ms] ease-out group-hover:scale-[1.08]"
-                priority={i === 0}
-              />
-              {/* Bottom-fade scrim + subtle warm top-light for depth */}
-              <div
-                aria-hidden
-                className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent"
-              />
-              <div
-                aria-hidden
-                className="absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-white/10 to-transparent"
-              />
-
-              <div className="absolute inset-x-0 bottom-0 p-6 md:p-7 text-white">
-                <div className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-white/75 mb-1.5">
-                  {t(dest.eyebrowKey)}
-                </div>
-                <h3 className="text-xl md:text-2xl font-semibold tracking-[-0.01em] leading-snug">
-                  {t(dest.titleKey)}
-                </h3>
-                <p className="text-sm text-white/80 mt-2 leading-relaxed line-clamp-2 max-w-xs">
-                  {t(dest.subtitleKey)}
-                </p>
-                <div className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-white/95
-                                transition-all duration-300 group-hover:gap-2.5">
-                  {t("destinos.explore")}
-                  <ArrowRight size={15} strokeWidth={2.25} />
-                </div>
-              </div>
-            </Link>
-          </Reveal>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-/* ───────────────────────── Trust pillars ───────────────────────── */
-
-const TRUST_PILLARS: Array<{
-  titleKey: TKey;
-  bodyKey: TKey;
-  icon: typeof BadgeCheck;
-}> = [
-  { titleKey: "trust.pillar1.title", bodyKey: "trust.pillar1.body", icon: BadgeCheck },
-  { titleKey: "trust.pillar2.title", bodyKey: "trust.pillar2.body", icon: Sparkles },
-  { titleKey: "trust.pillar3.title", bodyKey: "trust.pillar3.body", icon: MessageCircle },
-];
-
-async function TrustSection() {
-  const t = await getServerT();
-  return (
-    <section className="bg-white border-t border-neutral-200/80">
-      <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-16 md:py-24">
-        <Reveal className="block mb-12 md:mb-14 max-w-2xl">
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.22em] text-sage-700">
-            {t("trust.eyebrow")}
-          </span>
-          <h2 className="mt-2 text-2xl md:text-4xl font-bold text-neutral-900 tracking-[-0.02em]">
-            {t("trust.title.part1")} <span className="italic font-serif font-medium">{t("trust.title.part2")}</span>
-          </h2>
-        </Reveal>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 md:gap-10">
-          {TRUST_PILLARS.map((item, i) => {
-            const Icon = item.icon;
-            return (
-              <Reveal key={item.titleKey} delay={i * 140} y={20}>
-                <div className="group">
-                  <div
-                    className="inline-flex h-12 w-12 items-center justify-center rounded-2xl
-                               bg-sage-100 text-sage-700
-                               transition-all duration-300
-                               group-hover:bg-sage-600 group-hover:text-white
-                               group-hover:-rotate-3"
-                  >
-                    <Icon size={20} strokeWidth={1.75} />
-                  </div>
-                  <h3 className="mt-5 text-lg font-semibold text-neutral-900 tracking-[-0.01em]">
-                    {t(item.titleKey)}
-                  </h3>
-                  <p className="mt-2 text-sm text-neutral-600 leading-relaxed max-w-sm">
-                    {t(item.bodyKey)}
-                  </p>
-                </div>
-              </Reveal>
-            );
-          })}
-        </div>
-      </div>
-    </section>
+    <script
+      type="application/ld+json"
+      // JSON.stringify no escapa "<": se reemplaza para que un dato nunca cierre el <script>.
+      dangerouslySetInnerHTML={{ __html: JSON.stringify(data).replace(/</g, "\\u003c") }}
+    />
   );
 }

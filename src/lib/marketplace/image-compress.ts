@@ -2,7 +2,8 @@
 //
 // Las fotos de cámara llegan a varios MB y 4000px+. Las reescalamos a un JPEG de
 // ~2560px de lado mayor con calidad alta: pesan una fracción, suben rápido, no
-// chocan con el límite de 10 MB del action, y el "origen" que después transforma
+// chocan con el tope de cuerpo de las Server Actions (Vercel corta en 4,5 MB,
+// antes que el `bodySizeLimit` de next.config), y el "origen" que después transforma
 // Supabase queda liviano. La orientación EXIF se hornea en los píxeles (y se
 // descarta el metadata, así que no hay fotos "de costado").
 //

@@ -1,60 +1,39 @@
 import type { MetadataRoute } from "next";
-import { createAdminClient } from "@/lib/supabase/server";
+import { getAppUrl } from "@/lib/app-url";
+import { getStorefrontSlugs } from "@/lib/marketplace/storefront";
 
 /**
- * Sitemap del marketplace público. Incluye las rutas estáticas y una entrada
- * por cada unidad publicada (/u/{slug}). Ante cualquier error devolvemos al
- * menos las rutas estáticas para no romper el crawl.
+ * Sitemap de la web pública (www.apartcba.com): las páginas fijas y una
+ * entrada por unidad de la vidriera (/u/{slug}). Sólo la vidriera: nada de
+ * organizaciones demo ni de otras marcas del mismo dominio (rentOS).
+ * La lista de slugs sale del catálogo cacheado (5 min, tag
+ * `storefront-catalog`). Ante un error devuelve al menos las páginas fijas
+ * para no romper el rastreo.
  */
+export const revalidate = 3600;
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const base = process.env.NEXT_PUBLIC_APP_URL ?? "https://www.apartcba.com";
+  const base = getAppUrl();
 
   const staticRoutes: MetadataRoute.Sitemap = [
-    {
-      url: base,
-      changeFrequency: "daily",
-      priority: 1,
-    },
-    {
-      url: `${base}/buscar`,
-      changeFrequency: "daily",
-      priority: 0.9,
-    },
-    // Landing comercial de rentOS (el PMS). No es parte del marketplace, pero
-    // vive en el mismo dominio y sí queremos que indexe.
-    {
-      url: `${base}/rentos`,
-      changeFrequency: "weekly",
-      priority: 0.9,
-    },
+    { url: base, changeFrequency: "daily", priority: 1 },
+    { url: `${base}/buscar`, changeFrequency: "daily", priority: 0.9 },
+    { url: `${base}/como-reservar`, changeFrequency: "monthly", priority: 0.6 },
+    { url: `${base}/propietarios`, changeFrequency: "monthly", priority: 0.6 },
+    { url: `${base}/legal/terminos`, changeFrequency: "yearly", priority: 0.2 },
+    { url: `${base}/legal/privacidad`, changeFrequency: "yearly", priority: 0.2 },
   ];
 
   try {
-    const admin = createAdminClient();
-    const { data, error } = await admin
-      .from("units")
-      .select("slug, updated_at")
-      .eq("marketplace_published", true)
-      .eq("active", true)
-      .not("slug", "is", null);
-
-    if (error || !data) {
-      return staticRoutes;
-    }
-
-    const listingRoutes: MetadataRoute.Sitemap = data
-      .filter((unit): unit is { slug: string; updated_at: string | null } =>
-        Boolean(unit.slug)
-      )
-      .map((unit) => ({
-        url: `${base}/u/${unit.slug}`,
-        ...(unit.updated_at ? { lastModified: new Date(unit.updated_at) } : {}),
-        changeFrequency: "weekly" as const,
-        priority: 0.8,
-      }));
-
+    const slugs = await getStorefrontSlugs();
+    const listingRoutes: MetadataRoute.Sitemap = slugs.map((slug) => ({
+      url: `${base}/u/${encodeURIComponent(slug)}`,
+      changeFrequency: "weekly" as const,
+      priority: 0.8,
+    }));
     return [...staticRoutes, ...listingRoutes];
-  } catch {
+  } catch (err) {
+    console.error("[sitemap] no se pudo leer la vidriera", err);
     return staticRoutes;
   }
 }

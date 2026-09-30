@@ -1,15 +1,13 @@
-import { getActiveLocale } from "@/lib/actions/marketplace-preferences";
 import { t, type TKey } from "./dict";
 
 /**
- * Server-side translator. Returns a `t()` bound to the cookie-resolved locale,
- * so server components can render translated text without prop drilling.
+ * Traductor del server. La web es es-AR (sin selector de idioma): no lee
+ * cookies, así las páginas que lo usan pueden ser estáticas/ISR. Se mantiene
+ * async por compatibilidad con quienes hacen `await getServerT()`.
  *
- * Usage:
  *   const t = await getServerT();
  *   <h1>{t("hero.title.part1")}</h1>
  */
 export async function getServerT() {
-  const locale = await getActiveLocale();
-  return (key: TKey, vars?: Record<string, string | number>) => t(locale, key, vars);
+  return (key: TKey, vars?: Record<string, string | number>) => t("es-AR", key, vars);
 }

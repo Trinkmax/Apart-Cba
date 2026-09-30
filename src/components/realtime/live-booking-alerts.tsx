@@ -291,6 +291,10 @@ export function LiveBookingAlerts() {
       if (change.eventType !== "INSERT" || !change.id) return;
       const row = change.new as Record<string, unknown> | null;
       if (!row) return;
+      // Sólo los pedidos que esperan respuesta. La reserva inmediata de la web
+      // inserta la solicitud ya 'aprobada' JUNTO con la reserva, y esa ya
+      // avisa como "nueva": sin este corte salían dos avisos por la misma.
+      if (row.status !== "pendiente") return;
       if (!rememberOnce(`req:${change.id}`)) return;
       push({
         kind: "solicitud",

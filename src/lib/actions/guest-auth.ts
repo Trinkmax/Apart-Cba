@@ -10,6 +10,9 @@ import {
   createAdminClient,
   createAuthAdminClient,
 } from "@/lib/supabase/server";
+import { absoluteUrl } from "@/lib/app-url";
+import { authErrorMessage, classifyAuthError, type AuthErrorKind } from "@/components/marketplace/shell/auth-errors";
+import { DEFAULT_AFTER_LOGIN, safeRedirectPath } from "@/components/marketplace/shell/safe-redirect";
 import type { GuestProfile } from "@/lib/types/database";
 
 /** IP real del cliente (Vercel la inyecta en x-forwarded-for). */
@@ -51,7 +54,20 @@ async function allowAuthAttempt(
 }
 
 const RATE_LIMITED_MSG =
-  "Demasiados intentos. Esperá unos minutos e intentá de nuevo.";
+  "Hubo demasiados intentos seguidos. Esperá unos minutos y probá de nuevo.";
+
+/**
+ * Link del mail de confirmación / recuperación: pasa por /auth/callback (que
+ * canjea el code por la sesión) y sigue a `next`. Usa la URL pública limpia
+ * (getAppUrl), nunca el origin del request. REQUIERE que
+ * `<app>/auth/callback` esté en la allowlist de Redirect URLs de Supabase Auth.
+ */
+function authCallbackUrl(next: string, flow: "signup" | "recovery"): string {
+  // `flow` le dice al callback qué hacer si el canje falla: un link de
+  // confirmación abierto en otro navegador no trae el code_verifier, pero el
+  // email YA quedó confirmado (Supabase sólo manda `code` después de verificar).
+  return absoluteUrl(`/auth/callback?next=${encodeURIComponent(next)}&flow=${flow}`);
+}
 
 export type GuestSession = {
   userId: string;
@@ -59,33 +75,64 @@ export type GuestSession = {
   profile: GuestProfile;
 };
 
+const emailField = z
+  .string({ message: "Escribí tu email." })
+  .trim()
+  .min(1, "Escribí tu email.")
+  .max(254, "Ese email es demasiado largo.")
+  .email("Revisá el email: parece que tiene un error.");
+
 const signUpSchema = z.object({
-  email: z.string().email("Email inválido"),
-  password: z.string().min(8, "La contraseña debe tener al menos 8 caracteres"),
-  full_name: z.string().min(2, "Nombre demasiado corto").max(120),
+  email: emailField,
+  password: z
+    .string({ message: "Elegí una contraseña." })
+    .min(8, "La contraseña tiene que tener al menos 8 caracteres.")
+    .max(72, "La contraseña puede tener hasta 72 caracteres."),
+  full_name: z
+    .string({ message: "Escribí tu nombre." })
+    .trim()
+    .min(2, "Escribí tu nombre y apellido.")
+    .max(120, "El nombre es demasiado largo."),
   phone: z
     .string()
     .trim()
-    .min(6, "Teléfono inválido")
-    .max(30)
+    .max(30, "Revisá el WhatsApp: es demasiado largo.")
+    .refine((v) => v === "" || v.replace(/\D+/g, "").length >= 8, "Revisá el WhatsApp: faltan números.")
     .optional()
     .or(z.literal("")),
   marketing_consent: z.boolean().default(false),
+  /** A dónde volver después de confirmar el email (ruta interna). */
+  redirect: z.string().max(512).optional().nullable(),
 });
 
 const signInSchema = z.object({
-  email: z.string().email("Email inválido"),
-  password: z.string().min(1, "Contraseña requerida"),
+  email: emailField,
+  password: z.string({ message: "Escribí tu contraseña." }).min(1, "Escribí tu contraseña."),
 });
 
+const optionalText = (max: number, label: string) =>
+  z.string().trim().max(max, `${label}: es demasiado largo.`).optional().nullable();
+
 const updateProfileSchema = z.object({
-  full_name: z.string().min(2).max(120),
-  phone: z.string().max(30).optional().nullable(),
-  document_type: z.string().max(20).optional().nullable(),
-  document_number: z.string().max(40).optional().nullable(),
-  country: z.string().max(80).optional().nullable(),
-  city: z.string().max(120).optional().nullable(),
-  birth_date: z.string().optional().nullable(),
+  full_name: z
+    .string({ message: "Escribí tu nombre." })
+    .trim()
+    .min(2, "Escribí tu nombre y apellido.")
+    .max(120, "El nombre es demasiado largo."),
+  phone: optionalText(30, "WhatsApp").refine(
+    (v) => !v || v.replace(/\D+/g, "").length >= 8,
+    "Revisá el WhatsApp: faltan números.",
+  ),
+  document_type: optionalText(20, "Tipo de documento"),
+  document_number: optionalText(40, "Documento"),
+  country: optionalText(80, "País"),
+  city: optionalText(120, "Ciudad"),
+  birth_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Revisá la fecha de nacimiento.")
+    .optional()
+    .nullable()
+    .or(z.literal("")),
   marketing_consent: z.boolean().optional(),
 });
 
@@ -119,34 +166,55 @@ export async function getGuestSession(): Promise<GuestSession | null> {
   return guestSessionLoader();
 }
 
-export async function requireGuestSession(): Promise<GuestSession> {
+/**
+ * Exige sesión de huésped. Sin sesión redirige a `/ingresar?redirect=<returnTo>`
+ * para volver a la misma pantalla después de ingresar (`returnTo` se valida:
+ * sólo rutas internas).
+ */
+export async function requireGuestSession(returnTo?: string): Promise<GuestSession> {
   const session = await guestSessionLoader();
-  if (!session) redirect("/ingresar");
+  if (!session) {
+    const back = returnTo ? safeRedirectPath(returnTo, "") : "";
+    redirect(back ? `/ingresar?redirect=${encodeURIComponent(back)}` : "/ingresar");
+  }
   return session;
 }
 
-export async function signUpGuest(input: z.infer<typeof signUpSchema>): Promise<
-  | { ok: true }
-  | { ok: false; error: string }
-> {
+export type SignUpResult =
+  | { ok: true; needsConfirmation: boolean; email: string }
+  | { ok: false; error: string; code?: AuthErrorKind };
+
+/** Supabase devolvió un user recién creado (y no uno existente reenviado). */
+function isFreshUser(createdAt: string | undefined): boolean {
+  if (!createdAt) return false;
+  const ms = Date.parse(createdAt);
+  return Number.isFinite(ms) && Date.now() - ms < 2 * 60 * 1000;
+}
+
+export async function signUpGuest(input: z.input<typeof signUpSchema>): Promise<SignUpResult> {
   const parsed = signUpSchema.safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá los datos." };
   }
+  const email = parsed.data.email.toLowerCase();
+  const next = safeRedirectPath(parsed.data.redirect, DEFAULT_AFTER_LOGIN);
 
   const ip = await clientIp();
   if (!(await allowAuthAttempt(`signup:${ip}`, 8, 3600))) {
-    return { ok: false, error: RATE_LIMITED_MSG };
+    return { ok: false, error: RATE_LIMITED_MSG, code: "rate_limited" };
   }
 
   const supabase = await createClient();
   const phone = parsed.data.phone?.trim() || null;
 
-  // 1) Crear usuario en auth.users (Supabase Auth)
+  // 1) Crear usuario en auth.users. Con "Confirm email" activo Supabase NO
+  // devuelve sesión: la persona tiene que tocar el link del mail, que vuelve
+  // por /auth/callback a `next`.
   const { data, error } = await supabase.auth.signUp({
-    email: parsed.data.email,
+    email,
     password: parsed.data.password,
     options: {
+      emailRedirectTo: authCallbackUrl(next, "signup"),
       data: {
         full_name: parsed.data.full_name,
         is_marketplace_guest: true,
@@ -154,79 +222,153 @@ export async function signUpGuest(input: z.infer<typeof signUpSchema>): Promise<
     },
   });
   if (error) {
-    if (error.message.toLowerCase().includes("already registered")) {
-      return { ok: false, error: "Ya hay una cuenta con ese email. Probá ingresar." };
-    }
-    return { ok: false, error: error.message };
+    const kind = classifyAuthError(error);
+    if (kind === "unknown") console.error("[guest-auth] signUp", error.message);
+    return { ok: false, error: authErrorMessage(error, "signup"), code: kind };
   }
   if (!data.user) {
-    return { ok: false, error: "No se pudo crear la cuenta. Probá de nuevo." };
+    return { ok: false, error: authErrorMessage(null, "signup") };
   }
 
   // Supabase devuelve un user "ofuscado" con identities vacío cuando el email
-  // ya existe (anti-enumeration). Si no detectamos esto, intentamos insertar
-  // un guest_profile con un user_id que no existe en auth.users y falla la FK.
+  // ya existe y está confirmado (anti-enumeración). Sin este chequeo
+  // intentaríamos crear un perfil para un user_id que no existe.
   if (!data.user.identities || data.user.identities.length === 0) {
     return {
       ok: false,
-      error: "Ya hay una cuenta con ese email. Probá ingresar.",
+      error: authErrorMessage({ code: "user_already_exists" }, "signup"),
+      code: "already_registered",
     };
   }
 
-  // 2) Crear guest_profile (con service role para bypass de RLS)
+  // 2) Perfil de huésped (service role). Si la persona ya se había registrado
+  // sin confirmar, el perfil existe: no es un error.
   const admin = createAdminClient();
-  const { error: profileErr } = await admin
-    .from("guest_profiles")
-    .insert({
+  const { error: profileErr } = await admin.from("guest_profiles").upsert(
+    {
       user_id: data.user.id,
       full_name: parsed.data.full_name,
       phone,
       marketing_consent: parsed.data.marketing_consent ?? false,
-    });
+    },
+    { onConflict: "user_id", ignoreDuplicates: true },
+  );
 
   if (profileErr) {
-    // Best-effort cleanup: borrar auth user creado
-    try {
-      const authAdmin = createAuthAdminClient();
-      await authAdmin.auth.admin.deleteUser(data.user.id);
-    } catch {
-      // ignore
+    console.error("[guest-auth] guest_profiles insert", profileErr.message);
+    // Limpieza best-effort, sólo si el usuario de auth lo acabamos de crear.
+    if (isFreshUser(data.user.created_at)) {
+      try {
+        const authAdmin = createAuthAdminClient();
+        await authAdmin.auth.admin.deleteUser(data.user.id);
+      } catch {
+        // ignore
+      }
     }
-    return { ok: false, error: `Error creando el perfil: ${profileErr.message}` };
+    return { ok: false, error: authErrorMessage(null, "signup") };
   }
 
-  revalidatePath("/", "layout");
+  return { ok: true, needsConfirmation: !data.session, email };
+}
+
+/** Reenvío del mail de confirmación, con rate limit propio (por IP+email y por IP). */
+async function resendConfirmationFor(
+  email: string,
+  ip: string,
+  redirectTo: string | null | undefined,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const allowed =
+    (await allowAuthAttempt(`resend:${ip}:${email}`, 3, 900)) &&
+    (await allowAuthAttempt(`resend:ip:${ip}`, 10, 3600));
+  if (!allowed) return { ok: false, error: RATE_LIMITED_MSG };
+  const supabase = await createClient();
+  const { error } = await supabase.auth.resend({
+    type: "signup",
+    email,
+    options: { emailRedirectTo: authCallbackUrl(safeRedirectPath(redirectTo, DEFAULT_AFTER_LOGIN), "signup") },
+  });
+  if (error) {
+    if (classifyAuthError(error) === "unknown") console.error("[guest-auth] resend", error.message);
+    return { ok: false, error: authErrorMessage(error, "resend") };
+  }
   return { ok: true };
 }
 
-export async function signInGuest(
-  input: z.infer<typeof signInSchema>
+/**
+ * "Reenviar" el mail de confirmación de la cuenta. No revela si el email
+ * existe (Supabase responde igual en los dos casos).
+ */
+export async function resendGuestConfirmation(
+  email: string,
+  redirectTo?: string | null,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  const parsed = emailField.safeParse(email);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá el email." };
+  }
+  const ip = await clientIp();
+  return resendConfirmationFor(parsed.data.toLowerCase(), ip, redirectTo);
+}
+
+export type SignInResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: string;
+      code?: AuthErrorKind;
+      email?: string;
+      /** Sólo con email_not_confirmed: si pudimos reenviar el link recién. */
+      resent?: boolean;
+    };
+
+export async function signInGuest(input: {
+  email: string;
+  password: string;
+  /** A dónde volver si hay que reenviar la confirmación. */
+  redirect?: string | null;
+}): Promise<SignInResult> {
   const parsed = signInSchema.safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá los datos." };
   }
+  const email = parsed.data.email.toLowerCase();
 
   const ip = await clientIp();
-  if (!(await allowAuthAttempt(`login:${ip}:${parsed.data.email.toLowerCase()}`, 10, 300))) {
-    return { ok: false, error: RATE_LIMITED_MSG };
+  if (!(await allowAuthAttempt(`login:${ip}:${email}`, 10, 300))) {
+    return { ok: false, error: RATE_LIMITED_MSG, code: "rate_limited" };
   }
 
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({
-    email: parsed.data.email,
+    email,
     password: parsed.data.password,
   });
 
   if (error) {
-    return { ok: false, error: "Email o contraseña incorrectos" };
+    const kind = classifyAuthError(error);
+    if (kind === "email_not_confirmed") {
+      // Cuenta creada pero sin confirmar: le reenviamos el link y la pantalla
+      // ofrece "Reenviar" por si no le llega.
+      const resent = await resendConfirmationFor(email, ip, input.redirect);
+      return {
+        ok: false,
+        code: kind,
+        email,
+        resent: resent.ok,
+        error: resent.ok
+          ? authErrorMessage(error, "signin")
+          : "Todavía no confirmaste tu email. Buscá el mail que te mandamos (mirá también en spam) o pedí otro en unos minutos.",
+      };
+    }
+    if (kind === "unknown") console.error("[guest-auth] signIn", error.status, error.message);
+    return { ok: false, code: kind, error: authErrorMessage(error, "signin") };
   }
   if (!data.user) {
-    return { ok: false, error: "No se pudo iniciar sesión" };
+    return { ok: false, error: authErrorMessage(null, "signin") };
   }
 
   // Si el usuario ya existe en auth pero no tiene guest_profile, lo creamos
-  // al vuelo (caso: staff PMS que también quiere usar el marketplace).
+  // al vuelo (caso: staff PMS que también quiere usar la web).
   const admin = createAdminClient();
   const { data: existing } = await admin
     .from("guest_profiles")
@@ -245,23 +387,43 @@ export async function signInGuest(
     });
   }
 
-  revalidatePath("/", "layout");
+  // El layout de la web ya no depende de la sesión (el header la resuelve en
+  // el navegador): no hace falta revalidar nada público.
+  revalidatePath("/mi-cuenta");
   return { ok: true };
 }
 
+/**
+ * Salir (server). El header de la web sale desde el navegador
+ * (`useGuestSignOut`); esto queda para formularios server-side.
+ */
 export async function signOutGuest(): Promise<void> {
   const supabase = await createClient();
-  await supabase.auth.signOut();
+  await supabase.auth.signOut({ scope: "local" });
   redirect("/");
 }
 
+export type ProfileField =
+  | "full_name"
+  | "phone"
+  | "document_type"
+  | "document_number"
+  | "country"
+  | "city"
+  | "birth_date";
+
 export async function updateGuestProfile(
-  input: z.infer<typeof updateProfileSchema>
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  const session = await requireGuestSession();
+  input: z.input<typeof updateProfileSchema>
+): Promise<{ ok: true } | { ok: false; error: string; field?: ProfileField }> {
+  const session = await requireGuestSession("/mi-cuenta/perfil");
   const parsed = updateProfileSchema.safeParse(input);
   if (!parsed.success) {
-    return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+    const issue = parsed.error.issues[0];
+    return {
+      ok: false,
+      error: issue?.message ?? "Revisá los datos.",
+      field: (issue?.path[0] as ProfileField | undefined) ?? undefined,
+    };
   }
 
   const admin = createAdminClient();
@@ -279,29 +441,39 @@ export async function updateGuestProfile(
     })
     .eq("user_id", session.userId);
 
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    console.error("[guest-auth] updateGuestProfile", error.message);
+    return { ok: false, error: "No pudimos guardar tus datos. Probá de nuevo en unos minutos." };
+  }
   revalidatePath("/mi-cuenta");
   revalidatePath("/mi-cuenta/perfil");
   return { ok: true };
 }
 
+/**
+ * "Olvidé mi contraseña": manda el mail de recuperación. El link pasa por
+ * /auth/callback (canjea el code por sesión) y sigue a /reset-password. No
+ * revela si el email tiene cuenta.
+ */
 export async function requestGuestPasswordReset(
   email: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!email) return { ok: false, error: "Email requerido" };
+  const parsed = emailField.safeParse(email);
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá el email." };
+  }
+  const normalized = parsed.data.toLowerCase();
   const ip = await clientIp();
-  if (!(await allowAuthAttempt(`reset:${ip}:${email.toLowerCase()}`, 5, 3600))) {
+  if (!(await allowAuthAttempt(`reset:${ip}:${normalized}`, 5, 3600))) {
     return { ok: false, error: RATE_LIMITED_MSG };
   }
   const supabase = await createClient();
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3001";
-  // Pasa por /auth/callback para intercambiar el code por sesión (recovery).
-  // Antes apuntaba directo a /reset-password, que no establecía sesión -> el
-  // updateUser fallaba. REQUIERE además: NEXT_PUBLIC_APP_URL seteada y esta URL
-  // (y la de callback) en la allowlist de Redirect URLs de Supabase Auth.
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${appUrl}/auth/callback?next=${encodeURIComponent("/reset-password")}`,
+  const { error } = await supabase.auth.resetPasswordForEmail(normalized, {
+    redirectTo: authCallbackUrl("/reset-password", "recovery"),
   });
-  if (error) return { ok: false, error: error.message };
+  if (error) {
+    if (classifyAuthError(error) === "unknown") console.error("[guest-auth] resetPassword", error.message);
+    return { ok: false, error: authErrorMessage(error, "reset") };
+  }
   return { ok: true };
 }

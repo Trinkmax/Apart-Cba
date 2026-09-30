@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
+import { revalidateStorefront } from "@/lib/marketplace/storefront";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
 import type {
@@ -85,6 +86,8 @@ async function assertUnitInOrg(unitId: string): Promise<{ orgId: string }> {
 }
 
 function revalidateListingPaths(unitId: string, slug?: string | null) {
+  // Catálogo cacheado de la vidriera (home, /buscar y fichas leen el tag).
+  revalidateStorefront();
   revalidatePath("/dashboard/unidades");
   revalidatePath(`/dashboard/unidades/${unitId}`);
   revalidatePath(`/dashboard/unidades/${unitId}/marketplace`);

@@ -1,358 +1,236 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import Image from "next/image";
-import { ChevronLeft, ChevronRight, X, Grid3x3, Loader2, Play, PlayCircle } from "lucide-react";
+import { useRef, useState } from "react";
+import { preload } from "react-dom";
+import dynamic from "next/dynamic";
+import Image, { getImageProps } from "next/image";
+import { Images, PlayCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { UnitPhoto } from "@/lib/types/database";
+import { ApartLogo } from "@/components/marketplace/brand/apart-logo";
 
-type Props = {
-  photos: UnitPhoto[];
-  title: string;
-};
+// El visor pesa poco, pero no hace falta hasta que alguien toca una foto.
+const GalleryLightbox = dynamic(() => import("./listing/gallery-lightbox"), { ssr: false });
 
-/** Formatea milisegundos a m:ss (ej. 75000 → "1:15"). */
+/** 75000 → "1:15". */
 function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-export function UnitGallery({ photos, title }: Props) {
-  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+/** Posición de cada foto en el mosaico según cuántas hay (1 grande + hasta 4). */
+function tileClass(i: number, n: number): string {
+  if (n === 1) return "col-span-4 row-span-2";
+  if (i === 0) return "col-span-2 row-span-2";
+  if (n === 2) return "col-span-2 row-span-2";
+  if (n === 3) return "col-span-2";
+  if (n === 4 && i === 1) return "col-span-2";
+  return "";
+}
 
-  if (photos.length === 0) {
+function altFor(p: UnitPhoto, title: string, i: number, n: number): string {
+  if (p.alt_text) return p.alt_text;
+  return i === 0 ? title : `${title}, ${p.media_type === "video" ? "video" : "foto"} ${i + 1} de ${n}`;
+}
+
+const PHOTO_CLASS =
+  "object-cover transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] motion-safe:group-hover:scale-[1.03]";
+
+/** Breakpoint `md` de Tailwind (48rem): debajo se ve el carrusel; desde ahí, el mosaico. */
+const CAROUSEL_MEDIA = "(width < 48rem)";
+const MOSAIC_MEDIA = "(width >= 48rem)";
+
+/** GIF transparente de 1×1 (no hace pedido de red). */
+const BLANK_GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/**
+ * La portada, que casi siempre es el LCP de la ficha. El carrusel y el mosaico
+ * la dibujan cada uno a su tamaño y sólo uno de los dos se ve: con dos
+ * <Image priority> el navegador precargaba y bajaba LAS DOS (la oculta
+ * también, a hasta 2560 px). Acá cada copia va en un <picture> cuyo <source>
+ * para el otro breakpoint es un GIF vacío, y el preload lleva `media`: cada
+ * pantalla baja UNA portada, con prioridad alta y al ancho que usa.
+ * (React no precarga solo un <img> dentro de <picture>: el preload es éste.)
+ */
+function CoverPicture({ photo, alt, sizes, media }: { photo: UnitPhoto; alt: string; sizes: string; media: string }) {
+  const { props } = getImageProps({
+    src: photo.public_url,
+    alt,
+    fill: true,
+    sizes,
+    loading: "eager",
+    fetchPriority: "high",
+    className: PHOTO_CLASS,
+  });
+  preload(props.src, {
+    as: "image",
+    imageSrcSet: props.srcSet,
+    imageSizes: props.sizes,
+    fetchPriority: "high",
+    media,
+  });
+  return (
+    <picture>
+      <source media={media === CAROUSEL_MEDIA ? MOSAIC_MEDIA : CAROUSEL_MEDIA} srcSet={BLANK_GIF} />
+      <img {...props} alt={alt} />
+    </picture>
+  );
+}
+
+/** Una foto (o el póster de un video) que llena su contenedor. La portada va por CoverPicture. */
+function Media({
+  photo,
+  alt,
+  sizes,
+  cover,
+  playSize = "size-12",
+}: {
+  photo: UnitPhoto;
+  alt: string;
+  sizes: string;
+  /** Portada: `media` del breakpoint en el que se ve esta copia. */
+  cover?: string;
+  playSize?: string;
+}) {
+  if (cover && photo.media_type !== "video" && photo.public_url) {
+    return <CoverPicture photo={photo} alt={alt} sizes={sizes} media={cover} />;
+  }
+  if (photo.media_type === "video") {
     return (
-      <div className="aspect-[16/9] bg-neutral-100 rounded-2xl grid place-items-center text-neutral-400">
-        Sin fotos
+      <>
+        {photo.poster_url ? (
+          <Image src={photo.poster_url} alt={alt} fill sizes={sizes} className="object-cover" />
+        ) : (
+          <span className="absolute inset-0 bg-forest-800" />
+        )}
+        <span className="absolute inset-0 grid place-items-center">
+          <PlayCircle className={cn("text-cream drop-shadow-lg", playSize)} strokeWidth={1.5} aria-hidden />
+        </span>
+        {photo.duration_ms ? (
+          <span className="absolute right-2 bottom-2 rounded-full bg-forest-950/75 px-2 py-0.5 text-[0.6875rem] font-semibold text-cream tabular-nums">
+            {formatDuration(photo.duration_ms)}
+          </span>
+        ) : null}
+      </>
+    );
+  }
+  return <Image src={photo.public_url} alt={alt} fill sizes={sizes} className={PHOTO_CLASS} />;
+}
+
+/**
+ * Galería de la ficha.
+ * - Mobile: carrusel a lo ancho con swipe (scroll-snap) y contador "1/12".
+ * - Escritorio: mosaico de 1 grande + 4 con "Ver las N fotos".
+ * Tocar cualquier foto abre el visor en esa foto.
+ *
+ * photos[0] es la portada (orden is_cover DESC, sort_order ASC; un video nunca
+ * es portada por CHECK en la base). Igual se dibuja defensivamente.
+ */
+export function UnitGallery({ photos, title, className }: { photos: UnitPhoto[]; title: string; className?: string }) {
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [slide, setSlide] = useState(0);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const n = photos.length;
+
+  if (n === 0) {
+    return (
+      <div
+        className={cn(
+          "relative grid aspect-[16/9] place-items-center overflow-hidden rounded-3xl bg-leaf-100 text-forest-700 md:aspect-[21/8]",
+          className,
+        )}
+      >
+        <div className="flex flex-col items-center gap-3 text-center">
+          <ApartLogo variant="symbol" className="h-12 text-forest-700/70" title={null} />
+          <p className="text-sm font-semibold">Todavía no cargamos las fotos de este lugar.</p>
+        </div>
       </div>
     );
   }
 
-  // En la práctica photos[0] es la portada (imagen): el orden es is_cover DESC,
-  // sort_order ASC y un video nunca puede ser portada (CHECK en BD). Aun así, el
-  // hero se renderiza de forma defensiva por si la primera fila fuese un video.
-  const hero = photos[0];
-  const grid = photos.slice(1, 5);
+  const hasVideo = photos.some((p) => p.media_type === "video");
+  const seeAllLabel = hasVideo ? `Ver fotos y videos (${n})` : n === 1 ? "Ver la foto" : `Ver las ${n} fotos`;
+
+  function onTrackScroll() {
+    const el = trackRef.current;
+    if (!el || el.clientWidth === 0) return;
+    const i = Math.round(el.scrollLeft / el.clientWidth);
+    if (i !== slide) setSlide(Math.max(0, Math.min(n - 1, i)));
+  }
 
   return (
-    <>
-      <div className="grid grid-cols-1 md:grid-cols-4 grid-rows-1 md:grid-rows-2 gap-2 rounded-2xl overflow-hidden h-[280px] sm:h-[360px] md:h-[480px]">
+    <div className={className}>
+      {/* Mobile: carrusel a lo ancho */}
+      <div className="relative -mx-4 sm:mx-0 md:hidden">
         <div
-          className="relative md:col-span-2 md:row-span-2 cursor-pointer group bg-neutral-100"
-          onClick={() => setLightboxIndex(0)}
+          ref={trackRef}
+          onScroll={onTrackScroll}
+          className="no-scrollbar flex aspect-[4/3] snap-x snap-mandatory overflow-x-auto overscroll-x-contain sm:rounded-3xl"
+          aria-label={`Fotos de ${title}`}
+          role="region"
+          aria-roledescription="carrusel"
         >
-          {hero.media_type === "video" ? (
-            <>
-              {hero.poster_url ? (
-                <Image
-                  src={hero.poster_url}
-                  alt={hero.alt_text ?? title}
-                  fill
-                  sizes="(max-width: 768px) 100vw, 50vw"
-                  className="object-cover group-hover:opacity-95 transition-opacity"
-                  priority
-                />
-              ) : (
-                <div className="absolute inset-0 bg-neutral-200" />
-              )}
-              <div className="absolute inset-0 grid place-items-center">
-                <PlayCircle size={64} strokeWidth={1.5} className="text-white/85 drop-shadow-lg" />
-              </div>
-            </>
-          ) : (
-            <Image
-              src={hero.public_url}
-              alt={hero.alt_text ?? title}
-              fill
-              sizes="(max-width: 768px) 100vw, 50vw"
-              className="object-cover group-hover:opacity-95 transition-opacity"
-              priority
-            />
-          )}
-        </div>
-        {grid.map((p, i) => (
-          <div
-            key={p.id}
-            className="hidden md:block relative cursor-pointer group bg-neutral-100"
-            onClick={() => setLightboxIndex(i + 1)}
-          >
-            {p.media_type === "video" ? (
-              <>
-                {p.poster_url ? (
-                  <Image
-                    src={p.poster_url}
-                    alt={p.alt_text ?? `${title} video ${i + 2}`}
-                    fill
-                    sizes="25vw"
-                    className="object-cover group-hover:opacity-95 transition-opacity"
-                  />
-                ) : (
-                  <div className="absolute inset-0 bg-neutral-200" />
-                )}
-                <div className="absolute inset-0 grid place-items-center">
-                  <PlayCircle
-                    size={48}
-                    strokeWidth={1.5}
-                    className="text-white/80 drop-shadow-md"
-                  />
-                </div>
-                {p.duration_ms ? (
-                  <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-white tabular-nums">
-                    {formatDuration(p.duration_ms)}
-                  </span>
-                ) : null}
-              </>
-            ) : (
-              <Image
-                src={p.public_url}
-                alt={p.alt_text ?? `${title} foto ${i + 2}`}
-                fill
-                sizes="25vw"
-                className="object-cover group-hover:opacity-95 transition-opacity"
-              />
-            )}
-          </div>
-        ))}
-      </div>
-
-      {photos.length > 5 ? (
-        <button
-          onClick={() => setLightboxIndex(0)}
-          className="absolute right-4 bottom-4 md:right-8 md:bottom-8 inline-flex items-center gap-2 rounded-lg bg-white border border-neutral-300 text-sm font-medium px-3 py-2 shadow-md hover:bg-neutral-50 transition-colors"
-        >
-          <Grid3x3 size={14} />
-          Ver todas ({photos.length})
-        </button>
-      ) : null}
-
-      {lightboxIndex !== null ? (
-        <Lightbox
-          photos={photos}
-          startIndex={lightboxIndex}
-          title={title}
-          onClose={() => setLightboxIndex(null)}
-        />
-      ) : null}
-    </>
-  );
-}
-
-function Lightbox({
-  photos,
-  startIndex,
-  title,
-  onClose,
-}: {
-  photos: UnitPhoto[];
-  startIndex: number;
-  title: string;
-  onClose: () => void;
-}) {
-  const [index, setIndex] = useState(startIndex);
-  // Ids de imágenes que ya terminaron de decodificar: gobierna el spinner.
-  const [loadedIds, setLoadedIds] = useState<Set<string>>(() => new Set());
-  const thumbRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const touchStartX = useRef<number | null>(null);
-
-  const count = photos.length;
-
-  const go = useCallback(
-    (delta: number) => {
-      setIndex((i) => (i + delta + count) % count);
-    },
-    [count]
-  );
-
-  // Teclado (Esc / flechas) + scroll-lock del body mientras el lightbox está abierto.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-      else if (e.key === "ArrowRight") go(1);
-      else if (e.key === "ArrowLeft") go(-1);
-    }
-    window.addEventListener("keydown", onKey);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [go, onClose]);
-
-  // El thumbnail activo se mantiene a la vista al navegar con flechas/swipe.
-  useEffect(() => {
-    thumbRefs.current[index]?.scrollIntoView({
-      behavior: "smooth",
-      inline: "center",
-      block: "nearest",
-    });
-  }, [index]);
-
-  const current = photos[index];
-
-  // Ventana de slides montados: el activo ± 1. Los vecinos (sólo imágenes,
-  // nunca <video>: seguiría sonando invisible) se montan con opacity-0 para
-  // que el avance sea instantáneo — la foto ya está descargada y decodificada.
-  // Cada slide lleva key={p.id}: sin key, React reutiliza el mismo <img> y
-  // Safari sigue mostrando el bitmap anterior tras mutar src/srcset (el bug
-  // de "paso de foto y no cambia").
-  const mounted = new Set([index, (index + 1) % count, (index - 1 + count) % count]);
-
-  const showSpinner = current.media_type === "image" && !loadedIds.has(current.id);
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex flex-col"
-    >
-      <div className="h-14 flex items-center justify-between px-4 text-white">
-        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full" aria-label="Cerrar">
-          <X size={22} />
-        </button>
-        <div className="text-sm tabular-nums">
-          {index + 1} / {count}
-        </div>
-        <div className="w-9" />
-      </div>
-      <div
-        className="flex-1 relative flex items-center justify-center px-2 md:px-12"
-        onTouchStart={(e) => {
-          // Un drag sobre los controles nativos del <video> (seek bar) no es
-          // un swipe de navegación: ignorarlo o el scrubbing cambia de slide.
-          if ((e.target as HTMLElement).closest("video")) {
-            touchStartX.current = null;
-            return;
-          }
-          touchStartX.current = e.touches[0].clientX;
-        }}
-        onTouchEnd={(e) => {
-          const startX = touchStartX.current;
-          touchStartX.current = null;
-          if (startX === null) return;
-          const dx = e.changedTouches[0].clientX - startX;
-          if (Math.abs(dx) > 48) go(dx < 0 ? 1 : -1);
-        }}
-      >
-        <button
-          onClick={() => go(-1)}
-          className="absolute left-3 md:left-6 h-12 w-12 rounded-full bg-white/15 hover:bg-white/25 grid place-items-center text-white transition-colors z-10"
-          aria-label="Anterior"
-        >
-          <ChevronLeft size={22} />
-        </button>
-        <div className="relative w-full max-w-5xl aspect-[4/3] md:aspect-[3/2]">
-          {showSpinner ? (
-            <div className="absolute inset-0 grid place-items-center">
-              <Loader2 size={32} className="animate-spin text-white/60" />
-            </div>
-          ) : null}
-          {photos.map((p, i) => {
-            if (!mounted.has(i)) return null;
-            const isActive = i === index;
-            if (p.media_type === "video") {
-              // Sólo se monta el <video> del índice activo: al cambiar de
-              // slide se desmonta y la reproducción se detiene sola.
-              if (!isActive) return null;
-              return (
-                <video
-                  key={p.id}
-                  src={p.public_url}
-                  poster={p.poster_url ?? undefined}
-                  controls
-                  autoPlay
-                  playsInline
-                  className="absolute inset-0 h-full w-full object-contain"
-                />
-              );
-            }
-            return (
-              <div
-                key={p.id}
-                className={cn(
-                  "absolute inset-0 transition-opacity duration-200",
-                  isActive ? "opacity-100" : "opacity-0 pointer-events-none"
-                )}
-                aria-hidden={!isActive}
-              >
-                <Image
-                  src={p.public_url}
-                  alt={p.alt_text ?? title}
-                  fill
-                  // El contenedor es max-w-5xl (~1024px): pedir 100vw en
-                  // desktop descargaba el doble de píxeles de los que se ven.
-                  sizes="(max-width: 1024px) 100vw, 1024px"
-                  className="object-contain"
-                  priority={isActive}
-                  loading="eager"
-                  onLoad={() =>
-                    setLoadedIds((prev) => {
-                      if (prev.has(p.id)) return prev;
-                      const next = new Set(prev);
-                      next.add(p.id);
-                      return next;
-                    })
-                  }
-                  // Si la foto falla (objeto borrado, transform caído) el
-                  // spinner no puede quedar girando para siempre.
-                  onError={() =>
-                    setLoadedIds((prev) => {
-                      if (prev.has(p.id)) return prev;
-                      const next = new Set(prev);
-                      next.add(p.id);
-                      return next;
-                    })
-                  }
-                />
-              </div>
-            );
-          })}
-        </div>
-        <button
-          onClick={() => go(1)}
-          className="absolute right-3 md:right-6 h-12 w-12 rounded-full bg-white/15 hover:bg-white/25 grid place-items-center text-white transition-colors z-10"
-          aria-label="Siguiente"
-        >
-          <ChevronRight size={22} />
-        </button>
-      </div>
-      <div className="px-4 pb-4 overflow-x-auto no-scrollbar">
-        <div className="flex gap-2">
           {photos.map((p, i) => (
             <button
               key={p.id}
-              ref={(el) => {
-                thumbRefs.current[i] = el;
-              }}
-              onClick={() => setIndex(i)}
-              aria-label={`Ver ${p.media_type === "video" ? "video" : "foto"} ${i + 1}`}
-              aria-current={i === index}
-              className={cn(
-                "relative h-16 w-24 shrink-0 rounded overflow-hidden border-2 transition bg-neutral-800",
-                i === index ? "border-white" : "border-transparent opacity-60"
-              )}
+              type="button"
+              onClick={() => setLightboxIndex(i)}
+              className="relative h-full w-full shrink-0 snap-center bg-cream-200 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-forest-500/50"
+              aria-label={`Abrir ${p.media_type === "video" ? "video" : "foto"} ${i + 1} de ${n}`}
             >
-              {p.media_type === "video" ? (
-                <>
-                  {p.poster_url ? (
-                    <Image src={p.poster_url} alt="" fill sizes="96px" className="object-cover" />
-                  ) : (
-                    <div className="absolute inset-0 bg-neutral-700" />
-                  )}
-                  <div className="absolute inset-0 grid place-items-center">
-                    <Play size={18} className="text-white/90 drop-shadow" fill="currentColor" />
-                  </div>
-                </>
-              ) : (
-                <Image src={p.public_url} alt="" fill sizes="96px" className="object-cover" />
-              )}
+              <Media photo={p} alt={altFor(p, title, i, n)} sizes="100vw" cover={i === 0 ? CAROUSEL_MEDIA : undefined} />
             </button>
           ))}
         </div>
+        {n > 1 ? (
+          <span
+            className="pointer-events-none absolute right-3 bottom-3 rounded-full bg-forest-950/70 px-2.5 py-1 text-xs font-semibold text-cream tabular-nums"
+            aria-live="polite"
+          >
+            {slide + 1}/{n}
+          </span>
+        ) : null}
       </div>
+
+      {/* Escritorio: mosaico */}
+      <div className="relative hidden md:block">
+        <div className="grid h-[420px] grid-cols-4 grid-rows-2 gap-2 overflow-hidden rounded-3xl lg:h-[480px]">
+          {photos.slice(0, 5).map((p, i) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setLightboxIndex(i)}
+              className={cn(
+                "group relative overflow-hidden bg-cream-200 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-forest-500/60",
+                tileClass(i, Math.min(n, 5)),
+              )}
+              aria-label={`Abrir ${p.media_type === "video" ? "video" : "foto"} ${i + 1} de ${n}`}
+            >
+              <Media
+                photo={p}
+                alt={altFor(p, title, i, n)}
+                sizes={i === 0 || n <= 2 ? "(max-width: 1279px) 50vw, 640px" : "(max-width: 1279px) 25vw, 320px"}
+                cover={i === 0 ? MOSAIC_MEDIA : undefined}
+                playSize={i === 0 ? "size-16" : "size-10"}
+              />
+            </button>
+          ))}
+        </div>
+        {n > 1 ? (
+          <button
+            type="button"
+            onClick={() => setLightboxIndex(0)}
+            className="absolute right-4 bottom-4 inline-flex h-10 items-center gap-2 rounded-full bg-paper px-4 text-sm font-semibold text-forest-700 shadow-apart-md ring-1 ring-cream-300 transition-colors hover:bg-cream-50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/40"
+          >
+            <Images className="size-4" aria-hidden />
+            {seeAllLabel}
+          </button>
+        ) : null}
+      </div>
+
+      {lightboxIndex !== null ? (
+        <GalleryLightbox photos={photos} startIndex={lightboxIndex} title={title} onClose={() => setLightboxIndex(null)} />
+      ) : null}
     </div>
   );
 }
