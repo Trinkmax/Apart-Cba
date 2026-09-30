@@ -2,6 +2,7 @@ import "server-only";
 
 import { cache } from "react";
 import { revalidateTag, unstable_cache } from "next/cache";
+import type { PostgrestFilterBuilder } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/server";
 import type {
   CancellationPolicy,
@@ -90,14 +91,23 @@ export const getStorefrontOrgIds = cache(async (): Promise<string[]> => {
 });
 
 /**
+ * El query de `units` que devuelve `storefrontUnitsQuery`, con la fila sin
+ * tipar: cada caller castea `data` a su forma (el cliente admin no lleva el
+ * tipo de la base). El retorno va EXPLÍCITO a propósito: inferido, TypeScript
+ * tenía que escribir en la declaración el tipo del `select` genérico de
+ * supabase-js, y el chequeo incremental de `next build` —que calcula esas
+ * declaraciones para los archivos cambiados cuando arranca de un
+ * `.tsbuildinfo` viejo, como el que Vercel restaura en `.next/cache`— se
+ * quedaba sin memoria (OOM local y `std::bad_alloc` en Vercel, 30/09/2026).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type StorefrontUnitsQuery = PostgrestFilterBuilder<any, any, any, any, any, any, any>;
+
+/**
  * `units` con el scope de la vidriera aplicado. Encadená los filtros propios
  * (`.eq("slug", …)`, `.in("id", …)`) sobre lo que devuelve.
  */
-export function storefrontUnitsQuery<C extends string>(
-  admin: AdminClient,
-  orgIds: string[],
-  columns: C,
-) {
+export function storefrontUnitsQuery(admin: AdminClient, orgIds: string[], columns: string): StorefrontUnitsQuery {
   return admin
     .from("units")
     .select(columns)
