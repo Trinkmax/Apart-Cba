@@ -15,7 +15,7 @@ const inside = (p: { left: number; top: number }) =>
 describe("placePreview", () => {
   it("arriba del precio cuando entra, alineada con el punto", () => {
     const p = placePreview({ ...base, point: { x: 235, y: 400 } });
-    expect(p).toEqual({ side: "top", left: 111, top: 108, anchor: 124 });
+    expect(p).toEqual({ side: "top", left: 111, top: 108, anchor: 124, fits: true });
     expect(inside(p)).toBe(true);
   });
 
@@ -41,11 +41,12 @@ describe("placePreview", () => {
   it("si no entra de ningún lado, queda entera adentro del mapa y sin anclaje si tapa el precio", () => {
     // Mapa de 400 de alto: ni arriba ni abajo entran; corrida, tapa la píldora.
     const p = placePreview({ ...base, container: { width: 470, height: 400 }, point: { x: 235, y: 200 } });
-    expect(p.side).toBe("bottom");
-    expect(p.top).toBe(142);
     expect(p.anchor).toBeNull();
+    expect(p.fits).toBe(false);
+    expect(p.top).toBeGreaterThanOrEqual(12);
     expect(p.top + 246).toBeLessThanOrEqual(400 - 12);
     expect(p.left).toBeGreaterThanOrEqual(12);
+    expect(p.left + 248).toBeLessThanOrEqual(470 - 12);
   });
 
   it("corrida pero todavía del lado del precio: conserva el anclaje", () => {
@@ -55,6 +56,17 @@ describe("placePreview", () => {
     expect(p.top).toBe(12);
     expect(p.top + 246).toBeLessThanOrEqual(302 - 34 - 4);
     expect(p.anchor).toBe(124);
+    expect(p.fits).toBe(false);
+  });
+
+  it("corrida y tapando igual: gana la que menos tapa el precio", () => {
+    // Mapa bajo y angosto: arriba y abajo la taparían entera; a la derecha, sólo un borde.
+    const p = placePreview({ ...base, container: { width: 470, height: 400 }, point: { x: 180, y: 200 } });
+    expect(p.side).toBe("right");
+    expect(p.left).toBe(210);
+    expect(p.left).toBeGreaterThan(180 - 44);
+    expect(p.anchor).toBeNull();
+    expect(p.fits).toBe(false);
   });
 
   it("pegada a un costado: la tarjeta se corre y el anclaje no se va a la esquina", () => {

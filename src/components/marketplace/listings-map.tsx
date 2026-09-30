@@ -48,14 +48,18 @@ type Located = CatalogListing & { latitude: number; longitude: number };
 const HOVER_GRACE_MS = 220;
 
 /**
- * Por debajo de este alto de mapa la tarjeta va compacta (foto más baja): con
- * la foto 16:10 (~267 px de alto) un mapa bajo no tiene lugar ni arriba ni
- * abajo del precio para la mitad de los puntos; compacta (~215 px) sí.
+ * Tamaños de la tarjeta, de mayor a menor: cambia sólo el alto de la foto
+ * (16:10, 2:1, 3:1 → ~280, ~248, ~205 px de alto en total). Se usa la más
+ * grande que entra entera de algún lado del precio sin taparlo; en un mapa
+ * bajo, un punto a media altura no deja lugar para la grande ni arriba ni abajo.
  */
-const COMPACT_BELOW_PX = 640;
+const PREVIEW_SIZES = ["full", "compact", "mini"] as const;
 
-/** Medida aproximada de una píldora de precio ("$ 110.000"). */
-const PILL = { width: 88, height: 34 } as const;
+/**
+ * Medida aproximada de la píldora activa ("$ 110.000", agrandada al 110 %),
+ * que se apoya justo arriba del punto.
+ */
+const PILL = { width: 88, height: 32 } as const;
 
 function isLocated(l: CatalogListing): l is Located {
   return (
@@ -173,8 +177,6 @@ export function ListingsMap({
     const box = previewRef.current;
     const inner = innerRef.current;
     if (!map || !wrap || !box || !inner || !popupListing) return;
-    // Primero el tamaño (compacta en mapas bajos) y recién después se mide.
-    box.dataset.compact = wrap.clientHeight < COMPACT_BELOW_PX ? "true" : "false";
     const p = map.project([popupListing.longitude, popupListing.latitude]);
     const W = wrap.clientWidth;
     const H = wrap.clientHeight;
@@ -189,12 +191,19 @@ export function ListingsMap({
       box.style.visibility = "hidden";
       return;
     }
-    const res = placePreview({
-      point: { x: p.x, y: p.y },
-      card: { width: box.offsetWidth, height: box.offsetHeight },
-      container: { width: W, height: H },
-      pill: PILL,
-    });
+    // La más grande que entre: cada intento cambia el tamaño y vuelve a medir.
+    let res: ReturnType<typeof placePreview> | null = null;
+    for (const size of PREVIEW_SIZES) {
+      box.dataset.size = size;
+      res = placePreview({
+        point: { x: p.x, y: p.y },
+        card: { width: box.offsetWidth, height: box.offsetHeight },
+        container: { width: W, height: H },
+        pill: PILL,
+      });
+      if (res.fits) break;
+    }
+    if (!res) return;
     box.style.transform = `translate3d(${Math.round(res.left)}px, ${Math.round(res.top)}px, 0)`;
     box.style.visibility = "visible";
     // Sin flecha: una punta color papel quedaba suelta sobre la foto o se
@@ -277,6 +286,12 @@ export function ListingsMap({
               latitude={l.latitude}
               longitude={l.longitude}
               anchor="bottom"
+              // El marcador es un rectángulo y la píldora, redondeada: con las
+              // píldoras apiladas, las esquinas del marcador de arriba le robaban
+              // el mouse a la de abajo. Sólo la píldora recibe el puntero (el clic
+              // sube igual hasta el marcador). Con !important porque Mapbox
+              // reescribe `pointer-events` en línea en cada actualización.
+              className="pointer-events-none!"
               style={{ zIndex: active ? 3 : 1 }}
               onClick={(e) => {
                 e.originalEvent.stopPropagation();
@@ -295,7 +310,10 @@ export function ListingsMap({
                 }}
                 onPointerLeave={() => leaveSoon(l.id)}
                 className={cn(
-                  "whitespace-nowrap rounded-full px-3 py-1.5 font-apart text-[0.8125rem] font-bold tabular-nums shadow-apart-md ring-1 outline-none",
+                  // block: como inline-block, el marcador sumaba el hueco de la línea
+                  // (~5 px invisibles abajo) y en un grupo apretado ese hueco tapaba
+                  // a la píldora de abajo: el mouse no le llegaba.
+                  "pointer-events-auto block whitespace-nowrap rounded-full px-3 py-1.5 font-apart text-[0.8125rem] font-bold tabular-nums shadow-apart-md ring-1 outline-none",
                   "transition-[transform,background-color,color] duration-200 focus-visible:ring-[3px] focus-visible:ring-forest-500/50",
                   active
                     ? "scale-110 bg-coral-700 text-white ring-coral-700"
@@ -374,7 +392,8 @@ function boundsOf(list: Located[]): [[number, number], [number, number]] | null 
 }
 
 /** Mismo alto de foto en la tarjeta y en la capa de controles que va encima. */
-const PREVIEW_PHOTO = "aspect-[16/10] group-data-[compact=true]/preview:aspect-[2/1]";
+const PREVIEW_PHOTO =
+  "aspect-[16/10] group-data-[size=compact]/preview:aspect-[2/1] group-data-[size=mini]/preview:aspect-[3/1]";
 const EASE = "ease-[cubic-bezier(0.22,1,0.36,1)]";
 
 /**
@@ -491,7 +510,7 @@ function PreviewCard({
           ) : null}
         </div>
 
-        <div className="px-4 pb-3.5 pt-3 group-data-[compact=true]/preview:pb-3 group-data-[compact=true]/preview:pt-2.5">
+        <div className="px-4 pb-3 pt-2.5 group-data-[size=full]/preview:pb-3.5 group-data-[size=full]/preview:pt-3">
           <p className="truncate text-base font-extrabold leading-tight tracking-[-0.015em] text-forest-700">
             {listing.display_title}
             {listing.display_tagline ? (
@@ -508,7 +527,7 @@ function PreviewCard({
               Reserva inmediata
             </p>
           ) : null}
-          <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-cream-300 pt-2.5 group-data-[compact=true]/preview:mt-2 group-data-[compact=true]/preview:pt-2">
+          <div className="mt-2 flex items-center justify-between gap-3 border-t border-cream-300 pt-2 group-data-[size=full]/preview:mt-2.5 group-data-[size=full]/preview:pt-2.5">
             <PreviewPrice price={price} />
             <span
               aria-hidden

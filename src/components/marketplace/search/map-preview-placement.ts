@@ -2,7 +2,8 @@
  * Dónde dibujar la vista previa de una unidad sobre el mapa de /buscar para
  * que se vea COMPLETA: arriba del precio si entra; si no, abajo, a la derecha
  * o a la izquierda (en ese orden); y si no entra de ningún lado, corrida hasta
- * quedar adentro del mapa aunque tape la píldora. Puro: recibe medidas en px
+ * quedar adentro del mapa, sin tapar la píldora si hay forma (`fits: false`
+ * avisa que conviene probar una tarjeta más chica). Puro: recibe medidas en px
  * del contenedor del mapa y devuelve la posición de la tarjeta y su punto de anclaje.
  */
 
@@ -20,6 +21,8 @@ export interface PreviewPlacement {
    * cuando la tarjeta tuvo que correrse y ya no queda enfrentada al precio.
    */
   anchor: number | null;
+  /** true: entró de un lado del precio con todo el aire; false: tuvo que correrse. */
+  fits: boolean;
 }
 
 export interface PlacePreviewInput {
@@ -88,24 +91,35 @@ export function placePreview(input: PlacePreviewInput): PreviewPlacement {
 
   const chosen = candidates.find((c) => c.fits);
   if (chosen) {
-    return { side: chosen.side, left: chosen.left, top: chosen.top, anchor: anchorFor(chosen.side, chosen.left, chosen.top) };
+    return {
+      side: chosen.side,
+      left: chosen.left,
+      top: chosen.top,
+      anchor: anchorFor(chosen.side, chosen.left, chosen.top),
+      fits: true,
+    };
   }
 
-  // No entra de ningún lado: el lado con más lugar, y la tarjeta corrida hasta
-  // quedar entera adentro del mapa. Si aun corrida sigue de ese lado de la
-  // píldora (sin taparla), conserva el anclaje; si la tapa, se pierde.
-  const best = candidates.reduce((a, b) => (b.room > a.room ? b : a));
-  const left = clamp(best.left, m, W - w - m);
-  const top = clamp(best.top, m, H - h - m);
-  const clearOfPill =
-    best.side === "top"
-      ? top + h <= point.y - pillH - 4
-      : best.side === "bottom"
-        ? top >= point.y + 4
-        : best.side === "right"
-          ? left >= point.x + pillW / 2 + 4
-          : left + w <= point.x - pillW / 2 - 4;
-  return { side: best.side, left, top, anchor: clearOfPill ? anchorFor(best.side, left, top) : null };
+  // No entra de ningún lado: cada lado corrido hasta quedar entero adentro del
+  // mapa. Gana el que menos tapa la píldora (ninguno, con suerte) y, a igual
+  // tapado, el que tiene más lugar. Tapándola no hay anclaje.
+  const pill = { l: point.x - pillW / 2 - 4, r: point.x + pillW / 2 + 4, t: point.y - pillH - 4, b: point.y + 4 };
+  const shifted = candidates.map((c) => {
+    const left = clamp(c.left, m, W - w - m);
+    const top = clamp(c.top, m, H - h - m);
+    const covered =
+      Math.max(0, Math.min(left + w, pill.r) - Math.max(left, pill.l)) *
+      Math.max(0, Math.min(top + h, pill.b) - Math.max(top, pill.t));
+    return { side: c.side, room: c.room, left, top, covered };
+  });
+  const best = shifted.reduce((a, b) => (b.covered < a.covered || (b.covered === a.covered && b.room > a.room) ? b : a));
+  return {
+    side: best.side,
+    left: best.left,
+    top: best.top,
+    anchor: best.covered === 0 ? anchorFor(best.side, best.left, best.top) : null,
+    fits: false,
+  };
 
   function anchorFor(side: PreviewSide, left: number, top: number): number | null {
     const along = side === "top" || side === "bottom" ? point.x - left : pillCenterY - top;
