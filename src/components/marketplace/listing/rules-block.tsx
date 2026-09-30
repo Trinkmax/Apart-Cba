@@ -1,7 +1,24 @@
 import { CalendarX2, ScrollText } from "lucide-react";
 import { cancellationCopy } from "@/lib/marketplace/display";
+import { descriptionBlocks } from "@/lib/marketplace/widget-quote";
 import type { CancellationPolicy } from "@/lib/types/database";
 import { DescriptionBlock } from "./description-block";
+
+/**
+ * "Reglas y cancelación" en una línea, para el plegable de celular y tablet:
+ * "Cancelación estricta · 8 reglas de la casa". Cada renglón (o viñeta) del
+ * texto del equipo cuenta como una regla; con uno solo, no se cuenta.
+ */
+export function rulesSummary(
+  houseRules: string | null,
+  policy: CancellationPolicy | null,
+  cancellationText: string | null,
+): string {
+  const cancel = cancellationCopy(policy, cancellationText).title;
+  const lines = descriptionBlocks(houseRules).reduce((n, b) => n + (b.kind === "p" ? b.lines.length : b.items.length), 0);
+  if (lines === 0) return cancel;
+  return `${cancel} · ${lines > 1 ? `${lines} reglas de la casa` : "reglas de la casa"}`;
+}
 
 /** Reglas de la casa (texto del equipo) y política de cancelación. */
 export function RulesBlock({

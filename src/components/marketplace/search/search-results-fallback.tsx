@@ -40,7 +40,6 @@ export function SearchResultsFallback({
   const results = sortListings(filterCatalog(catalog.listings, state), state);
   const counts = hoodCounts(catalog.listings, state, null);
   const n = results.length;
-  const heading = `${n} ${n === 1 ? "lugar" : "lugares"} en Córdoba`;
 
   return (
     <>
@@ -56,17 +55,18 @@ export function SearchResultsFallback({
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className={cn(MAP_ENABLED && "lg:grid lg:grid-cols-[minmax(0,58fr)_minmax(0,42fr)] lg:gap-8")}>
-          <section aria-labelledby="buscar-titulo" className="min-w-0 pb-24 pt-4 lg:pb-16">
+          <section aria-labelledby="buscar-titulo" className="min-w-0 pb-24 pt-4 lg:pb-16 max-lg:pb-4 max-lg:pt-3">
             <HoodChips hoods={catalog.hoods} counts={counts} total={n} value={null} onChange={noop} />
 
-            <div className="mt-5 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-              <div className="min-w-0">
+            <div className="mt-5 flex flex-wrap items-end justify-between gap-x-4 gap-y-3 max-lg:mt-4 max-lg:flex-nowrap max-lg:items-center max-lg:gap-x-2">
+              <div className="min-w-0 max-lg:flex-1">
                 <h1
                   id="buscar-titulo"
                   aria-live="polite"
-                  className="font-apart text-[1.625rem] font-extrabold leading-[1.1] tracking-[-0.025em] text-forest-700 sm:text-[1.875rem]"
+                  className="font-apart text-[1.625rem] font-extrabold leading-[1.1] tracking-[-0.025em] text-forest-700 sm:text-[1.875rem] max-sm:text-[1.25rem] min-[375px]:max-sm:text-[1.375rem] max-lg:relative"
                 >
-                  {heading}
+                  {n} {n === 1 ? "lugar" : "lugares"}
+                  <span className="max-lg:sr-only"> en Córdoba</span>
                 </h1>
               </div>
               <div className="flex items-center gap-2">
@@ -75,10 +75,10 @@ export function SearchResultsFallback({
                   <button
                     type="button"
                     aria-haspopup="dialog"
-                    className="inline-flex h-11 items-center gap-2 rounded-full border border-cream-400 bg-paper px-4 font-apart text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40 lg:hidden"
+                    className="inline-flex h-11 items-center gap-2 rounded-full border border-cream-400 bg-paper px-4 font-apart text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40 lg:hidden max-sm:relative max-sm:w-11 max-sm:justify-center max-sm:px-0"
                   >
                     <MapIcon aria-hidden className="size-[1.1rem]" />
-                    Mapa
+                    <span className="max-sm:sr-only">Mapa</span>
                   </button>
                 ) : null}
               </div>
@@ -93,12 +93,12 @@ export function SearchResultsFallback({
             ) : (
               <ul
                 className={cn(
-                  "mt-6 grid grid-cols-1 gap-x-5 gap-y-9 sm:grid-cols-2",
+                  "mt-6 grid grid-cols-1 gap-x-5 gap-y-9 sm:grid-cols-2 max-lg:mt-4",
                   MAP_ENABLED ? "2xl:grid-cols-3" : "lg:grid-cols-3",
                 )}
               >
                 {results.map((listing, i) => (
-                  <li key={listing.id}>
+                  <li key={listing.id} className="m-rise">
                     <ListingCard listing={listing} view="noche" stay={null} priority={i < 4} />
                   </li>
                 ))}
@@ -116,18 +116,8 @@ export function SearchResultsFallback({
         </div>
       </div>
 
-      {MAP_ENABLED && n > 0 ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex justify-center safe-bottom lg:hidden">
-          <button
-            type="button"
-            aria-haspopup="dialog"
-            className="pointer-events-auto inline-flex h-12 items-center gap-2 rounded-full bg-forest-700 px-5 font-apart text-[0.9375rem] font-bold text-cream shadow-apart-lg outline-none transition-transform active:scale-[0.97] focus-visible:ring-[3px] focus-visible:ring-forest-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-cream"
-          >
-            <MapIcon aria-hidden className="size-[1.1rem]" />
-            Ver mapa
-          </button>
-        </div>
-      ) : null}
+      {/* Sin el botón flotante "Ver mapa": el cliente lo muestra recién al bajar
+          (arriba ya está el de la fila del título). */}
     </>
   );
 }
@@ -139,7 +129,7 @@ function SortSelectStatic() {
       <span className="sr-only sm:not-sr-only">Ordenar</span>
       <select
         defaultValue="recomendado"
-        className="h-11 cursor-pointer appearance-none rounded-full border border-cream-400 bg-paper pl-4 pr-10 text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40"
+        className="h-11 cursor-pointer appearance-none rounded-full border border-cream-400 bg-paper pl-4 pr-10 text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40 max-sm:pl-3 max-sm:pr-7"
       >
         <option value="recomendado">Recomendados</option>
         <option value="precio_asc">Menor precio</option>
@@ -148,7 +138,7 @@ function SortSelectStatic() {
       <svg
         aria-hidden
         viewBox="0 0 16 16"
-        className="pointer-events-none absolute right-4 top-1/2 size-3.5 -translate-y-1/2 text-forest-700"
+        className="pointer-events-none absolute right-4 top-1/2 size-3.5 -translate-y-1/2 text-forest-700 max-sm:right-2.5"
       >
         <path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </svg>

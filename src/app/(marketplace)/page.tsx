@@ -65,8 +65,13 @@ export default async function MarketplaceHome() {
       />
       <HomePillars />
       <HomeFeatured listings={pickFeaturedListings(catalog.listings)} total={stats.shortStays} />
-      <HomeProcess responseHours={facts.responseHours} senaLabel={facts.senaLabel} />
-      <HomeHoods tiles={hoodTiles(catalog, { limit: 10 })} />
+      {/* En celular y tablet los barrios van antes del proceso (lo visual antes que el
+          texto). El contenedor es flex SÓLO por debajo de lg: en escritorio es un div
+          en bloque sin estilos (las secciones no tienen márgenes) y manda el orden del código. */}
+      <div className="max-lg:flex max-lg:flex-col">
+        <HomeProcess responseHours={facts.responseHours} senaLabel={facts.senaLabel} />
+        <HomeHoods tiles={hoodTiles(catalog, { limit: 10 })} className="max-lg:order-first" />
+      </div>
       <HomeMonthly monthlyCount={stats.monthly} whatsappUrl={monthlyWhatsapp} mailtoUrl={monthlyMailto} />
       <HomeStory />
       <HomeOwnersBand />

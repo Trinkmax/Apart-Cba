@@ -8,7 +8,7 @@ import { LegalNav } from "@/components/marketplace/shell/legal-nav";
  */
 export default function LegalLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="mx-auto max-w-3xl px-4 pb-20 pt-8 sm:px-6 sm:pt-12 lg:pb-28">
+    <div className="mx-auto max-w-3xl px-4 pb-20 pt-8 max-lg:pb-10 max-sm:pt-6 sm:px-6 sm:pt-12 lg:pb-28">
       <LegalNav />
       <div className="mt-10 sm:mt-12">{children}</div>
     </div>

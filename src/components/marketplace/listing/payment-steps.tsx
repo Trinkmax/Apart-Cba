@@ -50,6 +50,30 @@ function MonthlyConsultSteps({ responseHours }: { responseHours: number }) {
 }
 
 /**
+ * "Cómo se paga" en UNA línea, para el plegable de celular y tablet: con
+ * fechas, los montos ("Seña de $ 80.000 · $ 160.000 al llegar"); sin fechas,
+ * la regla ("Seña de 1 noche · el resto, al llegar"); por mes, la consulta.
+ */
+export function PaymentSummary() {
+  const { evaluation, settings, listing, view } = useListingStay();
+  const currency = listing.marketplace_currency;
+  if (view === "mes" || evaluation.kind === "monthly") return <>Se consulta: precio, contrato y forma de pago</>;
+  if (evaluation.kind === "nightly") {
+    if (evaluation.sena == null) return <>Sin seña: pagás todo al llegar</>;
+    // Sin aria-live: la barra de reservar ya anuncia el total al cambiar las fechas.
+    return (
+      <>
+        Seña de <span className="tabular-nums">{formatCurrency(evaluation.sena, currency)}</span> ·{" "}
+        <span className="tabular-nums">{formatCurrency(evaluation.resto, currency)}</span> al llegar
+      </>
+    );
+  }
+  const rule = senaStepLabel(null, settings.deposit, currency);
+  if (!rule) return <>Sin seña: pagás todo al llegar</>;
+  return <>{settings.deposit.rule === "percent" ? `Seña del ${rule}` : `Seña de ${rule}`} · el resto, al llegar</>;
+}
+
+/**
  * "Cómo se paga": los cuatro pasos reales con la seña de ESTA estadía (monto
  * si ya hay fechas; si no, la regla: "1 noche", "30 %"). Por mes (pestaña
  * "Por mes", unidad sólo mensual o 28+ noches), los pasos de la consulta.

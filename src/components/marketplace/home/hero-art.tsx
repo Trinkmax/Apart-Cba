@@ -16,6 +16,11 @@ const EASE = "motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]";
  *
  * La foto es el LCP: nunca arranca invisible (sólo se asienta de 105 % a
  * 100 % de escala, con la opacidad siempre en 1).
+ *
+ * Por debajo de lg la MISMA foto es un bloque a sangre con el borde de abajo en
+ * arco y un degradé forest para leer el titular (que va encima, en el grid del
+ * hero); el arco forest, el punto y la banda se esconden. Al bajar, la foto se
+ * aleja y se apaga (`.m-hero-fade`, atado al scroll de la página).
  */
 export function HeroArt({ statsLabel, className }: { statsLabel: string | null; className?: string }) {
   return (
@@ -24,7 +29,7 @@ export function HeroArt({ statsLabel, className }: { statsLabel: string | null; 
       <div
         aria-hidden
         className={cn(
-          "absolute right-0 top-0 h-[88%] w-[82%] rounded-t-full bg-forest-700",
+          "absolute right-0 top-0 h-[88%] w-[82%] rounded-t-full bg-forest-700 max-lg:hidden",
           "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-8 motion-safe:duration-1000",
           EASE,
         )}
@@ -36,17 +41,33 @@ export function HeroArt({ statsLabel, className }: { statsLabel: string | null; 
       />
 
       {/* Foto en arco (adelante). */}
-      <div className="absolute bottom-0 left-0 h-[88%] w-[82%] overflow-hidden rounded-t-full rounded-b-2xl bg-cream-300 shadow-apart-lg ring-1 ring-forest-900/5 lg:rounded-b-[1.75rem]">
+      <div
+        className={cn(
+          "absolute bottom-0 left-0 h-[88%] w-[82%] overflow-hidden rounded-t-full rounded-b-2xl bg-cream-300 shadow-apart-lg ring-1 ring-forest-900/5 lg:rounded-b-[1.75rem]",
+          "max-lg:h-full max-lg:w-full max-lg:rounded-t-none max-lg:rounded-b-[50%_2.5rem] max-lg:shadow-none max-lg:ring-0",
+        )}
+      >
         <BrandPhoto
           name="balcon-cordoba"
           priority
           alt="Living luminoso de un departamento, con el balcón abierto y la Catedral de Córdoba de fondo"
-          sizes="(min-width: 1280px) 460px, (min-width: 1024px) 36vw, (min-width: 640px) 26vw, 30vw"
+          // < lg la foto cubre un bloque más alto que ancho: se dibuja ~1,3 veces (tablet)
+          // a ~2,4 veces (teléfono) el ancho de la pantalla. Desde lg, lo mismo de siempre.
+          sizes="(min-width: 1280px) 460px, (min-width: 1024px) 36vw, (min-width: 640px) 130vw, 240vw"
           className={cn(
             "object-[60%_50%]",
             "motion-safe:animate-in motion-safe:zoom-in-105 motion-safe:duration-[1600ms]",
             EASE,
+            // Sólo < lg (y con animaciones por scroll): reemplaza la entrada por el alejarse al bajar.
+            "m-hero-fade",
           )}
+        />
+        {/* Degradé forest para leer el titular encima de la foto (sólo < lg). Las paradas
+            van en rem desde abajo, no en %: el texto ocupa siempre lo mismo y en una foto
+            baja (celular apaisado) tiene que seguir cubierto. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_top,rgb(6_32_27/0.95)_0,rgb(6_32_27/0.84)_9rem,rgb(6_32_27/0.5)_17rem,rgb(6_32_27/0)_26rem)] lg:hidden"
         />
         <div aria-hidden className="pointer-events-none absolute inset-0 rounded-[inherit] ring-1 ring-inset ring-white/10" />
       </div>
@@ -55,7 +76,7 @@ export function HeroArt({ statsLabel, className }: { statsLabel: string | null; 
       <span
         aria-hidden
         className={cn(
-          "absolute left-[-3%] top-[13%] size-[11%] rounded-full bg-coral-500 shadow-apart-sm",
+          "absolute left-[-3%] top-[13%] size-[11%] rounded-full bg-coral-500 shadow-apart-sm max-lg:hidden",
           "motion-safe:animate-in motion-safe:zoom-in-50 motion-safe:fade-in motion-safe:duration-700 motion-safe:delay-500 motion-safe:fill-mode-[both]",
           EASE,
         )}
@@ -65,7 +86,7 @@ export function HeroArt({ statsLabel, className }: { statsLabel: string | null; 
       <ArcBand
         thickness={18}
         className={cn(
-          "absolute bottom-0 right-[-4%] w-[34%] text-leaf-300",
+          "absolute bottom-0 right-[-4%] w-[34%] text-leaf-300 max-lg:hidden",
           "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-4 motion-safe:duration-700 motion-safe:delay-300 motion-safe:fill-mode-[both]",
           EASE,
         )}

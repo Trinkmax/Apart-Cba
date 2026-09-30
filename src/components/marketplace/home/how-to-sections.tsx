@@ -51,7 +51,12 @@ export function HowToSection({
   className?: string;
 }) {
   return (
-    <section id={id} aria-labelledby={`${id}-title`} className={cn("scroll-mt-24 lg:scroll-mt-28", className)}>
+    // max-lg:scroll-mt-36: en celular el índice queda pegado bajo el header (64 px + ≈60 px).
+    <section
+      id={id}
+      aria-labelledby={`${id}-title`}
+      className={cn("scroll-mt-24 lg:scroll-mt-28 max-lg:scroll-mt-36", className)}
+    >
       <div className="flex items-center gap-3">
         <span className="flex size-12 shrink-0 items-center justify-center rounded-t-full rounded-b-lg bg-leaf-200 text-forest-700">
           <Icon className="size-5" aria-hidden />
@@ -116,7 +121,7 @@ export function PedidoSection() {
       title="Pedís tus fechas"
       lead="Elegís el departamento, las fechas y cuántos son. No hace falta crear una cuenta ni cargar una tarjeta: todavía no pagás nada."
     >
-      <div className="rounded-3xl bg-paper p-5 shadow-apart-sm ring-1 ring-cream-300 sm:p-7">
+      <div className="m-rise rounded-3xl bg-paper p-5 shadow-apart-sm ring-1 ring-cream-300 sm:p-7">
         <p className="text-sm font-bold text-forest-700">Qué datos te pedimos</p>
         <dl className="mt-4 grid gap-x-8 gap-y-4 sm:grid-cols-2">
           {REQUEST_FIELDS.map((f) => (
@@ -212,7 +217,7 @@ export function PagosSection({ facts }: { facts: ProcessFacts }) {
       lead={`Cuando te confirmamos, señás ${facts.senaDetail} para asegurar tus fechas. El resto lo pagás al llegar.`}
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="relative overflow-hidden rounded-3xl bg-forest-700 p-6 text-cream shadow-apart-md sm:p-7">
+        <div className="m-rise relative overflow-hidden rounded-3xl bg-forest-700 p-6 text-cream shadow-apart-md sm:p-7">
           <p className="text-[0.6875rem] font-bold uppercase tracking-[0.2em] text-leaf-300">Al confirmar</p>
           <p className="mt-3 font-apart text-2xl font-extrabold tracking-[-0.02em]">
             Seña de {facts.senaLabel}
@@ -223,7 +228,7 @@ export function PagosSection({ facts }: { facts: ProcessFacts }) {
           </p>
           <span aria-hidden className="absolute -right-6 -top-6 size-20 rounded-full border-[10px] border-coral-500/80" />
         </div>
-        <div className="rounded-3xl bg-paper p-6 shadow-apart-sm ring-1 ring-cream-300 sm:p-7">
+        <div className="m-rise rounded-3xl bg-paper p-6 shadow-apart-sm ring-1 ring-cream-300 sm:p-7">
           <p className="text-[0.6875rem] font-bold uppercase tracking-[0.2em] text-forest-600">Al llegar</p>
           <p className="mt-3 font-apart text-2xl font-extrabold tracking-[-0.02em] text-forest-700">El resto</p>
           <p className="mt-2 text-[0.9375rem] leading-relaxed text-ink-700">
@@ -264,7 +269,7 @@ export function PorMesSection({
       title="Estadías por mes"
       lead="Para 28 noches o más, la reserva no se pide por la web: se consulta. Escribinos con las fechas y cuántos son, y te pasamos el precio por mes y las condiciones."
     >
-      <div className="rounded-3xl bg-cream-200 p-5 sm:p-7">
+      <div className="m-rise rounded-3xl bg-cream-200 p-5 sm:p-7">
         <p className="text-[0.9375rem] leading-relaxed text-ink-700">
           Son departamentos amoblados, pensados para quienes vienen por trabajo, estudio o tratamientos, con
           atención directa del equipo.
@@ -323,12 +328,15 @@ export function LlegadaSection() {
         />
         <figure className="mx-auto w-full max-w-[17rem]">
           <div className="aspect-[4/5] overflow-hidden rounded-t-full rounded-b-3xl bg-cream-300 shadow-apart-md">
-            <BrandPhoto
-              name="bienvenida"
-              alt="Tarjetas de bienvenida de apart: «Qué lindo tenerte por Córdoba» y «Cuidemos el lugar», junto a un llavero"
-              sizes="(min-width: 1024px) 17rem, (min-width: 768px) 15rem, 17rem"
-              className="object-[38%_50%]"
-            />
+            {/* Celular: la foto se mueve más lento que la página dentro del arco. */}
+            <div className="m-parallax size-full">
+              <BrandPhoto
+                name="bienvenida"
+                alt="Tarjetas de bienvenida de apart: «Qué lindo tenerte por Córdoba» y «Cuidemos el lugar», junto a un llavero"
+                sizes="(min-width: 1024px) 17rem, (min-width: 768px) 15rem, 17rem"
+                className="object-[38%_50%]"
+              />
+            </div>
           </div>
           <figcaption className="mt-3 text-center font-apart-serif text-base italic text-forest-600">
             Este lugar es tuyo por unos días.
@@ -357,7 +365,7 @@ export function CancelacionesSection({ customText }: { customText: string | null
       lead="Mientras tu pedido está pendiente, podés cancelarlo sin costo desde el link de tu reserva. Una vez confirmada, rige la política de cancelación."
     >
       {custom ? (
-        <div className="rounded-3xl bg-paper p-5 shadow-apart-sm ring-1 ring-cream-300 sm:p-7">
+        <div className="m-rise rounded-3xl bg-paper p-5 shadow-apart-sm ring-1 ring-cream-300 sm:p-7">
           <p className="text-sm font-bold text-forest-700">Nuestra política de cancelación</p>
           <p className="mt-2 whitespace-pre-line text-[0.9375rem] leading-relaxed text-ink-700">{custom}</p>
         </div>
@@ -368,7 +376,7 @@ export function CancelacionesSection({ customText }: { customText: string | null
           </p>
           <ul className="grid gap-3 md:grid-cols-3">
             {POLICIES.map((p) => (
-              <li key={p.label} className="rounded-3xl bg-paper p-5 shadow-apart-sm ring-1 ring-cream-300">
+              <li key={p.label} className="m-rise rounded-3xl bg-paper p-5 shadow-apart-sm ring-1 ring-cream-300">
                 <p className="font-bold text-forest-700">{p.label}</p>
                 <p className="mt-1.5 text-[0.875rem] leading-relaxed text-ink-700">{p.body}</p>
               </li>

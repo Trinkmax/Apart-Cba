@@ -35,7 +35,7 @@ export function ContactBand({
   const hasAny = Boolean(whatsappUrl || email || instagram);
   return (
     <section className={cn("px-2 sm:px-4 lg:px-6", className)} aria-labelledby="contact-band-title">
-      <div className="relative mx-auto max-w-[1400px] overflow-hidden rounded-[2rem] bg-leaf-100 px-5 py-12 sm:rounded-[2.5rem] sm:px-10 sm:py-16 lg:px-16">
+      <div className="m-rise relative mx-auto max-w-[1400px] overflow-hidden rounded-[2rem] bg-leaf-100 px-5 py-12 max-sm:py-10 sm:rounded-[2.5rem] sm:px-10 sm:py-16 lg:px-16">
         <ArcBand
           thickness={12}
           className="absolute -bottom-2 -right-10 w-48 text-leaf-300 sm:w-64 lg:-right-6 lg:w-80"

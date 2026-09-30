@@ -567,6 +567,65 @@
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
+/* ─────────── Web apart en celular: efectos atados al scroll ───────────
+   Sólo por debajo de lg (el escritorio no cambia), sólo con
+   `prefers-reduced-motion: no-preference` y sólo si el navegador tiene
+   animaciones por scroll (Chrome/Android, Safari 26+). Sin soporte, todo se
+   ve quieto y completo: ninguna clase deja nada invisible.
+   Todas animan transform/opacity (van por el compositor, no re-layout).
+   - .m-parallax   imagen que se desplaza más lento que la página. OJO: el
+                   recorte del contenedor va con `overflow-clip`, NUNCA
+                   `overflow-hidden`: hidden crea un contenedor de scroll,
+                   `view()` se engancha a él (que no scrollea) y el efecto
+                   queda congelado. Lo mismo para `sticky` (se muere adentro
+                   de un overflow-hidden). Dentro de un riel horizontal hace
+                   falta un view-timeline con nombre en el riel.
+   - .m-zoom-in    imagen que entra algo agrandada y se asienta.
+   - .m-rise       bloque que sube y aparece al entrar a la pantalla.
+   - .m-hero-fade  la foto del hero se aleja y se apaga al empezar a bajar. */
+@keyframes m-parallax {
+  from { transform: translate3d(0, -7%, 0) scale(1.16); }
+  to   { transform: translate3d(0, 7%, 0) scale(1.16); }
+}
+@keyframes m-zoom-in {
+  from { transform: scale(1.12); }
+  to   { transform: scale(1); }
+}
+@keyframes m-rise {
+  from { opacity: 0; transform: translate3d(0, 32px, 0) scale(0.98); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+@keyframes m-hero-fade {
+  from { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+  to   { opacity: 0.25; transform: translate3d(0, 10%, 0) scale(1.06); }
+}
+@media (max-width: 1023.98px) and (prefers-reduced-motion: no-preference) {
+  @supports (animation-timeline: view()) {
+    .m-parallax {
+      animation: m-parallax linear both;
+      animation-timeline: view();
+      animation-range: cover 0% cover 100%;
+      will-change: transform;
+    }
+    .m-zoom-in {
+      animation: m-zoom-in linear both;
+      animation-timeline: view();
+      animation-range: entry 0% cover 40%;
+    }
+    .m-rise {
+      animation: m-rise linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 85%;
+    }
+    .m-hero-fade {
+      animation: m-hero-fade linear both;
+      animation-timeline: scroll(root block);
+      animation-range: 0 70svh;
+      will-change: transform, opacity;
+    }
+  }
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

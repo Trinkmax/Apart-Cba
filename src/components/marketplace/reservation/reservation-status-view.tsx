@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import type { ReservationView } from "@/lib/marketplace/contracts";
+import { isActiveStage } from "@/lib/marketplace/guest-stage";
 import { todayIsoAR } from "@/lib/marketplace/pricing";
+import { cn } from "@/lib/utils";
 import { ArcBand, BrandDot } from "@/components/marketplace/brand/brand-shapes";
 import { StageTimeline } from "@/components/marketplace/brand/process-steps";
 import { StatusPill } from "@/components/marketplace/brand/status-pill";
@@ -16,7 +18,7 @@ function WelcomeBanner({ view }: { view: ReservationView }) {
   return (
     <section
       aria-labelledby="welcome-title"
-      className="relative isolate mb-8 overflow-hidden rounded-3xl bg-forest-700 px-5 py-6 text-cream shadow-apart-md sm:mb-10 sm:px-8 sm:py-8"
+      className="relative isolate mb-8 overflow-hidden rounded-3xl bg-forest-700 px-5 py-6 text-cream shadow-apart-md max-sm:mb-5 sm:mb-10 sm:px-8 sm:py-8 sm:max-lg:mb-7"
     >
       <ArcBand className="absolute -bottom-3 -right-10 -z-10 w-44 text-coral-500/90 sm:w-64" thickness={16} />
       <p className="font-apart-serif text-lg italic text-leaf-300">Hacemos lugar.</p>
@@ -63,6 +65,10 @@ export function ReservationStatusView({
   const { text, dot } = stageTitleParts(view.copy.title, view.copy.tone);
   const waiting = view.stage === "pedido_enviado" || view.stage === "sena_informada";
   const codeLabel = view.stage.startsWith("pedido_") ? "Pedido" : "Reserva";
+  // Celular y tablet, sin repetir: en las etapas activas la tarjeta de la etapa
+  // (que va justo abajo) ya dice lo mismo que la bajada, con más detalle; y al
+  // llegar del checkout, la bienvenida ya hace de título.
+  const bodyInStageCard = isActiveStage(view.stage);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pb-16 pt-6 sm:px-6 sm:pb-24 sm:pt-10 lg:px-8">
@@ -88,19 +94,35 @@ export function ReservationStatusView({
             <span className="font-mono font-semibold tracking-tight text-forest-700">{view.code}</span>
           </span>
         </div>
-        <h1 className="mt-3 max-w-3xl font-apart text-[2rem] font-extrabold leading-[1.05] tracking-[-0.025em] text-forest-700 text-balance sm:text-[2.75rem]">
+        <h1
+          className={cn(
+            "mt-3 max-w-3xl font-apart text-[2rem] font-extrabold leading-[1.05] tracking-[-0.025em] text-forest-700 text-balance sm:text-[2.75rem]",
+            isNew && "max-lg:sr-only",
+          )}
+        >
           {text}
           {dot ? <BrandDot /> : null}
         </h1>
-        <p className="mt-3 max-w-2xl text-[1.0625rem] leading-relaxed text-ink-700 text-pretty">{view.copy.body}</p>
-        <StageTimeline steps={view.timeline} className="mt-7 max-w-xl" />
+        <p
+          className={cn(
+            "mt-3 max-w-2xl text-[1.0625rem] leading-relaxed text-ink-700 text-pretty",
+            bodyInStageCard && "max-lg:hidden",
+          )}
+        >
+          {view.copy.body}
+        </p>
+        <StageTimeline steps={view.timeline} className="mt-7 max-w-xl max-sm:mt-6" />
       </header>
 
-      <div className="mt-8 grid gap-6 lg:mt-10 lg:grid-cols-[minmax(0,1fr)_22.5rem] lg:gap-10">
+      <div className="mt-8 grid gap-6 max-lg:mt-6 max-sm:gap-5 lg:mt-10 lg:grid-cols-[minmax(0,1fr)_22.5rem] lg:gap-10">
         <div className="min-w-0 space-y-5">
           <StageMain view={view} token={token} now={now} todayIso={todayIso} />
         </div>
-        <aside aria-label="Resumen de tu reserva" className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+        {/* Tablet: el resumen en dos columnas (en una sola quedaba media tarjeta vacía). */}
+        <aside
+          aria-label="Resumen de tu reserva"
+          className="space-y-4 sm:max-lg:grid sm:max-lg:grid-cols-2 sm:max-lg:items-start sm:max-lg:gap-4 sm:max-lg:space-y-0 lg:sticky lg:top-24 lg:self-start"
+        >
           <StaySummaryCard view={view} />
           <MoneyCard view={view} />
           <ContactCard view={view} />

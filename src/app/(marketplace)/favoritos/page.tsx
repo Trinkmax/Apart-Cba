@@ -24,8 +24,9 @@ export default async function FavoritosPage() {
   const n = listings.length;
 
   return (
-    <div className="mx-auto max-w-7xl px-4 pb-20 pt-10 font-apart sm:px-6 lg:px-8 lg:pt-14">
-      <header className="mb-8">
+    // < lg: menos aire arriba y abajo (el footer ya separa); las tarjetas suben al entrar (m-rise en la grilla).
+    <div className="mx-auto max-w-7xl px-4 pb-20 pt-10 font-apart sm:px-6 lg:px-8 lg:pt-14 max-lg:pb-4 max-lg:pt-6">
+      <header className="mb-8 max-lg:mb-5">
         <Eyebrow>Tu lista</Eyebrow>
         <h1 className="mt-2 text-[2rem] font-extrabold leading-[1.05] tracking-[-0.025em] text-forest-700 sm:text-[2.5rem]">
           Favoritos
@@ -39,7 +40,7 @@ export default async function FavoritosPage() {
       </header>
 
       {n === 0 ? (
-        <div className="mx-auto flex max-w-lg flex-col items-center rounded-3xl bg-paper px-6 py-12 text-center shadow-apart-sm ring-1 ring-cream-300">
+        <div className="mx-auto flex max-w-lg flex-col items-center rounded-3xl bg-paper px-6 py-12 text-center shadow-apart-sm ring-1 ring-cream-300 max-lg:py-10">
           <ArchShape className="grid h-24 w-20 place-items-center bg-leaf-200">
             <Heart aria-hidden className="mt-3 size-7 text-coral-500" strokeWidth={2.25} />
           </ArchShape>

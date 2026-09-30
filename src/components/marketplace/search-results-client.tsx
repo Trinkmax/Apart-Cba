@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { CalendarClock, Info, Map as MapIcon } from "lucide-react";
@@ -91,6 +91,7 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
   const [hoverStore] = useState(createHoverStore);
   const isLg = useMediaQuery("(min-width: 1024px)");
   const showDesktopMap = MAP_ENABLED && isLg;
+  const [mapHeadRef, mapEndRef, mapPillVisible] = useMapPillVisibility(MAP_ENABLED && !isLg);
 
   // "← Seguir buscando" de la ficha vuelve a esta búsqueda exacta.
   const currentHref = searchHref(state);
@@ -188,7 +189,8 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
 
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className={cn(showDesktopMap && "lg:grid lg:grid-cols-[minmax(0,58fr)_minmax(0,42fr)] lg:gap-8")}>
-          <section aria-labelledby="buscar-titulo" className="min-w-0 pb-24 pt-4 lg:pb-16">
+          {/* < lg: sin el colchón de abajo (quedaba un hueco grande antes del footer). */}
+          <section aria-labelledby="buscar-titulo" className="min-w-0 pb-24 pt-4 lg:pb-16 max-lg:pb-4 max-lg:pt-3">
             <HoodChips
               hoods={catalog.hoods}
               counts={counts}
@@ -214,18 +216,34 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
               </Notice>
             ) : null}
 
-            <div className="mt-5 flex flex-wrap items-end justify-between gap-x-4 gap-y-3">
-              <div className="min-w-0">
+            {/* < lg, una sola línea: título corto + orden + mapa. */}
+            <div
+              ref={mapHeadRef}
+              className="mt-5 flex flex-wrap items-end justify-between gap-x-4 gap-y-3 max-lg:mt-4 max-lg:flex-nowrap max-lg:items-center max-lg:gap-x-2"
+            >
+              <div className="min-w-0 max-lg:flex-1">
                 <h1
                   id="buscar-titulo"
                   aria-live="polite"
                   aria-busy={checking || undefined}
-                  className="font-apart text-[1.625rem] font-extrabold leading-[1.1] tracking-[-0.025em] text-forest-700 sm:text-[1.875rem]"
+                  className="font-apart text-[1.625rem] font-extrabold leading-[1.1] tracking-[-0.025em] text-forest-700 sm:text-[1.875rem] max-sm:text-[1.25rem] min-[375px]:max-sm:text-[1.375rem] max-lg:relative"
                 >
-                  {heading}
+                  {/* "en Córdoba" sigue para lectores y buscadores; a la vista sobra en celular (toda la web es Córdoba). */}
+                  {checking ? (
+                    <>
+                      <span className="max-lg:hidden">Buscando lugares libres…</span>
+                      <span className="lg:hidden">Buscando…</span>
+                    </>
+                  ) : (
+                    <>
+                      {n} {n === 1 ? "lugar" : "lugares"}
+                      <span className="max-lg:sr-only"> en Córdoba</span>
+                    </>
+                  )}
                 </h1>
+                {/* < lg ya lo dice la píldora de la barra sticky. */}
                 {stay ? (
-                  <p className="mt-1 text-[0.9375rem] text-ink-600">
+                  <p className="mt-1 text-[0.9375rem] text-ink-600 max-lg:hidden">
                     {view === "mes" && state.mode === "mes" ? "Desde el " : ""}
                     {rangeLabel(stay.checkIn, stay.checkOut)}
                     {state.guests ? ` · ${guestsCountLabel(state.guests)}` : ""}
@@ -239,10 +257,10 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
                     type="button"
                     onClick={() => setMapOpen(true)}
                     aria-haspopup="dialog"
-                    className="inline-flex h-11 items-center gap-2 rounded-full border border-cream-400 bg-paper px-4 font-apart text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40 lg:hidden"
+                    className="inline-flex h-11 items-center gap-2 rounded-full border border-cream-400 bg-paper px-4 font-apart text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40 lg:hidden max-sm:relative max-sm:w-11 max-sm:justify-center max-sm:px-0"
                   >
                     <MapIcon aria-hidden className="size-[1.1rem]" />
-                    Mapa
+                    <span className="max-sm:sr-only">Mapa</span>
                   </button>
                 ) : null}
               </div>
@@ -267,16 +285,26 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
                 {results.map((listing, i) => (
                   <li
                     key={listing.id}
+                    // .m-rise: sube y aparece al entrar (sólo < lg; en escritorio no hace nada).
+                    className="m-rise"
                     onPointerEnter={() => hoverStore.set(listing.id)}
                     onPointerLeave={() => hoverStore.set(null)}
                     onFocus={() => hoverStore.set(listing.id)}
                     onBlur={() => hoverStore.set(null)}
                   >
-                    <ListingCard listing={listing} view={view} stay={stay} priority={i < 4} />
+                    <ListingCard
+                      listing={listing}
+                      view={view}
+                      stay={stay}
+                      priority={i < 4}
+                      mobileBadge={view !== "mes"}
+                    />
                   </li>
                 ))}
               </ul>
             )}
+            {/* Fin de la lista: al entrar a la pantalla se va el botón flotante del mapa. */}
+            <div ref={mapEndRef} aria-hidden className="lg:hidden" />
           </section>
 
           {showDesktopMap ? (
@@ -296,7 +324,14 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
       </div>
 
       {MAP_ENABLED && !isLg && n > 0 && !checking ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-5 z-30 flex justify-center safe-bottom lg:hidden">
+        <div
+          inert={!mapPillVisible}
+          className={cn(
+            "pointer-events-none fixed inset-x-0 bottom-5 z-30 flex justify-center safe-bottom lg:hidden",
+            "transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none",
+            mapPillVisible ? "translate-y-0 opacity-100" : "translate-y-6 opacity-0",
+          )}
+        >
           <button
             type="button"
             onClick={() => setMapOpen(true)}
@@ -335,9 +370,48 @@ export function SearchResultsClient({ catalog, whatsappNumber }: SearchResultsCl
   );
 }
 
+/**
+ * Celular: el botón flotante "Ver mapa" aparece recién cuando la fila del
+ * título (que ya tiene su botón de mapa) quedó debajo de las barras sticky, y
+ * se va cuando entra el final de la lista (no tapa la última tarjeta ni el
+ * footer). Así nunca hay dos botones de mapa a la vista.
+ */
+function useMapPillVisibility(enabled: boolean) {
+  const headRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const [state, setState] = useState({ headOut: false, endIn: false });
+
+  useEffect(() => {
+    const head = headRef.current;
+    const end = endRef.current;
+    if (!enabled || !head || !end || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        setState((prev) => {
+          let { headOut, endIn } = prev;
+          for (const e of entries) {
+            const top = e.rootBounds?.top ?? 0;
+            const bottom = e.rootBounds?.bottom ?? window.innerHeight;
+            if (e.target === head) headOut = !e.isIntersecting && e.boundingClientRect.top < top;
+            else endIn = e.boundingClientRect.top < bottom;
+          }
+          return headOut === prev.headOut && endIn === prev.endIn ? prev : { headOut, endIn };
+        });
+      },
+      // Arriba, lo que tapan el header (64 px) y la barra de búsqueda.
+      { rootMargin: "-128px 0px 0px 0px" },
+    );
+    io.observe(head);
+    io.observe(end);
+    return () => io.disconnect();
+  }, [enabled]);
+
+  return [headRef, endRef, enabled && state.headOut && !state.endIn] as const;
+}
+
 function gridClass(withMap: boolean) {
   return cn(
-    "mt-6 grid grid-cols-1 gap-x-5 gap-y-9 sm:grid-cols-2",
+    "mt-6 grid grid-cols-1 gap-x-5 gap-y-9 sm:grid-cols-2 max-lg:mt-4",
     withMap ? "2xl:grid-cols-3" : "lg:grid-cols-3",
   );
 }
@@ -356,6 +430,8 @@ function Notice({
       role={tone === "warn" ? "status" : undefined}
       className={cn(
         "mt-4 flex items-start gap-3 rounded-2xl px-4 py-3 text-[0.9375rem] leading-snug",
+        // < lg, más compacto: es un aviso, no tiene que empujar las fotos.
+        "max-lg:mt-3 max-lg:gap-2.5 max-lg:px-3.5 max-lg:py-2.5 max-lg:text-[0.8125rem]",
         tone === "warn" ? "bg-coral-50 text-coral-800 ring-1 ring-inset ring-coral-200" : "bg-leaf-100 text-ink-800",
       )}
     >
@@ -372,7 +448,7 @@ function SortSelect({ value, onChange }: { value: SearchSort; onChange: (sort: S
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as SearchSort)}
-        className="h-11 cursor-pointer appearance-none rounded-full border border-cream-400 bg-paper pl-4 pr-10 text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40"
+        className="h-11 cursor-pointer appearance-none rounded-full border border-cream-400 bg-paper pl-4 pr-10 text-[0.9375rem] font-semibold text-forest-700 outline-none transition-colors hover:border-forest-700/45 focus-visible:ring-[3px] focus-visible:ring-forest-500/40 max-sm:pl-3 max-sm:pr-7"
       >
         {SORT_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>
@@ -383,7 +459,7 @@ function SortSelect({ value, onChange }: { value: SearchSort; onChange: (sort: S
       <svg
         aria-hidden
         viewBox="0 0 16 16"
-        className="pointer-events-none absolute right-4 top-1/2 size-3.5 -translate-y-1/2 text-forest-700"
+        className="pointer-events-none absolute right-4 top-1/2 size-3.5 -translate-y-1/2 text-forest-700 max-sm:right-2.5"
       >
         <path d="M3.5 6l4.5 4.5L12.5 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </svg>

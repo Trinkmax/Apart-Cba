@@ -140,7 +140,13 @@ export function ListingsMap({
         }}
         onClick={() => setSelected(null)}
       >
-        <NavigationControl position="top-right" showCompass={false} />
+        <NavigationControl
+          position="top-right"
+          showCompass={false}
+          // Hoja del mapa en celular (sin popups): los botones de zoom quedaban
+          // debajo de "Ver lista"; bajan por debajo de esa fila. Escritorio igual.
+          style={popups ? undefined : { marginTop: "calc(4rem + env(safe-area-inset-top, 0px))" }}
+        />
         {located.map((l) => {
           const active = hovered === l.id || selected === l.id;
           const label = pillLabel(l, view, stay);

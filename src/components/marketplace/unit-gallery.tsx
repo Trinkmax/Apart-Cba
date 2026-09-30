@@ -118,15 +118,40 @@ function Media({
 }
 
 /**
+ * Botones sobre la foto en celular (volver, compartir, guardar): arriba, a los
+ * dos costados. Sólo existen por debajo de md, igual que el carrusel.
+ */
+function PhotoOverlay({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-[1] flex items-start justify-between gap-2 p-3 md:hidden [&>*]:pointer-events-auto">
+      {children}
+    </div>
+  );
+}
+
+/**
  * Galería de la ficha.
- * - Mobile: carrusel a lo ancho con swipe (scroll-snap) y contador "1/12".
+ * - Celular (< md): va primera, a sangre y alta; carrusel con swipe
+ *   (scroll-snap), contador "1/12", parallax suave al bajar (.m-parallax) y
+ *   los botones de `overlay` encima. La hoja del título se le encima abajo.
  * - Escritorio: mosaico de 1 grande + 4 con "Ver las N fotos".
  * Tocar cualquier foto abre el visor en esa foto.
  *
  * photos[0] es la portada (orden is_cover DESC, sort_order ASC; un video nunca
  * es portada por CHECK en la base). Igual se dibuja defensivamente.
  */
-export function UnitGallery({ photos, title, className }: { photos: UnitPhoto[]; title: string; className?: string }) {
+export function UnitGallery({
+  photos,
+  title,
+  className,
+  overlay,
+}: {
+  photos: UnitPhoto[];
+  title: string;
+  className?: string;
+  /** Botones sobre la foto, sólo en celular (< md). */
+  overlay?: React.ReactNode;
+}) {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [slide, setSlide] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -137,6 +162,8 @@ export function UnitGallery({ photos, title, className }: { photos: UnitPhoto[];
       <div
         className={cn(
           "relative grid aspect-[16/9] place-items-center overflow-hidden rounded-3xl bg-leaf-100 text-forest-700 md:aspect-[21/8]",
+          // Celular: a sangre y sin redondear, como el carrusel (la hoja del título tapa el borde de abajo).
+          "max-md:rounded-none max-md:pb-6 max-sm:-mx-4 sm:max-md:-mx-6",
           className,
         )}
       >
@@ -144,6 +171,7 @@ export function UnitGallery({ photos, title, className }: { photos: UnitPhoto[];
           <ApartLogo variant="symbol" className="h-12 text-forest-700/70" title={null} />
           <p className="text-sm font-semibold">Todavía no cargamos las fotos de este lugar.</p>
         </div>
+        {overlay ? <PhotoOverlay>{overlay}</PhotoOverlay> : null}
       </div>
     );
   }
@@ -160,12 +188,16 @@ export function UnitGallery({ photos, title, className }: { photos: UnitPhoto[];
 
   return (
     <div className={className}>
-      {/* Mobile: carrusel a lo ancho */}
-      <div className="relative -mx-4 sm:mx-0 md:hidden">
+      {/* Celular: carrusel a sangre, alto (cuadrado en un teléfono, con tope de
+          62svh). La pista entera lleva el parallax: sus fotos no pueden, porque
+          su contenedor de scroll más cercano sería la pista horizontal. El
+          recorte es overflow-clip y NO overflow-hidden: hidden crea un
+          contenedor de scroll y view() se engancharía a él (efecto congelado). */}
+      <div className="relative -mx-4 overflow-clip sm:-mx-6 md:hidden">
         <div
           ref={trackRef}
           onScroll={onTrackScroll}
-          className="no-scrollbar flex aspect-[4/3] snap-x snap-mandatory overflow-x-auto overscroll-x-contain sm:rounded-3xl"
+          className="m-parallax no-scrollbar flex h-[min(100vw,62svh)] snap-x snap-mandatory overflow-x-auto overscroll-x-contain sm:h-[min(75vw,62svh)]"
           aria-label={`Fotos de ${title}`}
           role="region"
           aria-roledescription="carrusel"
@@ -182,14 +214,16 @@ export function UnitGallery({ photos, title, className }: { photos: UnitPhoto[];
             </button>
           ))}
         </div>
+        {/* bottom-9: por encima de los 24 px que tapa la hoja del título. */}
         {n > 1 ? (
           <span
-            className="pointer-events-none absolute right-3 bottom-3 rounded-full bg-forest-950/70 px-2.5 py-1 text-xs font-semibold text-cream tabular-nums"
+            className="pointer-events-none absolute right-3 bottom-9 rounded-full bg-forest-950/70 px-2.5 py-1 text-xs font-semibold text-cream tabular-nums backdrop-blur-sm"
             aria-live="polite"
           >
             {slide + 1}/{n}
           </span>
         ) : null}
+        {overlay ? <PhotoOverlay>{overlay}</PhotoOverlay> : null}
       </div>
 
       {/* Escritorio: mosaico */}

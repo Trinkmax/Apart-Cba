@@ -91,7 +91,8 @@ export function SenaPaymentCard({
         </div>
       ) : null}
 
-      <div className="space-y-4 px-5 py-6 sm:px-7">
+      {/* Celular: flex + gap (no space-y) para que el paso a paso escondido no deje su margen. */}
+      <div className="space-y-4 px-5 py-6 max-lg:flex max-lg:flex-col max-lg:gap-4 max-lg:space-y-0 sm:px-7">
         <h3
           id={compact ? "sena-title" : undefined}
           className="text-base font-extrabold tracking-[-0.01em] text-forest-700 sm:text-lg"
@@ -167,8 +168,10 @@ export function SenaPaymentCard({
             />
           </div>
         )}
+        {/* Celular y tablet: el monto y el plazo ya están arriba, y "¿Ya transferiste?"
+            va justo abajo; el paso a paso repetía las dos cosas. */}
         {!compact ? (
-          <ol className="grid gap-2.5 border-t border-cream-300 pt-4 text-[0.9375rem] leading-snug text-ink-700">
+          <ol className="grid gap-2.5 border-t border-cream-300 pt-4 text-[0.9375rem] leading-snug text-ink-700 max-lg:hidden">
             {[
               `Transferí ${formatCurrency(toTransfer, currency)} desde tu banco o billetera.`,
               "Avisanos acá abajo, con el comprobante si lo tenés.",

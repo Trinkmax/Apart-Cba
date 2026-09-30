@@ -7,21 +7,26 @@ import { formatCurrency } from "@/lib/marketplace/pricing";
 import { hoursLabel } from "@/lib/marketplace/web-settings";
 import { ApartButton } from "@/components/marketplace/brand/apart-button";
 import { ApartLogo } from "@/components/marketplace/brand/apart-logo";
-import { guestsLabel, nightsLabel, shortDay } from "./format";
+import { cn } from "@/lib/utils";
+import { guestsLabel, nightsLabel, shortDay, stayRangeShort } from "./format";
 import { MoneyRow, Panel, WhatsAppButton } from "./stage-parts";
 import { amountDueOnArrival } from "./view-helpers";
 
 const dtClass = "text-[0.6875rem] font-bold uppercase tracking-[0.14em] text-ink-500";
 
-/** Foto en arco + título + fechas. */
+/**
+ * Foto en arco + título + fechas. En celular y tablet las fechas van en una
+ * sola línea (y sin repetirlas cuando la tarjeta de la llegada ya las muestra).
+ */
 export function StaySummaryCard({ view }: { view: ReservationView }) {
   const { unit, stay } = view;
+  const datesInStageCard = view.stage === "reserva_asegurada";
   return (
-    <Panel labelledBy="aside-stay" className="p-4 sm:p-5">
+    <Panel labelledBy="aside-stay" className="m-rise p-4 sm:p-5">
       <div className="flex gap-4">
         <div className="relative h-24 w-20 shrink-0 overflow-hidden rounded-b-2xl rounded-t-full bg-cream-200">
           {unit.cover_url ? (
-            <Image src={unit.cover_url} alt="" fill sizes="80px" className="object-cover" />
+            <Image src={unit.cover_url} alt="" fill sizes="80px" className="m-zoom-in object-cover" />
           ) : (
             <div className="flex size-full items-center justify-center text-forest-700/25">
               <ApartLogo variant="symbol" className="h-8" title={null} />
@@ -44,7 +49,15 @@ export function StaySummaryCard({ view }: { view: ReservationView }) {
           </Link>
         </div>
       </div>
-      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-cream-300 pt-4 text-[0.9375rem]">
+      <p className="mt-3.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t border-cream-300 pt-3 lg:hidden">
+        {datesInStageCard ? null : (
+          <span className="font-semibold text-ink-900">{stayRangeShort(stay.check_in, stay.check_out)}</span>
+        )}
+        <span className="text-[0.8125rem] text-ink-500">
+          {nightsLabel(stay.nights)} · {guestsLabel(stay.guests)}
+        </span>
+      </p>
+      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-cream-300 pt-4 text-[0.9375rem] max-lg:hidden">
         <div>
           <dt className={dtClass}>Llegada</dt>
           <dd className="mt-0.5 font-semibold text-ink-900">{shortDay(stay.check_in)}</dd>
@@ -73,27 +86,48 @@ export function MoneyCard({ view }: { view: ReservationView }) {
   const live = isActiveStage(view.stage) || view.stage === "estadia_finalizada";
   const waitingConfirmation = view.stage === "pedido_enviado";
   const alLlegar = amountDueOnArrival(money);
+  const senaReceived = money.sena != null && money.sena_covered && money.paid > 0;
+  // Celular y tablet: lo que la tarjeta de la etapa ya muestra no se repite acá.
+  // Falta la seña → la tarjeta de la seña tiene la seña, lo recibido y el resto:
+  // acá queda sólo el total. Asegurada → "Al llegar pagás" está en la llegada.
+  const senaInStageCard = view.stage === "sena_pendiente";
+  const arrivalInStageCard = senaInStageCard || view.stage === "reserva_asegurada";
+  // "Ya pagaste" repite "Seña · Recibida" cuando lo pagado es justo la seña.
+  const paidRepeatsSena = senaReceived && money.paid === money.sena;
   return (
-    <Panel labelledBy="aside-money" className="p-4 sm:p-5">
-      <h2 id="aside-money" className="text-base font-extrabold text-forest-700">
+    <Panel labelledBy="aside-money" className="m-rise p-4 sm:p-5">
+      <h2 id="aside-money" className={cn("text-base font-extrabold text-forest-700", senaInStageCard && "max-lg:sr-only")}>
         {live ? "Cómo se paga" : "Lo que habías pedido"}
       </h2>
-      <dl className="mt-3 space-y-2.5 text-[0.9375rem]">
+      {/* Celular: flex + gap (no space-y), así una fila escondida no deja su margen. */}
+      <dl
+        className={cn(
+          "mt-3 space-y-2.5 text-[0.9375rem] max-lg:flex max-lg:flex-col max-lg:gap-2.5 max-lg:space-y-0",
+          senaInStageCard && "max-lg:mt-0",
+        )}
+      >
         <MoneyRow label={live ? "Total de la estadía" : "Total cotizado"} value={formatCurrency(money.total, currency)} strong />
         {live ? (
           <>
-            <div className="border-t border-dashed border-cream-400 pt-2.5">
+            <div className={cn("border-t border-dashed border-cream-400 pt-2.5", senaInStageCard && "max-lg:hidden")}>
               <MoneyRow
                 label={waitingConfirmation || money.sena_is_estimate ? "Seña (al confirmar)" : "Seña"}
-                hint={money.sena != null && money.sena_covered && money.paid > 0 ? "Recibida" : undefined}
+                hint={senaReceived ? "Recibida" : undefined}
                 value={money.sena != null ? formatCurrency(money.sena, currency) : "Sin seña"}
               />
             </div>
-            {money.paid > 0 ? <MoneyRow label="Ya pagaste" value={formatCurrency(money.paid, currency)} /> : null}
+            {money.paid > 0 ? (
+              <MoneyRow
+                label="Ya pagaste"
+                value={formatCurrency(money.paid, currency)}
+                className={cn((senaInStageCard || paidRepeatsSena) && "max-lg:hidden")}
+              />
+            ) : null}
             <MoneyRow
               label="Al llegar"
               hint="En efectivo o por transferencia"
               value={formatCurrency(alLlegar, currency)}
+              className={cn(arrivalInStageCard && "max-lg:hidden")}
             />
           </>
         ) : null}
@@ -106,7 +140,7 @@ export function MoneyCard({ view }: { view: ReservationView }) {
 export function ContactCard({ view }: { view: ReservationView }) {
   const { contact } = view;
   return (
-    <Panel labelledBy="aside-contact" className="p-4 sm:p-5">
+    <Panel labelledBy="aside-contact" className="m-rise p-4 sm:p-5">
       <div className="flex items-center gap-3">
         <span className="flex size-11 shrink-0 items-center justify-center rounded-b-lg rounded-t-full bg-forest-700 text-cream">
           <ApartLogo variant="symbol" className="h-5" title={null} />
@@ -118,7 +152,8 @@ export function ContactCard({ view }: { view: ReservationView }) {
           <p className="text-[0.8125rem] text-ink-500">Respondemos en menos de {hoursLabel(view.response_hours)}.</p>
         </div>
       </div>
-      <p className="mt-3 text-sm leading-relaxed text-ink-700">
+      {/* Celular: el código ya está arriba de todo y viaja solo en el WhatsApp y en el asunto del mail. */}
+      <p className="mt-3 text-sm leading-relaxed text-ink-700 max-lg:hidden">
         Si nos escribís, mencioná tu código{" "}
         <strong className="font-mono font-semibold tracking-tight text-forest-700">{view.code}</strong>.
       </p>
@@ -155,7 +190,7 @@ export function ContactCard({ view }: { view: ReservationView }) {
 export function PolicyCard({ view }: { view: ReservationView }) {
   if (!view.cancellation) return null;
   return (
-    <section aria-labelledby="aside-policy" className="rounded-3xl bg-cream-200/60 px-4 py-4 ring-1 ring-cream-300 sm:px-5">
+    <section aria-labelledby="aside-policy" className="m-rise rounded-3xl bg-cream-200/60 px-4 py-4 ring-1 ring-cream-300 sm:px-5">
       <h2 id="aside-policy" className="text-sm font-bold text-forest-700">
         {view.cancellation.title}
       </h2>

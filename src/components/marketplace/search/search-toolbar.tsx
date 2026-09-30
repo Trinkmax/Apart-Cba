@@ -59,8 +59,9 @@ export function SearchToolbar({
   }
 
   return (
-    <div className="sticky top-16 z-30 border-b border-cream-300 bg-cream/95 backdrop-blur-md supports-[backdrop-filter]:bg-cream/80 lg:top-[72px]">
-      <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-6 lg:px-8">
+    // < lg: más baja (py-2) y con una sombra suave: se lee como una capa sobre las fotos que pasan por debajo.
+    <div className="sticky top-16 z-30 border-b border-cream-300 bg-cream/95 backdrop-blur-md supports-[backdrop-filter]:bg-cream/80 lg:top-[72px] max-lg:shadow-[0_10px_24px_-20px_rgb(6_32_27/0.45)]">
+      <div className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-2.5 sm:gap-3 sm:px-6 lg:px-8 max-lg:py-2 max-[374px]:gap-1.5">
         <SearchPill
           state={state}
           onApply={onChange}
@@ -74,6 +75,8 @@ export function SearchToolbar({
           onChange={changeMode}
           labels={MODE_LABELS}
           className="shrink-0"
+          // 360 px: sin esto no entra "¿Cuándo venís?" en la píldora.
+          itemClassName="max-[374px]:px-2.5"
         />
         <button
           type="button"
@@ -145,7 +148,8 @@ function SearchPill({
       aria-expanded={open}
       aria-label={`Cambiar búsqueda: ${dates ?? "sin fechas"}, ${guests ?? "sin huéspedes"}`}
       className={cn(
-        "flex h-12 w-full min-w-0 items-center gap-2.5 rounded-full bg-paper pl-1.5 pr-4 text-left font-apart shadow-apart-sm ring-1 ring-cream-300 outline-none transition-shadow max-[399px]:pl-4",
+        // Por debajo de 400 px no entra el ícono: sólo el texto, con menos aire para que "Agregá huéspedes" no se corte.
+        "flex h-12 w-full min-w-0 items-center gap-2.5 rounded-full bg-paper pl-1.5 pr-4 text-left font-apart shadow-apart-sm ring-1 ring-cream-300 outline-none transition-shadow max-[399px]:pl-3.5 max-sm:pr-2.5",
         "hover:shadow-apart-md focus-visible:ring-[3px] focus-visible:ring-forest-500/40",
       )}
     >

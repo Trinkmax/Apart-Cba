@@ -22,6 +22,8 @@ export function AuthShell({
     <div
       className={cn(
         "mx-auto grid max-w-7xl gap-10 px-4 pb-16 pt-6 sm:px-6 sm:pt-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:gap-16 lg:px-8 lg:pb-24 lg:pt-12",
+        // Celular: el footer ya separa (mt-12); sin el hueco vacío de antes.
+        "max-lg:pb-8",
         className,
       )}
     >

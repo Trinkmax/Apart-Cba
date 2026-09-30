@@ -24,7 +24,7 @@ export function SearchEmptyState({
   className?: string;
 }) {
   return (
-    <div className={cn("mx-auto flex max-w-xl flex-col items-center px-4 py-12 text-center font-apart", className)}>
+    <div className={cn("mx-auto flex max-w-xl flex-col items-center px-4 py-12 text-center font-apart max-lg:py-8", className)}>
       <ArchShape className="relative grid h-28 w-24 place-items-end justify-center bg-leaf-200 pb-4">
         <span aria-hidden className="absolute -right-1 top-3 size-4 rounded-full bg-coral-500" />
         <span aria-hidden className="h-10 w-9 rounded-t-full bg-forest-700/85" />

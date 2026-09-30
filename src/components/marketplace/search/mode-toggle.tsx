@@ -14,6 +14,7 @@ export function ModeToggle({
   labels = { noche: "Por noches", mes: "Por meses" },
   size = "md",
   className,
+  itemClassName,
   ariaLabel = "Tipo de estadía",
 }: {
   value: SearchMode;
@@ -21,6 +22,8 @@ export function ModeToggle({
   labels?: { noche: React.ReactNode; mes: React.ReactNode };
   size?: "sm" | "md";
   className?: string;
+  /** Clases extra de cada opción (p. ej. menos aire en celulares angostos). */
+  itemClassName?: string;
   ariaLabel?: string;
 }) {
   const refs = useRef<Record<SearchMode, HTMLButtonElement | null>>({ noche: null, mes: null });
@@ -63,6 +66,7 @@ export function ModeToggle({
               "focus-visible:ring-[3px] focus-visible:ring-forest-500/40",
               size === "sm" ? "h-11 px-3.5 text-sm" : "h-11 px-4 text-[0.9375rem]",
               active ? "bg-paper text-forest-700 shadow-apart-sm" : "text-ink-600 hover:text-forest-700",
+              itemClassName,
             )}
           >
             {labels[opt]}

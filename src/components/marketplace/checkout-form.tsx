@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore, useTransition } from
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, KeyRound, Loader2 } from "lucide-react";
 import { Dialog } from "@/components/ui/dialog";
 import { ApartButton } from "@/components/marketplace/brand/apart-button";
 import { ProcessSteps } from "@/components/marketplace/brand/process-steps";
@@ -103,20 +103,27 @@ function validate(v: { fullName: string; email: string; phone: string; agreed: b
   return errors;
 }
 
+/** "24 horas" → "24 h" (el resumen de una línea del celular); "1 hora" y "2 días" quedan igual. */
+function shortHours(hours: number): string {
+  return hoursLabel(hours).replace(/^(\d+) horas$/, "$1 h");
+}
+
 /** Un bloque del formulario con su título. */
 function FormSection({
   id,
   title,
   aside,
+  className,
   children,
 }: {
   id: string;
   title: string;
   aside?: React.ReactNode;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <section aria-labelledby={id} className="space-y-5">
+    <section aria-labelledby={id} className={cn("space-y-5", className)}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 id={id} className="text-xl font-extrabold tracking-[-0.015em] text-forest-700 sm:text-[1.375rem]">
           {title}
@@ -268,10 +275,18 @@ export function CheckoutForm({
   const cur = summary.money.currency || "ARS";
   const ctaLabel = instant ? "Reservar" : "Enviar pedido";
   const senaLabel = summary.money.sena ? formatCurrency(summary.money.sena, cur) : null;
+  // Celular: "Cómo sigue" plegado, con el proceso en una línea.
+  const sigueResumen = [
+    instant ? "Queda confirmada al instante" : `Te confirmamos en menos de ${shortHours(responseHours)}`,
+    senaLabel ? `seña ${senaLabel}` : null,
+    senaLabel ? (summary.money.resto > 0 ? "el resto al llegar" : null) : "pagás al llegar",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <>
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-12 xl:gap-16">
+      <div className="grid gap-8 max-lg:gap-5 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-12 xl:gap-16">
         {/* Celular: resumen plegable arriba del formulario. */}
         <details className="group rounded-3xl bg-paper shadow-apart-sm ring-1 ring-cream-300 lg:hidden">
           <summary className="flex min-h-16 cursor-pointer list-none items-center gap-3 rounded-3xl px-4 py-3 outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/30 [&::-webkit-details-marker]:hidden">
@@ -302,7 +317,7 @@ export function CheckoutForm({
           </div>
         </details>
 
-        <form ref={formRef} id="checkout-form" onSubmit={onSubmit} noValidate className="min-w-0 space-y-10">
+        <form ref={formRef} id="checkout-form" onSubmit={onSubmit} noValidate className="min-w-0 space-y-10 max-lg:space-y-8">
           {error ? (
             <div ref={errorRef} tabIndex={-1} className="outline-none">
               <FormAlert tone="error" title="No pudimos enviar el pedido">
@@ -336,7 +351,7 @@ export function CheckoutForm({
               ) : null
             }
           >
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-5 max-lg:gap-4 sm:grid-cols-2">
               <Field label="Nombre y apellido" error={fieldErrors.full_name} className="sm:col-span-2">
                 {({ id, describedBy, invalid }) => (
                   <input
@@ -467,7 +482,8 @@ export function CheckoutForm({
             </Field>
           </FormSection>
 
-          <FormSection id="checkout-sigue" title="Cómo sigue">
+          {/* Escritorio: el proceso a la vista, como siempre. */}
+          <FormSection id="checkout-sigue" title="Cómo sigue" className="hidden lg:block">
             <div className="rounded-3xl bg-paper p-5 ring-1 ring-cream-300 sm:p-6">
               <ProcessSteps layout="vertical" responseHours={responseHours} senaLabel={senaLabel} instant={instant} />
               {summary.money.resto > 0 ? (
@@ -479,6 +495,42 @@ export function CheckoutForm({
               ) : null}
             </div>
           </FormSection>
+
+          {/* Celular y tablet: plegado, con el resumen en una línea (el detalle, a un toque). */}
+          <details className="group rounded-3xl bg-paper shadow-apart-sm ring-1 ring-cream-300 lg:hidden">
+            <summary className="flex min-h-16 cursor-pointer list-none items-center gap-3 rounded-3xl px-4 py-3.5 outline-none focus-visible:ring-[3px] focus-visible:ring-forest-500/30 [&::-webkit-details-marker]:hidden">
+              <span
+                aria-hidden
+                className="flex size-10 shrink-0 items-center justify-center rounded-b-lg rounded-t-full bg-leaf-200 text-forest-700"
+              >
+                <KeyRound className="size-[1.125rem]" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-base font-extrabold tracking-[-0.01em] text-forest-700">Cómo sigue</span>
+                <span className="mt-0.5 block text-[0.8125rem] leading-snug text-ink-500 tabular-nums">{sigueResumen}</span>
+              </span>
+              <ChevronDown
+                aria-hidden
+                className="size-4 shrink-0 text-forest-700 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none"
+              />
+            </summary>
+            <div className="px-4 pb-5">
+              <ProcessSteps
+                layout="vertical"
+                responseHours={responseHours}
+                senaLabel={senaLabel}
+                instant={instant}
+                className="border-t border-cream-300 pt-4"
+              />
+              {summary.money.resto > 0 ? (
+                <p className="mt-4 border-t border-cream-300 pt-4 text-[0.9375rem] text-ink-700">
+                  Al llegar pagás{" "}
+                  <span className="font-bold tabular-nums text-forest-700">{formatCurrency(summary.money.resto, cur)}</span>, en
+                  efectivo o por transferencia.
+                </p>
+              ) : null}
+            </div>
+          </details>
 
           <div className="space-y-3">
             <CheckboxRow

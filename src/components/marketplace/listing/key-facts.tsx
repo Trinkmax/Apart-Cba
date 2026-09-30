@@ -3,10 +3,21 @@ import { bathroomsLabel, bedroomsLabel, checkInWindowLabel, guestsLabel } from "
 import { offersShortStays } from "@/lib/marketplace/stay";
 import { nightsLabel } from "@/lib/marketplace/widget-quote";
 import type { StorefrontListingDetail } from "@/lib/marketplace/contracts";
+import { cn } from "@/lib/utils";
 
-function Fact({ icon: Icon, title, detail }: { icon: LucideIcon; title: string; detail?: string | null }) {
+function Fact({
+  icon: Icon,
+  title,
+  detail,
+  className,
+}: {
+  icon: LucideIcon;
+  title: string;
+  detail?: string | null;
+  className?: string;
+}) {
   return (
-    <li className="flex items-start gap-3">
+    <li className={cn("flex items-start gap-3", className)}>
       <span className="flex size-10 shrink-0 items-center justify-center rounded-t-full rounded-b-lg bg-leaf-200 text-forest-700">
         <Icon className="size-[1.1rem]" aria-hidden />
       </span>
@@ -17,6 +28,12 @@ function Fact({ icon: Icon, title, detail }: { icon: LucideIcon; title: string; 
     </li>
   );
 }
+
+/**
+ * Por debajo de lg la capacidad (huéspedes, dormitorios, baños, m²) ya está en
+ * el bloque del título (fila de celular o pastillas de tablet): acá no se repite.
+ */
+const IN_TITLE_BELOW_LG = "max-lg:hidden";
 
 /** "Lo importante": capacidad, ambientes, check-in, estadía mínima y limpieza. */
 export function KeyFacts({ listing }: { listing: StorefrontListingDetail }) {
@@ -31,10 +48,12 @@ export function KeyFacts({ listing }: { listing: StorefrontListingDetail }) {
 
   return (
     <ul className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2">
-      {guests ? <Fact icon={Users} title={guests} detail="Contando a todas las personas que se quedan." /> : null}
-      {bedrooms ? <Fact icon={BedDouble} title={bedrooms} /> : null}
-      {baths ? <Fact icon={Bath} title={baths} /> : null}
-      {size ? <Fact icon={Ruler} title={size} /> : null}
+      {guests ? (
+        <Fact icon={Users} title={guests} detail="Contando a todas las personas que se quedan." className={IN_TITLE_BELOW_LG} />
+      ) : null}
+      {bedrooms ? <Fact icon={BedDouble} title={bedrooms} className={IN_TITLE_BELOW_LG} /> : null}
+      {baths ? <Fact icon={Bath} title={baths} className={IN_TITLE_BELOW_LG} /> : null}
+      {size ? <Fact icon={Ruler} title={size} className={IN_TITLE_BELOW_LG} /> : null}
       {checkIn ? <Fact icon={Clock} title={`Check-in ${checkIn}`} detail="Coordinamos la entrega de llaves con vos." /> : null}
       {short ? (
         <Fact

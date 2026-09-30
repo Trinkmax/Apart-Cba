@@ -20,10 +20,36 @@ export type ListingCardProps = {
   stay?: { checkIn: string; checkOut: string; guests?: number } | null;
   /** next/image priority (las primeras 4 de una grilla). */
   priority?: boolean;
+  /**
+   * La tarjeta va en un riel horizontal (home, "Otros lugares"). Sólo por
+   * debajo de lg: una sola foto (el deslizamiento mueve el riel, no el
+   * carrusel de fotos de adentro), sin puntos ni flechas, y `sizes` al ancho
+   * del riel (80 %). Desde lg no cambia nada.
+   */
+  rail?: boolean;
+  /**
+   * false: por debajo de lg se esconde la etiqueta "Por mes" de la foto (en
+   * /buscar por mes todas lo son y el precio ya dice "mes"). Desde lg, igual.
+   */
+  mobileBadge?: boolean;
   className?: string;
 };
 
+// Desde lg (las dos últimas condiciones) tiene que quedar igual en las dos:
+// el escritorio baja la misma foto.
 const SIZES = "(max-width: 639px) 92vw, (max-width: 1023px) 46vw, (max-width: 1279px) 30vw, 22vw";
+const RAIL_SIZES = "(max-width: 639px) 80vw, (max-width: 1023px) 22rem, (max-width: 1279px) 30vw, 22vw";
+/**
+ * Dentro de un riel horizontal, por debajo de lg, se ve una sola foto: el gesto
+ * de deslizar es del riel y no del carrusel de adentro (dos scrolls
+ * horizontales anidados se pelean). Se detecta solo: un ancestro con
+ * `overflow-x-auto` en sus clases (SnapRail / MOBILE_RAIL usan
+ * `max-lg:overflow-x-auto`). La prop `rail` lo fuerza y además ajusta `sizes`.
+ * Todo con `max-lg:`: desde lg no hace nada.
+ */
+const IN_RAIL_TRACK = "in-[[class*=overflow-x-auto]]:max-lg:overflow-x-hidden";
+const IN_RAIL_DOTS = "in-[[class*=overflow-x-auto]]:max-lg:hidden";
+const IN_RAIL_ARROW = "in-[[class*=overflow-x-auto]]:md:max-lg:hidden";
 const EASE = "ease-[cubic-bezier(0.22,1,0.36,1)]";
 
 /**
@@ -31,7 +57,15 @@ const EASE = "ease-[cubic-bezier(0.22,1,0.36,1)]";
  * y las flechas del carrusel viven ENCIMA como hermanos del link (nunca un
  * botón adentro de un <a>), así que no navegan.
  */
-export function ListingCard({ listing, view = "noche", stay = null, priority = false, className }: ListingCardProps) {
+export function ListingCard({
+  listing,
+  view = "noche",
+  stay = null,
+  priority = false,
+  rail = false,
+  mobileBadge = true,
+  className,
+}: ListingCardProps) {
   const photos = listing.photo_urls.length > 0 ? listing.photo_urls : listing.cover_url ? [listing.cover_url] : [];
   const [index, setIndex] = useState(0);
   // Carga progresiva: al principio sólo la foto 0 pide red; las siguientes se
@@ -48,6 +82,9 @@ export function ListingCard({ listing, view = "noche", stay = null, priority = f
   const showMinNights = view === "noche" && listing.offers_short && listing.min_nights > 2;
 
   function warmUpTo(i: number) {
+    // En un riel (< lg) la pista no se desliza y se ve sólo la primera foto: no pedir las demás.
+    const track = trackRef.current;
+    if (track && getComputedStyle(track).overflowX === "hidden") return;
     setMountedUpTo((m) => Math.max(m, Math.min(i, photos.length - 1)));
   }
 
@@ -95,7 +132,12 @@ export function ListingCard({ listing, view = "noche", stay = null, priority = f
               onScroll={handleScroll}
               onPointerEnter={() => warmUpTo(1)}
               onTouchStart={() => warmUpTo(1)}
-              className="no-scrollbar absolute inset-0 flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain"
+              className={cn(
+                "no-scrollbar absolute inset-0 flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain",
+                // En un riel (< lg) el carrusel de adentro no se desliza: el gesto es del riel.
+                IN_RAIL_TRACK,
+                rail && "max-lg:overflow-x-hidden",
+              )}
             >
               {photos.map((src, i) => (
                 <div key={`${src}-${i}`} className="relative h-full w-full shrink-0 snap-start snap-always">
@@ -104,7 +146,7 @@ export function ListingCard({ listing, view = "noche", stay = null, priority = f
                       src={src}
                       alt={i === 0 ? `Foto de ${listing.display_title}` : ""}
                       fill
-                      sizes={SIZES}
+                      sizes={rail ? RAIL_SIZES : SIZES}
                       priority={i === 0 && priority}
                       loading={i > 0 ? "eager" : undefined}
                       draggable={false}
@@ -124,7 +166,12 @@ export function ListingCard({ listing, view = "noche", stay = null, priority = f
           )}
 
           {perMonth ? (
-            <span className="absolute left-3 top-3 z-[1] inline-flex items-center gap-1.5 rounded-full bg-paper/95 px-2.5 py-1 text-xs font-bold text-forest-700 shadow-apart-sm">
+            <span
+              className={cn(
+                "absolute left-3 top-3 z-[1] inline-flex items-center gap-1.5 rounded-full bg-paper/95 px-2.5 py-1 text-xs font-bold text-forest-700 shadow-apart-sm",
+                !mobileBadge && "max-lg:hidden",
+              )}
+            >
               <CalendarRange aria-hidden className="size-3.5" />
               Por mes
             </span>
@@ -136,7 +183,14 @@ export function ListingCard({ listing, view = "noche", stay = null, priority = f
           ) : null}
 
           {photos.length > 1 ? (
-            <span aria-hidden className="absolute inset-x-0 bottom-3 z-[1] flex justify-center gap-1.5">
+            <span
+              aria-hidden
+              className={cn(
+                "absolute inset-x-0 bottom-3 z-[1] flex justify-center gap-1.5",
+                IN_RAIL_DOTS,
+                rail && "max-lg:hidden",
+              )}
+            >
               {photos.map((_, i) => (
                 <span
                   key={i}
@@ -174,8 +228,8 @@ export function ListingCard({ listing, view = "noche", stay = null, priority = f
         <HeartButton unitId={listing.id} className="pointer-events-auto absolute right-1.5 top-1.5 z-[2]" />
         {photos.length > 1 ? (
           <>
-            <CarouselArrow dir={-1} hidden={index === 0} onClick={() => go(-1)} />
-            <CarouselArrow dir={1} hidden={index >= photos.length - 1} onClick={() => go(1)} />
+            <CarouselArrow dir={-1} hidden={index === 0} rail={rail} onClick={() => go(-1)} />
+            <CarouselArrow dir={1} hidden={index >= photos.length - 1} rail={rail} onClick={() => go(1)} />
           </>
         ) : null}
       </div>
@@ -208,7 +262,17 @@ function CardPriceLine({ price }: { price: ReturnType<typeof cardPrice> }) {
   );
 }
 
-function CarouselArrow({ dir, hidden, onClick }: { dir: -1 | 1; hidden: boolean; onClick: () => void }) {
+function CarouselArrow({
+  dir,
+  hidden,
+  rail,
+  onClick,
+}: {
+  dir: -1 | 1;
+  hidden: boolean;
+  rail: boolean;
+  onClick: () => void;
+}) {
   const Icon = dir < 0 ? ChevronLeft : ChevronRight;
   return (
     <button
@@ -226,6 +290,9 @@ function CarouselArrow({ dir, hidden, onClick }: { dir: -1 | 1; hidden: boolean;
         "opacity-0 group-hover/card:opacity-100",
         dir < 0 ? "left-3" : "right-3",
         hidden && "invisible",
+        // En un riel se ve una sola foto hasta lg (md:grid las mostraría desde 768 px).
+        IN_RAIL_ARROW,
+        rail && "md:max-lg:hidden",
       )}
     >
       <Icon aria-hidden className="size-4" strokeWidth={2.5} />

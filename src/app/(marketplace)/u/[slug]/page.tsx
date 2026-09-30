@@ -4,7 +4,9 @@ import { UnitGallery } from "@/components/marketplace/unit-gallery";
 import { UnitDetailInfo } from "@/components/marketplace/unit-detail-info";
 import { UnitBookingWidget } from "@/components/marketplace/unit-booking-widget";
 import { MobileReserveBar } from "@/components/marketplace/mobile-reserve-bar";
+import { ListingShareActions } from "@/components/marketplace/listing-share-actions";
 import type { AmenityItem } from "@/components/marketplace/listing/amenities-block";
+import { BackLink } from "@/components/marketplace/listing/back-link";
 import { ListingErrorBanner } from "@/components/marketplace/listing/error-banner";
 import { ListingHeader } from "@/components/marketplace/listing/listing-header";
 import { ListingJsonLd } from "@/components/marketplace/listing/listing-json-ld";
@@ -153,10 +155,25 @@ export default async function UnitPage({ params }: { params: Params }) {
   return (
     <ListingStayProvider key={listing.id} listing={toStayListing(listing)} settings={staySettings} pageUrl={pageUrl}>
       <ListingJsonLd listing={listing} amenityNames={amenities.map((a) => a.name)} />
-      <div className="mx-auto w-full max-w-[1280px] px-4 pt-4 pb-12 sm:px-6 md:pt-6 lg:px-8 lg:pb-20">
-        <ListingErrorBanner />
-        <ListingHeader listing={listing} pageUrl={pageUrl} />
-        <UnitGallery photos={listing.photos} title={listing.display_title} className="mt-6 md:mt-8" />
+      {/* Celular (< md): la galería va primera y a sangre (order, sin duplicarla)
+          y el bloque del título es una hoja que sube sobre su borde de abajo.
+          Todo con max-md:, así que desde md el orden y los márgenes son los de siempre. */}
+      <div className="mx-auto w-full max-w-[1280px] px-4 pb-12 max-md:flex max-md:flex-col max-md:pt-0 sm:px-6 md:pt-6 lg:px-8 lg:pb-20">
+        <div className="max-md:relative max-md:z-10 max-md:-mt-6 max-md:rounded-t-[1.75rem] max-md:bg-cream max-md:pt-6 max-md:shadow-[0_-14px_28px_-18px_rgb(6_32_27/0.45)] max-sm:-mx-4 max-sm:px-4 sm:max-md:-mx-6 sm:max-md:px-6">
+          <ListingErrorBanner />
+          <ListingHeader listing={listing} pageUrl={pageUrl} />
+        </div>
+        <UnitGallery
+          photos={listing.photos}
+          title={listing.display_title}
+          className="max-md:order-first md:mt-8"
+          overlay={
+            <>
+              <BackLink variant="overlay" />
+              <ListingShareActions variant="overlay" url={pageUrl} title={listing.display_title} unitId={listing.id} />
+            </>
+          }
+        />
 
         <div className="mt-8 grid grid-cols-1 gap-10 md:mt-12 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-14 xl:grid-cols-[minmax(0,1fr)_420px] xl:gap-16">
           <div className="min-w-0">
@@ -175,7 +192,7 @@ export default async function UnitPage({ params }: { params: Params }) {
         </div>
 
         {similar.items.length > 0 ? (
-          <div className="mt-14 md:mt-20">
+          <div className="mt-14 max-md:mt-10 md:mt-20">
             <SimilarListings items={similar.items} title={similarTitle} />
           </div>
         ) : null}

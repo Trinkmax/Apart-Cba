@@ -6,22 +6,26 @@ import { BrandPhoto } from "./brand-photo";
 /**
  * "Hacemos lugar.": el concepto de la marca ("De ubicación a lugar") con la
  * foto del cuidado de la cama en arco y la tarjeta de bienvenida.
+ * Celular y tablet: foto más baja con parallax (`.m-parallax`), el titular y
+ * sólo el primer párrafo. Para que el parallax corra, la sección y el marco de
+ * la foto recortan con `overflow: clip` (con `hidden` serían contenedores de
+ * scroll y la animación por scroll quedaría quieta).
  */
 export function HomeStory() {
   return (
-    <section className="overflow-hidden py-16 sm:py-24 lg:py-28">
-      <div className="mx-auto grid max-w-[1240px] items-center gap-14 px-4 sm:px-6 lg:grid-cols-2 lg:gap-20 lg:px-8">
+    <section className="overflow-hidden py-10 max-lg:overflow-clip sm:py-16 lg:py-28">
+      <div className="mx-auto grid max-w-[1240px] items-center gap-11 px-4 sm:px-6 lg:grid-cols-2 lg:gap-20 lg:px-8">
         <Reveal y={24} className="relative mx-auto w-full max-w-[28rem] lg:max-w-none">
           <ArcBand thickness={14} className="absolute -left-8 -top-6 w-40 text-leaf-300 sm:-left-10 sm:w-52" />
-          <div className="relative aspect-[4/5] overflow-hidden rounded-t-full rounded-b-3xl bg-cream-300 shadow-apart-lg">
+          <div className="relative aspect-[4/5] overflow-hidden rounded-t-full rounded-b-3xl bg-cream-300 shadow-apart-lg max-lg:aspect-[4/3] max-lg:overflow-clip">
             <BrandPhoto
               name="cuidado-cama"
               alt="Manos acomodando un almohadón sobre una cama recién tendida"
               sizes="(min-width: 1024px) 34vw, (min-width: 640px) 28rem, 92vw"
-              className="object-[60%_50%]"
+              className="m-parallax object-[60%_50%]"
             />
           </div>
-          <div className="absolute -bottom-8 -right-2 w-[46%] rotate-[4deg] overflow-hidden rounded-2xl bg-paper p-1.5 shadow-apart-lg ring-1 ring-cream-300 sm:-right-8 sm:w-[42%]">
+          <div className="absolute -bottom-8 -right-2 w-[46%] rotate-[4deg] overflow-hidden rounded-2xl bg-paper p-1.5 shadow-apart-lg ring-1 ring-cream-300 max-sm:w-[40%] sm:-right-8 sm:w-[42%] sm:max-lg:w-[36%]">
             <div className="aspect-[6/5] overflow-hidden rounded-xl">
               <BrandPhoto
                 name="bienvenida"
@@ -41,14 +45,17 @@ export function HomeStory() {
           <p className="mt-2 font-apart-serif text-xl italic text-forest-600 sm:text-2xl">
             Para personas, ideas y llegadas.
           </p>
-          <div className="mt-7 max-w-xl space-y-4 text-[1.0625rem] leading-relaxed text-ink-700">
+          <div className="mt-7 max-w-xl space-y-4 text-[1.0625rem] leading-relaxed text-ink-700 max-lg:mt-4 max-lg:space-y-0">
             <p>
               apart entiende el alojamiento desde un lugar más cercano: no alcanza con tener dónde quedarse,
               también importa cómo te reciben, cómo se cuida el espacio y quién está del otro lado.
             </p>
-            <p>Una forma simple y humana de acompañar a quienes llegan y a quienes confían su propiedad.</p>
+            {/* < lg: sólo el primer párrafo. */}
+            <p className="max-lg:hidden">
+              Una forma simple y humana de acompañar a quienes llegan y a quienes confían su propiedad.
+            </p>
           </div>
-          <div className="mt-9 flex items-center gap-4 border-t border-cream-300 pt-7">
+          <div className="mt-9 flex items-center gap-4 border-t border-cream-300 pt-7 max-lg:hidden">
             <span className="flex size-12 shrink-0 items-center justify-center rounded-full bg-leaf-100 text-coral-500">
               <ApartLogo variant="symbol" title={null} className="h-5" />
             </span>

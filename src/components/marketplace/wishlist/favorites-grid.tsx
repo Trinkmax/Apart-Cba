@@ -17,7 +17,8 @@ export function FavoritesGrid({ listings }: { listings: CatalogListing[] }) {
   return (
     <ul className="grid grid-cols-1 gap-x-5 gap-y-9 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {listings.map((listing, i) => (
-        <li key={listing.id}>
+        // .m-rise: sube y aparece al entrar (sólo < lg; en escritorio no hace nada).
+        <li key={listing.id} className="m-rise">
           <ListingCard
             listing={listing}
             view={listing.offers_short ? "noche" : "mes"}

@@ -31,7 +31,8 @@ export function BookingModeNote() {
         };
 
   return (
-    <div className="flex items-start gap-4 rounded-3xl bg-leaf-100 p-5 ring-1 ring-inset ring-leaf-300/60">
+    // m-rise: sube al entrar a la pantalla (sólo < lg, por scroll; en escritorio no hace nada).
+    <div className="m-rise flex items-start gap-4 rounded-3xl bg-leaf-100 p-5 ring-1 ring-inset ring-leaf-300/60">
       <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-paper text-forest-700 shadow-apart-sm">
         <Icon className="size-5" aria-hidden />
       </span>

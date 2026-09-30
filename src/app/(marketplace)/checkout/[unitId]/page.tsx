@@ -127,7 +127,7 @@ export default async function CheckoutPage({ params, searchParams }: { params: P
         <ArrowLeft className="size-4" aria-hidden />
         Volver a {listing.display_title}
       </Link>
-      <header className="mb-8 max-w-3xl sm:mb-10">
+      <header className="mb-8 max-w-3xl max-sm:mb-6 sm:mb-10 sm:max-lg:mb-8">
         <h1 className="font-apart text-[2rem] font-extrabold leading-[1.05] tracking-[-0.025em] text-forest-700 text-balance sm:text-[2.75rem]">
           {instant ? "Confirmá tu reserva" : "Pedí tu reserva"}
           <BrandDot />

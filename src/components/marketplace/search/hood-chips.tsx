@@ -29,7 +29,13 @@ export function HoodChips({
     <nav aria-label="Barrios" className={cn("relative", className)}>
       {/* `relative`: los sr-only de cada chip son absolute; sin esto su bloque
           contenedor es el <nav> y escapan del scroll, estirando el body. */}
-      <ul className="no-scrollbar relative -mx-4 flex snap-x gap-2 overflow-x-auto px-4 py-1 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      {/* < lg: riel a sangre que se esfuma en los bordes (se nota que sigue). */}
+      <ul
+        className={cn(
+          "no-scrollbar relative -mx-4 flex snap-x gap-2 overflow-x-auto px-4 py-1 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8",
+          "max-sm:scroll-px-4 sm:max-lg:scroll-px-6 max-lg:[mask-image:linear-gradient(to_right,transparent,#000_1rem,#000_calc(100%-1.75rem),transparent)]",
+        )}
+      >
         <li className="snap-start">
           <Chip active={value == null} onClick={() => onChange(null)} label="Todos" count={total} />
         </li>

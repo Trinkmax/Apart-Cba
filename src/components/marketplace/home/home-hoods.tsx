@@ -2,18 +2,34 @@ import Image from "next/image";
 import Link from "next/link";
 import { ApartLogo } from "@/components/marketplace/brand/apart-logo";
 import { SectionHeading } from "@/components/marketplace/brand/brand-shapes";
+import { SnapRail } from "@/components/marketplace/brand/snap-rail";
 import { Reveal } from "@/components/marketplace/reveal";
+import { cn } from "@/lib/utils";
 import { deptosLabel, type HoodTile } from "./home-data";
 
 /**
- * "Elegí tu barrio": una fila de arcos (puertas/ventanas), uno por barrio con
- * unidades, con la portada de un depto real de ese barrio. Mobile: carrusel.
+ * Zoom de las fotos cuando el riel entra en pantalla (sólo < lg, con animaciones
+ * por scroll y sin "reducir movimiento"). `.m-zoom-in` no sirve adentro de un
+ * riel: su `view()` toma el contenedor con scroll más cercano, que es el propio
+ * riel (horizontal), y la animación queda quieta. Por eso el riel publica una
+ * línea de tiempo con nombre y cada foto se ata a esa.
  */
-export function HomeHoods({ tiles }: { tiles: HoodTile[] }) {
+const RAIL_TIMELINE = "max-lg:[view-timeline-name:--home-hoods]";
+const PHOTO_ZOOM =
+  "max-lg:motion-safe:supports-[animation-timeline:view()]:animate-[m-zoom-in_linear_both] " +
+  "max-lg:motion-safe:supports-[animation-timeline:view()]:[animation-timeline:--home-hoods] " +
+  "max-lg:motion-safe:supports-[animation-timeline:view()]:[animation-range:entry_0%_cover_45%]";
+
+/**
+ * "Elegí tu barrio": una fila de arcos (puertas/ventanas), uno por barrio con
+ * unidades, con la portada de un depto real de ese barrio. Celular y tablet:
+ * riel con barra de progreso (y en la home va antes del proceso: `className`).
+ */
+export function HomeHoods({ tiles, className }: { tiles: HoodTile[]; className?: string }) {
   if (tiles.length < 2) return null;
 
   return (
-    <section className="py-14 sm:py-20 lg:py-24">
+    <section className={cn("py-10 sm:py-14 lg:py-24", className)}>
       <div className="mx-auto max-w-[1320px] px-4 sm:px-6 lg:px-8">
         <Reveal>
           <SectionHeading
@@ -24,13 +40,17 @@ export function HomeHoods({ tiles }: { tiles: HoodTile[] }) {
         </Reveal>
       </div>
 
-      <ul
-        aria-label="Barrios con alojamientos"
-        className={
-          "mx-auto mt-9 flex max-w-[1320px] snap-x snap-mandatory scroll-px-4 gap-4 overflow-x-auto px-4 pb-3 sm:mt-12 sm:scroll-px-6 sm:px-6 " +
-          "[scrollbar-width:none] [&::-webkit-scrollbar]:hidden " +
-          "lg:snap-none lg:justify-center lg:gap-5 lg:overflow-visible lg:px-8"
-        }
+      <SnapRail
+        as="ul"
+        label="Barrios con alojamientos"
+        className={cn(
+          // < lg: el ul ya ocupa todo el ancho de la sección, así que va sin los
+          // márgenes negativos del riel (con el mismo padding de página).
+          "max-sm:mx-0 sm:max-lg:mx-0",
+          // ≥ lg: lo mismo que antes (fila centrada, gap-5, px-8, pb-3, mt-12).
+          "mx-auto mt-7 max-w-[1320px] sm:mt-10 lg:mt-12 lg:flex lg:justify-center lg:gap-5 lg:px-8 lg:pb-3",
+          RAIL_TIMELINE,
+        )}
       >
         {tiles.map((t, i) => (
           <li key={t.slug} className="w-[8.25rem] shrink-0 snap-start sm:w-[9.5rem] lg:w-auto lg:max-w-[10.5rem] lg:flex-1">
@@ -41,13 +61,17 @@ export function HomeHoods({ tiles }: { tiles: HoodTile[] }) {
               >
                 <span className="relative block aspect-[3/4] overflow-hidden rounded-t-full rounded-b-2xl bg-leaf-200 shadow-apart-sm ring-1 ring-forest-900/5 transition-shadow duration-300 group-hover:shadow-apart-md">
                   {t.cover ? (
-                    <Image
-                      src={t.cover}
-                      alt=""
-                      fill
-                      sizes="(min-width: 1024px) 168px, (min-width: 640px) 152px, 132px"
-                      className="object-cover transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.06] motion-reduce:transition-none"
-                    />
+                    // El span sólo lleva el zoom de celular (en escritorio es una capa a
+                    // tamaño completo sin estilo): el hover de la foto sigue en la imagen.
+                    <span className={cn("absolute inset-0", PHOTO_ZOOM)}>
+                      <Image
+                        src={t.cover}
+                        alt=""
+                        fill
+                        sizes="(min-width: 1024px) 168px, (min-width: 640px) 152px, 132px"
+                        className="object-cover transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.06] motion-reduce:transition-none"
+                      />
+                    </span>
                   ) : (
                     <span className="flex size-full items-center justify-center text-forest-700/70">
                       <ApartLogo variant="symbol" title={null} className="h-10" />
@@ -63,7 +87,7 @@ export function HomeHoods({ tiles }: { tiles: HoodTile[] }) {
             </Reveal>
           </li>
         ))}
-      </ul>
+      </SnapRail>
     </section>
   );
 }

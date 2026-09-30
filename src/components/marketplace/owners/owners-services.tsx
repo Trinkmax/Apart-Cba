@@ -1,5 +1,9 @@
 import { CalendarCheck2, FileText, KeyRound, RefreshCw, Sparkles, UserRoundCheck, type LucideIcon } from "lucide-react";
 import { ArcBand, SectionHeading } from "@/components/marketplace/brand/brand-shapes";
+import { SnapRail } from "@/components/marketplace/brand/snap-rail";
+// Server component: las clases del riel salen del módulo SIN "use client" (desde
+// snap-rail.tsx llegarían como referencias de cliente y cn() las descartaría).
+import { MOBILE_RAIL_ITEM } from "@/components/marketplace/brand/snap-rail-classes";
 import { Reveal } from "@/components/marketplace/reveal";
 import { cn } from "@/lib/utils";
 
@@ -36,7 +40,7 @@ const CHANNELS = ["Airbnb", "Booking.com", "Nuestra web"];
 
 export function OwnersServices() {
   return (
-    <section aria-labelledby="owners-services-title" className="py-16 sm:py-24">
+    <section aria-labelledby="owners-services-title" className="py-16 max-sm:py-12 sm:py-24 sm:max-lg:py-16">
       <div className="mx-auto max-w-[1240px] px-4 sm:px-6 lg:px-8">
         <Reveal>
           <SectionHeading
@@ -46,11 +50,16 @@ export function OwnersServices() {
           />
         </Reveal>
 
-        <ul className="mt-10 grid gap-4 sm:mt-12 md:grid-cols-2 lg:grid-cols-3 lg:gap-5">
+        {/* Celular/tablet: riel con snap (la tarjeta siguiente asomada). Escritorio: la
+            misma grilla de siempre (grid, 3 columnas, gap-5, mt-12). */}
+        <SnapRail as="ul" label="Qué hacemos" className="mt-10 sm:mt-12 lg:grid lg:grid-cols-3 lg:gap-5">
           <Reveal
             as="li"
             y={16}
-            className="relative isolate overflow-hidden rounded-3xl bg-forest-700 p-6 text-cream shadow-apart-md sm:p-8 md:col-span-2"
+            className={cn(
+              "relative isolate overflow-hidden rounded-3xl bg-forest-700 p-6 text-cream shadow-apart-md sm:p-8 md:col-span-2",
+              MOBILE_RAIL_ITEM,
+            )}
           >
             <ArcBand
               thickness={12}
@@ -91,6 +100,7 @@ export function OwnersServices() {
               className={cn(
                 "rounded-3xl bg-paper p-6 shadow-apart-sm ring-1 ring-cream-300 sm:p-7",
                 "transition-[box-shadow,transform] duration-300 motion-safe:hover:-translate-y-0.5 hover:shadow-apart-md",
+                MOBILE_RAIL_ITEM,
               )}
             >
               <span className="flex size-12 items-center justify-center rounded-t-full rounded-b-lg bg-leaf-200 text-forest-700">
@@ -100,7 +110,7 @@ export function OwnersServices() {
               <p className="mt-2 text-[0.9375rem] leading-relaxed text-ink-700">{s.body}</p>
             </Reveal>
           ))}
-        </ul>
+        </SnapRail>
       </div>
     </section>
   );

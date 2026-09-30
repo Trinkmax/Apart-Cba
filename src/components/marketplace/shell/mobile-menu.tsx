@@ -16,6 +16,10 @@ import { BRAND_INVITE } from "./nav";
 import type { GuestIdentity } from "./use-guest-identity";
 import { WhatsAppIcon } from "./whatsapp-icon";
 
+// Entrada escalonada de los bloques de la hoja (se monta al abrirse).
+const ENTER =
+  "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:fill-mode-[both] motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)]";
+
 const rowClass =
   "flex min-h-12 items-center gap-3 rounded-2xl px-2 text-[1.0625rem] font-semibold text-ink-800 outline-none transition-colors hover:bg-forest-700/[0.05] focus-visible:ring-[3px] focus-visible:ring-forest-500/40 [&_svg]:size-5 [&_svg]:shrink-0 [&_svg]:text-forest-600";
 
@@ -114,7 +118,7 @@ function ContactSection({ contact }: { contact: ShellContact }) {
   ].filter((x): x is NonNullable<typeof x> => x !== null);
   if (items.length === 0) return null;
   return (
-    <div>
+    <div className={ENTER} style={{ animationDelay: "440ms" }}>
       <p className="mb-1 px-2 text-[0.6875rem] font-bold uppercase tracking-[0.2em] text-forest-600">Hablemos</p>
       <ul>
         {items.map((item) => (
@@ -196,10 +200,15 @@ export function MobileMenu({
             <MainNav variant="mobile" onNavigate={close} />
           </nav>
           <div className="h-px bg-cream-300" />
-          <AccountSection identity={identity} onNavigate={close} />
+          <div className={ENTER} style={{ animationDelay: "380ms" }}>
+            <AccountSection identity={identity} onNavigate={close} />
+          </div>
           <ContactSection contact={contact} />
 
-          <div className="relative mt-auto overflow-hidden rounded-3xl bg-forest-700 px-5 pb-6 pt-7 text-cream">
+          <div
+            className={cn("relative mt-auto overflow-hidden rounded-3xl bg-forest-700 px-5 pb-6 pt-7 text-cream", ENTER)}
+            style={{ animationDelay: "500ms" }}
+          >
             <ArcBand className="absolute -right-6 -top-3 w-28 text-leaf-300/35" thickness={16} />
             <p className="relative max-w-[14rem] font-apart-serif text-[1.375rem] italic leading-snug">
               {BRAND_INVITE}

@@ -21,8 +21,12 @@ export function OwnersContact({
 }) {
   const hasDirect = Boolean(whatsappUrl || email);
   return (
-    <section id="contacto" aria-labelledby="owners-contact-title" className="scroll-mt-20 py-16 sm:py-24 lg:scroll-mt-24">
-      <div className="mx-auto grid max-w-[1240px] gap-10 px-4 sm:px-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-16 lg:px-8">
+    <section
+      id="contacto"
+      aria-labelledby="owners-contact-title"
+      className="scroll-mt-20 py-16 max-sm:pb-2 max-sm:pt-12 sm:py-24 sm:max-lg:pb-8 sm:max-lg:pt-16 lg:scroll-mt-24"
+    >
+      <div className="mx-auto grid max-w-[1240px] gap-10 px-4 max-sm:gap-8 sm:px-6 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-16 lg:px-8">
         <Reveal className="lg:pt-4">
           <SectionHeading
             eyebrow="Hablemos"

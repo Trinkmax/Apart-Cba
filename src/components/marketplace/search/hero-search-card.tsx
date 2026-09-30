@@ -61,12 +61,15 @@ export function HeroSearchCard({
         className,
       )}
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h2 className="text-lg font-extrabold tracking-[-0.02em] text-forest-700 sm:text-xl">
+      {/* Teléfono (< sm): la pregunta queda para lectores de pantalla (arriba ya está el
+          titular del hero) y "Por noches | Por meses" ocupa todo el ancho. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 max-sm:mb-2.5">
+        <h2 className="text-lg font-extrabold tracking-[-0.02em] text-forest-700 max-sm:sr-only sm:text-xl">
           ¿Cuándo venís?
         </h2>
         <ModeToggle
           size="sm"
+          className="max-sm:grid max-sm:w-full max-sm:grid-cols-2"
           value={draft.mode}
           onChange={(mode) => {
             setOpenField(null);

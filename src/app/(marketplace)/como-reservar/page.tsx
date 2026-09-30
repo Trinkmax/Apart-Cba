@@ -100,7 +100,8 @@ export default async function ComoReservarPage() {
         ) : null}
       </ContentHero>
 
-      <section aria-labelledby="pasos-title" className="px-2 sm:px-4 lg:px-6">
+      {/* En celular no va: repite las secciones de abajo, que el índice sticky ya ordena. */}
+      <section aria-labelledby="pasos-title" className="px-2 sm:px-4 lg:px-6 max-lg:hidden">
         <div className="mx-auto max-w-[1400px] rounded-[2rem] bg-cream-200 px-4 py-12 sm:rounded-[2.5rem] sm:px-8 sm:py-16 lg:px-12">
           <div className="mx-auto max-w-[1240px]">
             <Eyebrow>
@@ -115,20 +116,24 @@ export default async function ComoReservarPage() {
         </div>
       </section>
 
-      <div className="mx-auto max-w-[1240px] px-4 py-14 sm:px-6 sm:py-20 lg:grid lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:gap-16 lg:px-8 lg:py-24 xl:gap-24">
+      <div className="mx-auto max-w-[1240px] px-4 py-14 sm:px-6 sm:py-20 lg:grid lg:grid-cols-[12.5rem_minmax(0,1fr)] lg:gap-16 lg:px-8 lg:py-24 xl:gap-24 max-lg:pb-12 max-lg:pt-0 sm:max-lg:pb-16 sm:max-lg:pt-0">
         <aside className="hidden lg:block">
           <PageToc items={TOC} variant="aside" className="sticky top-28" />
         </aside>
         <div className="min-w-0">
-          <PageToc items={TOC} variant="chips" className="mb-12 lg:hidden" />
-          <div className="max-w-3xl space-y-16 sm:space-y-20">
+          <PageToc items={TOC} variant="chips" className="mb-10 lg:hidden" />
+          <div className="max-w-3xl space-y-16 max-sm:space-y-14 sm:space-y-20 sm:max-lg:space-y-16">
             <PedidoSection />
             <ConfirmacionSection responseHours={facts.responseHours} />
             <PagosSection facts={facts} />
             <LlegadaSection />
             <PorMesSection whatsappUrl={monthlyWhatsapp} mailtoUrl={monthlyMailto} />
             <CancelacionesSection customText={settings.cancellationText} />
-            <section id="preguntas" aria-labelledby="preguntas-title" className="scroll-mt-24 lg:scroll-mt-28">
+            <section
+              id="preguntas"
+              aria-labelledby="preguntas-title"
+              className="scroll-mt-24 lg:scroll-mt-28 max-lg:scroll-mt-36"
+            >
               <h2
                 id="preguntas-title"
                 className="font-apart text-2xl font-extrabold leading-[1.1] tracking-[-0.02em] text-forest-700 sm:text-[2rem]"
@@ -146,7 +151,7 @@ export default async function ComoReservarPage() {
         whatsappLabel={formatPhoneAR(contact.whatsappNumber)}
         email={contact.publicEmail}
         instagram={contact.instagramHandle}
-        className="pb-16 sm:pb-24"
+        className="pb-16 sm:pb-24 max-sm:pb-0 sm:max-lg:pb-4"
       />
     </>
   );

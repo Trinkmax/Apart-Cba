@@ -17,9 +17,10 @@ export default function Loading() {
         <div className="mt-4 h-9 w-3/4 max-w-xl rounded-2xl bg-cream-300/70 sm:h-11" />
         <div className="mt-3 h-5 w-1/2 max-w-sm rounded-full bg-cream-200" />
 
-        <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Celular/tablet: como los rieles de la web (tarjeta al 80 % y la siguiente asomada). */}
+        <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4 max-lg:flex max-lg:gap-3 max-lg:overflow-hidden">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="space-y-3">
+            <div key={i} className="space-y-3 max-lg:w-[80%] max-lg:max-w-[22rem] max-lg:shrink-0">
               <div className="aspect-[4/3] rounded-3xl bg-cream-200" />
               <div className="h-4 w-2/3 rounded-full bg-cream-300/70" />
               <div className="h-3.5 w-1/2 rounded-full bg-cream-200" />
