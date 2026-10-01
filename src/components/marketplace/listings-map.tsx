@@ -155,6 +155,11 @@ export function ListingsMap({
       if (hoverStore.get() === id) hoverStore.set(null);
     }, HOVER_GRACE_MS);
   };
+  const showFromPill = (id: string) => {
+    cancelLeave();
+    setPillHoverId(id);
+    hoverStore.set(id);
+  };
   useEffect(
     () => () => {
       if (leaveTimer.current != null) window.clearTimeout(leaveTimer.current);
@@ -303,12 +308,11 @@ export function ListingsMap({
                 type="button"
                 aria-label={`${l.display_title}, ${label}`}
                 aria-pressed={selected === l.id}
-                onPointerEnter={() => {
-                  cancelLeave();
-                  setPillHoverId(l.id);
-                  hoverStore.set(l.id);
-                }}
+                // Mouse o teclado (Tab): la misma vista previa.
+                onPointerEnter={() => showFromPill(l.id)}
                 onPointerLeave={() => leaveSoon(l.id)}
+                onFocus={() => showFromPill(l.id)}
+                onBlur={() => leaveSoon(l.id)}
                 className={cn(
                   // block: como inline-block, el marcador sumaba el hueco de la línea
                   // (~5 px invisibles abajo) y en un grupo apretado ese hueco tapaba

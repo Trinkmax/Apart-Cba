@@ -16,6 +16,7 @@ import {
   type StayListing,
   type StaySettings,
 } from "@/components/marketplace/listing/stay-context";
+import { ListingWhatsAppTopic } from "@/components/marketplace/listing/listing-whatsapp-topic";
 import { getReviewsForUnit } from "@/lib/actions/marketplace";
 import { listMarketplaceAmenitiesCatalog } from "@/lib/actions/listings";
 import { absoluteUrl } from "@/lib/app-url";
@@ -155,6 +156,7 @@ export default async function UnitPage({ params }: { params: Params }) {
   return (
     <ListingStayProvider key={listing.id} listing={toStayListing(listing)} settings={staySettings} pageUrl={pageUrl}>
       <ListingJsonLd listing={listing} amenityNames={amenities.map((a) => a.name)} />
+      <ListingWhatsAppTopic />
       {/* Celular (< md): la galería va primera y a sangre (order, sin duplicarla)
           y el bloque del título es una hoja que sube sobre su borde de abajo.
           Todo con max-md:, así que desde md el orden y los márgenes son los de siempre. */}

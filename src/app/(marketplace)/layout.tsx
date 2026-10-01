@@ -8,6 +8,7 @@ import {
   type ShellContact,
 } from "@/components/marketplace/shell/contact";
 import { SiteContactProvider } from "@/components/marketplace/shell/site-contact-context";
+import { WhatsAppFloat } from "@/components/marketplace/shell/whatsapp-float";
 import { getAppUrl } from "@/lib/app-url";
 import { getStorefrontCatalog } from "@/lib/marketplace/storefront";
 import { getSiteContact } from "@/lib/marketplace/web-settings-server";
@@ -120,6 +121,8 @@ export default async function MarketplaceLayout({ children }: { children: React.
           </main>
         </SiteContactProvider>
         <SiteFooter contact={contact} hoods={hoods} />
+        {/* WhatsApp a mano en todas las páginas (celular: globo; escritorio: píldora). */}
+        <WhatsAppFloat contact={contact} />
       </div>
     </MarketplacePrefsProvider>
   );

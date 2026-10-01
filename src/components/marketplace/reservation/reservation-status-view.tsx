@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { ArcBand, BrandDot } from "@/components/marketplace/brand/brand-shapes";
 import { StageTimeline } from "@/components/marketplace/brand/process-steps";
 import { StatusPill } from "@/components/marketplace/brand/status-pill";
+import { WhatsAppFloatTopic } from "@/components/marketplace/shell/whatsapp-float";
 import { CopyLinkButton } from "./copy-link-button";
 import { ContactCard, MoneyCard, PolicyCard, StaySummaryCard } from "./reservation-aside";
 import { StageMain } from "./stage-main";
@@ -72,6 +73,8 @@ export function ReservationStatusView({
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 pb-16 pt-6 sm:px-6 sm:pb-24 sm:pt-10 lg:px-8">
+      {/* El botón flotante de WhatsApp escribe por esta reserva (con su código). */}
+      <WhatsAppFloatTopic url={view.contact.whatsapp_url} />
       {backHref ? (
         <Link
           href={backHref}

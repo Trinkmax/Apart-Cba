@@ -634,6 +634,8 @@ export function CheckoutForm({
           ctaInView && "pointer-events-none translate-y-full",
         )}
         aria-hidden={ctaInView || undefined}
+        // El botón flotante de WhatsApp sube por encima mientras la barra se ve.
+        data-wa-lift={ctaInView ? undefined : ""}
       >
         <div className="mx-auto flex max-w-xl items-center gap-3">
           <div className="min-w-0">

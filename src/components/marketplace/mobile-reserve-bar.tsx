@@ -79,6 +79,7 @@ export function MobileReserveBar() {
     <>
       {/* Entra deslizándose desde abajo (fija: no mueve nada de la página). */}
       <div
+        data-wa-lift=""
         className="fixed inset-x-0 bottom-0 z-40 border-t border-cream-300 bg-paper/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-apart-lg backdrop-blur-md motion-safe:animate-in motion-safe:slide-in-from-bottom motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.22,1,0.36,1)] lg:hidden"
         aria-hidden={open ? true : undefined}
       >
