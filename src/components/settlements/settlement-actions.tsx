@@ -75,7 +75,11 @@ export function SettlementActions({
   function status(next: "revisada" | "enviada") {
     start(async () => {
       try {
-        await changeSettlementStatus(settlement.id, next);
+        const res = await changeSettlementStatus(settlement.id, next);
+        if (!res.ok) {
+          toast.error("No se pudo cambiar el estado", { description: res.error });
+          return;
+        }
         toast.success(`Marcada como ${next}`);
         router.refresh();
       } catch (e) {

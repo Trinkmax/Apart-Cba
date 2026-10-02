@@ -11,6 +11,8 @@ import { formatMoney, formatDate } from "@/lib/format";
 import {
   describeAuditChange,
   EDITABLE_STATUSES,
+  MANUAL_SETTLEMENT_STATUSES,
+  type ManualSettlementStatus,
   MAX_PERIOD_CYCLE,
   MAX_PERIOD_NOTE_LENGTH,
   formatPeriod,
@@ -4078,25 +4080,45 @@ export async function listOwnersForPeriod(year: number, month: number) {
 // Transiciones de estado (revisada / enviada / anulada / disputada).
 // El pago (→ pagada) va por registerSettlementPayment (impacta Caja).
 // ════════════════════════════════════════════════════════════════════════════
+/**
+ * Cambia el estado a mano, en cualquier dirección entre los de
+ * MANUAL_SETTLEMENT_STATUSES (enviada → revisada, revisada → borrador…).
+ * "pagada" entra y sale sólo con el pago en Caja; "anulada" es terminal.
+ * Devuelve el error en vez de lanzarlo: en producción Next.js reemplaza el
+ * mensaje de cualquier throw y la persona no sabría por qué no cambió.
+ */
 export async function changeSettlementStatus(
   id: string,
-  status: "borrador" | "revisada" | "enviada" | "pagada" | "anulada" | "disputada",
-  paidMovementId?: string,
-) {
+  status: ManualSettlementStatus,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
-    throw new Error("No tenés permisos para cambiar liquidaciones");
+    return { ok: false, error: "No tenés permisos para cambiar liquidaciones" };
   }
+  const parsed = z
+    .object({ id: z.string().uuid(), status: z.enum(MANUAL_SETTLEMENT_STATUSES) })
+    .safeParse({ id, status });
+  if (!parsed.success) return { ok: false, error: "Estado inválido" };
   const admin = createAdminClient();
 
   const { data: prev } = await admin
     .from("owner_settlements")
-    .select("status")
+    .select("status, paid_movement_id")
     .eq("id", id)
     .eq("organization_id", organization.id)
     .maybeSingle();
-  if (!prev) throw new Error("Liquidación no encontrada");
+  if (!prev) return { ok: false, error: "Liquidación no encontrada" };
+  if (prev.status === "pagada" || prev.paid_movement_id) {
+    return {
+      ok: false,
+      error: "Esta liquidación ya tiene el pago registrado en Caja: su estado no se cambia a mano.",
+    };
+  }
+  if (prev.status === "anulada") {
+    return { ok: false, error: "La liquidación está anulada: no se puede reabrir." };
+  }
+  if (prev.status === status) return { ok: true };
 
   const now = new Date().toISOString();
   const update: Record<string, unknown> = {
@@ -4109,30 +4131,41 @@ export async function changeSettlementStatus(
     update.reviewed_at = now;
     update.reviewed_by = session.userId;
   }
-  if (status === "enviada") update.sent_at = now;
-  if (status === "pagada") {
-    update.paid_at = now;
-    if (paidMovementId) update.paid_movement_id = paidMovementId;
+  // Volver a borrador la reabre: ya no está revisada (igual que el parte diario).
+  if (status === "borrador") {
+    update.reviewed_at = null;
+    update.reviewed_by = null;
   }
-  const { error } = await admin
+  if (status === "enviada") update.sent_at = now;
+  // Condicionado al estado leído: si en el medio alguien registró el pago, no
+  // lo pisamos con un estado anterior (la fila ya no matchea y no se toca).
+  const { data: changed, error } = await admin
     .from("owner_settlements")
     .update(update)
     .eq("id", id)
-    .eq("organization_id", organization.id);
-  if (error) throw new Error(error.message);
-
-  if (prev.status !== status) {
-    await admin.from("settlement_audit").insert({
-      organization_id: organization.id,
-      settlement_id: id,
-      action: "status_change",
-      actor_user_id: session.userId,
-      actor_name: actorNameOf(session),
-      changes: { status: { from: prev.status, to: status } },
-      side_effects: [],
-    });
+    .eq("organization_id", organization.id)
+    .eq("status", prev.status)
+    .is("paid_movement_id", null)
+    .select("id");
+  if (error) return { ok: false, error: error.message };
+  if (!changed || changed.length === 0) {
+    return {
+      ok: false,
+      error: "La liquidación cambió mientras tanto. Recargá la página y probá de nuevo.",
+    };
   }
+
+  await admin.from("settlement_audit").insert({
+    organization_id: organization.id,
+    settlement_id: id,
+    action: "status_change",
+    actor_user_id: session.userId,
+    actor_name: actorNameOf(session),
+    changes: { status: { from: prev.status, to: status } },
+    side_effects: [],
+  });
   revalidateSettlement(id);
+  return { ok: true };
 }
 
 /**

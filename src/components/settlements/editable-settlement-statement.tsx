@@ -110,6 +110,7 @@ import {
   type PeriodCycleSuggestion,
 } from "./period-cycle-editor";
 import { UndoRedoButtons, type UndoState } from "./undo-redo-buttons";
+import { SettlementStatusMenu } from "./settlement-status-menu";
 
 type LineType = SettlementLine["line_type"];
 type Unit = { id: string; code: string; name: string };
@@ -1969,16 +1970,11 @@ export function EditableSettlementStatement({
                   {model.periodCycleLabel}
                 </span>
               )}
-              <div
-                className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full"
-                style={{ backgroundColor: "oklch(1 0 0 / 0.16)" }}
-              >
-                <span
-                  className="size-1.5 rounded-full"
-                  style={{ backgroundColor: model.statusColor }}
-                />
-                {model.statusLabel}
-              </div>
+              <SettlementStatusMenu
+                settlementId={settlementId}
+                status={status}
+                paid={paid}
+              />
             </div>
           </div>
         </div>

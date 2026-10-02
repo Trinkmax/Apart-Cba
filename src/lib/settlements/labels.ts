@@ -177,6 +177,25 @@ export const EDITABLE_STATUSES: SettlementStatus[] = [
 export const REGENERABLE_STATUSES: SettlementStatus[] = ["borrador"];
 
 /**
+ * Estados que se eligen a mano desde el menú del estado, en cualquier orden
+ * (enviada → revisada, revisada → borrador…). Quedan afuera:
+ *   • "pagada": la pone «Registrar pago» junto con el egreso en Caja. Marcarla
+ *     a mano dejaría una liquidación pagada que Caja no conoce.
+ *   • "anulada": es terminal — no se regenera y el único por
+ *     owner+mes+moneda bloquea generar otra. Una generada por error se elimina.
+ * Una liquidación pagada tampoco SALE de "pagada" por acá: su egreso queda
+ * protegido en Caja mientras esté revisada/enviada/pagada (cash_movement_settlement_lock).
+ */
+export const MANUAL_SETTLEMENT_STATUSES = [
+  "borrador",
+  "revisada",
+  "enviada",
+  "disputada",
+] as const satisfies readonly SettlementStatus[];
+
+export type ManualSettlementStatus = (typeof MANUAL_SETTLEMENT_STATUSES)[number];
+
+/**
  * Estados "cerrados contablemente": editar acá impacta Caja mediante un
  * asiento de ajuste y el movimiento queda protegido (cash_movement_settlement_lock).
  */
