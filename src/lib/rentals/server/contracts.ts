@@ -6,6 +6,7 @@ import type { RentalContract, RentalSettings } from "@/lib/types/database";
 import { INDEX_CODES, type IndexLookup } from "@/lib/rentals/indices";
 import { formatContractNumber } from "@/lib/rentals/labels";
 import { deriveRentalToken, hashRentalToken, tenantPortalPath } from "@/lib/rentals/link-token";
+import { guarantorConsentError, joinNamesEs, planGuarantorConsents, renewalLegalPatch, type GuarantorConsent } from "@/lib/rentals/renewal";
 import { contractEndDate } from "@/lib/rentals/schedule";
 import { addDays, isYmd, maxYmd } from "@/lib/rentals/ymd";
 import { loadSeriesForContract } from "./series";
@@ -1000,7 +1001,8 @@ export async function renewContract(
     initial_rent: input.initialRent,
     billing_starts_on: null,
     signed_at: null,
-    parties: parties.map(({ sort_order: _order, ...p }) => ({ ...p, guarantor_consent_at: null })),
+    // El schema descarta sort_order: el orden lo da la posición en la lista.
+    parties: parties.map((p) => ({ ...p, guarantor_consent_at: null })),
   };
   const oldLabel = formatContractNumber(old.number);
   const consentNote = guarantors
