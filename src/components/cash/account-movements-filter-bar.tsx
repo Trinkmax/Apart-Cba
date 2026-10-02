@@ -22,6 +22,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   commission: "Comisiones",
   refund: "Devoluciones",
   extra_charge: "Cobros extra",
+  rent_collection: "Cobros de alquiler",
+  rent_owner_payout: "Rendiciones de alquiler",
+  security_deposit: "Depósitos en garantía",
+  agency_fee: "Honorarios inmobiliarios",
   other: "Otros",
 };
 

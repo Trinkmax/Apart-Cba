@@ -59,11 +59,12 @@ import {
 } from "@/lib/actions/cash";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { CashAccount, Unit } from "@/lib/types/database";
+import type { CashAccount, MovementCategory, Unit } from "@/lib/types/database";
 import { MovementDeleteAlert } from "./movement-delete-alert";
 import { DownloadReceiptButton } from "./download-receipt-button";
+import { ReceiptPdfButton } from "@/components/rentals/collections/receipt-actions";
 
-const CATEGORY_LABELS: Record<UpdateMovementInput["category"], string> = {
+const CATEGORY_LABELS: Record<MovementCategory, string> = {
   booking_payment: "Cobro de reserva",
   maintenance: "Mantenimiento",
   cleaning: "Limpieza",
@@ -77,8 +78,15 @@ const CATEGORY_LABELS: Record<UpdateMovementInput["category"], string> = {
   commission: "Comisión",
   refund: "Devolución",
   extra_charge: "Cobro extra",
+  rent_collection: "Cobro de alquiler",
+  rent_owner_payout: "Rendición a propietario",
+  security_deposit: "Depósito en garantía",
+  agency_fee: "Honorarios inmobiliarios",
   other: "Otro",
 };
+
+/** Categorías que sólo escribe el módulo Alquileres: no se eligen a mano. */
+const MODULE_CATEGORIES = new Set<string>(["rent_collection", "rent_owner_payout", "security_deposit", "agency_fee"]);
 
 interface Props {
   movementId: string | null;
@@ -185,7 +193,17 @@ function SheetBody({
 }) {
   const isIn = detail.direction === "in";
   const isTransfer = detail.category === "transfer";
-  const isLockedSettlement = detail.linked_settlement?.is_locked ?? false;
+  // Un movimiento de Alquileres se trata como bloqueado: se anula desde el módulo.
+  // Se decide por ref_type (como el servidor) y no sólo por la vista previa: si
+  // ésta no carga, Editar/Eliminar igual fallarían y el comprobante saldría mal.
+  const isRentalMovement = detail.linked_rental !== null || Boolean(detail.ref_type?.startsWith("rental_"));
+  const isLockedSettlement = (detail.linked_settlement?.is_locked ?? false) || isRentalMovement;
+  // El comprobante genérico de Caja nombraría al propietario como pagador (el
+  // ingreso del cobro se asienta billable_to='owner') y le pondría un segundo
+  // número al mismo pago. Un cobro de alquiler tiene su recibo en el módulo
+  // (inquilino como pagador, numeración oficial); rendiciones y gastos, el suyo
+  // en Alquileres.
+  const rentalReceiptPaymentId = detail.linked_rental?.kind === "cobro" ? detail.ref_id : null;
   const isScheduleLinked = detail.linked_schedule !== null;
   const canEditCategory = !isTransfer && !isScheduleLinked;
   const canEditDirection = !isScheduleLinked && !isTransfer;
@@ -285,9 +303,14 @@ function SheetBody({
           </div>
         </div>
       )}
-      {tab === "detalle" && isLockedSettlement && detail.linked_settlement && (
+      {tab === "detalle" && !isRentalMovement && isLockedSettlement && detail.linked_settlement && (
         <div className="border-t px-5 py-3 flex items-center justify-end">
           <DownloadReceiptButton movementId={detail.id} />
+        </div>
+      )}
+      {tab === "detalle" && rentalReceiptPaymentId && (
+        <div className="border-t px-5 py-3 flex items-center justify-end">
+          <ReceiptPdfButton paymentId={rentalReceiptPaymentId}>Recibo del inquilino</ReceiptPdfButton>
         </div>
       )}
     </>
@@ -375,9 +398,29 @@ function DetailPane({ detail, audit }: { detail: MovementDetail; audit: CashMove
       <Separator />
 
       {/* Vinculación */}
-      {(detail.linked_booking || detail.linked_schedule || detail.linked_transfer || detail.linked_settlement) && (
+      {(detail.linked_booking || detail.linked_schedule || detail.linked_transfer || detail.linked_settlement || detail.linked_rental) && (
         <div className="space-y-3">
           <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground font-medium">Vinculado a</h3>
+
+          {detail.linked_rental && (
+            <div className="rounded-xl border bg-card p-4 flex items-start gap-3">
+              <div className="size-10 rounded-lg bg-teal-500/15 text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
+                <Lock size={16} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">{detail.linked_rental.title}</div>
+                {detail.linked_rental.subtitle && (
+                  <div className="text-xs text-muted-foreground mt-0.5">{detail.linked_rental.subtitle}</div>
+                )}
+                <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                  <Lock size={11} /> Se maneja desde Alquileres: para corregirlo, anulalo ahí.
+                </div>
+              </div>
+              <Button asChild variant="outline" size="sm" className="shrink-0">
+                <Link href={detail.linked_rental.href}>Abrir</Link>
+              </Button>
+            </div>
+          )}
 
           {detail.linked_schedule && detail.linked_booking && (
             <Link
@@ -561,6 +604,25 @@ function describeChanges(changes: CashMovementAuditEntry["changes"]): string {
 }
 
 function LockedNotice({ detail }: { detail: MovementDetail }) {
+  // Sin vista previa (no se encontró el cobro, la rendición o el gasto) sigue
+  // siendo de Alquileres: el aviso no puede caer en el de liquidaciones.
+  if (detail.linked_rental || detail.ref_type?.startsWith("rental_")) {
+    return (
+      <div className="rounded-xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/40 p-4 flex items-start gap-3">
+        <Lock size={18} className="text-amber-700 dark:text-amber-300 mt-0.5" />
+        <div className="text-sm text-amber-900 dark:text-amber-200">
+          <div className="font-semibold">Movimiento de Alquileres</div>
+          <p className="mt-1">
+            {detail.linked_rental ? `${detail.linked_rental.title}. ` : ""}Se corrige desde Alquileres (anulando el cobro, la rendición o el gasto) para que la
+            cuenta del inquilino y las rendiciones queden bien.
+          </p>
+          <Button asChild variant="outline" size="sm" className="mt-3">
+            <Link href={detail.linked_rental?.href ?? "/dashboard/alquileres"}>Abrir en Alquileres</Link>
+          </Button>
+        </div>
+      </div>
+    );
+  }
   const s = detail.linked_settlement!;
   return (
     <div className="rounded-xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800/40 p-4 flex items-start gap-3">
@@ -611,7 +673,8 @@ function EditPane({
     account_id: detail.account_id,
     direction: detail.direction,
     amount: Number(detail.amount),
-    category: detail.category,
+    // Los movimientos de Alquileres (categorías rent_*) nunca llegan acá: se muestran bloqueados.
+    category: detail.category as UpdateMovementInput["category"],
     unit_id: detail.unit_id,
     owner_id: detail.owner_id,
     description: detail.description ?? "",
@@ -738,7 +801,7 @@ function EditPane({
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
             {Object.entries(CATEGORY_LABELS)
-              .filter(([k]) => canEditCategory || k === form.category)
+              .filter(([k]) => (canEditCategory && !MODULE_CATEGORIES.has(k)) || k === form.category)
               .map(([k, l]) => (
                 <SelectItem key={k} value={k}>{l}</SelectItem>
               ))}

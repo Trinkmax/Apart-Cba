@@ -20,6 +20,9 @@ export default function robots(): MetadataRoute.Robots {
         "/checkout",
         "/reserva/",
         "/liquidacion/",
+        // Links con token del módulo Alquileres (portal del inquilino, rendición).
+        "/inquilino/",
+        "/rendicion/",
         "/dashboard",
         "/superadmin",
         "/m/",

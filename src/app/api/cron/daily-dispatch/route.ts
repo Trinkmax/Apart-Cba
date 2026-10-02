@@ -437,6 +437,16 @@ export async function GET(req: Request) {
     results.booking_requests_expired = { error: (err as Error).message };
   }
 
+  // 9. Alquileres tradicionales: índices (INDEC/BCRA), ajustes automáticos,
+  //    cargos del mes, comprobantes esperados y avisos (mora, vencimientos).
+  //    Sólo orgs con organizations.rentals_enabled (migración 068).
+  try {
+    const { runRentalsDaily } = await import("@/lib/rentals/server/cron");
+    results.rentals = await runRentalsDaily(createAdminClient());
+  } catch (err) {
+    results.rentals = { error: (err as Error).message };
+  }
+
   const duration_ms = Date.now() - startedAt;
   console.log(`[cron/daily-dispatch] completed in ${duration_ms}ms`, results);
   return NextResponse.json({ ok: true, duration_ms, ...results });

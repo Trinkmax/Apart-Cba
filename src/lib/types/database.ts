@@ -74,7 +74,15 @@ export type MovementCategory =
   | "commission"
   | "refund"
   | "other"
-  | "extra_charge";
+  | "extra_charge"
+  /** Cobro a un inquilino de alquiler tradicional (ref_type 'rental_payment'). Migración 068. */
+  | "rent_collection"
+  /** Pago de una rendición al propietario (ref_type 'rental_statement_payment'). Migración 068. */
+  | "rent_owner_payout"
+  /** Depósito en garantía (devolución al inquilino). Migración 068. */
+  | "security_deposit"
+  /** Honorarios inmobiliarios cobrados aparte. Migración 068. */
+  | "agency_fee";
 
 export type SettlementStatus =
   | "borrador"
@@ -131,6 +139,11 @@ export type NotificationType =
   | "channel_cancellation_pending"
   | "channel_request_pending"
   | "channel_request_auto_confirmed"
+  | "rental_overdue"
+  | "rental_adjustment"
+  | "rental_expiring"
+  | "rental_proof"
+  | "rental_payment_report"
   | "manual"
   | "other";
 
@@ -201,6 +214,11 @@ export interface Organization {
    * `units.marketplace_published`. Migración 067.
    */
   marketplace_enabled: boolean;
+  /**
+   * Muestra la sección Alquileres (tradicionales): contratos de 2-3 años con
+   * ajuste por índice, cobranzas, comprobantes y rendiciones. Migración 068.
+   */
+  rentals_enabled: boolean;
   /** NOT NULL mientras conserve los datos de ejemplo del alta. NULL una vez vaciados. */
   demo_data_seeded_at: string | null;
   trial_expires_at: string | null;
@@ -2227,4 +2245,598 @@ export interface MarketplaceListingDetail extends MarketplaceListingSummary {
   pricing_rules: UnitPricingRule[];
   organization_name: string;
   organization_logo_url: string | null;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Alquileres tradicionales (migraciones 068 / 068b)
+// Contratos de 2-3 años con ajuste por índice, cobranza mensual, comprobantes
+// de expensas/servicios y rendición al propietario. Módulo aparte del PMS: las
+// propiedades NO son `units`. Lógica pura en src/lib/rentals/.
+// ════════════════════════════════════════════════════════════════════════════
+
+export type RentalIndexCode = "ipc" | "icl" | "casa_propia" | "uva" | "cer" | "ripte";
+export type RentalAdjustmentMethod = "indice" | "porcentaje_fijo" | "escalonado" | "manual" | "sin_ajuste";
+export type RentalRounding = "none" | "unit" | "ten" | "hundred" | "thousand";
+export type RentalLateFeeType = "diario_pct" | "mensual_pct" | "fijo_diario" | "ninguno";
+export type RentalMoneyOwner = "propietario" | "inmobiliaria";
+export type RentalVatCondition = "responsable_inscripto" | "monotributo" | "exento";
+export type RentalCommissionBasis = "pct_total_contrato" | "meses" | "monto_fijo" | "ninguna";
+
+/** Honorario {base, valor, IVA}: 5 % del total del contrato, 1 mes, $X… */
+export interface RentalCommissionRule {
+  basis: RentalCommissionBasis;
+  value: number;
+  vat: boolean;
+}
+
+/** Valores por defecto del módulo por organización. Sin fila = defaults de la 068. */
+export interface RentalSettings {
+  organization_id: string;
+  /** Plazo para pagar, en días desde el inicio del período (10 = "del 1 al 10"). */
+  payment_window_days: number;
+  grace_days: number;
+  late_fee_type: RentalLateFeeType;
+  late_fee_value: number;
+  late_fee_payee: RentalMoneyOwner;
+  /** % de lo cobrado, a cargo del propietario (Ley 9445 art. 25 e: 10 %). */
+  admin_fee_pct: number;
+  admin_fee_vat: boolean;
+  tenant_commission: RentalCommissionRule;
+  owner_commission: RentalCommissionRule;
+  default_index: RentalIndexCode;
+  default_adjustment_every: number;
+  default_lag_months: number;
+  default_rounding: RentalRounding;
+  default_duration_months: number;
+  auto_apply_adjustments: boolean;
+  stamp_tax_rate_pct: number;
+  /** Exento de Sellos si el alquiler promedio mensual no supera esto (Córdoba 2026: 1.230.000). */
+  stamp_tax_exempt_monthly: number | null;
+  stamp_tax_tenant_share_pct: number;
+  vat_condition: RentalVatCondition;
+  /** Corredor responsable y su matrícula (CPI Córdoba, Ley 9445 art. 21). */
+  broker_name: string | null;
+  broker_license: string | null;
+  /** Datos para transferir (CBU/alias) que ven los inquilinos. */
+  payment_instructions: string | null;
+  receipt_footer: string | null;
+  /** Días antes del inicio de cada período en que se genera el cargo. */
+  charge_lead_days: number;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export type RentalPropertyType =
+  | "departamento" | "casa" | "ph" | "duplex" | "local" | "oficina" | "cochera" | "deposito" | "terreno" | "otro";
+export type RentalPropertyAvailability = "disponible" | "reservada" | "en_refaccion" | "retirada";
+export type RentalServiceKind =
+  | "expensas" | "luz" | "gas" | "agua" | "municipal" | "inmobiliario" | "internet" | "seguro" | "otro";
+
+/** Cuenta de un servicio o impuesto de la propiedad (EPEC, Ecogas, Aguas Cordobesas, Rentas…). */
+export interface RentalPropertyServiceAccount {
+  kind: RentalServiceKind;
+  provider: string | null;
+  account_number: string | null;
+  holder: string | null;
+  notes: string | null;
+}
+
+export interface RentalProperty {
+  id: string;
+  organization_id: string;
+  code: string;
+  property_type: RentalPropertyType;
+  street: string;
+  street_number: string | null;
+  floor: string | null;
+  apartment: string | null;
+  tower: string | null;
+  neighborhood: string | null;
+  city: string;
+  province: string;
+  postal_code: string | null;
+  rooms: number | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  covered_m2: number | null;
+  total_m2: number | null;
+  furnished: boolean;
+  has_garage: boolean;
+  consortium_name: string | null;
+  consortium_phone: string | null;
+  consortium_email: string | null;
+  /** Unidad funcional en el consorcio. */
+  functional_unit: string | null;
+  /** Nomenclatura catastral / cuenta de Rentas. */
+  cadastral_id: string | null;
+  services: RentalPropertyServiceAccount[];
+  /** Precio pretendido mientras está vacante. */
+  listing_rent: number | null;
+  listing_currency: string | null;
+  availability: RentalPropertyAvailability;
+  /** Mandato de administración firmado (Ley 9445 art. 16 p). */
+  mandate_signed_at: string | null;
+  notes: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface RentalPropertyOwner {
+  id: string;
+  organization_id: string;
+  property_id: string;
+  owner_id: string;
+  ownership_pct: number;
+  is_primary: boolean;
+  created_at: string;
+}
+
+export type RentalPersonType = "fisica" | "juridica";
+export type RentalDocType = "DNI" | "CUIT" | "CUIL" | "PASAPORTE" | "OTRO";
+
+/** Inquilino o garante (la misma persona puede ser las dos cosas en contratos distintos). */
+export interface RentalPerson {
+  id: string;
+  organization_id: string;
+  person_type: RentalPersonType;
+  full_name: string;
+  doc_type: RentalDocType | null;
+  doc_number: string | null;
+  /** CUIT/CUIL. */
+  tax_id: string | null;
+  birth_date: string | null;
+  nationality: string | null;
+  email: string | null;
+  phone: string | null;
+  phone_alt: string | null;
+  address: string | null;
+  city: string | null;
+  province: string | null;
+  occupation: string | null;
+  employer: string | null;
+  employer_phone: string | null;
+  monthly_income: number | null;
+  income_currency: string | null;
+  notes: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export type RentalContractStatus = "borrador" | "vigente" | "finalizado" | "rescindido";
+export type RentalUsage = "vivienda" | "comercial" | "mixto" | "cochera" | "otro";
+export type RentalLegalRegime = "ccyc_2015" | "ley_27551" | "ley_27737" | "dnu_70_2023";
+export type RentalDepositStatus = "pendiente" | "retenido" | "devuelto" | "aplicado" | "no_aplica";
+export type RentalStampTaxStatus = "pendiente" | "pagado" | "exento" | "no_aplica";
+export type RentalExpensasPayer = "inquilino" | "propietario" | "no_aplica";
+export type RentalExpensasMode = "paga_inquilino" | "cobra_inmobiliaria" | "no_aplica";
+export type RentalEarlyTerminationRule = "dnu_10pct" | "ley_27551" | "pactada" | "sin_penalidad";
+export type RentalPayer = "inquilino" | "propietario";
+
+/** Servicio o impuesto cuyo comprobante se controla cada mes. */
+export interface RentalContractService {
+  kind: RentalServiceKind;
+  payer: RentalPayer;
+  proof_required: boolean;
+  frequency: "mensual" | "bimestral";
+}
+
+export interface RentalContract {
+  id: string;
+  organization_id: string;
+  /** Correlativo por organización ("C-0007"). */
+  number: number;
+  property_id: string;
+  status: RentalContractStatus;
+  usage: RentalUsage;
+  legal_regime: RentalLegalRegime;
+  start_date: string;
+  duration_months: number;
+  /** start_date + duration_months − 1 día. */
+  end_date: string;
+  signed_at: string | null;
+  currency: string;
+  initial_rent: number;
+  /** Alquiler vigente HOY (cache que mantienen el aplicar ajuste y el cron). */
+  current_rent: number;
+  adjustment_method: RentalAdjustmentMethod;
+  index_code: RentalIndexCode | null;
+  adjustment_every_months: number | null;
+  /** Índices mensuales: 1 = meses del ciclo; 2 = último dato publicado al ajustar. */
+  index_lag_months: number;
+  fixed_pct: number | null;
+  /** Escalonado: montos pactados de cada ajuste. */
+  steps: number[] | null;
+  rounding: RentalRounding;
+  cap_pct: number | null;
+  allow_decrease: boolean;
+  payment_window_days: number;
+  grace_days: number;
+  late_fee_type: RentalLateFeeType;
+  late_fee_value: number;
+  late_fee_payee: RentalMoneyOwner;
+  /** Quién cobra el alquiler: la inmobiliaria (entra a Caja y se rinde) o el propietario directo. */
+  collector: RentalMoneyOwner;
+  /** Contratos que ya venían corriendo: se cobra desde el período que contiene esta fecha. */
+  billing_starts_on: string | null;
+  admin_fee_pct: number;
+  admin_fee_vat: boolean;
+  tenant_commission: RentalCommissionRule | null;
+  owner_commission: RentalCommissionRule | null;
+  deposit_amount: number;
+  deposit_currency: string | null;
+  deposit_holder: RentalMoneyOwner;
+  deposit_status: RentalDepositStatus;
+  deposit_returned_amount: number | null;
+  deposit_returned_at: string | null;
+  stamp_tax_status: RentalStampTaxStatus;
+  stamp_tax_amount: number | null;
+  expensas_payer: RentalExpensasPayer;
+  expensas_mode: RentalExpensasMode;
+  expensas_extra_payer: RentalPayer;
+  services: RentalContractService[];
+  insurance_required: boolean;
+  insurance_company: string | null;
+  insurance_policy: string | null;
+  insurance_expires_at: string | null;
+  early_termination_rule: RentalEarlyTerminationRule;
+  early_termination_notes: string | null;
+  terminated_at: string | null;
+  termination_reason: string | null;
+  termination_notice_date: string | null;
+  termination_penalty: number | null;
+  /** Vencido y el inquilino sigue (art. 1218): se cobran los meses de continuación. Lo enciende una persona (068f). */
+  continuation_billing: boolean;
+  renewed_from_id: string | null;
+  portal_token_hash: string | null;
+  portal_token_version: number;
+  portal_enabled: boolean;
+  reli_code: string | null;
+  special_clauses: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+  updated_by: string | null;
+}
+
+export type RentalPartyRole = "inquilino" | "garante";
+export type RentalGuaranteeType =
+  | "propietaria" | "recibo_sueldo" | "seguro_caucion" | "fianza" | "aval_bancario" | "pagare" | "otra";
+
+export interface RentalContractParty {
+  id: string;
+  organization_id: string;
+  contract_id: string;
+  person_id: string;
+  role: RentalPartyRole;
+  /** Inquilino principal: titular de los recibos. */
+  is_primary: boolean;
+  guarantee_type: RentalGuaranteeType | null;
+  /** Detalle libre de la garantía (inmueble, aseguradora y póliza, empleador…). */
+  guarantee_details: Record<string, string | number | null>;
+  /** Conformidad del garante para renovar (art. 1225 CCyC). */
+  guarantor_consent_at: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export type RentalAdjustmentStatus =
+  | "programado" | "pendiente_indice" | "pendiente_manual" | "calculado" | "aplicado" | "omitido";
+
+export interface RentalAdjustment {
+  id: string;
+  organization_id: string;
+  contract_id: string;
+  sequence: number;
+  period_index: number;
+  effective_date: string;
+  status: RentalAdjustmentStatus;
+  method: RentalAdjustmentMethod;
+  index_code: RentalIndexCode | null;
+  /** Mes base (YYYY-MM-01) o día base del índice. */
+  from_key: string | null;
+  to_key: string | null;
+  from_value: number | null;
+  to_value: number | null;
+  coefficient: number | null;
+  variation_pct: number | null;
+  base_amount: number | null;
+  computed_amount: number | null;
+  /** Lo que rige desde effective_date (puede diferir del cálculo: override_reason). */
+  applied_amount: number | null;
+  override_reason: string | null;
+  computed_at: string | null;
+  applied_at: string | null;
+  applied_by: string | null;
+  notified_at: string | null;
+  notified_via: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RentalChargeKind = "mensual" | "ingreso" | "extra" | "salida";
+/** Estado guardado; "vencido" se deriva (due_date < hoy con saldo). */
+export type RentalChargeStatus = "pendiente" | "parcial" | "pagado" | "anulado";
+export type RentalChargeItemKind =
+  | "alquiler" | "diferencia_ajuste" | "expensas" | "servicio" | "punitorio" | "honorarios"
+  | "deposito" | "sellado" | "reparacion" | "rescision" | "otro";
+export type RentalPayee = "propietario" | "inmobiliaria" | "consorcio" | "tercero";
+
+export interface RentalCharge {
+  id: string;
+  organization_id: string;
+  contract_id: string;
+  kind: RentalChargeKind;
+  period_index: number | null;
+  period_start: string | null;
+  period_end: string | null;
+  cycle: number | null;
+  index_in_cycle: number | null;
+  cycle_length: number | null;
+  /** "Octubre 2026 · Período 2/3" */
+  label: string;
+  issue_date: string;
+  due_date: string;
+  currency: string;
+  subtotal: number;
+  paid_amount: number;
+  status: RentalChargeStatus;
+  /** Salió con el precio anterior porque el ajuste del período no tenía índice. */
+  pending_adjustment_seq: number | null;
+  notified_at: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface RentalChargeItem {
+  id: string;
+  organization_id: string;
+  charge_id: string;
+  kind: RentalChargeItemKind;
+  /** De quién es la plata cuando se cobra. */
+  payee: RentalPayee;
+  description: string;
+  amount: number;
+  /** Importe antes de bonificar. */
+  original_amount: number | null;
+  discount_reason: string | null;
+  paid_amount: number;
+  ref_type: string | null;
+  ref_id: string | null;
+  meta: Record<string, unknown>;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RentalPaymentMethod = "efectivo" | "transferencia" | "mp" | "cheque" | "deposito" | "otro";
+
+export interface RentalPayment {
+  id: string;
+  organization_id: string;
+  contract_id: string;
+  paid_at: string;
+  amount: number;
+  currency: string;
+  method: RentalPaymentMethod;
+  /** Cuenta de Caja (null si cobró el propietario directo). */
+  account_id: string | null;
+  cash_movement_id: string | null;
+  reference: string | null;
+  payer_name: string | null;
+  /** Recibo correlativo por organización. */
+  receipt_number: number | null;
+  /** Saldo a favor del inquilino que todavía no se imputó. */
+  unallocated_amount: number;
+  report_id: string | null;
+  notes: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  voided_by: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+export interface RentalPaymentAllocation {
+  id: string;
+  organization_id: string;
+  payment_id: string;
+  charge_id: string;
+  charge_item_id: string;
+  amount: number;
+  /** 'payment' = se imputó al registrar el cobro; 'credit' = saldo a favor aplicado después (068f). */
+  source: "payment" | "credit";
+  voided: boolean;
+  created_at: string;
+}
+
+export type RentalProofStatus = "pendiente" | "en_revision" | "validado" | "rechazado" | "no_corresponde";
+
+/** Comprobante mensual que presenta el inquilino (expensas, luz, gas…) y su validación. */
+export interface RentalProof {
+  id: string;
+  organization_id: string;
+  contract_id: string;
+  kind: RentalServiceKind;
+  /** Primer día del mes al que corresponde. */
+  period: string;
+  status: RentalProofStatus;
+  amount: number | null;
+  currency: string | null;
+  due_date: string | null;
+  /** Ruta en el bucket privado `rental-docs`. */
+  file_path: string | null;
+  file_mime: string | null;
+  file_name: string | null;
+  file_size: number | null;
+  uploaded_at: string | null;
+  uploaded_via: "staff" | "portal" | null;
+  uploaded_by: string | null;
+  reviewed_at: string | null;
+  reviewed_by: string | null;
+  rejection_reason: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Aviso de pago del inquilino desde su link. NO es un cobro: staff lo registra. */
+export interface RentalPaymentReport {
+  id: string;
+  organization_id: string;
+  contract_id: string;
+  amount: number | null;
+  currency: string | null;
+  paid_on: string | null;
+  receipt_path: string | null;
+  receipt_mime: string | null;
+  note: string | null;
+  status: PaymentReportStatus;
+  payment_id: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+}
+
+export type RentalExpenseCategory =
+  | "reparacion" | "mantenimiento" | "expensas_extraordinarias" | "impuesto" | "servicio"
+  | "seguro" | "honorarios_terceros" | "otro";
+export type RentalExpenseChargedTo = "propietario" | "inquilino" | "inmobiliaria";
+export type RentalExpensePaidBy = "inmobiliaria" | "propietario" | "inquilino" | "pendiente";
+export type RentalExpenseStatus = "pendiente" | "aplicado" | "anulado";
+
+export interface RentalExpense {
+  id: string;
+  organization_id: string;
+  property_id: string;
+  contract_id: string | null;
+  occurred_on: string;
+  category: RentalExpenseCategory;
+  description: string;
+  provider: string | null;
+  amount: number;
+  currency: string;
+  /** A cargo de quién: propietario (rendición), inquilino (cargo) o inmobiliaria. */
+  charged_to: RentalExpenseChargedTo;
+  paid_by: RentalExpensePaidBy;
+  /** pendiente = todavía no se pasó a una rendición o a un cargo. */
+  status: RentalExpenseStatus;
+  account_id: string | null;
+  cash_movement_id: string | null;
+  statement_id: string | null;
+  charge_item_id: string | null;
+  file_path: string | null;
+  file_mime: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export type RentalStatementStatus = "borrador" | "emitida" | "pagada" | "anulada";
+export type RentalStatementLineType =
+  | "cobro_alquiler" | "cobro_punitorio" | "cobro_otro" | "honorarios_administracion"
+  | "iva_honorarios" | "comision_locacion" | "gasto" | "ajuste";
+
+/** Rendición al propietario: lo cobrado menos honorarios, IVA y gastos a su cargo. */
+export interface RentalOwnerStatement {
+  id: string;
+  organization_id: string;
+  owner_id: string;
+  number: number;
+  period_year: number;
+  period_month: number;
+  /** Incluye cobros hasta esta fecha. */
+  cutoff_date: string;
+  currency: string;
+  status: RentalStatementStatus;
+  collected_amount: number;
+  fees_amount: number;
+  vat_amount: number;
+  expenses_amount: number;
+  other_amount: number;
+  net_amount: number;
+  public_token_hash: string | null;
+  public_token_version: number;
+  sent_at: string | null;
+  sent_to: string | null;
+  paid_at: string | null;
+  paid_movement_ids: string[];
+  notes: string | null;
+  generated_at: string;
+  generated_by: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+  updated_at: string;
+}
+
+export interface RentalOwnerStatementLine {
+  id: string;
+  organization_id: string;
+  statement_id: string;
+  owner_id: string;
+  line_type: RentalStatementLineType;
+  sign: 1 | -1;
+  amount: number;
+  description: string;
+  contract_id: string | null;
+  property_id: string | null;
+  ref_type: "allocation" | "expense" | "contract_commission" | "manual" | null;
+  ref_id: string | null;
+  share_pct: number;
+  voided: boolean;
+  sort_order: number;
+  created_at: string;
+}
+
+export type RentalDocumentKind =
+  | "contrato" | "garantia" | "inventario" | "acta_entrega" | "mandato" | "dni"
+  | "recibo_sueldo" | "poliza" | "foto" | "otro";
+
+export interface RentalDocument {
+  id: string;
+  organization_id: string;
+  contract_id: string | null;
+  property_id: string | null;
+  person_id: string | null;
+  kind: RentalDocumentKind;
+  title: string;
+  /** Ruta en el bucket privado `rental-docs`. */
+  file_path: string;
+  file_mime: string | null;
+  file_size: number | null;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
+export interface RentalEvent {
+  id: string;
+  organization_id: string;
+  contract_id: string | null;
+  property_id: string | null;
+  event_type: string;
+  summary: string;
+  payload: Record<string, unknown>;
+  actor_user_id: string | null;
+  actor_name: string | null;
+  created_at: string;
+}
+
+/** Nivel de un índice público (tabla GLOBAL, sin organization_id). */
+export interface EconomicIndexValue {
+  index_code: RentalIndexCode;
+  /** Mensual → primer día del mes; diario → el día. */
+  period: string;
+  value: number;
+  source: "indec" | "bcra" | "datos_gob" | "argentinadatos" | "manual";
+  fetched_at: string;
 }

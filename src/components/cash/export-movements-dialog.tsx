@@ -71,6 +71,10 @@ const CATEGORY_LABELS: Record<MovementCategory, string> = {
   commission: "Comisión",
   refund: "Reintegro",
   extra_charge: "Cobro extra",
+  rent_collection: "Cobro de alquiler",
+  rent_owner_payout: "Rendición a propietario",
+  security_deposit: "Depósito en garantía",
+  agency_fee: "Honorarios inmobiliarios",
   other: "Otro",
 };
 

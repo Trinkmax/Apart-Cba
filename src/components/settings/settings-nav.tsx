@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Building2, Users, Palette, Mail, MessageSquareText, Percent, Sparkles, Globe } from "lucide-react";
+import { Building2, Users, Palette, Mail, MessageSquareText, Percent, Sparkles, Globe, KeyRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type SettingsNavItem = {
@@ -20,6 +20,7 @@ const ITEMS: SettingsNavItem[] = [
   { label: "Colores", href: "/dashboard/configuracion/colores", icon: Palette },
   { label: "Comunicaciones", href: "/dashboard/configuracion/comunicaciones", icon: Mail },
   { label: "Web y cobros", href: "/dashboard/configuracion/web", icon: Globe },
+  { label: "Alquileres", href: "/dashboard/configuracion/alquileres", icon: KeyRound },
   { label: "Mensajería", href: "/dashboard/configuracion/mensajeria", icon: MessageSquareText },
 ];
 

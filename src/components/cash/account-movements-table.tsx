@@ -48,6 +48,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   commission: "Comisión",
   refund: "Devolución",
   extra_charge: "Extra",
+  rent_collection: "Alquiler",
+  rent_owner_payout: "Rendición",
+  security_deposit: "Depósito",
+  agency_fee: "Honorarios",
   other: "Otro",
 };
 

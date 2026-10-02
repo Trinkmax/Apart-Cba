@@ -615,6 +615,9 @@ async function buildSettlementLines(opts: {
     if (!(amt > 0)) continue;
     const rt = m.ref_type as string | null;
     if (rt && EXCLUDED_EXPENSE_REF_TYPES.has(rt)) continue;
+    // Alquileres tradicionales (migración 068) liquida sus propios gastos en
+    // las rendiciones del módulo: acá se descontarían dos veces.
+    if (rt && rt.startsWith("rental_")) continue;
     const desc = (m.description as string | null)?.trim();
     stats.expenseCount++;
     lines.push({

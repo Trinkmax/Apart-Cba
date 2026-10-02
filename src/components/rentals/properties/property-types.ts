@@ -1,0 +1,153 @@
+import type {
+  RentalContractStatus,
+  RentalGuaranteeType,
+  RentalPartyRole,
+  RentalProperty,
+  RentalPropertyAvailability,
+  RentalPropertyServiceAccount,
+  RentalPropertyType,
+} from "@/lib/types/database";
+import type { ContractDisplayState } from "@/lib/rentals/labels";
+import type { PropertyDisplayState } from "./property-helpers";
+
+/** Tipos compartidos entre las actions de Propiedades y sus pantallas (sin runtime). */
+
+export interface PropertyOwnerInput {
+  owner_id: string;
+  ownership_pct: number;
+  is_primary: boolean;
+}
+
+/** Propietario de la tabla `owners` para el buscador. */
+export interface OwnerOption {
+  id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  document_number: string | null;
+}
+
+export interface PropertyOwnerView {
+  owner_id: string;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  cbu: string | null;
+  alias_cbu: string | null;
+  bank_name: string | null;
+  ownership_pct: number;
+  is_primary: boolean;
+}
+
+export interface ContractPartyView {
+  person_id: string;
+  full_name: string;
+  role: RentalPartyRole;
+  is_primary: boolean;
+  guarantee_type: RentalGuaranteeType | null;
+}
+
+/** Un contrato visto desde una propiedad o una persona. */
+export interface ContractSummary {
+  id: string;
+  number: number;
+  property_id: string;
+  status: RentalContractStatus;
+  display_state: ContractDisplayState;
+  start_date: string;
+  end_date: string;
+  terminated_at: string | null;
+  currency: string;
+  current_rent: number;
+  /** Inquilino titular (el de los recibos). */
+  tenant: { id: string; full_name: string } | null;
+  parties: ContractPartyView[];
+  /** Lo que debe hoy (cargos abiertos) y la parte ya vencida. */
+  balance: number;
+  overdue: number;
+}
+
+export interface PropertyListItem {
+  property: RentalProperty;
+  state: PropertyDisplayState;
+  owners: PropertyOwnerView[];
+  /** Contrato vigente (a lo sumo uno por propiedad). */
+  current: ContractSummary | null;
+  /** Contrato en borrador (por arrancar). */
+  draft: ContractSummary | null;
+  /** Desde cuándo está sin contrato (fin del último), si alguna vez tuvo. */
+  vacant_since: string | null;
+}
+
+export interface PropertyEventView {
+  id: string;
+  event_type: string;
+  summary: string;
+  created_at: string;
+  actor_name: string | null;
+}
+
+export interface PropertyDetail extends PropertyListItem {
+  /** Todos los contratos, del más nuevo al más viejo. */
+  contracts: ContractSummary[];
+  events: PropertyEventView[];
+}
+
+export interface PropertyCodeRef {
+  id: string;
+  code: string;
+  label: string;
+}
+
+export interface PropertyFormOptions {
+  owners: OwnerOption[];
+  codes: PropertyCodeRef[];
+  /** Titulares actuales de la propiedad que se edita (null si es alta). */
+  current_owners: PropertyOwnerInput[] | null;
+}
+
+/** Lo que manda el formulario. `code` vacío = lo genera el servidor desde la dirección. */
+export interface PropertyInput {
+  code: string;
+  property_type: RentalPropertyType;
+  street: string;
+  street_number: string | null;
+  floor: string | null;
+  apartment: string | null;
+  tower: string | null;
+  neighborhood: string | null;
+  city: string;
+  province: string;
+  postal_code: string | null;
+  rooms: number | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  covered_m2: number | null;
+  total_m2: number | null;
+  furnished: boolean;
+  has_garage: boolean;
+  consortium_name: string | null;
+  consortium_phone: string | null;
+  consortium_email: string | null;
+  functional_unit: string | null;
+  cadastral_id: string | null;
+  services: RentalPropertyServiceAccount[];
+  listing_rent: number | null;
+  listing_currency: string | null;
+  availability: RentalPropertyAvailability;
+  mandate_signed_at: string | null;
+  notes: string | null;
+  owners: PropertyOwnerInput[];
+}
+
+export type PropertySaveResult =
+  | { ok: true; property: RentalProperty }
+  | { ok: false; error: string; field?: string; suggestion?: string };
+
+export interface QuickOwnerInput {
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  cbu: string | null;
+  alias_cbu: string | null;
+}

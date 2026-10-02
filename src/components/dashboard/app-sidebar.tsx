@@ -19,6 +19,14 @@ import {
   ScrollText,
   Inbox,
   PieChart,
+  LayoutGrid,
+  FilePenLine,
+  HandCoins,
+  FileCheck,
+  TrendingUp,
+  BanknoteArrowUp,
+  Building,
+  UsersRound,
 } from "lucide-react";
 import {
   Sidebar,
@@ -51,6 +59,8 @@ interface NavItem {
 interface NavGroup {
   label: string;
   items: NavItem[];
+  /** Grupo de un módulo que se enciende por organización (p. ej. Alquileres). */
+  module?: "rentals";
 }
 
 const NAV: NavGroup[] = [
@@ -84,6 +94,22 @@ const NAV: NavGroup[] = [
       { label: "Resultados", href: "/dashboard/resultados", icon: PieChart, resource: "payments" },
       { label: "Liquidaciones", href: "/dashboard/liquidaciones", icon: FileText, resource: "settlements" },
       { label: "Propietarios", href: "/dashboard/propietarios", icon: ShieldCheck, resource: "owners" },
+    ],
+  },
+  {
+    // Alquileres tradicionales (contratos de 2-3 años con ajuste por índice).
+    // Sólo aparece si la org tiene el módulo encendido (organizations.rentals_enabled).
+    label: "Alquileres",
+    module: "rentals",
+    items: [
+      { label: "Resumen", href: "/dashboard/alquileres", icon: LayoutGrid, resource: "rentals" },
+      { label: "Contratos", href: "/dashboard/alquileres/contratos", icon: FilePenLine, resource: "rentals" },
+      { label: "Cobranzas", href: "/dashboard/alquileres/cobranzas", icon: HandCoins, resource: "rentals" },
+      { label: "Comprobantes", href: "/dashboard/alquileres/comprobantes", icon: FileCheck, resource: "rentals" },
+      { label: "Ajustes", href: "/dashboard/alquileres/ajustes", icon: TrendingUp, resource: "rentals" },
+      { label: "Rendiciones", href: "/dashboard/alquileres/rendiciones", icon: BanknoteArrowUp, resource: "rentals" },
+      { label: "Propiedades", href: "/dashboard/alquileres/propiedades", icon: Building, resource: "rentals" },
+      { label: "Inquilinos", href: "/dashboard/alquileres/personas", icon: UsersRound, resource: "rentals" },
     ],
   },
   {
@@ -130,6 +156,7 @@ export function AppSidebar({
 
       <SidebarContent>
         {NAV.map((group) => {
+          if (group.module === "rentals" && !currentOrg.rentals_enabled) return null;
           const visibleItems = group.items.filter(
             (item) =>
               (item.resource === "*" || can(currentRole, item.resource as Resource, "view")) &&

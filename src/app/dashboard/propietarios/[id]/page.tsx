@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import {
@@ -22,6 +23,9 @@ import { Separator } from "@/components/ui/separator";
 import { OwnerFormDialog } from "@/components/owners/owner-form-dialog";
 import { getInitials, CURRENCY_LABELS } from "@/lib/format";
 import type { Owner, Unit, UnitOwner } from "@/lib/types/database";
+import { getCurrentOrg } from "@/lib/actions/org";
+import { can } from "@/lib/permissions";
+import { OwnerRentalsCard } from "@/components/rentals/owner-rentals-card";
 
 type OwnerWithUnits = Owner & {
   unit_owners: (UnitOwner & {
@@ -41,6 +45,9 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
     .map((u) => ({ id: u.id, code: u.code, name: u.name }));
 
   const totalOwnership = owner.unit_owners.reduce((acc, uo) => acc + Number(uo.ownership_pct), 0);
+  // Alquileres tradicionales: sólo con el módulo encendido y permiso para verlo.
+  const { organization, role } = await getCurrentOrg();
+  const rentalsOn = organization.rentals_enabled && can(role, "rentals", "view");
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
@@ -132,6 +139,12 @@ export default async function OwnerDetailPage({ params }: { params: Promise<{ id
             </div>
           </dl>
         </Card>
+
+        {rentalsOn && (
+          <Suspense fallback={<Card className="p-5 lg:col-span-3 h-44 animate-pulse bg-muted/30" />}>
+            <OwnerRentalsCard ownerId={owner.id} />
+          </Suspense>
+        )}
 
         {owner.notes && (
           <Card className="p-5 lg:col-span-3">

@@ -74,6 +74,19 @@ export type LinkedSettlementPreview = {
   is_locked: boolean;
 };
 
+/**
+ * Movimiento que escribió el módulo Alquileres (ref_type 'rental_*'): un cobro
+ * a un inquilino, el pago de una rendición o un gasto pagado desde Caja. Se
+ * maneja SÓLO desde Alquileres (anular el cobro / la rendición / el gasto):
+ * editarlo acá dejaría la cuenta del inquilino o la rendición desincronizadas.
+ */
+export type LinkedRentalPreview = {
+  kind: "cobro" | "rendicion" | "gasto";
+  title: string;
+  subtitle: string | null;
+  href: string;
+};
+
 export type MovementDetail = EnrichedMovement & {
   /** Nombre del usuario que creó el movimiento (resuelto de created_by). */
   created_by_name: string | null;
@@ -81,7 +94,13 @@ export type MovementDetail = EnrichedMovement & {
   linked_schedule: LinkedSchedulePreview | null;
   linked_transfer: LinkedTransferPreview | null;
   linked_settlement: LinkedSettlementPreview | null;
+  linked_rental: LinkedRentalPreview | null;
 };
+
+/** ref_type de los movimientos que escribe el módulo Alquileres (migración 068). */
+function isRentalRefType(refType: string | null | undefined): boolean {
+  return typeof refType === "string" && refType.startsWith("rental_");
+}
 
 export type AccountStats = {
   balance: number;
@@ -992,6 +1011,10 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
     }
   }
 
+  const linked_rental = isRentalRefType(movement.ref_type) && movement.ref_id
+    ? await loadLinkedRental(admin, organization.id, movement.ref_type as string, movement.ref_id as string)
+    : null;
+
   const created_by_name = await createdByPromise;
 
   return {
@@ -1002,7 +1025,66 @@ export async function getMovementDetail(movementId: string): Promise<MovementDet
     linked_schedule,
     linked_transfer,
     linked_settlement,
+    linked_rental,
   };
+}
+
+async function loadLinkedRental(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  refType: string,
+  refId: string,
+): Promise<LinkedRentalPreview | null> {
+  if (refType === "rental_payment") {
+    const { data } = await admin
+      .from("rental_payments")
+      .select("receipt_number, voided_at, contract:rental_contracts(id, number, property:rental_properties(street, street_number, floor, apartment))")
+      .eq("id", refId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!data) return null;
+    const c = data.contract as unknown as { id: string; number: number; property: { street: string; street_number: string | null; floor: string | null; apartment: string | null } | null } | null;
+    const p = c?.property;
+    const address = p ? [p.street, p.street_number].filter(Boolean).join(" ") + (p.floor || p.apartment ? ` · ${[p.floor ? `${p.floor}°` : null, p.apartment].filter(Boolean).join("")}` : "") : null;
+    return {
+      kind: "cobro",
+      title: `Cobro de alquiler · recibo ${String(data.receipt_number ?? "").padStart(6, "0")}`,
+      subtitle: [c ? `Contrato C-${String(c.number).padStart(4, "0")}` : null, address].filter(Boolean).join(" · ") || null,
+      href: c ? `/dashboard/alquileres/contratos/${c.id}?tab=cuenta` : "/dashboard/alquileres/cobranzas",
+    };
+  }
+  if (refType === "rental_statement_payment") {
+    const { data } = await admin
+      .from("rental_owner_statements")
+      .select("id, number, owner:owners(full_name)")
+      .eq("id", refId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!data) return null;
+    const o = data.owner as unknown as { full_name: string } | null;
+    return {
+      kind: "rendicion",
+      title: `Rendición N° ${String(data.number).padStart(4, "0")}`,
+      subtitle: o?.full_name ?? null,
+      href: `/dashboard/alquileres/rendiciones/${data.id}`,
+    };
+  }
+  if (refType === "rental_expense") {
+    const { data } = await admin
+      .from("rental_expenses")
+      .select("description, property_id, contract_id")
+      .eq("id", refId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!data) return null;
+    return {
+      kind: "gasto",
+      title: `Gasto de alquiler: ${data.description}`,
+      subtitle: null,
+      href: data.contract_id ? `/dashboard/alquileres/contratos/${data.contract_id}?tab=gastos` : `/dashboard/alquileres/propiedades/${data.property_id}`,
+    };
+  }
+  return null;
 }
 
 // Lista los movements asociados a una booking (directos + por sus cuotas).
@@ -1112,6 +1194,11 @@ async function assertCanMutateMovement(movementId: string, action: "update" | "d
 
   if (!can(role, "cash", action)) {
     throw new Error("No tenés permiso para modificar movimientos de caja.");
+  }
+  if (isRentalRefType(refType)) {
+    // Cobros, rendiciones y gastos de Alquileres: se anulan desde el módulo
+    // (revierte imputaciones, recibos y rendiciones). La UI ya no ofrece el botón.
+    throw new Error("Este movimiento lo maneja Alquileres: anulalo desde el contrato, la rendición o el gasto.");
   }
   if (refType === "booking" || refType === "payment_schedule") {
     // payments requiere doble check (recepcion puede crear pero no editar)
@@ -1328,6 +1415,7 @@ const exportFiltersSchema = z.object({
       z.enum([
         "booking_payment", "maintenance", "cleaning", "owner_settlement", "transfer",
         "adjustment", "salary", "utilities", "tax", "supplies", "commission", "refund", "other", "extra_charge",
+        "rent_collection", "rent_owner_payout", "security_deposit", "agency_fee",
       ])
     )
     .optional(),
@@ -1530,6 +1618,12 @@ export async function getPaymentReceiptData(
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!m) throw new Error("Movimiento no encontrado");
+  // Los movimientos de Alquileres tienen su comprobante en el módulo (recibo del
+  // cobro con el inquilino como pagador y la numeración oficial, o la
+  // rendición). Éste nombraría al propietario como pagador —el cobro se asienta
+  // billable_to='owner'— y le daría otro número al mismo pago. La UI no ofrece
+  // el botón: si se llega acá es un bug, por eso se lanza.
+  if (isRentalRefType(m.ref_type)) throw new Error("El comprobante de este movimiento se descarga desde Alquileres.");
 
   const acc = m.account as unknown as { id: string; name: string; type: string } | null;
   const unitRaw = m.unit as unknown as

@@ -24,7 +24,9 @@ export type Resource =
   | "crm_config"
   | "parte_diario"
   | "date_marks"
-  | "unit_tips";
+  | "unit_tips"
+  /** Alquileres tradicionales (contratos, cobranzas, rendiciones). Migración 068. */
+  | "rentals";
 
 export function can(role: UserRole, resource: Resource, action: Action = "view"): boolean {
   const perms = DEFAULT_ROLE_PERMISSIONS[role];
