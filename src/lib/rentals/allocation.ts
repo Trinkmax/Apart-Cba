@@ -103,6 +103,51 @@ export function allocatePayment(
   return { allocations, remainder: Math.max(0, left) };
 }
 
+/** Saldo a favor de un pago (lo que quedó sin imputar), en la moneda del pago. */
+export interface CreditSource {
+  paymentId: string;
+  currency: string;
+  available: number;
+}
+
+/** Un ítem abierto que puede recibir saldo a favor, en la moneda de su cargo. */
+export interface CreditTarget extends OpenItem {
+  currency: string;
+}
+
+/**
+ * Reparte el saldo a favor de los pagos (en el orden en que vienen: el más
+ * viejo primero) entre lo que se debe, lo más viejo primero. Cada pago sólo
+ * paga ítems de SU moneda: 500 dólares nunca cancelan 500 pesos.
+ */
+export function planCreditAllocations(
+  sources: readonly CreditSource[],
+  targets: readonly CreditTarget[],
+): { paymentId: string; itemId: string; amount: number }[] {
+  const queues = new Map<string, { items: OpenItem[]; next: number }>();
+  for (const currency of new Set(targets.map((t) => t.currency))) {
+    const items = sortForImputation(targets.filter((t) => t.currency === currency).map((t) => ({ ...t })))
+      .map((t) => ({ ...t, outstanding: round2(t.outstanding) }))
+      .filter((t) => t.outstanding > 0);
+    queues.set(currency, { items, next: 0 });
+  }
+  const out: { paymentId: string; itemId: string; amount: number }[] = [];
+  for (const p of sources) {
+    const q = queues.get(p.currency);
+    if (!q) continue;
+    let left = round2(p.available);
+    while (left > 0 && q.next < q.items.length) {
+      const item = q.items[q.next];
+      const take = round2(Math.min(left, item.outstanding));
+      out.push({ paymentId: p.paymentId, itemId: item.itemId, amount: take });
+      item.outstanding = round2(item.outstanding - take);
+      left = round2(left - take);
+      if (item.outstanding <= 0) q.next += 1;
+    }
+  }
+  return out;
+}
+
 export type ChargeStatus = "pendiente" | "parcial" | "pagado" | "vencido" | "anulado";
 
 /** Estado de un cargo a partir de lo pagado y la fecha. */

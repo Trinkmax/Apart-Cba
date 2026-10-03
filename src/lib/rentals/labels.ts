@@ -53,7 +53,8 @@ export type ContractDisplayState =
   | "por_vencer"
   | "vencido_ocupado"
   | "rescision_notificada"
-  | "salida_programada";
+  | "salida_programada"
+  | "renovado";
 
 export const CONTRACT_STATE_META: Record<ContractDisplayState, StatusMeta> = {
   borrador: { label: "Borrador", color: "#64748b", description: "Todavía no rige: no genera cargos ni ajustes." },
@@ -75,6 +76,11 @@ export const CONTRACT_STATE_META: Record<ContractDisplayState, StatusMeta> = {
     color: "#8b5cf6",
     description: "Ya tiene fecha de entrega de llaves: sigue vigente, y se le sigue cobrando, hasta ese día. Después se finaliza solo.",
   },
+  renovado: {
+    label: "Renovado",
+    color: "#0d9488",
+    description: "Ya está activa la renovación: este contrato sigue hasta el día anterior a que empiece y ese día se cierra solo, sin cargos de salida.",
+  },
   finalizado: { label: "Finalizado", color: "#6366f1" },
   rescindido: { label: "Rescindido", color: "#ef4444" },
 };
@@ -82,12 +88,17 @@ export const CONTRACT_STATE_META: Record<ContractDisplayState, StatusMeta> = {
 /** Días antes del fin en que un contrato pasa a "por vencer". */
 export const EXPIRING_SOON_DAYS = 90;
 
-/** Lo que mira `contractDisplayState`. Las columnas de la salida son opcionales: sin ellas no se distingue. */
+/**
+ * Lo que mira `contractDisplayState`. Las columnas de la salida son opcionales: sin ellas no se distingue.
+ * `renewed`: ya está activa su renovación (no viene en la fila: lo pasa quien la leyó).
+ */
 export type ContractStateInput = Pick<RentalContract, "status" | "end_date"> &
-  Partial<Pick<RentalContract, "terminated_at" | "termination_notice_date">>;
+  Partial<Pick<RentalContract, "terminated_at" | "termination_notice_date">> & { renewed?: boolean };
 
 export function contractDisplayState(c: ContractStateInput, today: string): ContractDisplayState {
   if (c.status !== "vigente") return c.status;
+  // Lo sigue la renovación: ni "por vencer" ni "entrega las llaves" (el inquilino no se va).
+  if (c.renewed) return "renovado";
   // Salida registrada pero todavía no llegó: manda sobre el vencimiento.
   if (c.terminated_at) return c.termination_notice_date ? "rescision_notificada" : "salida_programada";
   if (c.end_date < today) return "vencido_ocupado";
@@ -106,6 +117,7 @@ export function contractStateLabel(c: ContractStateInput, today: string): string
   const state = contractDisplayState(c, today);
   if (state === "rescision_notificada" && c.terminated_at) return `Rescisión notificada · desocupa el ${dayMonth(c.terminated_at, today)}`;
   if (state === "salida_programada" && c.terminated_at) return `Entrega las llaves el ${dayMonth(c.terminated_at, today)}`;
+  if (state === "renovado") return `Renovado · sigue hasta el ${dayMonth(c.terminated_at ?? c.end_date, today)}`;
   return CONTRACT_STATE_META[state].label;
 }
 
@@ -328,6 +340,7 @@ export const DEPOSIT_STATUS_LABEL: Record<RentalDepositStatus, string> = {
   retenido: "Retenido",
   devuelto: "Devuelto",
   aplicado: "Aplicado a deudas",
+  trasladado: "Pasó a la renovación",
   no_aplica: "Sin depósito",
 };
 

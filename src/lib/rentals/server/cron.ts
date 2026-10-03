@@ -4,8 +4,9 @@ import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
 import type { RentalContract } from "@/lib/types/database";
 import { consecutiveUnpaidRun, rentBalanceOf, type ArrearsPeriod, type RentItemLike } from "@/lib/rentals/arrears";
 import { formatContractNumber } from "@/lib/rentals/labels";
+import { isRenewalHandover, takesEffectAfterExit } from "@/lib/rentals/exit";
 import { addDays, diffDays } from "@/lib/rentals/ymd";
-import { finishContract, getRentalSettings } from "./contracts";
+import { closeRenewedAtEnd, finishContract, getRentalSettings, type ContractCloseOut } from "./contracts";
 import { syncContract, type ContractSyncSummary } from "./contract-sync";
 import { loadSeriesForContracts } from "./series";
 import { logRentalsError, type AdminClient } from "./access";
@@ -15,7 +16,8 @@ import { logRentalsError, type AdminClient } from "./access";
  * Argentina). Para cada organización con el módulo encendido:
  *   1. sincroniza cada contrato vigente (ajustes, cargos, diferencias, saldo a
  *      favor, comprobantes del mes) y cierra los que ya pasaron su salida
- *      registrada (rescisión notificada o entrega programada);
+ *      registrada (rescisión notificada o entrega programada) o vencieron con
+ *      su renovación ya vigente (traspaso: sin cargo de salida);
  *   2. avisa en la campanita lo que necesita una persona: cobros vencidos, dos
  *      períodos impagos (causal de resolución, art. 1219 CCyC), ajustes
  *      aplicados o trabados sin índice, contratos por vencer y seguros.
@@ -88,27 +90,45 @@ async function runForOrg(admin: AdminClient, orgId: string, today: string, resul
   const contracts = (contractsData ?? []) as RentalContract[];
   if (!contracts.length) return;
   const seriesByIndex = await loadSeriesForContracts(admin, contracts);
+  // Renovación ya vigente de cada contrato (misma propiedad): los meses desde que empieza los cobra ella.
+  const renewalOf = new Map<string, RentalContract>();
+  for (const r of contracts) {
+    const from = r.renewed_from_id ? contracts.find((p) => p.id === r.renewed_from_id) : null;
+    if (from && from.property_id === r.property_id) renewalOf.set(from.id, r);
+  }
 
   // Contratos que esta corrida cerró (su salida registrada ya pasó): no reciben más avisos de vigentes.
   const closedIds = new Set<string>();
   for (const c of contracts) {
     result.contracts += 1;
+    const renewal = renewalOf.get(c.id) ?? null;
     try {
       const series = c.index_code ? (seriesByIndex.get(c.index_code) ?? null) : null;
       let sync: ContractSyncSummary;
+      // undefined = no le toca cerrarse hoy.
+      let closed: ContractCloseOut | null | undefined;
       if (c.terminated_at && c.terminated_at < today) {
         // Desocupó (o entregó las llaves) ayer o antes: se cierra. Anula lo posterior
-        // devolviendo el saldo a favor, factura lo que falte y los gastos pendientes.
-        const closed = await finishContract(admin, c, { today, settings, series });
+        // devolviendo el saldo a favor, factura lo que falte y los gastos pendientes
+        // (o, si lo sigue su renovación, se los pasa a ella).
+        closed = await finishContract(admin, c, { today, settings, series });
+      } else if (!c.terminated_at && renewal && c.end_date < today && isRenewalHandover(c.end_date, renewal.start_date)) {
+        // Venció y desde el día siguiente rige su renovación: se cierra en su fin, como traspaso.
+        closed = await closeRenewedAtEnd(admin, c, renewal, { today, settings, series });
+      }
+      if (closed !== undefined) {
         closedIds.add(c.id);
         if (!closed) continue;
         result.contractsClosed += 1;
         sync = closed.sync;
+        const exitDay = (c.terminated_at ?? c.end_date).split("-").reverse().join("/");
         await notify(orgId, result, {
           type: "rental_expiring",
           severity: "info",
-          title: `${formatContractNumber(c.number)} ${closed.status === "rescindido" ? "rescindido" : "finalizado"}`,
-          body: `${closed.status === "rescindido" ? "Desocupó" : "Entregó las llaves"} el ${c.terminated_at.split("-").reverse().join("/")}. Revisá la cuenta del contrato y el depósito antes de devolverlo.${closed.kept.length ? " Hay cargos posteriores a la salida con cobros: revisalos." : ""}`,
+          title: `${formatContractNumber(c.number)} ${closed.status === "rescindido" ? "rescindido" : "finalizado"}${closed.renewal ? " · renovado" : ""}`,
+          body: closed.renewal
+            ? `Siguió con la renovación ${formatContractNumber(closed.renewal.number)} desde el ${closed.renewal.startDate.split("-").reverse().join("/")}.${c.deposit_status === "retenido" && Number(c.deposit_amount) > 0 ? " Pasale el depósito a la renovación desde la ficha («Cerrar el depósito»)." : ""}${closed.kept.length ? " Hay cargos posteriores con cobros: revisalos." : ""}`
+            : `${closed.status === "rescindido" ? "Desocupó" : "Entregó las llaves"} el ${exitDay}. Revisá la cuenta del contrato y el depósito antes de devolverlo.${closed.kept.length ? " Hay cargos posteriores a la salida con cobros: revisalos." : ""}`,
           ref_type: "rental_contract",
           ref_id: c.id,
           action_url: `/dashboard/alquileres/contratos/${c.id}?tab=cuenta`,
@@ -125,6 +145,8 @@ async function runForOrg(admin: AdminClient, orgId: string, today: string, resul
       result.chargesCreated += sync.chargesCreated;
       result.adjustmentsApplied += sync.autoApplied.length;
       for (const a of sync.autoApplied) {
+        // Rige después de la salida registrada: el inquilino ya no va a estar (no se aplica ni se avisa).
+        if (takesEffectAfterExit(a.effective_date, c.terminated_at)) continue;
         const pct = a.variation_pct != null ? ` (${Number(a.variation_pct) >= 0 ? "+" : ""}${Number(a.variation_pct).toLocaleString("es-AR", { maximumFractionDigits: 2 })} %)` : "";
         await notify(orgId, result, {
           type: "rental_adjustment",
@@ -140,11 +162,28 @@ async function runForOrg(admin: AdminClient, orgId: string, today: string, resul
     } catch (e) {
       result.errors.push(`${formatContractNumber(c.number)}: ${(e as Error).message}`);
       logRentalsError(`sync ${c.id}`, e);
+      // La salida ya pasó y no se pudo cerrar: queda vigente (y en la agenda). Que alguien lo mire.
+      if (c.terminated_at && c.terminated_at < today) {
+        try {
+          await notify(orgId, result, {
+            type: "rental_expiring",
+            severity: "warning",
+            title: `${formatContractNumber(c.number)}: no se pudo cerrar`,
+            body: `La salida del ${c.terminated_at.split("-").reverse().join("/")} ya pasó y el contrato sigue abierto. Entrá a la ficha: si ya entregó las llaves, registrá la entrega; si sigue adentro, cambiá la salida.`,
+            ref_type: "rental_contract",
+            ref_id: c.id,
+            action_url: `/dashboard/alquileres/contratos/${c.id}`,
+            dedup_key: `rental_close_failed:${c.id}:${c.terminated_at}`,
+          });
+        } catch (ne) {
+          logRentalsError(`notify close failed ${c.id}`, ne);
+        }
+      }
     }
 
-    // Ya cerrado, o con la salida registrada: no hay que decidir si se renueva.
+    // Ya cerrado, con la salida registrada o con la renovación activa: no hay que decidir si se renueva.
     if (closedIds.has(c.id)) continue;
-    const exitDecided = Boolean(c.terminated_at);
+    const exitDecided = Boolean(c.terminated_at) || Boolean(renewal);
 
     // Por vencer (90/60/30 días) y vencido sin cerrar.
     const daysLeft = diffDays(today, c.end_date);
@@ -284,6 +323,8 @@ async function notifyStuckAdjustments(
   for (const a of (data ?? []) as { id: string; contract_id: string; effective_date: string; status: string }[]) {
     const c = byId.get(a.contract_id);
     if (!c) continue;
+    // Rige después de la salida registrada: nadie tiene que aplicarlo ni cargarlo.
+    if (takesEffectAfterExit(a.effective_date, c.terminated_at)) continue;
     // El índice suele salir a mitad de mes: un "esperando índice" recién se avisa si lleva 5 días.
     const tooEarly = a.status === "pendiente_indice" && diffDays(a.effective_date, today) < 5;
     if (tooEarly) continue;

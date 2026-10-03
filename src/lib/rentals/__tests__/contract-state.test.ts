@@ -28,4 +28,14 @@ describe("estado que se muestra de un contrato", () => {
   it("sin las columnas de la salida, cae en los estados de siempre", () => {
     expect(contractStateLabel({ status: "vigente", end_date: "2026-09-30" }, TODAY)).toBe(CONTRACT_STATE_META.vencido_ocupado.label);
   });
+
+  it("con la renovación activa no dice «por vencer» ni «entrega las llaves»: sigue hasta el día anterior", () => {
+    expect(contractDisplayState({ status: "vigente", end_date: "2026-10-31", renewed: true }, TODAY)).toBe("renovado");
+    expect(contractStateLabel({ status: "vigente", end_date: "2026-10-31", renewed: true }, TODAY)).toBe("Renovado · sigue hasta el 31/10");
+    // Corte por una renovación anticipada: la fecha es la del corte, no el fin.
+    const cut = { status: "vigente" as const, end_date: "2027-03-31", terminated_at: "2026-11-30", termination_notice_date: null, renewed: true };
+    expect(contractStateLabel(cut, TODAY)).toBe("Renovado · sigue hasta el 30/11");
+    // Ya cerrado, manda el estado guardado.
+    expect(contractDisplayState({ status: "finalizado", end_date: "2026-10-31", renewed: true }, TODAY)).toBe("finalizado");
+  });
 });

@@ -78,6 +78,10 @@ export function GenerateStatementDialog({
       const res = await createStatement({ ownerId, currency, cutoff, notes: notes.trim() || null });
       if (!res.ok) {
         toast.error("No se pudo generar la rendición", { description: res.error });
+        // Si falló porque algo cambió mientras tanto (otra persona anuló un
+        // cobro, un gasto o la rendición del saldo), la vista previa quedó
+        // vieja: se recalcula para que lo que se ve sea lo que se va a generar.
+        loadPreview(cutoff);
         return;
       }
       toast.success(`Rendición N° ${String(res.number).padStart(4, "0")} generada`, { description: "Quedó en borrador: revisala, emitila y mandásela al propietario." });

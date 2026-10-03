@@ -29,9 +29,11 @@ export function LiveUpdatesPill({
     <div
       className={cn(
         // El offset suma el inset superior: en la PWA instalada con notch, un
-        // 4.5rem crudo caía justo encima del header de /m.
+        // 4.5rem crudo caía justo encima del header de /m. Una sección con su
+        // propia barra debajo del header (Tradicionales) lo corre con
+        // --live-pill-top para no tapar sus pestañas.
         "pointer-events-none fixed left-1/2 z-40 -translate-x-1/2 animate-live-pill",
-        "top-[calc(4.5rem+env(safe-area-inset-top,0px))]",
+        "top-[calc(var(--live-pill-top,4.5rem)+env(safe-area-inset-top,0px))]",
         className
       )}
       role="status"

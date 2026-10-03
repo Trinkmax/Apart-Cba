@@ -8,7 +8,7 @@ import { TodoAgenda } from "@/components/rentals/dashboard/todo-agenda";
 import { ExpiringPanel, IndicesPanel, UpcomingAdjustmentsPanel } from "@/components/rentals/dashboard/side-panels";
 import { RentalsOnboarding } from "@/components/rentals/dashboard/rentals-onboarding";
 
-export const metadata = { title: "Alquileres" };
+export const metadata = { title: "Tradicionales" };
 
 /**
  * Resumen de Alquileres tradicionales: ¿cómo vamos este mes? y ¿qué tengo
@@ -37,7 +37,7 @@ export default async function AlquileresPage() {
             <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_24rem]">
               <TodoAgenda agenda={res.data.agenda} />
               <div className="space-y-4">
-                <UpcomingAdjustmentsPanel rows={res.data.upcomingAdjustments} today={res.data.today} />
+                <UpcomingAdjustmentsPanel rows={res.data.upcomingAdjustments} today={res.data.today} indices={res.data.indices} />
                 <ExpiringPanel rows={res.data.expiring} />
                 <IndicesPanel indices={res.data.indices} />
               </div>

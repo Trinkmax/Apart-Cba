@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { RentalContract } from "@/lib/types/database";
 import {
   applyRegime,
   defaultWizardState,
   endDateOf,
+  guarantorsMissingConsent,
   overridesForSave,
   parseWizard,
   previewInputOf,
   stepOfField,
   suggestedStartDate,
+  wizardStateFromContract,
   type WizardSettings,
   type WizardState,
 } from "../wizard-state";
@@ -95,5 +98,43 @@ describe("wizard-state", () => {
     expect(overridesForSave(s)).toEqual([{ sequence: 2, amount: 612_400, reason: "Monto real al cargar el contrato" }]);
     expect(stepOfField("initial_rent")).toBe("plazo");
     expect(stepOfField("nada")).toBeNull();
+  });
+
+  it("un contrato nuevo arranca con el régimen vigente y no es renovación", () => {
+    expect(defaultWizardState(SETTINGS, "2026-10-02")).toMatchObject({ legal_regime: "dnu_70_2023", early_termination_rule: "dnu_10pct", is_renewal: false });
+  });
+
+  it("la renovación sale de renewed_from_id", () => {
+    const base = { ...parseWizard(filled()).input, steps: null, services: [], tenant_commission: null, owner_commission: null, renewed_from_id: null };
+    const parties = [{ person_id: "g1", role: "garante" as const, is_primary: false, guarantee_type: "fianza" as const, guarantee_details: { detalle: "Recibo" }, guarantor_consent_at: null }];
+    expect(wizardStateFromContract(base as unknown as RentalContract, parties).is_renewal).toBe(false);
+    const renewal = wizardStateFromContract({ ...base, renewed_from_id: "33333333-3333-4333-8333-333333333333" } as unknown as RentalContract, parties);
+    expect(renewal.is_renewal).toBe(true);
+    expect(renewal.parties[0]).toMatchObject({ guarantee_detail: "Recibo", guarantor_consent_at: "" });
+  });
+
+  it("en una renovación cada garante necesita la fecha en que firmó (el borrador se guarda igual)", () => {
+    const garante = (key: string, person_id: string, guarantor_consent_at: string) =>
+      ({ key, person_id, role: "garante", is_primary: false, guarantee_type: "propietaria", guarantee_detail: "", guarantor_consent_at }) as const;
+    const s: WizardState = { ...filled(), is_renewal: true, parties: [...filled().parties, garante("g", "g1", ""), garante("h", "g2", "2026-09-30"), garante("i", "", "")] };
+    expect(guarantorsMissingConsent(s).map((p) => p.person_id)).toEqual(["g1"]);
+    expect(guarantorsMissingConsent({ ...s, is_renewal: false })).toEqual([]);
+    // Con "hoy", una fecha futura todavía no es una firma.
+    expect(guarantorsMissingConsent(s, "2026-09-29").map((p) => p.person_id)).toEqual(["g1", "g2"]);
+    const withoutEmptyRow = { ...s, parties: s.parties.filter((p) => p.person_id) };
+    const { input, issues } = parseWizard(withoutEmptyRow);
+    expect(issues).toEqual([]);
+    expect(input?.parties?.map((p) => p.guarantor_consent_at)).toEqual([null, null, "2026-09-30"]);
+  });
+
+  it("una fecha de conformidad ilegible se marca en el paso de las partes", () => {
+    const s: WizardState = {
+      ...filled(),
+      parties: [
+        ...filled().parties,
+        { key: "g", person_id: "g1", role: "garante", is_primary: false, guarantee_type: "fianza", guarantee_detail: "", guarantor_consent_at: "31/12/2026" },
+      ],
+    };
+    expect(parseWizard(s).issues).toEqual([{ step: "partes", field: "parties", message: "Revisá la fecha en que firmó el garante." }]);
   });
 });

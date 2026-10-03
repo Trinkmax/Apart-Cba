@@ -12,26 +12,45 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { addChargeItem, discountChargeItem } from "@/lib/actions/rentals-collections";
 import { formatMoney, parseAmountInput } from "@/lib/format";
+import { depositItemPayee } from "@/lib/rentals/deposit";
 import { ITEM_KIND_LABEL, PAYEE_LABEL } from "@/lib/rentals/labels";
-import type { RentalChargeItemKind, RentalPayee } from "@/lib/types/database";
+import type { RentalChargeItemKind, RentalMoneyOwner, RentalPayee } from "@/lib/types/database";
 import { Spinner } from "./whatsapp-message-dialog";
 
 export const MANUAL_KINDS = ["expensas", "servicio", "reparacion", "honorarios", "punitorio", "deposito", "sellado", "rescision", "otro"] as const;
 export type ManualKind = (typeof MANUAL_KINDS)[number];
 export const PAYEES: RentalPayee[] = ["propietario", "inmobiliaria", "consorcio", "tercero"];
 
-/** De quién suele ser la plata de cada concepto (se puede cambiar). */
+/**
+ * De quién suele ser la plata de cada concepto (se puede cambiar). El depósito
+ * no: va para quien lo guarda según el contrato (payeeFor / depositItemPayee) y
+ * el servidor lo fuerza igual, como al activar el contrato.
+ */
 export const DEFAULT_PAYEE: Record<ManualKind, RentalPayee> = {
   expensas: "consorcio",
   servicio: "tercero",
   reparacion: "inmobiliaria",
   honorarios: "inmobiliaria",
   punitorio: "propietario",
-  deposito: "propietario",
+  deposito: "tercero",
   sellado: "tercero",
   rescision: "propietario",
   otro: "propietario",
 };
+
+/** Destinatario inicial de un concepto: el depósito sale de quién lo guarda (si se sabe). */
+export function payeeFor(kind: ManualKind, depositHolder?: RentalMoneyOwner | null): RentalPayee {
+  return kind === "deposito" && depositHolder ? depositItemPayee(depositHolder) : DEFAULT_PAYEE[kind];
+}
+
+/** Lo que se muestra en lugar de elegir el destinatario del depósito. */
+export function depositPayeeHint(depositHolder?: RentalMoneyOwner | null): string {
+  if (depositHolder === "propietario") return "Lo guarda el propietario (así dice el contrato): se le rinde con los cobros.";
+  if (depositHolder === "inmobiliaria") {
+    return "Lo guarda la inmobiliaria (así dice el contrato): no se le rinde al propietario; al terminar se devuelve o se aplica a deudas.";
+  }
+  return "Va para quien guarda el depósito según el contrato.";
+}
 
 export const PAYEE_HINT: Record<RentalPayee, string> = {
   propietario: "Se le rinde al propietario.",
@@ -122,12 +141,15 @@ export function AddItemDialog({
   chargeId,
   chargeLabel,
   currency,
+  depositHolder,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   chargeId: string;
   chargeLabel: string;
   currency: string;
+  /** Quién guarda el depósito según el contrato (para mostrar adónde va un renglón de depósito). */
+  depositHolder?: RentalMoneyOwner | null;
 }) {
   const router = useRouter();
   const [kind, setKind] = useState<ManualKind>("expensas");
@@ -176,7 +198,7 @@ export function AddItemDialog({
               value={kind}
               onValueChange={(v) => {
                 setKind(v as ManualKind);
-                setPayee(DEFAULT_PAYEE[v as ManualKind]);
+                setPayee(payeeFor(v as ManualKind, depositHolder));
               }}
             >
               <SelectTrigger className="h-10 w-full">
@@ -202,19 +224,26 @@ export function AddItemDialog({
         </div>
         <div className="space-y-1.5">
           <Label>¿De quién es la plata?</Label>
-          <Select value={payee} onValueChange={(v) => setPayee(v as RentalPayee)}>
-            <SelectTrigger className="h-10 w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PAYEES.map((p) => (
-                <SelectItem key={p} value={p}>
-                  {PAYEE_LABEL[p]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <p className="text-[11px] text-muted-foreground">{PAYEE_HINT[payee]}</p>
+          {kind === "deposito" ? (
+            // El depósito no se elige: si fuera para otro, se le rendiría a quien no lo guarda.
+            <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{depositPayeeHint(depositHolder)}</p>
+          ) : (
+            <>
+              <Select value={payee} onValueChange={(v) => setPayee(v as RentalPayee)}>
+                <SelectTrigger className="h-10 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAYEES.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {PAYEE_LABEL[p]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">{PAYEE_HINT[payee]}</p>
+            </>
+          )}
         </div>
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
         <DialogFooter className="gap-2 sm:gap-2">

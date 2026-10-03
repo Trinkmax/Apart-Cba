@@ -11,6 +11,7 @@ import { monthOf } from "@/lib/rentals/ymd";
 import { dbFailure, logRentalsError, rentalsContext, type ActionResult, type AdminClient } from "@/lib/rentals/server/access";
 import { logRentalEvent } from "@/lib/rentals/server/contract-sync";
 import { expectedProofKindsIn, proofMonthRange, proofsTrackedFrom } from "@/lib/rentals/server/portal-queries";
+import { withContinuationFlags } from "@/lib/rentals/server/continuation";
 import { portalPathOf } from "@/lib/rentals/server/contracts";
 import { revalidateRentals } from "@/lib/rentals/server/revalidate";
 import { sendGuestMail } from "@/lib/email/guest";
@@ -66,7 +67,10 @@ type ContractRow = Pick<
   | "billing_starts_on"
   | "terminated_at"
   | "created_at"
->;
+> & {
+  /** 068f: se lee aparte y tolerante (withContinuationFlags), no en CONTRACT_COLS. */
+  continuation_billing?: boolean;
+};
 
 const CONTRACT_COLS =
   "id, organization_id, number, status, property_id, currency, portal_enabled, portal_token_hash, portal_token_version, expensas_payer, expensas_mode, services, start_date, end_date, billing_starts_on, terminated_at, created_at";
@@ -125,7 +129,8 @@ async function loadContracts(admin: AdminClient, orgId: string, ids: string[]): 
     logRentalsError("proofs:loadContracts", error);
     return out;
   }
-  const contracts = (cData ?? []) as unknown as ContractRow[];
+  // Los meses de continuación (art. 1218) también piden comprobantes si se cobran.
+  const contracts = await withContinuationFlags(admin, orgId, (cData ?? []) as unknown as ContractRow[]);
   const [{ data: pData }, { data: partyData }] = await Promise.all([
     admin
       .from("rental_properties")
@@ -301,7 +306,7 @@ export async function getProofsBoard(month?: string | null): Promise<ActionResul
   const review = (reviewRes.data ?? []) as unknown as ProofRow[];
   const reviewed = (reviewedRes.data ?? []) as unknown as ProofRow[];
   const monthProofs = (monthRes.data ?? []) as { id: string; contract_id: string; kind: string; status: RentalProof["status"]; rejection_reason: string | null }[];
-  const active = (activeRes.data ?? []) as unknown as ContractRow[];
+  const active = await withContinuationFlags(ctx.admin, orgId, (activeRes.data ?? []) as unknown as ContractRow[]);
   const reports = [...((reportsRes.data ?? []) as ReportRow[]), ...((resolvedRes.data ?? []) as ReportRow[])];
 
   // Qué falta este mes: lo que pide cada contrato vigente menos lo que ya está.

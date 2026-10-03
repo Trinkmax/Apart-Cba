@@ -4,6 +4,8 @@ import type { RentalProperty } from "@/lib/types/database";
 import { propertyAddress } from "@/lib/rentals/labels";
 import { isIndexCode, type IndexCode } from "@/lib/rentals/indices";
 import { addDays, addMonthsToMonth, diffDays, monthOf } from "@/lib/rentals/ymd";
+import { rentBalanceOf } from "@/lib/rentals/arrears";
+import { ymdInTz } from "@/lib/dates";
 import { logRentalsError, rentalsContext, type ActionResult, type RentalsCtx } from "@/lib/rentals/server/access";
 import { loadIndexPoints } from "@/lib/rentals/server/series";
 import { buildAgenda, type AgendaContract } from "@/components/rentals/dashboard/agenda";
@@ -43,6 +45,8 @@ interface ContractRow {
   deposit_amount: number | string;
   deposit_currency: string | null;
   terminated_at: string | null;
+  renewed_from_id: string | null;
+  grace_days: number | string | null;
   adjustment_method: string;
   index_code: string | null;
   property: PropertyLite | null;
@@ -58,6 +62,8 @@ interface ChargeRow {
   subtotal: number | string;
   paid_amount: number | string;
   currency: string;
+  /** Sólo en los vencidos: sin el período no se puede hablar de períodos consecutivos (art. 1219). */
+  period_index?: number | null;
   items?: { kind: string; payee: string; amount: number | string; paid_amount: number | string }[] | null;
 }
 
@@ -71,6 +77,7 @@ interface AdjustmentRow {
   applied_amount: number | string | null;
   variation_pct: number | string | null;
   index_code: string | null;
+  from_key: string | null;
   to_key: string | null;
 }
 
@@ -102,7 +109,7 @@ async function readAll(ctx: RentalsCtx) {
       .from("rental_contracts")
       .select(
         `id, number, status, property_id, end_date, currency, collector, admin_fee_pct, insurance_required, insurance_expires_at,
-         deposit_status, deposit_amount, deposit_currency, terminated_at, adjustment_method, index_code,
+         deposit_status, deposit_amount, deposit_currency, terminated_at, renewed_from_id, grace_days, adjustment_method, index_code,
          property:rental_properties(street, street_number, floor, apartment, tower),
          parties:rental_contract_parties(role, is_primary, person:rental_people(full_name))`,
       )
@@ -120,7 +127,9 @@ async function readAll(ctx: RentalsCtx) {
       .limit(5000),
     ctx.admin
       .from("rental_charges")
-      .select("id, contract_id, kind, label, due_date, subtotal, paid_amount, currency")
+      .select(
+        "id, contract_id, kind, label, due_date, subtotal, paid_amount, currency, period_index, items:rental_charge_items(kind, payee, amount, paid_amount)",
+      )
       .eq("organization_id", org)
       .is("voided_at", null)
       .in("status", ["pendiente", "parcial"])
@@ -128,7 +137,7 @@ async function readAll(ctx: RentalsCtx) {
       .limit(5000),
     ctx.admin
       .from("rental_adjustments")
-      .select("id, contract_id, status, effective_date, base_amount, computed_amount, applied_amount, variation_pct, index_code, to_key")
+      .select("id, contract_id, status, effective_date, base_amount, computed_amount, applied_amount, variation_pct, index_code, from_key, to_key")
       .eq("organization_id", org)
       .or(`status.in.(calculado,pendiente_indice,pendiente_manual),and(effective_date.gte.${today},effective_date.lte.${in60})`)
       .limit(2000),
@@ -138,7 +147,8 @@ async function readAll(ctx: RentalsCtx) {
       .from("rental_owner_statements")
       .select("id, number, net_amount, currency, generated_at, owner:owners(full_name)")
       .eq("organization_id", org)
-      .eq("status", "emitida")
+      // Abiertas = borrador o emitida (como el KPI "Sin pagar" de Rendiciones): las dos se pagan o, con neto <= 0, se cierran con saldo a cuenta.
+      .in("status", ["borrador", "emitida"])
       .limit(200),
   ]);
 }
@@ -239,18 +249,40 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
       depositStatus: c.deposit_status,
       depositAmount: n(c.deposit_amount),
       depositCurrency: c.deposit_currency,
+      graceDays: n(c.grace_days),
+      renewedFromId: c.renewed_from_id,
     }));
+
+    // ── Índices: IPC e ICL siempre, más los que usan los contratos ──
+    // Antes de la agenda: con la cobertura de Casa Propia nombra el mes que de verdad falta.
+    const codes = new Set<IndexCode>(["ipc", "icl"]);
+    for (const c of contracts) if (c.adjustment_method === "indice" && isIndexCode(c.index_code)) codes.add(c.index_code);
+    const indices = await Promise.all(
+      [...codes].slice(0, 4).map(async (code) => {
+        const [from, to] = summaryRange(code, today);
+        return summarizeIndex(code, await loadIndexPoints(ctx.admin, code, from, to), today);
+      }),
+    );
+
     const agenda = buildAgenda({
       today,
       contracts: agendaContracts,
-      overdue: overdueRows.map((ch) => ({
-        contractId: ch.contract_id,
-        kind: ch.kind,
-        label: ch.label,
-        dueDate: ch.due_date,
-        outstanding: Math.round((n(ch.subtotal) - n(ch.paid_amount)) * 100) / 100,
-        currency: ch.currency,
-      })),
+      indices,
+      overdue: overdueRows.map((ch) => {
+        // Alquiler del período y lo que falta de él: la causal del art. 1219 no cuenta punitorios ni expensas.
+        const rb = rentBalanceOf(ch.items ?? []);
+        return {
+          contractId: ch.contract_id,
+          kind: ch.kind,
+          label: ch.label,
+          dueDate: ch.due_date,
+          outstanding: Math.round((n(ch.subtotal) - n(ch.paid_amount)) * 100) / 100,
+          currency: ch.currency,
+          periodIndex: ch.period_index ?? null,
+          rentAmount: rb.rent,
+          rentOutstanding: rb.outstanding,
+        };
+      }),
       adjustments: adjustments.map((a) => ({
         id: a.id,
         contractId: a.contract_id,
@@ -261,6 +293,7 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
         variationPct: nOrNull(a.variation_pct),
         indexCode: a.index_code,
         toKey: a.to_key,
+        fromKey: a.from_key,
       })),
       paymentReports: ((reportsRes.data ?? []) as { id: string; contract_id: string; amount: number | string | null; currency: string | null; created_at: string }[]).map((p) => ({
         id: p.id,
@@ -268,6 +301,7 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
         amount: nOrNull(p.amount),
         currency: p.currency,
         createdAt: p.created_at,
+        createdOn: ymdInTz(new Date(p.created_at), ctx.tz),
       })),
       proofsInReview: kpis.proofsInReview,
       unpaidStatements: ((statementsRes.data ?? []) as unknown as { id: string; number: number; net_amount: number | string; currency: string; generated_at: string; owner: { full_name: string } | null }[]).map((s) => ({
@@ -276,7 +310,8 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
         ownerName: s.owner?.full_name ?? "Propietario",
         net: n(s.net_amount),
         currency: s.currency,
-        date: s.generated_at?.slice(0, 10) ?? null,
+        // generated_at es timestamptz: el día es el de la organización, no el de UTC (de noche serían "mañana").
+        date: s.generated_at ? ymdInTz(new Date(s.generated_at), ctx.tz) : null,
       })),
     });
     const agendaById = new Map(agendaContracts.map((c) => [c.id, c]));
@@ -303,6 +338,7 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
           currency: c.currency,
           indexCode: a.index_code,
           toKey: a.to_key,
+          fromKey: a.from_key,
         };
       });
     const expiring: ExpiringContractRow[] = vigentes
@@ -318,16 +354,6 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
         endDate: c.end_date,
         daysLeft,
       }));
-
-    // ── Índices: IPC e ICL siempre, más los que usan los contratos ──
-    const codes = new Set<IndexCode>(["ipc", "icl"]);
-    for (const c of contracts) if (c.adjustment_method === "indice" && isIndexCode(c.index_code)) codes.add(c.index_code);
-    const indices = await Promise.all(
-      [...codes].slice(0, 4).map(async (code) => {
-        const [from, to] = summaryRange(code, today);
-        return summarizeIndex(code, await loadIndexPoints(ctx.admin, code, from, to), today);
-      }),
-    );
 
     return {
       ok: true,

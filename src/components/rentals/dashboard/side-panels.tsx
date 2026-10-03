@@ -22,7 +22,21 @@ function PanelHeader({ title, href, linkLabel }: { title: string; href: string; 
   );
 }
 
-export function UpcomingAdjustmentsPanel({ rows, today }: { rows: UpcomingAdjustmentRow[]; today: string }) {
+/**
+ * `indices` (los mismos resúmenes de la columna) y `fromKey` dejan nombrar el
+ * mes de Casa Propia que de verdad falta; sin ellos se nombra el final de la ventana.
+ */
+export function UpcomingAdjustmentsPanel({
+  rows,
+  today,
+  indices,
+}: {
+  rows: (UpcomingAdjustmentRow & { fromKey?: string | null })[];
+  today: string;
+  indices?: IndexSummary[];
+}) {
+  // undefined (no null) cuando no hay resumen de ese índice: null es "no hay nada cargado".
+  const coverageOf = (code: string | null) => indices?.find((s) => s.code === code)?.coverage;
   return (
     <Card className="gap-0 p-0 overflow-hidden">
       <PanelHeader title="Próximos ajustes" href="/dashboard/alquileres/ajustes" linkLabel="Ver todos" />
@@ -48,7 +62,9 @@ export function UpcomingAdjustmentsPanel({ rows, today }: { rows: UpcomingAdjust
                       </p>
                     ) : (
                       <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-                        {a.status === "pendiente_manual" ? "Falta cargar el monto" : waitingForIndexText(a.indexCode, a.toKey)}
+                        {a.status === "pendiente_manual"
+                          ? "Falta cargar el monto"
+                          : waitingForIndexText(a.indexCode, a.toKey, { coverage: coverageOf(a.indexCode), fromKey: a.fromKey })}
                       </p>
                     )}
                     {meta && a.status !== "programado" && (

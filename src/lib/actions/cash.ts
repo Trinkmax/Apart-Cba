@@ -81,7 +81,7 @@ export type LinkedSettlementPreview = {
  * editarlo acá dejaría la cuenta del inquilino o la rendición desincronizadas.
  */
 export type LinkedRentalPreview = {
-  kind: "cobro" | "rendicion" | "gasto";
+  kind: "cobro" | "rendicion" | "gasto" | "deposito";
   title: string;
   subtitle: string | null;
   href: string;
@@ -1082,6 +1082,24 @@ async function loadLinkedRental(
       title: `Gasto de alquiler: ${data.description}`,
       subtitle: null,
       href: data.contract_id ? `/dashboard/alquileres/contratos/${data.contract_id}?tab=gastos` : `/dashboard/alquileres/propiedades/${data.property_id}`,
+    };
+  }
+  if (refType === "rental_deposit_return" || refType === "rental_deposit_received") {
+    // Depósito en garantía (068h): ref_id es el contrato. Se deshace desde su ficha.
+    const { data } = await admin
+      .from("rental_contracts")
+      .select("id, number, property:rental_properties(street, street_number, floor, apartment)")
+      .eq("id", refId)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!data) return null;
+    const p = data.property as unknown as { street: string; street_number: string | null; floor: string | null; apartment: string | null } | null;
+    const address = p ? [p.street, p.street_number].filter(Boolean).join(" ") + (p.floor || p.apartment ? ` · ${[p.floor ? `${p.floor}°` : null, p.apartment].filter(Boolean).join("")}` : "") : null;
+    return {
+      kind: "deposito",
+      title: refType === "rental_deposit_return" ? "Devolución del depósito en garantía" : "Depósito en garantía cobrado",
+      subtitle: [`Contrato C-${String(data.number).padStart(4, "0")}`, address].filter(Boolean).join(" · ") || null,
+      href: `/dashboard/alquileres/contratos/${data.id}`,
     };
   }
   return null;

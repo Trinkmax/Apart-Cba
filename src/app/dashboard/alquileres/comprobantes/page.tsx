@@ -9,7 +9,7 @@ import { getProofsBoard } from "@/lib/actions/rentals-proofs";
 import { requireRentalsPage } from "@/lib/rentals/server/access";
 import { monthOf } from "@/lib/rentals/ymd";
 
-export const metadata: Metadata = { title: "Comprobantes · Alquileres" };
+export const metadata: Metadata = { title: "Comprobantes · Tradicionales" };
 
 const TABS: ProofsTab[] = ["revisar", "faltan", "avisos", "revisados"];
 

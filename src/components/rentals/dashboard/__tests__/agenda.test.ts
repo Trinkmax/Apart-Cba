@@ -112,6 +112,27 @@ describe("agenda", () => {
     expect(ready?.detail.replace(/\s/g, " ")).toContain("$ 500.000 → $ 543.500 (+8,7 %)");
   });
 
+  it("Casa Propia trabado: con la cobertura nombra el mes que de verdad falta, no el final de la ventana (P20)", () => {
+    const stuck = {
+      id: "cp1",
+      contractId: "c1",
+      status: "pendiente_indice",
+      effectiveDate: "2026-06-01",
+      baseAmount: 100,
+      computedAmount: null,
+      variationPct: null,
+      indexCode: "casa_propia",
+      toKey: "2026-04-01",
+      fromKey: "2025-10-01",
+    };
+    const detailOf = (over: Partial<AgendaInput>) =>
+      buildAgenda(input({ contracts: [contract("c1")], adjustments: [stuck], ...over })).items.find((i) => i.key === "adjustment_stuck:cp1")?.detail;
+    const coverage = { first: "2025-11-01", last: "2026-04-01", gaps: ["2026-01-01"] };
+    expect(detailOf({ indices: [{ code: "casa_propia", coverage }] })).toContain("Casa Propia de enero de 2026");
+    // Sin el resumen del índice, como antes: el final de la ventana.
+    expect(detailOf({})).toContain("Casa Propia de abril de 2026");
+  });
+
   it("agrupa cuando hay muchos ajustes del mismo tipo", () => {
     const adjustments = ["a", "b", "c", "d"].map((id) => ({
       id,
@@ -187,6 +208,51 @@ describe("agenda", () => {
     const a = buildAgenda(input({ contracts: [contract("c1", { endDate: "2026-09-30" })] }));
     expect(a.items[0].kind).toBe("expired_open");
     expect(a.items[0].detail).toContain("hasta entonces no se genera ningún cargo");
+  });
+
+  it("salida registrada que ya pasó con el contrato abierto: no desaparece, pide revisarlo (P12)", () => {
+    const a = buildAgenda(input({ contracts: [contract("c1", { endDate: "2027-03-31", terminatedAt: "2026-10-12" })] }));
+    expect(a.items).toHaveLength(1);
+    expect(a.items[0]).toMatchObject({ key: "exit_overdue:c1", urgency: "high", title: "Salida del 12/10/2026 sin cerrar · Inquilino c1", cta: "Revisar" });
+  });
+
+  it("ajustes que rigen después de la salida registrada no se piden ni se avisan (P11)", () => {
+    const adj = { baseAmount: 100, computedAmount: 110, variationPct: 10, indexCode: "ipc", toKey: "2026-09" };
+    const a = buildAgenda(
+      input({
+        contracts: [contract("c1", { terminatedAt: "2026-10-25" })],
+        adjustments: [
+          { id: "a1", contractId: "c1", status: "calculado", effectiveDate: "2026-10-20", ...adj },
+          { id: "a2", contractId: "c1", status: "calculado", effectiveDate: "2026-10-26", ...adj },
+        ],
+      }),
+    );
+    const keys = a.items.map((i) => i.key);
+    expect(keys).toContain("adjustment_ready:a1");
+    expect(keys).not.toContain("adjustment_ready:a2");
+  });
+
+  it("renovación: con la renovación activa el anterior no pide decidir nada y el depósito se pasa (P8)", () => {
+    const a = buildAgenda(
+      input({
+        contracts: [
+          // Vence en 16 días pero ya tiene la renovación activa.
+          contract("c1", { endDate: "2026-10-31" }),
+          contract("c2", { renewedFromId: "c1", endDate: "2028-10-31" }),
+          // Vencido con la renovación en borrador: lleva a la renovación.
+          contract("c3", { endDate: "2026-09-30" }),
+          contract("c4", { status: "borrador", renewedFromId: "c3" }),
+          // Terminado, renovado, con el depósito retenido.
+          contract("c5", { status: "finalizado", terminatedAt: "2026-09-30", depositAmount: 300000 }),
+          contract("c6", { renewedFromId: "c5", endDate: "2028-09-30" }),
+        ],
+      }),
+    );
+    const byKey = Object.fromEntries(a.items.map((i) => [i.key, i]));
+    expect(byKey["expiring:c1"]).toBeUndefined();
+    expect(byKey["expired_open:c3"]).toMatchObject({ cta: "Ver renovación", href: "/dashboard/alquileres/contratos/c4" });
+    expect(byKey["expired_open:c3"].detail).toContain("La renovación C-0004 está en borrador");
+    expect(byKey["deposit_return:c5"]).toMatchObject({ title: "Depósito para pasar a la renovación · Inquilino c5", cta: "Pasar el depósito" });
   });
 
   it("rendición con neto negativo o cero: se cierra con saldo a cuenta, nunca 'Registrar pago'", () => {

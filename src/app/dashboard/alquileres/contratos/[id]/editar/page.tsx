@@ -55,7 +55,7 @@ export default async function EditContractPage({ params }: { params: Promise<{ i
       ? "Es un borrador: podés cambiar todo."
       : data.hasPayments
         ? "Ya tiene cobros: las fechas, el precio y el ajuste quedan fijos. El resto lo podés cambiar."
-        : "Está vigente: si cambiás condiciones económicas, se recalculan los ajustes y los cargos impagos.";
+        : "Está vigente: si cambiás condiciones económicas, se recalculan los ajustes y los alquileres impagos, y las expensas y los conceptos que les agregaste pasan a los cargos nuevos. Los gastos de ingreso y los cargos extra quedan como están.";
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 max-w-[1280px] mx-auto">

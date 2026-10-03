@@ -5,8 +5,8 @@ import { formatMoney } from "@/lib/format";
 import { toWhatsappDigits } from "@/lib/marketplace/staff-helpers";
 import { INDEX_META } from "@/lib/rentals/indices";
 import {
-  CONTRACT_STATE_META,
   contractDisplayState,
+  contractStateLabel,
   formatContractNumber,
   formatReceiptNumber,
   PAYMENT_METHOD_LABEL,
@@ -49,12 +49,19 @@ export const MAX_PENDING_TENANT_REPORTS = 5;
 /** Días después del fin en que el portal todavía deja subir cosas (última expensa, último pago). */
 const UPLOADS_GRACE_DAYS = 90;
 
-type RangeContract = Pick<RentalContract, "status" | "start_date" | "end_date" | "billing_starts_on" | "terminated_at">;
+type RangeContract = Pick<RentalContract, "status" | "start_date" | "end_date" | "billing_starts_on" | "terminated_at"> &
+  Partial<Pick<RentalContract, "continuation_billing">>;
 
 /** Meses que el contrato cobra (y en los que pide comprobantes): [from, to] en YYYY-MM-01. */
 export function proofMonthRange(c: RangeContract): { from: string; to: string } | null {
   if (c.status === "borrador") return null;
-  const end = c.terminated_at && c.terminated_at < c.end_date ? c.terminated_at : c.end_date;
+  // Igual que ensureMonthProofs: si se cobran los meses de continuación (art. 1218), hasta la salida
+  // o sin tope mientras siga; si no, hasta el fin o la salida, lo que llegue antes.
+  const end = c.continuation_billing
+    ? (c.terminated_at ?? "9999-12-31")
+    : c.terminated_at && c.terminated_at < c.end_date
+      ? c.terminated_at
+      : c.end_date;
   return { from: monthOf(c.billing_starts_on ?? c.start_date), to: monthOf(end) };
 }
 
@@ -295,9 +302,11 @@ export async function loadTenantPortal(pc: PortalContext, opts: { receiptsAvaila
       address: prop ? propertyAddress(prop) : "",
       city: prop?.city ?? "",
       status: state,
-      statusLabel: CONTRACT_STATE_META[state].label,
+      // Con la salida registrada dice el día: "Rescisión notificada · desocupa el 15/12".
+      statusLabel: contractStateLabel(c, today),
       startDate: c.start_date,
       endDate: c.end_date,
+      moveOutDate: c.status === "vigente" ? c.terminated_at : null,
       currency: c.currency,
       currentRent: Number(c.current_rent),
       adjustmentSummary: adjustmentSummary({ method: c.adjustment_method, indexCode: c.index_code, every: c.adjustment_every_months, fixedPct: c.fixed_pct == null ? null : Number(c.fixed_pct) }),

@@ -93,6 +93,11 @@ export interface GuarantorConsentPlan {
   invalid: string[];
 }
 
+/** Hay conformidad: una fecha válida de hoy o anterior (una futura todavía no se dio). */
+export function isValidConsent(consentAt: string | null | undefined, today: string): boolean {
+  return isYmd(consentAt) && consentAt <= today;
+}
+
 /**
  * Garantes de una renovación al activarla: cada uno necesita la fecha en que
  * dio su conformidad —la guardada o la que se carga en el momento— o salir
@@ -104,7 +109,7 @@ export function planGuarantorConsents(
 ): GuarantorConsentPlan {
   const given = new Map((input.consents ?? []).filter((c) => c.consentAt).map((c) => [c.personId, c.consentAt]));
   const remove = new Set(input.remove ?? []);
-  const valid = (d: string) => isYmd(d) && d <= input.today;
+  const valid = (d: string) => isValidConsent(d, input.today);
   const plan: GuarantorConsentPlan = { updates: [], removals: [], missing: [], invalid: [] };
   for (const p of parties) {
     if (p.role !== "garante") continue;
@@ -120,11 +125,6 @@ export function planGuarantorConsents(
     else if (!valid(p.guarantor_consent_at)) plan.invalid.push(p.person_id);
   }
   return plan;
-}
-
-/** Garantes sin la fecha de su conformidad (una renovación vigente no puede tenerlos). */
-export function guarantorsWithoutConsent<T extends { role: string; guarantor_consent_at?: string | null }>(parties: readonly T[]): T[] {
-  return parties.filter((p) => p.role === "garante" && !p.guarantor_consent_at);
 }
 
 /** "Ana", "Ana y Juan", "Ana, Juan y Pedro". */

@@ -27,13 +27,15 @@ interface ContractRow {
   start_date: string;
   end_date: string;
   terminated_at: string | null;
+  /** Con fecha = rescisión notificada (no una entrega programada): cambia el estado que se muestra. */
+  termination_notice_date: string | null;
   currency: string;
   current_rent: number | string | null;
   rental_contract_parties: PartyRow[] | null;
 }
 
 const CONTRACT_SELECT =
-  "id, number, property_id, status, start_date, end_date, terminated_at, currency, current_rent, " +
+  "id, number, property_id, status, start_date, end_date, terminated_at, termination_notice_date, currency, current_rent, " +
   "rental_contract_parties(person_id, role, is_primary, sort_order, guarantee_type, person:rental_people(id, full_name))";
 
 export class RentalsQueryError extends Error {}

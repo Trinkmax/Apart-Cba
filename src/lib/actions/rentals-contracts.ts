@@ -11,6 +11,7 @@ import { revalidateRentals } from "@/lib/rentals/server/revalidate";
 import { loadSeriesForContract } from "@/lib/rentals/server/series";
 import {
   activateContract,
+  changeContractExit,
   createContractDraft,
   deleteDraftContract,
   finalizeContract,
@@ -28,6 +29,15 @@ import {
   loadIntimationData,
   viewOfRow,
 } from "@/lib/rentals/server/contracts-queries";
+import {
+  getDepositSetup,
+  markDepositReceived,
+  previewDepositApplication,
+  reopenDeposit,
+  settleDeposit,
+  type DepositApplicationPreview,
+  type DepositSetup,
+} from "@/lib/rentals/server/deposit";
 import { buildIntimationLetter } from "@/components/rentals/contracts/intimation-text";
 import type { ContractDetailData, ContractFormOptions, ContractListResult, PlanPreview } from "@/components/rentals/contracts/types";
 
@@ -172,6 +182,12 @@ const entryItemSchema = z.object({
 const activateSchema = z.object({
   entryItems: z.array(entryItemSchema).max(20).default([]),
   entryDueDate: z.union([ymd, z.literal(""), z.null()]).optional(),
+  // Renovación (art. 1225 CCyC): fecha en que firmó cada garante, o los que no firmaron y salen del contrato.
+  guarantorConsents: z
+    .array(z.object({ personId: uuid, consentAt: z.string().refine(isYmd, "Revisá la fecha en que firmó el garante.") }))
+    .max(12)
+    .default([]),
+  removeGuarantors: z.array(uuid).max(12).default([]),
 });
 
 const overrideSchema = z.object({
@@ -276,6 +292,8 @@ export async function saveRentalContract(
     if (a.ok) {
       activated = true;
       portalPath = a.portalPath;
+      // Una renovación cierra (o corta) el contrato anterior: su ficha también cambió.
+      if (a.previousId) await revalidateContract(ctx, a.previousId);
     } else activationError = a.error;
   }
   await revalidateContract(ctx, contractId);
@@ -290,12 +308,28 @@ export async function activateRentalContract(id: string, opts: unknown): Promise
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá el cargo de ingreso." };
   const r = await rentalsContext("update");
   if (!r.ok) return r;
-  const res = await activateContract(r.ctx, id, { entryItems: parsed.data.entryItems, entryDueDate: parsed.data.entryDueDate || null });
-  if (res.ok) await revalidateContract(r.ctx, id);
+  const res = await activateContract(r.ctx, id, {
+    entryItems: parsed.data.entryItems,
+    entryDueDate: parsed.data.entryDueDate || null,
+    guarantorConsents: parsed.data.guarantorConsents,
+    removeGuarantors: parsed.data.removeGuarantors,
+  });
+  if (res.ok) {
+    await revalidateContract(r.ctx, id);
+    // Una renovación cierra (o corta) el contrato anterior: su ficha también cambió.
+    if (res.previousId) await revalidateContract(r.ctx, res.previousId);
+    // Los que salieron ya no son partes: revalidateContract no los encuentra.
+    for (const personId of parsed.data.removeGuarantors) revalidateRentals({ personId });
+  }
   return res;
 }
 
-const finalizeSchema = z.object({ endedOn: ymd, reason: z.string().trim().max(500).optional().nullable() });
+// Vencido sin cobrar la continuación: la salida puede activarla en el mismo paso (art. 1218).
+const finalizeSchema = z.object({
+  endedOn: ymd,
+  reason: z.string().trim().max(500).optional().nullable(),
+  continuationBilling: z.boolean().optional(),
+});
 
 /** Finaliza (entrega de llaves). Con fecha futura queda programado: `closesOn` es el día en que se cierra solo. */
 export async function finalizeRentalContract(id: string, input: unknown): Promise<ActionResult<{ closesOn: string | null }>> {
@@ -304,7 +338,34 @@ export async function finalizeRentalContract(id: string, input: unknown): Promis
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá la fecha.", field: "endedOn" };
   const r = await rentalsContext("update");
   if (!r.ok) return r;
-  const res = await finalizeContract(r.ctx, id, { endedOn: parsed.data.endedOn, reason: parsed.data.reason ?? null });
+  const res = await finalizeContract(r.ctx, id, {
+    endedOn: parsed.data.endedOn,
+    reason: parsed.data.reason ?? null,
+    continuationBilling: parsed.data.continuationBilling ?? false,
+  });
+  if (res.ok) await revalidateContract(r.ctx, id);
+  return res;
+}
+
+const changeExitSchema = z.object({
+  expected: ymd,
+  // null = se anula la salida (el inquilino se queda).
+  newDate: ymd.nullable(),
+  continuationBilling: z.boolean().optional(),
+});
+
+/** Corre o anula una salida registrada. `notice`: lo que tiene que resolver una persona (p. ej. una indemnización ya cobrada). */
+export async function changeRentalContractExit(id: string, input: unknown): Promise<ActionResult<{ closesOn: string | null; notice: string | null }>> {
+  if (!uuid.safeParse(id).success) return badId();
+  const parsed = changeExitSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá la fecha.", field: "newDate" };
+  const r = await rentalsContext("update");
+  if (!r.ok) return r;
+  const res = await changeContractExit(r.ctx, id, {
+    expected: parsed.data.expected,
+    newDate: parsed.data.newDate,
+    continuationBilling: parsed.data.continuationBilling ?? false,
+  });
   if (res.ok) await revalidateContract(r.ctx, id);
   return res;
 }
@@ -315,6 +376,7 @@ const rescindSchema = z.object({
   reason: z.string().trim().max(500).default(""),
   penaltyAmount: z.number().min(0).max(1_000_000_000).default(0),
   chargePenalty: z.boolean().default(false),
+  continuationBilling: z.boolean().default(false),
 });
 
 /** Rescisión: hasta la desocupación sigue vigente (se le sigue cobrando); `closesOn` = el día que se cierra solo. */
@@ -346,7 +408,11 @@ const renewSchema = z.object({
   initialRent: z.number().positive("El alquiler tiene que ser mayor a cero").max(1_000_000_000),
 });
 
-export async function renewRentalContract(id: string, input: unknown): Promise<ActionResult<{ contractId: string; number: number }>> {
+/** `changes`: qué se puso como en un contrato nuevo (régimen, sellado…); `guarantors`: cuántos tienen que firmar la renovación. */
+export async function renewRentalContract(
+  id: string,
+  input: unknown,
+): Promise<ActionResult<{ contractId: string; number: number; changes: string[]; guarantors: number }>> {
   if (!uuid.safeParse(id).success) return badId();
   const parsed = renewSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá los datos de la renovación." };
@@ -422,7 +488,7 @@ export async function previewTermination(
 /** Texto de la carta documento por falta de pago (art. 1222 CCyC), listo para copiar. */
 export async function buildIntimationText(
   id: string,
-): Promise<ActionResult<{ text: string; total: number; currency: string; count: number; guarantors: string[] }>> {
+): Promise<ActionResult<{ text: string; total: number; currency: string; count: number; guarantors: string[]; hasLateFee: boolean }>> {
   if (!uuid.safeParse(id).success) return badId();
   const r = await rentalsContext("view");
   if (!r.ok) return r;
@@ -430,8 +496,107 @@ export async function buildIntimationText(
     const res = await loadIntimationData(r.ctx, id);
     if (!res.ok) return res;
     const d = res.data;
-    return { ok: true, text: buildIntimationLetter(d), total: d.total, currency: d.currency, count: d.lines.length, guarantors: d.guarantors };
+    return {
+      ok: true,
+      text: buildIntimationLetter(d),
+      total: d.total,
+      currency: d.currency,
+      count: d.lines.length,
+      guarantors: d.guarantors,
+      hasLateFee: d.lateFee != null,
+    };
   } catch (e) {
     return dbFailure("buildIntimationText", e as { message?: string }, "No se pudo armar la intimación.");
   }
+}
+
+// ─── Depósito en garantía (068h) ────────────────────────────────────────────
+
+/** Datos del diálogo del depósito: deuda al día, renovación y cuentas de Caja (en un viaje). */
+export async function getRentalDepositSetup(id: string): Promise<ActionResult<{ setup: DepositSetup }>> {
+  if (!uuid.safeParse(id).success) return badId();
+  const r = await rentalsContext("update");
+  if (!r.ok) return r;
+  return getDepositSetup(r.ctx, id);
+}
+
+const depositPreviewSchema = z.object({
+  applied: z.number().min(0, "Lo aplicado no puede ser negativo").max(10_000_000_000),
+  date: ymd,
+  waiveLateFees: z.boolean().default(false),
+});
+
+/** Qué paga lo que se aplica del depósito (imputación de un cobro, con intereses a esa fecha). */
+export async function previewRentalDepositApplication(id: string, input: unknown): Promise<ActionResult<{ preview: DepositApplicationPreview }>> {
+  if (!uuid.safeParse(id).success) return badId();
+  const parsed = depositPreviewSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá los datos." };
+  const r = await rentalsContext("update");
+  if (!r.ok) return r;
+  if (parsed.data.date > r.ctx.today) return { ok: false, error: "La fecha no puede ser futura.", field: "date" };
+  return previewDepositApplication(r.ctx, id, parsed.data);
+}
+
+const markDepositSchema = z.object({
+  received: z.boolean(),
+  date: ymd,
+  accountId: uuid.nullable().default(null),
+});
+
+/** Marca (o desmarca) cobrado un depósito que no pasó por la cuenta del inquilino. */
+export async function markRentalDepositReceived(id: string, input: unknown): Promise<ActionResult<{ movementId: string | null }>> {
+  if (!uuid.safeParse(id).success) return badId();
+  const parsed = markDepositSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Revisá los datos del depósito." };
+  const r = await rentalsContext("update");
+  if (!r.ok) return r;
+  const res = await markDepositReceived(r.ctx, id, parsed.data);
+  if (res.ok) revalidateRentals({ contractId: id, caja: Boolean(res.movementId) });
+  return res;
+}
+
+const settleDepositSchema = z.object({
+  outcome: z.enum(["cerrar", "renovacion"]),
+  applied: z.number().min(0, "Lo aplicado no puede ser negativo").max(10_000_000_000).default(0),
+  returned: z.number().min(0, "Lo devuelto no puede ser negativo").max(10_000_000_000).default(0),
+  date: ymd,
+  accountId: uuid.nullable().default(null),
+  note: z.string().trim().max(300, "La nota es muy larga (máximo 300 caracteres).").default(""),
+  waiveLateFees: z.boolean().default(false),
+});
+
+/** Cierra el depósito de un contrato terminado: aplicado a deudas, devuelto (egreso de Caja) o pasado a la renovación. */
+export async function settleRentalDeposit(
+  id: string,
+  input: unknown,
+): Promise<ActionResult<{ status: string; receiptNumber: number | null; renewalId: string | null }>> {
+  if (!uuid.safeParse(id).success) return badId();
+  const parsed = settleDepositSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return { ok: false, error: issue?.message ?? "Revisá los datos del depósito.", field: typeof issue?.path[0] === "string" ? issue.path[0] : undefined };
+  }
+  const r = await rentalsContext("update");
+  if (!r.ok) return r;
+  const res = await settleDeposit(r.ctx, id, parsed.data);
+  if (!res.ok) return res;
+  // Lo aplicado cambia la deuda (ficha, propiedad, personas, cobranzas); lo devuelto, Caja.
+  await revalidateContract(r.ctx, id);
+  if (res.renewalId) await revalidateContract(r.ctx, res.renewalId);
+  if (res.caja) revalidateRentals({ caja: true });
+  return { ok: true, status: res.status, receiptNumber: res.receiptNumber, renewalId: res.renewalId };
+}
+
+/** Deshace el cierre del depósito (anula el cobro aplicado, borra el egreso, se lo saca a la renovación). */
+export async function reopenRentalDeposit(id: string, reason: unknown): Promise<ActionResult> {
+  if (!uuid.safeParse(id).success) return badId();
+  if (typeof reason !== "string") return { ok: false, error: "Contá brevemente por qué se deshace.", field: "reason" };
+  const r = await rentalsContext("update");
+  if (!r.ok) return r;
+  const res = await reopenDeposit(r.ctx, id, reason);
+  if (!res.ok) return res;
+  await revalidateContract(r.ctx, id);
+  if (res.renewalId) await revalidateContract(r.ctx, res.renewalId);
+  if (res.caja) revalidateRentals({ caja: true });
+  return { ok: true };
 }

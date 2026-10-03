@@ -1,5 +1,6 @@
 import { diffDays } from "@/lib/rentals/ymd";
 import { consecutiveUnpaidRun } from "@/lib/rentals/arrears";
+import { takesEffectAfterExit } from "@/lib/rentals/exit";
 import { formatContractNumber, formatStatementNumber } from "@/lib/rentals/labels";
 import {
   formatVariation,
@@ -7,6 +8,7 @@ import {
   shortDate,
   waitingForIndexText,
 } from "@/components/rentals/adjustments/adjustment-text";
+import type { IndexSummary } from "@/components/rentals/indices/index-model";
 
 /**
  * Agenda "Para hacer hoy" del resumen de Alquileres. Pura: recibe lo que ya
@@ -64,6 +66,11 @@ export interface AgendaContract {
   depositCurrency: string | null;
   /** Días de gracia del contrato (para no contar como impago un período todavía en plazo). */
   graceDays?: number;
+  /**
+   * Contrato del que es renovación (renewed_from_id). Con la renovación en la
+   * lista, el anterior no pide "definí si se renueva" ni "devolvé el depósito".
+   */
+  renewedFromId?: string | null;
 }
 
 export interface AgendaOverdueCharge {
@@ -90,6 +97,7 @@ export interface AgendaAdjustment {
   variationPct: number | null;
   indexCode: string | null;
   toKey: string | null;
+  fromKey?: string | null;
 }
 
 export interface AgendaInput {
@@ -97,7 +105,10 @@ export interface AgendaInput {
   contracts: AgendaContract[];
   overdue: AgendaOverdueCharge[];
   adjustments: AgendaAdjustment[];
-  paymentReports: { id: string; contractId: string; amount: number | null; currency: string | null; createdAt: string }[];
+  /** Resúmenes de índices: con la cobertura de Casa Propia se nombra el mes que de verdad falta. */
+  indices?: Pick<IndexSummary, "code" | "coverage">[];
+  /** createdOn: el día del aviso en la zona de la organización (createdAt es timestamptz y su fecha UTC puede ser "mañana"). */
+  paymentReports: { id: string; contractId: string; amount: number | null; currency: string | null; createdAt: string; createdOn?: string }[];
   proofsInReview: number;
   unpaidStatements: { id: string; number: number; ownerName: string; net: number; currency: string; date: string | null }[];
 }
@@ -189,6 +200,8 @@ function adjustmentItems(input: AgendaInput, byId: Map<string, AgendaContract>):
     const meta = ADJ_META[status];
     const rows = input.adjustments.filter((a) => {
       if (a.status !== status) return false;
+      // Rige después de la salida registrada: el inquilino ya no va a estar.
+      if (takesEffectAfterExit(a.effectiveDate, byId.get(a.contractId)?.terminatedAt)) return false;
       // El índice suele salir a mitad de mes: recién es "trabado" si lleva 5 días.
       if (status === "pendiente_indice") return diffDays(a.effectiveDate, input.today) >= 5;
       return diffDays(input.today, a.effectiveDate) <= 15;
@@ -219,7 +232,9 @@ function adjustmentItems(input: AgendaInput, byId: Map<string, AgendaContract>):
       if (status === "calculado" && a.baseAmount != null && a.computedAmount != null) {
         detail = `${plainMoney(a.baseAmount, cur)} → ${plainMoney(a.computedAmount, cur)} (${formatVariation(a.variationPct)}) desde el ${shortDate(a.effectiveDate)}.`;
       } else if (status === "pendiente_indice") {
-        detail = `Rige desde el ${shortDate(a.effectiveDate)}. ${waitingForIndexText(a.indexCode, a.toKey)}`;
+        // Sin resumen del índice, coverage queda undefined (null sería "no hay nada cargado").
+        const coverage = input.indices?.find((s) => s.code === a.indexCode)?.coverage;
+        detail = `Rige desde el ${shortDate(a.effectiveDate)}. ${waitingForIndexText(a.indexCode, a.toKey, { coverage, fromKey: a.fromKey })}`;
       }
       out.push({
         key: `${meta.kind}:${a.id}`,
@@ -243,6 +258,13 @@ function contractItems(input: AgendaInput): AgendaItem[] {
   const { today } = input;
   const out: AgendaItem[] = [];
   const drafts: AgendaContract[] = [];
+  // Renovación de cada contrato (la activa gana sobre un borrador).
+  const renewalOf = new Map<string, AgendaContract>();
+  for (const r of input.contracts) {
+    if (!r.renewedFromId) continue;
+    const prev = renewalOf.get(r.renewedFromId);
+    if (!prev || prev.status === "borrador") renewalOf.set(r.renewedFromId, r);
+  }
   for (const c of input.contracts) {
     const base = { amount: null, currency: null, contractId: c.id };
     if (c.status === "borrador") {
@@ -251,7 +273,25 @@ function contractItems(input: AgendaInput): AgendaItem[] {
     }
     if (c.status === "vigente") {
       const left = diffDays(today, c.endDate);
-      if (c.terminatedAt) {
+      const renewal = renewalOf.get(c.id);
+      const draftRenewal = renewal?.status === "borrador" ? renewal : null;
+      if (c.terminatedAt && c.terminatedAt < today) {
+        // La salida registrada ya pasó y sigue abierto (el cierre automático falló o
+        // nadie lo cerró): no puede desaparecer de la agenda.
+        out.push({
+          ...base,
+          key: `exit_overdue:${c.id}`,
+          kind: "expired_open",
+          urgency: "high",
+          title: `Salida del ${shortDate(c.terminatedAt)} sin cerrar · ${who(c)}`,
+          detail: `${c.address} · la salida registrada ya pasó y el contrato sigue abierto. Si ya entregó las llaves, registrá la entrega; si sigue adentro, cambiá la salida.`,
+          href: contractHref(c.id),
+          cta: "Revisar",
+          date: c.terminatedAt,
+        });
+      } else if (renewal?.status === "vigente") {
+        // Ya rige (o está por regir) su renovación: se cierra solo el día antes, sin nada que decidir.
+      } else if (c.terminatedAt) {
         // La salida ya está registrada (rescisión notificada o entrega programada):
         // no hay que decidir si se renueva, hay que preparar la entrega.
         const toExit = diffDays(today, c.terminatedAt);
@@ -275,9 +315,11 @@ function contractItems(input: AgendaInput): AgendaItem[] {
           kind: "expired_open",
           urgency: "high",
           title: `Contrato vencido sin cerrar · ${who(c)}`,
-          detail: `${c.address} · terminó el ${shortDate(c.endDate)} y sigue abierto. Si el inquilino sigue, activá en la ficha el cobro de los meses de continuación (hasta entonces no se genera ningún cargo); si ya se fue, finalizalo.`,
-          href: contractHref(c.id),
-          cta: "Resolver",
+          detail: draftRenewal
+            ? `${c.address} · terminó el ${shortDate(c.endDate)}. La renovación ${formatContractNumber(draftRenewal.number)} está en borrador: al activarla, cobra ella desde su inicio y este se cierra.`
+            : `${c.address} · terminó el ${shortDate(c.endDate)} y sigue abierto. Si el inquilino sigue, activá en la ficha el cobro de los meses de continuación (hasta entonces no se genera ningún cargo); si ya se fue, finalizalo.`,
+          href: contractHref(draftRenewal?.id ?? c.id),
+          cta: draftRenewal ? "Ver renovación" : "Resolver",
           date: c.endDate,
         });
       } else if (left <= 90) {
@@ -287,9 +329,11 @@ function contractItems(input: AgendaInput): AgendaItem[] {
           kind: "expiring",
           urgency: left <= 30 ? "high" : left <= 60 ? "medium" : "low",
           title: `Vence ${left === 0 ? "hoy" : `en ${left} días`} · ${who(c)}`,
-          detail: `${c.address} · el ${shortDate(c.endDate)}. Definí si se renueva o coordiná la entrega.`,
-          href: contractHref(c.id),
-          cta: "Ver contrato",
+          detail: draftRenewal
+            ? `${c.address} · el ${shortDate(c.endDate)}. La renovación ${formatContractNumber(draftRenewal.number)} está en borrador: activala cuando esté firmada.`
+            : `${c.address} · el ${shortDate(c.endDate)}. Definí si se renueva o coordiná la entrega.`,
+          href: contractHref(draftRenewal?.id ?? c.id),
+          cta: draftRenewal ? "Ver renovación" : "Ver contrato",
           date: c.endDate,
         });
       }
@@ -311,14 +355,19 @@ function contractItems(input: AgendaInput): AgendaItem[] {
     }
     if ((c.status === "finalizado" || c.status === "rescindido") && c.depositStatus === "retenido" && c.depositAmount > 0) {
       const ended = c.terminatedAt ?? c.endDate;
+      // Siguió con su renovación: el depósito no se devuelve, sigue en garantía del contrato nuevo.
+      const renewal = renewalOf.get(c.id);
+      const renewed = renewal && renewal.status !== "borrador" ? renewal : null;
       out.push({
         key: `deposit_return:${c.id}`,
         kind: "deposit_return",
         urgency: "medium",
-        title: `Depósito a devolver · ${who(c)}`,
-        detail: `${c.address} · el contrato terminó el ${shortDate(ended)}. Devolvé el depósito o aplicalo a lo que quedó debiendo.`,
+        title: renewed ? `Depósito para pasar a la renovación · ${who(c)}` : `Depósito a devolver · ${who(c)}`,
+        detail: renewed
+          ? `${c.address} · siguió con la renovación ${formatContractNumber(renewed.number)}: pasale el depósito para que siga en garantía (o devolvelo si no corresponde).`
+          : `${c.address} · el contrato terminó el ${shortDate(ended)}. Devolvelo, aplicalo a lo que quedó debiendo o, si renovó, pasalo a la renovación.`,
         href: contractHref(c.id),
-        cta: "Ver contrato",
+        cta: renewed ? "Pasar el depósito" : "Cerrar el depósito",
         amount: c.depositAmount,
         currency: c.depositCurrency ?? c.currency,
         date: ended,
@@ -364,7 +413,7 @@ function inboxItems(input: AgendaInput, byId: Map<string, AgendaContract>): Agen
       cta: "Revisar",
       amount: r.amount,
       currency: r.currency,
-      date: r.createdAt.slice(0, 10),
+      date: r.createdOn ?? r.createdAt.slice(0, 10),
       contractId: r.contractId,
     });
   } else if (reports.length > 1) {
@@ -378,7 +427,7 @@ function inboxItems(input: AgendaInput, byId: Map<string, AgendaContract>): Agen
       cta: "Revisar",
       amount: null,
       currency: null,
-      date: reports[0].createdAt.slice(0, 10),
+      date: reports[0].createdOn ?? reports[0].createdAt.slice(0, 10),
       contractId: null,
     });
   }
@@ -442,7 +491,7 @@ function inboxItems(input: AgendaInput, byId: Map<string, AgendaContract>): Agen
       key: "statement_unpaid:many",
       kind: "statement_unpaid",
       urgency: "medium",
-      title: `${st.length} rendiciones emitidas sin pagar`,
+      title: `${st.length} rendiciones sin pagar`,
       detail: "Propietarios esperando la transferencia de lo cobrado.",
       href: `${BASE}/rendiciones`,
       cta: "Ver rendiciones",

@@ -113,10 +113,14 @@ export async function computePaymentPreview(
   const contract = contractData as RentalContract | null;
   if (!contract) return { ok: false, error: "No encontramos el contrato." };
 
+  // Sólo lo que está en la moneda del contrato (la del cobro): un cargo en otra
+  // moneda no se paga 1 a 1 con éste (500 dólares no cancelan 500 pesos).
   const { data: chargesData, error } = await admin
     .from("rental_charges")
     .select("id, label, due_date, subtotal, paid_amount, status, items:rental_charge_items(id, kind, payee, description, amount, original_amount, paid_amount, sort_order, meta)")
+    .eq("organization_id", organizationId)
     .eq("contract_id", contract.id)
+    .eq("currency", contract.currency)
     .is("voided_at", null)
     .in("status", ["pendiente", "parcial"])
     .order("due_date", { ascending: true });
@@ -252,6 +256,42 @@ export interface RegisterPaymentInput extends PaymentPreviewInput {
   reportId?: string | null;
 }
 
+/**
+ * Renglones e imputaciones que recibe `rental_register_payment` (068b). Lo usa
+ * también el cierre del depósito (lo aplicado a deudas entra por la misma función).
+ * Primero los punitorios que se cobran (las imputaciones los apuntan por
+ * posición: `new_item_index`) y después las marcas en $ 0 de lo condonado, que
+ * ninguna imputación toca. Anular el cobro borra las dos cosas (068b).
+ */
+export function paymentRpcItems(preview: PaymentPreview, latePayee: RentalPayee, paidAt: string) {
+  return {
+    p_new_items: [
+      ...preview.lateFees.map((f) => ({
+        charge_id: f.chargeId,
+        kind: "punitorio",
+        payee: latePayee,
+        description: f.description,
+        amount: f.amount,
+        meta: { days_late: f.daysLate, base: f.base, as_of: paidAt },
+      })),
+      ...preview.waivedLateFees.map((f) => ({
+        charge_id: f.chargeId,
+        kind: "punitorio",
+        payee: latePayee,
+        description: f.description,
+        amount: 0,
+        meta: { waived: true, waived_amount: f.amount, days_late: f.daysLate, base: f.base, as_of: paidAt },
+      })),
+    ],
+    p_allocations: preview.allocations.map((a) => ({
+      charge_id: a.chargeId,
+      item_id: a.itemId,
+      new_item_index: a.newItemIndex,
+      amount: a.amount,
+    })),
+  };
+}
+
 /** Titular "principal" de la propiedad del contrato (para el owner_id del ingreso en Caja). */
 async function primaryOwnerOf(admin: AdminClient, propertyId: string): Promise<string | null> {
   const { data } = await admin
@@ -299,33 +339,7 @@ export async function registerRentalPayment(
       owner_id: ownerId,
       occurred_at: zonedTimeToUtc(input.paidAt, "12:00", ctx.tz).toISOString(),
     },
-    // Primero los punitorios que se cobran (las imputaciones los apuntan por
-    // posición: `new_item_index`) y después las marcas en $ 0 de lo condonado,
-    // que ninguna imputación toca. Anular el cobro borra las dos cosas (068b).
-    p_new_items: [
-      ...preview.lateFees.map((f) => ({
-        charge_id: f.chargeId,
-        kind: "punitorio",
-        payee: contract.late_fee_payee,
-        description: f.description,
-        amount: f.amount,
-        meta: { days_late: f.daysLate, base: f.base, as_of: input.paidAt },
-      })),
-      ...preview.waivedLateFees.map((f) => ({
-        charge_id: f.chargeId,
-        kind: "punitorio",
-        payee: contract.late_fee_payee,
-        description: f.description,
-        amount: 0,
-        meta: { waived: true, waived_amount: f.amount, days_late: f.daysLate, base: f.base, as_of: input.paidAt },
-      })),
-    ],
-    p_allocations: preview.allocations.map((a) => ({
-      charge_id: a.chargeId,
-      item_id: a.itemId,
-      new_item_index: a.newItemIndex,
-      amount: a.amount,
-    })),
+    ...paymentRpcItems(preview, contract.late_fee_payee, input.paidAt),
   });
   if (error) return dbFailure("registerRentalPayment", error, "No se pudo registrar el cobro. Probá de nuevo.");
   const res = data as { payment_id: string; receipt_number: number; unallocated: number };
@@ -359,6 +373,22 @@ export async function voidRentalPayment(
     .eq("organization_id", ctx.organization.id)
     .maybeSingle();
   if (!pay) return { ok: false, error: "No encontramos el cobro." };
+  // El depósito aplicado a deudas entra como un cobro: anularlo suelto dejaría el
+  // depósito "aplicado" con las deudas otra vez abiertas. Se deshace desde la ficha
+  // (068h: rental_reopen_deposit lo anula y vuelve el depósito a retenido).
+  const { data: dep } = await ctx.admin
+    .from("rental_contracts")
+    .select("deposit_status, deposit_meta")
+    .eq("id", pay.contract_id)
+    .eq("organization_id", ctx.organization.id)
+    .maybeSingle();
+  const settlement = (dep?.deposit_meta as { settlement?: { payment_id?: string | null } } | null)?.settlement;
+  if (settlement?.payment_id === paymentId) {
+    return {
+      ok: false,
+      error: "Este cobro es el depósito aplicado a deudas. Para anularlo, deshacé el cierre del depósito desde la ficha del contrato.",
+    };
+  }
   const { error } = await ctx.admin.rpc("rental_void_payment", {
     p_organization_id: ctx.organization.id,
     p_payment_id: paymentId,

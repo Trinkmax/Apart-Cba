@@ -1,6 +1,7 @@
 import { parseAmountInput, parsePercentInput } from "@/lib/format";
 import type { ContractInput } from "@/lib/rentals/server/contracts";
 import { LEGAL_REGIME_META } from "@/lib/rentals/labels";
+import { REGIME_IN_FORCE } from "@/lib/rentals/renewal";
 import { adjustmentCount, contractEndDate } from "@/lib/rentals/schedule";
 import { isYmd } from "@/lib/rentals/ymd";
 import type {
@@ -124,6 +125,11 @@ export interface WizardState {
   notes: string;
   /** Montos reales de ajustes que ya rigieron (sequence → monto + motivo). Sólo borradores. */
   overrides: Record<string, OverrideDraft>;
+  /**
+   * Es la renovación de otro contrato (no se edita: sale de renewed_from_id).
+   * Cada garante tiene que firmarla (art. 1225 CCyC): se pide la fecha.
+   */
+  is_renewal: boolean;
 }
 
 export type WizardSettings = Pick<
@@ -188,13 +194,13 @@ export function defaultWizardState(settings: WizardSettings, today: string): Wiz
     property_id: "",
     parties: [],
     usage: "vivienda",
-    legal_regime: "dnu_70_2023",
+    legal_regime: REGIME_IN_FORCE,
     start_date: suggestedStartDate(today),
     duration_months: String(settings.default_duration_months || 24),
     signed_at: "",
     currency: "ARS",
     initial_rent: "",
-    early_termination_rule: "dnu_10pct",
+    early_termination_rule: LEGAL_REGIME_META[REGIME_IN_FORCE].preset.termination,
     early_termination_notes: "",
     adjustment_method: "indice",
     index_code: settings.default_index || "ipc",
@@ -235,6 +241,7 @@ export function defaultWizardState(settings: WizardSettings, today: string): Wiz
     special_clauses: "",
     notes: "",
     overrides: {},
+    is_renewal: false,
   };
 }
 
@@ -307,7 +314,21 @@ export function wizardStateFromContract(
     special_clauses: c.special_clauses ?? "",
     notes: c.notes ?? "",
     overrides: Object.fromEntries(overrides.map((o) => [String(o.sequence), { amount: editableNumber(o.amount), reason: o.reason ?? "" }])),
+    is_renewal: Boolean(c.renewed_from_id),
   };
+}
+
+/**
+ * Garantes de una renovación que todavía no tienen la fecha en que la
+ * firmaron (art. 1225 CCyC). El borrador se puede guardar igual; activar o
+ * guardar una renovación vigente, no. Con `today`, una fecha futura cuenta
+ * como faltante (todavía no firmó).
+ */
+export function guarantorsMissingConsent(s: WizardState, today?: string): WizardParty[] {
+  if (!s.is_renewal) return [];
+  return s.parties.filter(
+    (p) => p.role === "garante" && p.person_id && (!isYmd(p.guarantor_consent_at) || (today != null && p.guarantor_consent_at > today)),
+  );
 }
 
 /** Elegir el régimen legal precarga plazo, índice, frecuencia y rescisión. */
@@ -361,6 +382,9 @@ export function parseWizard(s: WizardState): { input: ContractInput | null; issu
   if (filled.filter((p) => p.role === "inquilino" && p.is_primary).length > 1) add("partes", "parties", "Marcá un solo titular de los recibos.");
   const ids = filled.map((p) => `${p.person_id}:${p.role}`);
   if (new Set(ids).size !== ids.length) add("partes", "parties", "Hay una persona repetida con el mismo rol.");
+  if (filled.some((p) => p.role === "garante" && p.guarantor_consent_at && !isYmd(p.guarantor_consent_at))) {
+    add("partes", "parties", "Revisá la fecha en que firmó el garante.");
+  }
 
   if (!isYmd(s.start_date)) add("plazo", "start_date", "Poné la fecha de inicio.");
   const duration = intOf(s.duration_months);

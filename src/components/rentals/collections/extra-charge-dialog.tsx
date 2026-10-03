@@ -13,17 +13,32 @@ import { createExtraCharge } from "@/lib/actions/rentals-collections";
 import { formatMoney, parseAmountInput } from "@/lib/format";
 import { ITEM_KIND_LABEL, PAYEE_LABEL } from "@/lib/rentals/labels";
 import { addDays } from "@/lib/rentals/ymd";
-import type { RentalPayee } from "@/lib/types/database";
+import type { RentalMoneyOwner, RentalPayee } from "@/lib/types/database";
 import { cn } from "@/lib/utils";
-import { DEFAULT_PAYEE, MANUAL_KINDS, PAYEES, type ManualKind } from "./charge-dialogs";
+import { DEFAULT_PAYEE, MANUAL_KINDS, PAYEES, depositPayeeHint, payeeFor, type ManualKind } from "./charge-dialogs";
 import { Spinner } from "./whatsapp-message-dialog";
 
 type Row = { key: number; kind: ManualKind; description: string; amountText: string; payee: RentalPayee };
 
 const SUGGESTIONS = ["Reparación", "Diferencia de expensas", "Gastos de salida", "Reintegro de servicios"];
 
-/** Cargo aparte del mensual (una reparación, gastos de salida…). Envuelve al botón que lo abre. */
-export function ExtraChargeDialog({ contractId, currency, today, children }: { contractId: string; currency: string; today: string; children: ReactNode }) {
+/**
+ * Cargo aparte del mensual (una reparación, gastos de salida…). Envuelve al botón que lo abre.
+ * `depositHolder`: quién guarda el depósito según el contrato (un renglón de depósito va para él).
+ */
+export function ExtraChargeDialog({
+  contractId,
+  currency,
+  today,
+  depositHolder,
+  children,
+}: {
+  contractId: string;
+  currency: string;
+  today: string;
+  depositHolder?: RentalMoneyOwner | null;
+  children: ReactNode;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [label, setLabel] = useState("");
@@ -117,7 +132,7 @@ export function ExtraChargeDialog({ contractId, currency, today, children }: { c
         <div className="space-y-2">
           {rows.map((r) => (
             <div key={r.key} className="rounded-lg border p-2.5 grid gap-2 sm:grid-cols-[9.5rem_minmax(0,1fr)_8rem_9rem_auto] sm:items-center">
-              <Select value={r.kind} onValueChange={(v) => update(r.key, { kind: v as ManualKind, payee: DEFAULT_PAYEE[v as ManualKind] })}>
+              <Select value={r.kind} onValueChange={(v) => update(r.key, { kind: v as ManualKind, payee: payeeFor(v as ManualKind, depositHolder) })}>
                 <SelectTrigger className="h-9 w-full" aria-label="Qué es">
                   <SelectValue />
                 </SelectTrigger>
@@ -131,18 +146,25 @@ export function ExtraChargeDialog({ contractId, currency, today, children }: { c
               </Select>
               <Input value={r.description} maxLength={200} onChange={(e) => update(r.key, { description: e.target.value })} placeholder="Detalle (opcional)" className="h-9" aria-label="Detalle" />
               <Input type="text" inputMode="decimal" placeholder="0,00" value={r.amountText} onChange={(e) => update(r.key, { amountText: e.target.value })} className="h-9 tabular-nums" aria-label="Importe" />
-              <Select value={r.payee} onValueChange={(v) => update(r.key, { payee: v as RentalPayee })}>
-                <SelectTrigger className="h-9 w-full" aria-label="De quién es la plata">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAYEES.map((p) => (
-                    <SelectItem key={p} value={p}>
-                      Para: {PAYEE_LABEL[p]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {r.kind === "deposito" ? (
+                // El depósito no se elige: va para quien lo guarda (el servidor lo fuerza igual).
+                <p className="text-xs text-muted-foreground leading-tight px-1" title={depositPayeeHint(depositHolder)}>
+                  {depositHolder === "propietario" ? "Lo guarda el propietario" : depositHolder === "inmobiliaria" ? "Lo guarda la inmobiliaria" : "Para quien lo guarda"}
+                </p>
+              ) : (
+                <Select value={r.payee} onValueChange={(v) => update(r.key, { payee: v as RentalPayee })}>
+                  <SelectTrigger className="h-9 w-full" aria-label="De quién es la plata">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAYEES.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        Para: {PAYEE_LABEL[p]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <Button variant="ghost" size="icon-sm" disabled={rows.length === 1} onClick={() => setRows((rs) => rs.filter((x) => x.key !== r.key))} aria-label="Sacar concepto">
                 <Trash2 size={14} />
               </Button>
@@ -156,6 +178,7 @@ export function ExtraChargeDialog({ contractId, currency, today, children }: { c
               Total <span className="font-semibold tabular-nums">{formatMoney(total, currency)}</span>
             </p>
           </div>
+          {rows.some((r) => r.kind === "deposito") && <p className="text-[11px] text-muted-foreground">Depósito: {depositPayeeHint(depositHolder)}</p>}
         </div>
         {error && <p className="text-xs text-rose-600 dark:text-rose-400">{error}</p>}
         <DialogFooter className="gap-2 sm:gap-2">

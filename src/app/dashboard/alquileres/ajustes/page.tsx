@@ -120,7 +120,15 @@ export default async function AjustesPage({ searchParams }: { searchParams: Prom
                 <SectionTitle>{monthLabelOf(`${g.month}-01`)}</SectionTitle>
                 <div className="space-y-3">
                   {g.items.map((a) => (
-                    <AdjustmentCard key={a.id} adj={a} today={list.today} canEdit={canEdit} />
+                    <AdjustmentCard
+                      key={a.id}
+                      adj={a}
+                      today={list.today}
+                      canEdit={canEdit}
+                      autoApply={settings.auto_apply_adjustments}
+                      // Sin resumen del índice queda undefined (null sería "no hay nada cargado").
+                      coverage={overview.ok ? overview.indices.find((s) => s.code === a.indexCode)?.coverage : undefined}
+                    />
                   ))}
                 </div>
               </section>

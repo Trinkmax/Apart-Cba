@@ -3,14 +3,24 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, History, Loader2, Rocket, Save } from "lucide-react";
+import { ArrowLeft, ArrowRight, History, Loader2, RefreshCcw, Rocket, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatTimeAgo } from "@/lib/format";
 import { previewContractPlan, saveRentalContract } from "@/lib/actions/rentals-contracts";
+import { joinNamesEs } from "@/lib/rentals/renewal";
 import type { RentalContractStatus } from "@/lib/types/database";
 import type { ContractFormOptions, PersonOption, PlanPreview, PropertyOption } from "./types";
-import { WIZARD_STEPS, overridesForSave, parseWizard, previewInputOf, stepOfField, type WizardState, type WizardStepKey } from "./wizard-state";
+import {
+  WIZARD_STEPS,
+  guarantorsMissingConsent,
+  overridesForSave,
+  parseWizard,
+  previewInputOf,
+  stepOfField,
+  type WizardState,
+  type WizardStepKey,
+} from "./wizard-state";
 import { entryOf } from "./wizard-derived";
 import type { StepProps } from "./wizard-step-props";
 import { WizardStepsBar } from "./wizard-steps-bar";
@@ -169,7 +179,8 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
 
   function restore() {
     if (!stored) return;
-    setState(stored.state);
+    // Si es renovación lo dice el contrato, no lo guardado en el navegador (que puede ser de antes).
+    setState({ ...stored.state, is_renewal: initial.is_renewal });
     setStep(Math.min(Math.max(0, stored.step), last));
     setVisited(last);
     setDirty(true);
@@ -191,6 +202,20 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
       const first = parsed.issues[0];
       toast.error("Faltan datos", { description: first?.message });
       if (first) goTo(first.step);
+      return;
+    }
+    // Renovación (art. 1225 CCyC): el borrador se guarda sin las firmas de los
+    // garantes, pero no se activa —ni se guarda ya vigente— sin la fecha de cada uno.
+    const unsigned = guarantorsMissingConsent(state, options.today);
+    if (unsigned.length && (activate || !isDraft)) {
+      const names = joinNamesEs(unsigned.map((p) => people.find((x) => x.id === p.person_id)?.fullName ?? "un garante"));
+      const many = unsigned.length > 1;
+      toast.error(many ? "Faltan las firmas de los garantes" : "Falta la firma de un garante", {
+        description: many
+          ? `Es una renovación: cargá la fecha en que firmaron ${names} (art. 1225 CCyC), o sacá del contrato al que no firme.`
+          : `Es una renovación: cargá la fecha en que firmó ${names} (art. 1225 CCyC), o sacalo del contrato si no firma.`,
+      });
+      goTo("partes");
       return;
     }
     const entry = activate && state.generate_entry_charge ? entryOf(state, options.settings) : null;
@@ -217,7 +242,12 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
       setDirty(false);
       if (activate && res.activated) toast.success("Contrato activado", { description: "Ya rige: se armó el cronograma de ajustes y los cargos que tocan." });
       else if (activate) toast.warning("Se guardó, pero no se pudo activar", { description: res.activationError ?? undefined });
-      else toast.success(isDraft ? "Borrador guardado" : "Cambios guardados", { description: isDraft ? "Activalo cuando esté firmado." : undefined });
+      // El aviso del servidor nombra los cargos que no se recalcularon (gastos de ingreso, extras): que se lea antes de que se vaya.
+      else
+        toast.success(isDraft ? "Borrador guardado" : "Cambios guardados", {
+          description: isDraft ? "Activalo cuando esté firmado." : (res.notice ?? undefined),
+          duration: !isDraft && res.notice ? 12000 : undefined,
+        });
       router.push(`/dashboard/alquileres/contratos/${res.contractId}`);
     });
   }
@@ -242,6 +272,7 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
     contractLabel,
   };
   const key = WIZARD_STEPS[step].key;
+  const unsignedCount = guarantorsMissingConsent(state, options.today).length;
 
   return (
     <div ref={topRef} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem] lg:items-start scroll-mt-4">
@@ -259,6 +290,27 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
               <Button size="sm" onClick={restore}>
                 Recuperar
               </Button>
+            </div>
+          </div>
+        )}
+        {initial.is_renewal && isDraft && (
+          <div className="rounded-xl border border-teal-500/30 bg-teal-500/[0.07] px-4 py-3 flex gap-3">
+            <RefreshCcw size={18} className="text-teal-600 dark:text-teal-400 shrink-0 mt-0.5 hidden sm:block" />
+            <div className="min-w-0 space-y-1">
+              <p className="text-sm font-medium">Es una renovación: un contrato nuevo que se firma ahora.</p>
+              <p className="text-xs text-muted-foreground leading-snug">
+                Copiamos las condiciones y las personas del anterior. El régimen, la rescisión, el sellado y el código RELI van como en un contrato nuevo: revisalos junto con el plazo y el
+                precio.
+              </p>
+              {unsignedCount > 0 && (
+                <p className="text-xs text-amber-800 dark:text-amber-200 leading-snug">
+                  {unsignedCount === 1 ? "Falta la fecha en que el garante firmó" : `Faltan las fechas en que ${unsignedCount} garantes firmaron`} la renovación (art. 1225 CCyC): cargala en{" "}
+                  <button type="button" onClick={() => goTo("partes")} className="underline underline-offset-2 hover:no-underline font-medium">
+                    Inquilino y garantes
+                  </button>{" "}
+                  antes de activar.
+                </p>
+              )}
             </div>
           </div>
         )}

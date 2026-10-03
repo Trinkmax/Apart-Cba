@@ -20,7 +20,18 @@ import { OverrideDialog, SkipDialog } from "./adjustment-dialogs";
 import { WhatsappNoticeDialog } from "./whatsapp-notice-dialog";
 
 /** Botonera de una tarjeta de ajuste: aplicar, corregir, no aplicar, volver al cálculo y avisar. */
-export function AdjustmentActions({ adj, today, canEdit }: { adj: AdjustmentView; today: string; canEdit: boolean }) {
+export function AdjustmentActions({
+  adj,
+  today,
+  canEdit,
+  scheduled = false,
+}: {
+  adj: AdjustmentView;
+  today: string;
+  canEdit: boolean;
+  /** Se va a aplicar solo (auto-aplicación): "Aplicar" pasa a ser una opción secundaria. */
+  scheduled?: boolean;
+}) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState<"apply" | "mail" | "reopen" | null>(null);
@@ -80,11 +91,16 @@ export function AdjustmentActions({ adj, today, canEdit }: { adj: AdjustmentView
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {can.apply && (
-        <Button size="sm" className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={apply} disabled={pending}>
-          {spinner("apply") ?? <Check size={14} />} Aplicar
-        </Button>
-      )}
+      {can.apply &&
+        (scheduled ? (
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={apply} disabled={pending}>
+            {spinner("apply") ?? <Check size={14} />} Aplicar ahora
+          </Button>
+        ) : (
+          <Button size="sm" className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={apply} disabled={pending}>
+            {spinner("apply") ?? <Check size={14} />} Aplicar
+          </Button>
+        ))}
       {can.override && (
         <Button
           size="sm"

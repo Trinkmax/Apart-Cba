@@ -46,6 +46,12 @@ export interface OwnerPending {
   /** Cuántos cobros entran (para "3 cobros sin rendir"). */
   collectedCount: number;
   lastPaidAt: string | null;
+  /**
+   * Importe completo de cada gasto (id → importe) tal como se leyó. Viaja a la
+   * RPC como `ref_amount`: si alguien edita el gasto entre esta lectura y la
+   * RPC, la rendición frena en vez de descontar el importe viejo (068k).
+   */
+  expenseAmounts: Record<string, number>;
 }
 
 type PropertyLite = Pick<RentalProperty, "id" | "street" | "street_number" | "floor" | "apartment" | "tower">;
@@ -120,6 +126,8 @@ export async function computePendingForOwners(
           .from("rental_payment_allocations")
           .select("id, amount, charge:rental_charges!inner(contract_id, label), item:rental_charge_items!inner(kind, payee), payment:rental_payments!inner(paid_at, voided_at)")
           .eq("organization_id", organizationId)
+          // Mismo criterio que revalida la RPC (068k): una imputación anulada no se rinde.
+          .eq("voided", false)
           .in("charge.contract_id", contractIds)
           .eq("item.payee", "propietario")
           .is("payment.voided_at", null)
@@ -256,6 +264,7 @@ export async function computePendingForOwners(
         totals: carryLines.length ? totalsOf(lines) : built.totals,
         collectedCount: collected.length,
         lastPaidAt,
+        expenseAmounts: Object.fromEntries(ownerExpenses.map((x) => [x.id, x.amount])),
       });
     }
   }
@@ -293,6 +302,9 @@ export async function createOwnerStatement(
       property_id: l.propertyId,
       ref_type: l.refType,
       ref_id: l.refId,
+      // La RPC (068k) frena si el gasto cambió de importe desde que se leyó;
+      // antes de la 068k la clave se ignora.
+      ref_amount: l.refType === "expense" && l.refId ? (mine.expenseAmounts[l.refId] ?? null) : null,
       share_pct: l.sharePct,
       sort_order: i + 1,
     })),
@@ -385,7 +397,12 @@ export async function emitOwnerStatement(ctx: RentalsCtx, statementId: string): 
   if (s.status === "anulada") return { ok: false, error: "La rendición está anulada." };
   const path = await ensureStatementLink(ctx, s);
   if (s.status === "borrador") {
-    const { error } = await ctx.admin.from("rental_owner_statements").update({ status: "emitida" }).eq("id", s.id).eq("status", "borrador");
+    const { error } = await ctx.admin
+      .from("rental_owner_statements")
+      .update({ status: "emitida" })
+      .eq("id", s.id)
+      .eq("organization_id", ctx.organization.id)
+      .eq("status", "borrador");
     if (error) return dbFailure("emitOwnerStatement", error, "No se pudo emitir la rendición.");
   }
   return { ok: true, path };

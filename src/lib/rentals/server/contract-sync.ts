@@ -9,11 +9,20 @@ import type {
   RentalExpense,
   RentalPayment,
 } from "@/lib/types/database";
-import { rentForPeriod, type ChainStep } from "@/lib/rentals/adjustments";
-import { sortForImputation, type OpenItem } from "@/lib/rentals/allocation";
-import { buildMonthlyCharge, chooseDifferenceTarget, periodsDueForCharging, type ChargeItemDraft } from "@/lib/rentals/charges";
+import { AUTO_APPLY_HORIZON_DAYS, rentForPeriod, type ChainStep } from "@/lib/rentals/adjustments";
+import { planCreditAllocations, type CreditTarget } from "@/lib/rentals/allocation";
+import {
+  buildMonthlyCharge,
+  carryOverItems,
+  chooseDifferenceTarget,
+  periodsDueForCharging,
+  pickCarrySource,
+  type ChargeItemDraft,
+  type VoidedMonthlyCharge,
+} from "@/lib/rentals/charges";
 import type { IndexLookup } from "@/lib/rentals/indices";
 import { EXPENSE_CATEGORY_LABEL } from "@/lib/rentals/labels";
+import { takesEffectAfterExit } from "@/lib/rentals/exit";
 import {
   appliedMapOf,
   buildContractPlan,
@@ -22,7 +31,7 @@ import {
   skippedSetOf,
   type ContractPlan,
 } from "@/lib/rentals/plan";
-import { addDays, monthOf, monthsBetween } from "@/lib/rentals/ymd";
+import { addDays, addMonthsToMonth, monthOf, monthsBetween } from "@/lib/rentals/ymd";
 import type { AdminClient } from "./access";
 import { logRentalsError } from "./access";
 
@@ -65,21 +74,16 @@ export async function logRentalEvent(
 
 // ─── Ajustes ────────────────────────────────────────────────────────────────
 
-/**
- * Con "aplicar automáticamente", un ajuste calculado se aplica recién cuando
- * faltan como mucho estos días para que rija: alcanza para generar el cargo
- * del período (se genera hasta 28 días antes) y para avisarle al inquilino con
- * un mes de anticipación, sin dar por aplicados ajustes de dentro de un año
- * (los de % fijo o escalonados se conocen desde el primer día).
- */
-export const AUTO_APPLY_HORIZON_DAYS = 35;
+// AUTO_APPLY_HORIZON_DAYS vive en el motor puro (también lo usa la UI).
+export { AUTO_APPLY_HORIZON_DAYS };
 
-function persistedStatusOf(step: ChainStep, today: string, autoApply: boolean): RentalAdjustmentStatus {
+function persistedStatusOf(step: ChainStep, today: string, autoApply: boolean, terminatedAt: string | null): RentalAdjustmentStatus {
+  if (step.status === "aplicado" || step.status === "omitido") return step.status;
+  // Rige después de la salida registrada (preaviso): el inquilino ya no va a estar.
+  // Queda programado: no se aplica solo, no se avisa ni pide que alguien lo cargue.
+  // Si la salida se anula o se corre, la próxima sincronización lo retoma.
+  if (takesEffectAfterExit(step.window.effectiveDate, terminatedAt)) return "programado";
   switch (step.status) {
-    case "aplicado":
-      return "aplicado";
-    case "omitido":
-      return "omitido";
     case "calculado":
       return autoApply && step.window.effectiveDate <= addDays(today, AUTO_APPLY_HORIZON_DAYS) ? "aplicado" : "calculado";
     case "pendiente_indice":
@@ -137,7 +141,7 @@ export async function syncContractAdjustments(
       rows.push(prev);
       continue;
     }
-    const status = persistedStatusOf(step, opts.today, opts.autoApply);
+    const status = persistedStatusOf(step, opts.today, opts.autoApply, contract.terminated_at);
     const r = step.result?.status === "ok" ? step.result : null;
     const values = {
       organization_id: contract.organization_id,
@@ -260,24 +264,79 @@ export async function ensureContractCharges(
   if (!due.length) return { created: 0 };
 
   let extras = await pendingTenantExpenseItems(admin, contract);
+  const voided = await voidedMonthlyChargesFor(admin, contract, due);
   let created = 0;
   for (const period of due) {
     const rent = rentForPeriod(Number(contract.initial_rent), plan.chain, period.index, { onlyApplied: true });
-    const draft = buildMonthlyCharge({ period, rent, currency: contract.currency, extraItems: extras });
-    const { items, ...charge } = draft;
-    const { data, error: rpcErr } = await admin.rpc("rental_create_charge", {
-      p_organization_id: contract.organization_id,
-      p_contract_id: contract.id,
-      p_charge: { ...charge, created_by: opts.actorId ?? null },
-      p_items: items,
-    });
-    if (rpcErr) throw new Error(`No se pudo generar el cargo de ${draft.label}: ${rpcErr.message}`);
-    if ((data as { created?: boolean } | null)?.created) {
+    // Si este mes ya tuvo un mensual que se anuló (se editó el contrato, una persona
+    // lo anuló, se movió la salida), lo que le cargaron una persona o un cobro pasa a
+    // éste: expensas, conceptos a mano, punitorios y lo condonado. Va en la misma
+    // transacción que crea el cargo, así no queda a mitad de camino.
+    const source = pickCarrySource(voided, period.start, contract.currency);
+    const carried = source ? carryOverItems(source.items) : [];
+    const create = async (carriedItems: ChargeItemDraft[]) => {
+      const draft = buildMonthlyCharge({ period, rent, currency: contract.currency, extraItems: extras, carriedItems });
+      const { items, ...charge } = draft;
+      const res = await admin.rpc("rental_create_charge", {
+        p_organization_id: contract.organization_id,
+        p_contract_id: contract.id,
+        p_charge: { ...charge, created_by: opts.actorId ?? null },
+        p_items: items,
+      });
+      return { ...res, label: draft.label };
+    };
+    let attempt = carried;
+    let res = await create(attempt);
+    // Sólo un rechazo de la base (raise de un trigger, P0xxx, o una restricción,
+    // 23xxx) por algo de lo que pasaba, p. ej. un depósito que ya se marcó cobrado
+    // a mano (068j). El mes no puede quedarse sin cargo por eso: primero sin el
+    // depósito, si no sin nada de lo que pasaba, y queda escrito para que una
+    // persona lo vuelva a cargar. Un corte de red o un timeout no: se lanza y la
+    // próxima sincronización lo reintenta con todo.
+    while (res.error && attempt.length && /^(P0|23)/.test(res.error.code ?? "")) {
+      logRentalsError("ensureContractCharges:carry", res.error);
+      attempt = attempt.some((c) => c.kind === "deposito") ? attempt.filter((c) => c.kind !== "deposito") : [];
+      res = await create(attempt);
+    }
+    const dropped = carried.filter((c) => !attempt.includes(c));
+    if (res.error) throw new Error(`No se pudo generar el cargo de ${res.label}: ${res.error.message}`);
+    if ((res.data as { created?: boolean } | null)?.created) {
       created += 1;
       extras = []; // los gastos van una sola vez, en el primer cargo nuevo
+      if (dropped.length) {
+        await logRentalEvent(admin, {
+          organizationId: contract.organization_id,
+          contractId: contract.id,
+          type: "cargo_conceptos_no_pasados",
+          summary: `No se pudieron pasar a ${res.label} los conceptos del cargo anulado de ese mes (${dropped.map((d) => d.description).join(", ")}): cargalos de nuevo si corresponden.`,
+          payload: { source_charge_id: source?.id ?? null, items: dropped.map((d) => d.meta?.carried_from ?? null) },
+          actorId: opts.actorId ?? null,
+        });
+      }
     }
   }
   return { created };
+}
+
+/**
+ * Mensuales anulados de los meses que se van a generar (con sus ítems), para
+ * pasarle al cargo nuevo lo que tenía el anulado. Si no se pueden leer, no se
+ * genera nada: generar igual perdería en silencio lo que había que pasar.
+ */
+async function voidedMonthlyChargesFor(admin: AdminClient, contract: RentalContract, due: readonly { start: string }[]): Promise<VoidedMonthlyCharge[]> {
+  const months = [...new Set(due.map((p) => monthOf(p.start)))].sort();
+  if (!months.length) return [];
+  const { data, error } = await admin
+    .from("rental_charges")
+    .select("id, period_start, currency, voided_at, items:rental_charge_items(id, kind, payee, description, amount, original_amount, discount_reason, ref_type, ref_id, meta, sort_order)")
+    .eq("organization_id", contract.organization_id)
+    .eq("contract_id", contract.id)
+    .eq("kind", "mensual")
+    .not("voided_at", "is", null)
+    .gte("period_start", months[0])
+    .lt("period_start", addMonthsToMonth(months[months.length - 1], 1));
+  if (error) throw new Error(`No se pudieron leer los cargos anulados: ${error.message}`);
+  return (data ?? []) as unknown as VoidedMonthlyCharge[];
 }
 
 /**
@@ -521,12 +580,22 @@ export async function voidContractCharges(
   return { voided, kept: ((keptRows ?? []) as { id: string }[]).map((r) => r.id), creditRestored: 0, expensesReleased };
 }
 
+export interface StaleDifferencesResult {
+  /** Diferencias que se sacaron (ítems borrados más cargos aparte anulados enteros). */
+  dropped: number;
+  amount: number;
+  /** Cargos de donde salieron, para avisar. */
+  chargeLabels: string[];
+}
+
 /**
  * Diferencias por ajuste de períodos cuyos cargos se acaban de anular: el
  * período se vuelve a facturar con el precio que corresponde (o ya no se
  * factura), así que esas diferencias sobran y cobrarlas sería cobrar dos
  * veces. Las impagas se borran; un cargo aparte que sólo tenía esas
- * diferencias se anula entero.
+ * diferencias se anula entero (las marcas en $ 0 de punitorios condonados no
+ * cuentan: no son deuda, y dejarlo vivo lo mostraba "pagado" sin que nadie
+ * pagara nada).
  */
 export async function dropStaleDifferences(
   admin: AdminClient,
@@ -534,45 +603,63 @@ export async function dropStaleDifferences(
   contractId: string,
   voidedChargeIds: string[],
   reason: string,
-): Promise<number> {
-  if (!voidedChargeIds.length) return 0;
+): Promise<StaleDifferencesResult> {
+  const none: StaleDifferencesResult = { dropped: 0, amount: 0, chargeLabels: [] };
+  if (!voidedChargeIds.length) return none;
   const voidedSet = new Set(voidedChargeIds);
   const { data, error } = await admin
     .from("rental_charges")
-    .select("id, kind, paid_amount, items:rental_charge_items(id, kind, ref_type, ref_id, paid_amount)")
+    .select("id, kind, label, paid_amount, items:rental_charge_items(id, kind, amount, ref_type, ref_id, paid_amount)")
     .eq("organization_id", organizationId)
     .eq("contract_id", contractId)
     .is("voided_at", null);
   if (error) {
     logRentalsError("dropStaleDifferences", error);
-    return 0;
+    return none;
   }
-  type Row = { id: string; kind: string; paid_amount: number; items: Pick<RentalChargeItem, "id" | "kind" | "ref_type" | "ref_id" | "paid_amount">[] };
-  const wholeCharges: string[] = [];
-  const staleItems: string[] = [];
-  const touched: string[] = [];
+  type Row = { id: string; kind: string; label: string; paid_amount: number; items: Pick<RentalChargeItem, "id" | "kind" | "amount" | "ref_type" | "ref_id" | "paid_amount">[] };
+  const wholeCharges: Row[] = [];
+  const staleItems: { id: string; amount: number }[] = [];
+  const touched: Row[] = [];
   for (const r of (data ?? []) as Row[]) {
     const stale = r.items.filter(
       (i) => i.kind === "diferencia_ajuste" && i.ref_type === "rental_charge" && !!i.ref_id && voidedSet.has(i.ref_id) && Number(i.paid_amount) === 0,
     );
     if (!stale.length) continue;
-    if (r.kind !== "mensual" && stale.length === r.items.length && Number(r.paid_amount) === 0) wholeCharges.push(r.id);
+    const staleIds = new Set(stale.map((i) => i.id));
+    // ¿Queda algo que se deba o se haya cobrado, además de las diferencias que sobran?
+    const rest = r.items.filter((i) => !staleIds.has(i.id) && !(Number(i.amount) === 0 && Number(i.paid_amount) === 0));
+    if (r.kind !== "mensual" && !rest.length && Number(r.paid_amount) === 0) wholeCharges.push(r);
     else {
-      staleItems.push(...stale.map((i) => i.id));
-      touched.push(r.id);
+      staleItems.push(...stale.map((i) => ({ id: i.id, amount: Number(i.amount) })));
+      touched.push(r);
     }
   }
-  let dropped = 0;
-  if (wholeCharges.length) dropped += (await voidContractCharges(admin, organizationId, contractId, wholeCharges, reason)).voided.length;
+  const out: StaleDifferencesResult = { dropped: 0, amount: 0, chargeLabels: [] };
+  if (wholeCharges.length) {
+    const res = await voidContractCharges(admin, organizationId, contractId, wholeCharges.map((r) => r.id), reason);
+    for (const r of wholeCharges.filter((w) => res.voided.includes(w.id))) {
+      out.dropped += 1;
+      out.amount = round2(out.amount + r.items.reduce((s, i) => s + Number(i.amount), 0));
+      out.chargeLabels.push(r.label);
+    }
+  }
   if (staleItems.length) {
-    const { error: delErr } = await admin.from("rental_charge_items").delete().eq("organization_id", organizationId).in("id", staleItems).eq("paid_amount", 0);
+    const { error: delErr } = await admin
+      .from("rental_charge_items")
+      .delete()
+      .eq("organization_id", organizationId)
+      .in("id", staleItems.map((i) => i.id))
+      .eq("paid_amount", 0);
     if (delErr) logRentalsError("dropStaleDifferences:items", delErr);
     else {
-      dropped += staleItems.length;
-      await admin.rpc("rental_recompute_charges", { p_charge_ids: touched });
+      out.dropped += staleItems.length;
+      out.amount = round2(out.amount + staleItems.reduce((s, i) => s + i.amount, 0));
+      out.chargeLabels.push(...touched.map((r) => r.label));
+      await admin.rpc("rental_recompute_charges", { p_charge_ids: touched.map((r) => r.id) });
     }
   }
-  return dropped;
+  return out;
 }
 
 /**
@@ -604,49 +691,58 @@ export async function billPendingTenantExpenses(
 
 // ─── Saldo a favor ──────────────────────────────────────────────────────────
 
-/** Imputa el saldo a favor de pagos anteriores a lo que el inquilino debe (lo más viejo primero). */
+/**
+ * Imputa el saldo a favor de pagos anteriores a lo que el inquilino debe (lo
+ * más viejo primero), cada pago en su moneda. Nunca a un mensual que empieza
+ * después de la salida: si sigue vivo es porque tiene cobros directos y lo
+ * resuelve una persona; ponerle saldo a favor (el que el cierre le acaba de
+ * devolver al inquilino) se le rendía al propietario como alquiler de un mes
+ * en el que el inquilino ya no vive.
+ */
 export async function applyAvailableCredit(admin: AdminClient, organizationId: string, contractId: string): Promise<number> {
   const { data: pays, error } = await admin
     .from("rental_payments")
-    .select("id, unallocated_amount, paid_at")
+    .select("id, unallocated_amount, paid_at, currency")
+    .eq("organization_id", organizationId)
     .eq("contract_id", contractId)
     .is("voided_at", null)
     .gt("unallocated_amount", 0)
     .order("paid_at", { ascending: true });
   if (error || !pays?.length) return 0;
-  const { data: charges } = await admin
-    .from("rental_charges")
-    .select("id, due_date, items:rental_charge_items(id, kind, amount, paid_amount, sort_order)")
-    .eq("contract_id", contractId)
-    .is("voided_at", null)
-    .in("status", ["pendiente", "parcial"]);
-  type C = { id: string; due_date: string; items: Pick<RentalChargeItem, "id" | "kind" | "amount" | "paid_amount" | "sort_order">[] };
-  const open: OpenItem[] = ((charges ?? []) as C[]).flatMap((c) =>
-    c.items.map((i) => ({
-      itemId: i.id,
-      chargeId: c.id,
-      dueDate: c.due_date,
-      kind: i.kind,
-      outstanding: round2(Number(i.amount) - Number(i.paid_amount)),
-      sortOrder: i.sort_order,
-    })),
-  );
-  const queue = sortForImputation(open).filter((i) => i.outstanding > 0);
-  if (!queue.length) return 0;
-
-  const allocations: { payment_id: string; item_id: string; amount: number }[] = [];
-  let qi = 0;
-  for (const p of pays as Pick<RentalPayment, "id" | "unallocated_amount" | "paid_at">[]) {
-    let left = round2(Number(p.unallocated_amount));
-    while (left > 0 && qi < queue.length) {
-      const item = queue[qi];
-      const take = round2(Math.min(left, item.outstanding));
-      allocations.push({ payment_id: p.id, item_id: item.itemId, amount: take });
-      item.outstanding = round2(item.outstanding - take);
-      left = round2(left - take);
-      if (item.outstanding <= 0) qi += 1;
-    }
-  }
+  const [{ data: contractRow }, { data: charges, error: chErr }] = await Promise.all([
+    admin.from("rental_contracts").select("terminated_at").eq("id", contractId).eq("organization_id", organizationId).maybeSingle(),
+    admin
+      .from("rental_charges")
+      .select("id, kind, due_date, period_start, currency, items:rental_charge_items(id, kind, amount, paid_amount, sort_order)")
+      .eq("organization_id", organizationId)
+      .eq("contract_id", contractId)
+      .is("voided_at", null)
+      .in("status", ["pendiente", "parcial"]),
+  ]);
+  if (!contractRow || chErr) return 0;
+  const terminatedAt = (contractRow as { terminated_at: string | null }).terminated_at;
+  type C = Pick<RentalCharge, "id" | "kind" | "due_date" | "period_start" | "currency"> & {
+    items: Pick<RentalChargeItem, "id" | "kind" | "amount" | "paid_amount" | "sort_order">[];
+  };
+  const targets: CreditTarget[] = ((charges ?? []) as C[])
+    .filter((c) => !(terminatedAt && c.kind === "mensual" && c.period_start && c.period_start > terminatedAt))
+    .flatMap((c) =>
+      c.items.map((i) => ({
+        itemId: i.id,
+        chargeId: c.id,
+        dueDate: c.due_date,
+        kind: i.kind,
+        outstanding: round2(Number(i.amount) - Number(i.paid_amount)),
+        sortOrder: i.sort_order,
+        currency: c.currency,
+      })),
+    );
+  const sources = (pays as Pick<RentalPayment, "id" | "unallocated_amount" | "currency">[]).map((p) => ({
+    paymentId: p.id,
+    currency: p.currency,
+    available: Number(p.unallocated_amount),
+  }));
+  const allocations = planCreditAllocations(sources, targets).map((a) => ({ payment_id: a.paymentId, item_id: a.itemId, amount: a.amount }));
   if (!allocations.length) return 0;
   const { data, error: rpcErr } = await admin.rpc("rental_apply_credit", {
     p_organization_id: organizationId,
@@ -658,6 +754,28 @@ export async function applyAvailableCredit(admin: AdminClient, organizationId: s
     return 0;
   }
   return Number((data as { applied?: number } | null)?.applied ?? 0);
+}
+
+/**
+ * Saldo a favor que el inquilino tiene sin imputar (en la moneda del
+ * contrato). Para avisar lo que de verdad quedó a favor después de una
+ * sincronización, que puede haber usado parte en deudas anteriores. null si
+ * no se pudo leer.
+ */
+export async function unallocatedCreditOf(admin: AdminClient, organizationId: string, contractId: string, currency: string): Promise<number | null> {
+  const { data, error } = await admin
+    .from("rental_payments")
+    .select("unallocated_amount")
+    .eq("organization_id", organizationId)
+    .eq("contract_id", contractId)
+    .eq("currency", currency)
+    .is("voided_at", null)
+    .gt("unallocated_amount", 0);
+  if (error) {
+    logRentalsError("unallocatedCreditOf", error);
+    return null;
+  }
+  return round2(((data ?? []) as { unallocated_amount: number }[]).reduce((s, p) => s + Number(p.unallocated_amount), 0));
 }
 
 // ─── Comprobantes esperados ─────────────────────────────────────────────────

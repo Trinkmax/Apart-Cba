@@ -1,4 +1,12 @@
-import { INDEX_META, indexFrequency, isIndexCode, type IndexCode } from "@/lib/rentals/indices";
+import {
+  INDEX_META,
+  indexFrequency,
+  isCoefficientIndex,
+  isIndexCode,
+  lastMissingMonthIn,
+  type IndexCode,
+  type MonthCoverage,
+} from "@/lib/rentals/indices";
 import { addMonthsToMonth, isYmd, monthsBetween } from "@/lib/rentals/ymd";
 import type { RentalAdjustmentMethod } from "@/lib/types/database";
 
@@ -160,16 +168,40 @@ export function adjustmentMethodLine(
   }
 }
 
-/** Cuándo suele salir el dato que falta (para "Esperando el IPC de septiembre…"). */
-export function waitingForIndexText(code: string | null, missingKey: string | null): string {
+/**
+ * Cuándo suele salir el dato que falta (para "Esperando el IPC de septiembre…").
+ * `missingKey` es el dato que falta o, si el que llama no lo sabe, el final
+ * de la ventana (`to_key`). En Casa Propia eso no alcanza: puede faltar un
+ * mes del medio (un hueco) y el final estar cargado. Con `coverage` (lo
+ * cargado, de `IndexSummary`) se nombra el mes que de verdad falta; con
+ * `fromKey`, además, se sabe cuándo ya no falta ninguno.
+ */
+export function waitingForIndexText(
+  code: string | null,
+  missingKey: string | null,
+  opts: { coverage?: MonthCoverage | null; fromKey?: string | null } = {},
+): string {
   if (!code || !isIndexCode(code) || !missingKey || !isYmd(missingKey)) return "Esperando que se publique el índice.";
   const meta = INDEX_META[code as IndexCode];
   if (indexFrequency(code) === "daily") {
     return `Esperando el ${meta.label} del ${shortDate(missingKey)} (el BCRA lo publica unos días antes).`;
   }
+  if (isCoefficientIndex(code)) {
+    // El año siempre: un hueco puede ser de hace meses.
+    if (opts.coverage === undefined) {
+      return `Esperando el coeficiente ${meta.label} de ${monthName(missingKey, true)} (se carga a mano cuando sale).`;
+    }
+    const month = lastMissingMonthIn(opts.fromKey, missingKey, opts.coverage);
+    if (month) return `Esperando el coeficiente ${meta.label} de ${monthName(month, true)} (se carga a mano cuando sale).`;
+    // No falta ninguno: o el ajuste se recalcula en la corrida de la noche (el
+    // índice es de todas las inmobiliarias y al cargarlo sólo se recalcula la
+    // org de quien lo cargó), o lo frena un ajuste anterior. No se promete nada.
+    return opts.fromKey
+      ? `Ya están cargados los coeficientes ${meta.label} que usa este ajuste.`
+      : `Esperando un coeficiente ${meta.label} (se cargan a mano cuando salen).`;
+  }
   const next = monthName(addMonthsToMonth(missingKey, 1));
   if (code === "ipc") return `Esperando el IPC de ${monthName(missingKey)} (el INDEC lo publica a mediados de ${next}).`;
-  if (code === "casa_propia") return `Esperando el coeficiente Casa Propia de ${monthName(missingKey)} (se carga a mano cuando sale).`;
   return `Esperando el ${meta.label} de ${monthName(missingKey)}.`;
 }
 

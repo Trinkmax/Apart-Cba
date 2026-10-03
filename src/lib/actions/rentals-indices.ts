@@ -16,7 +16,9 @@ import {
   type IndexPoint,
 } from "@/lib/rentals/indices";
 import { addDays, addMonthsToMonth, isYmd, monthOf } from "@/lib/rentals/ymd";
+import { todayYmdInTz } from "@/lib/dates";
 import { createAdminClient } from "@/lib/supabase/server";
+import { monthName } from "@/components/rentals/adjustments/adjustment-text";
 import { dbFailure, logRentalsError, rentalsContext, type ActionResult, type RentalsCtx } from "@/lib/rentals/server/access";
 import { resyncContract } from "@/lib/rentals/server/contracts";
 import { loadIndexPoints } from "@/lib/rentals/server/series";
@@ -170,13 +172,18 @@ export async function calculateAdjustment(
   }
 }
 
-/** Contratos de la org cuyo próximo ajuste podría cambiar con un dato nuevo del índice. */
-async function resyncAffected(ctx: RentalsCtx, code?: IndexCode): Promise<number> {
+/**
+ * Contratos de la org cuyo próximo ajuste podría cambiar con un dato nuevo del índice.
+ * `includeCalculated`: cuando se corrige o se borra un valor cargado a mano,
+ * un ajuste "listo para aplicar" puede estar calculado con el dato viejo.
+ */
+async function resyncAffected(ctx: RentalsCtx, code?: IndexCode, opts: { includeCalculated?: boolean } = {}): Promise<number> {
+  const statuses = opts.includeCalculated ? ["programado", "pendiente_indice", "calculado"] : ["programado", "pendiente_indice"];
   let q = ctx.admin
     .from("rental_adjustments")
     .select("contract_id, contract:rental_contracts!inner(status, index_code)")
     .eq("organization_id", ctx.organization.id)
-    .in("status", ["programado", "pendiente_indice"])
+    .in("status", statuses)
     .lte("effective_date", addDays(ctx.today, 45))
     .eq("contract.status", "vigente");
   if (code) q = q.eq("contract.index_code", code);
@@ -251,6 +258,19 @@ export async function saveManualIndexValue(code: string, period: string, value: 
     };
   }
   const key = indexFrequency(c) === "monthly" ? monthOf(parsed.data.period) : parsed.data.period;
+  // Un índice mensual no tiene dato de un mes que todavía no empezó: es un
+  // error de tipeo (2027 por 2026). El mes que se quería cargar sigue
+  // faltando y, cuando la serie llegue hasta ahí, el valor equivocado entraría
+  // en los ajustes de todas las inmobiliarias. El mes se mira en Argentina,
+  // que es donde se publica, no en la zona de cada org.
+  const currentMonth = monthOf(todayYmdInTz());
+  if (indexFrequency(c) === "monthly" && key > currentMonth) {
+    return {
+      ok: false,
+      error: `Todavía no llegó ${monthName(key, true)}: revisá el mes. Se puede cargar hasta ${monthName(currentMonth, true)}.`,
+      field: "period",
+    };
+  }
   const admin = createAdminClient();
   const { data: existing } = await admin
     .from("economic_indices")
@@ -266,7 +286,8 @@ export async function saveManualIndexValue(code: string, period: string, value: 
     .upsert({ index_code: c, period: key, value: parsed.data.value, source: "manual", fetched_at: new Date().toISOString() }, { onConflict: "index_code,period" });
   if (error) return dbFailure("saveManualIndexValue", error, "No se pudo guardar el valor.");
   const r = await rentalsContext("update");
-  if (r.ok) await resyncAffected(r.ctx, c);
+  // Con calculados: si se corrigió un valor ya cargado, el ajuste listo para aplicar quedó viejo.
+  if (r.ok) await resyncAffected(r.ctx, c, { includeCalculated: true });
   revalidatePath("/dashboard/alquileres");
   revalidatePath("/dashboard/alquileres/ajustes");
   return { ok: true, period: key };
@@ -280,6 +301,12 @@ export async function deleteManualIndexValue(code: string, period: string): Prom
   const admin = createAdminClient();
   const { error } = await admin.from("economic_indices").delete().eq("index_code", code).eq("period", period).eq("source", "manual");
   if (error) return dbFailure("deleteManualIndexValue", error, "No se pudo borrar el valor.");
+  // Borrar un valor mal tipeado cambia los ajustes ya mismo: los que lo usaban
+  // vuelven a esperar y los que frenaba (un mes futuro, un hueco) se calculan.
+  // Sin esto quedaban como estaban hasta la corrida de la noche.
+  const r = await rentalsContext("update");
+  if (r.ok) await resyncAffected(r.ctx, code, { includeCalculated: true });
+  revalidatePath("/dashboard/alquileres");
   revalidatePath("/dashboard/alquileres/ajustes");
   return { ok: true };
 }

@@ -236,6 +236,15 @@ function EndCell({ row }: { row: ContractListRow }) {
       </div>
     );
   }
+  // Salida registrada (rescisión notificada o entrega programada): lo que importa es el día que desocupa, no el fin pactado.
+  if ((row.displayState === "rescision_notificada" || row.displayState === "salida_programada") && row.terminatedAt) {
+    return (
+      <div className="min-w-0">
+        <p className="text-xs tabular-nums font-semibold text-amber-700 dark:text-amber-300">{formatDate(row.terminatedAt)}</p>
+        <StatusBadge meta={CONTRACT_STATE_META[row.displayState]} compact className="mt-1" />
+      </div>
+    );
+  }
   const soon = row.displayState === "por_vencer" || row.displayState === "vencido_ocupado";
   return (
     <div className="min-w-0">

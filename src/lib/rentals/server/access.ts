@@ -101,10 +101,16 @@ const RPC_PREFIXES = [
   "SALDO_TRASLADADO",
   "SIN_SALDO",
   "SUMA_DISTINTA",
+  // 068k: al generar una rendición, algo que toma (saldo, cobro, gasto) se anuló o cambió mientras tanto.
+  "RENDICION_DESACTUALIZADA",
+  // 068h: depósito en garantía (marcar cobrado, cerrar, deshacer; y el trigger que frena "despagarlo").
+  "DEPOSITO",
 ];
 
 const CONSTRAINT_MESSAGES: Record<string, string> = {
-  rental_contracts_no_overlap: "Ya hay un contrato vigente para esa propiedad en esas fechas. Finalizá el anterior o cambiá las fechas.",
+  // Respaldo: cada camino arma su mensaje con el contrato que choca. Desde la 068i la
+  // ocupación llega hasta la salida registrada (o no tiene fin mientras se cobra la continuación).
+  rental_contracts_no_overlap: "Ya hay un contrato vigente que ocupa esa propiedad en esas fechas: registrá antes su salida o cambiá las fechas.",
   rental_properties_org_code_key: "Ya hay una propiedad con ese código. Usá uno distinto.",
   rental_property_owners_unique: "Ese propietario ya figura en la propiedad.",
   rental_contract_parties_unique: "Esa persona ya figura en el contrato con ese rol.",

@@ -169,6 +169,7 @@ export function StepFees({ state, set, errors, options }: StepProps) {
   const contractValue = entry?.contractValue ?? null;
   const basis = p ? contractValueBasis(p, state.currency) : null;
   const threshold = options.settings.stamp_tax_exempt_monthly;
+  const currencyWord = state.currency === "USD" ? "dólares" : state.currency;
   const ri = options.settings.vat_condition === "responsable_inscripto";
 
   return (
@@ -261,13 +262,20 @@ export function StepFees({ state, set, errors, options }: StepProps) {
       {stamp && state.stamp_tax_status === "pendiente" && !stamp.manual && (
         stamp.exempt ? (
           <Callout tone="ok">
-            Exento: {basis?.average ?? "el promedio mensual"} ({formatMoney(stamp.averageMonthly, state.currency)}) no supera {formatMoney(threshold, "ARS")}.{" "}
+            Exento: {basis?.average ?? "el promedio mensual"} ({formatMoney(stamp.averageMonthlyArs ?? stamp.averageMonthly, "ARS")}) no supera {formatMoney(threshold, "ARS")}.{" "}
             <button type="button" className="font-medium underline hover:no-underline" onClick={() => set({ stamp_tax_status: "exento" })}>
               Marcar como exento
             </button>
           </Callout>
         ) : (
           <Callout>
+            {stamp.needsRate && (
+              <>
+                Contrato en {currencyWord}: el tope de exención ({formatMoney(threshold, "ARS")} por mes) se compara en pesos, al dólar BNA vendedor del día
+                hábil anterior a la firma, así que no lo damos por exento. Si en pesos no lo supera, elegí «Exento»; si Rentas ya liquidó el sellado, cargá
+                el monto en {currencyWord}.{" "}
+              </>
+            )}
             {formatMoney(stamp.tax, state.currency)}: {options.settings.stamp_tax_rate_pct.toLocaleString("es-AR")} % del valor del contrato ({formatMoney(stamp.base, state.currency)}{basis ? `, ${basis.total}` : ""}). Paga el inquilino el {options.settings.stamp_tax_tenant_share_pct.toLocaleString("es-AR")} %: {formatMoney(stamp.tenantPart, state.currency)}.
           </Callout>
         )

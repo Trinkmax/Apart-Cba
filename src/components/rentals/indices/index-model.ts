@@ -1,4 +1,13 @@
-import { INDEX_META, indexFrequency, seriesFromPoints, type IndexCode, type IndexPoint } from "@/lib/rentals/indices";
+import {
+  INDEX_META,
+  indexFrequency,
+  isCoefficientIndex,
+  monthCoverage,
+  seriesFromPoints,
+  type IndexCode,
+  type IndexPoint,
+  type MonthCoverage,
+} from "@/lib/rentals/indices";
 import { addDays, addMonthsToMonth, diffDays, minYmd, monthOf, monthsBetween } from "@/lib/rentals/ymd";
 
 /**
@@ -39,6 +48,12 @@ export interface IndexSummary {
   /** Variación de cada uno de los últimos 12 meses (para el minigráfico). */
   monthly: MonthlyVariation[];
   freshness: Freshness;
+  /**
+   * Sólo Casa Propia (se carga a mano, mes a mes): primer y último mes
+   * cargados y los huecos del medio. Con eso cada pantalla nombra el mes que
+   * de verdad frena un ajuste (`waitingForIndexText`). null en los demás.
+   */
+  coverage: MonthCoverage | null;
 }
 
 function pct(to: number | undefined, from: number | undefined): number | null {
@@ -68,6 +83,10 @@ export function summarizeIndex(code: IndexCode, points: IndexPoint[], today: str
     publisher: meta.publisher,
     frequency,
     lastPublished: series.lastDate,
+    // Casa Propia se lee entera (loadIndexPoints ignora el rango): la cobertura es la real.
+    coverage: isCoefficientIndex(code)
+      ? monthCoverage(points.filter((p) => Number.isFinite(p.value) && p.value > 0).map((p) => p.date))
+      : null,
   };
   if (!series.lastDate) {
     return { ...base, refDate: null, refValue: null, monthlyPct: null, quarterPct: null, yearlyPct: null, monthly: [], freshness: "empty" };

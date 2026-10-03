@@ -3,8 +3,10 @@ import {
   IMPUTATION_PRIORITY,
   allocatePayment,
   chargeStatusOf,
+  planCreditAllocations,
   sortForImputation,
   type ChargeItemKind,
+  type CreditTarget,
   type OpenItem,
 } from "@/lib/rentals/allocation";
 
@@ -199,5 +201,45 @@ describe("chargeStatusOf", () => {
   it("anulado gana sobre todo lo demás", () => {
     expect(chargeStatusOf({ total: 500000, paid: 500000, dueDate: due, today: due, voided: true })).toBe("anulado");
     expect(chargeStatusOf({ total: 500000, paid: 0, dueDate: due, today: "2026-12-01", voided: true })).toBe("anulado");
+  });
+});
+
+describe("planCreditAllocations (saldo a favor, lo más viejo primero y sin mezclar monedas)", () => {
+  const target = (itemId: string, chargeId: string, dueDate: string, outstanding: number, currency = "ARS", kind: ChargeItemKind = "alquiler"): CreditTarget => ({
+    itemId,
+    chargeId,
+    dueDate,
+    kind,
+    outstanding,
+    currency,
+  });
+
+  it("cada pago paga sólo ítems de su moneda: los dólares no cancelan pesos 1 a 1", () => {
+    const targets = [
+      target("dep", "ingreso", "2026-09-01", 300_000, "ARS", "deposito"),
+      target("oct", "octubre", "2026-10-10", 500, "USD"),
+    ];
+    expect(planCreditAllocations([{ paymentId: "p1", currency: "USD", available: 600 }], targets)).toEqual([{ paymentId: "p1", itemId: "oct", amount: 500 }]);
+  });
+
+  it("varios pagos consumen la misma cola en orden, sin pasarse de lo que se debe", () => {
+    const targets = [target("sep", "septiembre", "2026-09-10", 100), target("oct", "octubre", "2026-10-10", 100)];
+    expect(
+      planCreditAllocations(
+        [
+          { paymentId: "p1", currency: "ARS", available: 150 },
+          { paymentId: "p2", currency: "ARS", available: 80 },
+        ],
+        targets,
+      ),
+    ).toEqual([
+      { paymentId: "p1", itemId: "sep", amount: 100 },
+      { paymentId: "p1", itemId: "oct", amount: 50 },
+      { paymentId: "p2", itemId: "oct", amount: 50 },
+    ]);
+  });
+
+  it("sin deudas en esa moneda el saldo queda a favor", () => {
+    expect(planCreditAllocations([{ paymentId: "p1", currency: "ARS", available: 100 }], [target("x", "c", "2026-10-10", 0)])).toEqual([]);
   });
 });

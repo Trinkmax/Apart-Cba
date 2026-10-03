@@ -54,9 +54,9 @@ export function RentalsModuleToggle({ enabled: initial }: { enabled: boolean }) 
         return;
       }
       setConfirmOff(false);
-      toast.success(next ? "Alquileres activado" : "Alquileres desactivado", {
+      toast.success(next ? "Alquileres tradicionales activado" : "Alquileres tradicionales desactivado", {
         description: next
-          ? "Ya aparece en el menú. Empezá cargando el primer contrato."
+          ? "Ya aparece en el menú como «Tradicionales», dentro de Operación. Empezá cargando el primer contrato."
           : "Se ocultó del menú y se pausaron los links de los inquilinos y la cobranza automática. Los datos quedan guardados.",
       });
       router.refresh();
@@ -85,7 +85,7 @@ export function RentalsModuleToggle({ enabled: initial }: { enabled: boolean }) 
           </div>
           {enabled && !pending && (
             <Link href="/dashboard/alquileres" className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[#0d9488] hover:underline">
-              Ir a Alquileres <ArrowRight size={12} />
+              Ir a Tradicionales <ArrowRight size={12} />
             </Link>
           )}
         </div>
@@ -94,12 +94,12 @@ export function RentalsModuleToggle({ enabled: initial }: { enabled: boolean }) 
       <AlertDialog open={confirmOff} onOpenChange={(open) => !pending && setConfirmOff(open)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>¿Desactivar Alquileres?</AlertDialogTitle>
+            <AlertDialogTitle>¿Desactivar Alquileres tradicionales?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm text-muted-foreground">
                 <p>Mientras esté apagado:</p>
                 <ul className="list-disc space-y-1 pl-5">
-                  <li>Desaparece del menú y nadie del equipo puede cargar cobros, gastos ni rendiciones.</li>
+                  <li>«Tradicionales» desaparece del menú y nadie del equipo puede cargar cobros, gastos ni rendiciones.</li>
                   <li>
                     Los links de los inquilinos dejan de funcionar: les aparece «Este link no funciona».
                     {impact && impact.links > 0 ? ` Hoy hay ${impact.links} ${impact.links === 1 ? "link activo" : "links activos"}.` : ""}

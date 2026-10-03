@@ -1,5 +1,5 @@
 import { round2 } from "@/lib/finance/booking-economics";
-import type { IndexCode, IndexLookup } from "./indices";
+import { lookupWindow, type IndexCode, type IndexLookup } from "./indices";
 import type { AdjustmentWindow } from "./schedule";
 
 /**
@@ -16,6 +16,16 @@ import type { AdjustmentWindow } from "./schedule";
  * piso (el precio no baja salvo que el contrato lo permita) y redondeo. El
  * monto redondeado es el que se cobra y la base del ajuste siguiente.
  */
+
+/**
+ * Con "aplicar automáticamente", un ajuste calculado se aplica recién cuando
+ * faltan como mucho estos días para que rija: alcanza para generar el cargo
+ * del período (se genera hasta 28 días antes) y para avisarle al inquilino con
+ * un mes de anticipación, sin dar por aplicados ajustes de dentro de un año
+ * (los de % fijo o escalonados se conocen desde el primer día). Antes de ese
+ * horizonte un ajuste calculado no pide nada: no cuenta como "para resolver".
+ */
+export const AUTO_APPLY_HORIZON_DAYS = 35;
 
 export type AdjustmentMethod = "indice" | "porcentaje_fijo" | "escalonado" | "manual" | "sin_ajuste";
 
@@ -160,15 +170,12 @@ export function computeAdjustment(
       const fromKey = window.fromMonth ?? window.fromDate;
       const toKey = window.toMonth ?? window.toDate;
       if (!fromKey || !toKey) return { status: "invalid", reason: "La ventana del ajuste no tiene fechas." };
-      const fromValue = series?.get(fromKey);
-      const toValue = series?.get(toKey);
-      const missing = [fromValue === undefined ? fromKey : null, toValue === undefined ? toKey : null].filter(
-        (k): k is string => k !== null,
-      );
-      if (missing.length || fromValue === undefined || toValue === undefined) {
-        return { status: "missing_index", missing };
-      }
-      return finish(base, toValue / fromValue, rules, fromValue, toValue);
+      // En Casa Propia (coeficientes encadenados) las dos puntas tienen que caer
+      // en el mismo tramo sin huecos: un mes faltante antes o después de la
+      // ventana no la frena. En los índices de nivel es get() de cada punta.
+      const pair = lookupWindow(series, fromKey, toKey);
+      if (!pair.ok) return { status: "missing_index", missing: pair.missing };
+      return finish(base, pair.toValue / pair.fromValue, rules, pair.fromValue, pair.toValue);
     }
   }
 }

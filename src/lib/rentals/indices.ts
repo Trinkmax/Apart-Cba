@@ -113,12 +113,38 @@ export interface IndexPoint {
   value: number;
 }
 
+/** Las dos puntas de una ventana de ajuste, o las claves que faltan para calcularla. */
+export type IndexWindowLookup =
+  | { ok: true; fromValue: number; toValue: number }
+  | { ok: false; missing: string[] };
+
 /** Lo único que el motor de ajustes necesita de una serie. */
 export interface IndexLookup {
   /** Valor exacto o el aceptable más cercano; undefined si todavía no se publicó. */
   get(key: string): number | undefined;
   /** Último dato disponible (o null si la serie está vacía). */
   readonly lastDate: string | null;
+  /**
+   * Las dos puntas de una ventana, comparables entre sí. Sólo la tienen las
+   * series en las que leer cada punta con `get()` no alcanza (Casa Propia:
+   * un mes faltante corta la cadena y lo que importa es que las dos puntas
+   * queden del mismo lado del hueco). Se usa a través de `lookupWindow()`.
+   */
+  windowValues?(fromKey: string, toKey: string): IndexWindowLookup;
+}
+
+/**
+ * Las dos puntas de un ajuste, para cualquier serie: lo que usa el motor.
+ * `missing` son las claves sin dato, en orden: en un índice de nivel, la
+ * punta que falta; en Casa Propia, los meses de la ventana sin coeficiente.
+ */
+export function lookupWindow(series: IndexLookup | null | undefined, fromKey: string, toKey: string): IndexWindowLookup {
+  if (series?.windowValues) return series.windowValues(fromKey, toKey);
+  const fromValue = series?.get(fromKey);
+  const toValue = series?.get(toKey);
+  if (fromValue !== undefined && toValue !== undefined) return { ok: true, fromValue, toValue };
+  const missing = [fromValue === undefined ? fromKey : null, toValue === undefined ? toKey : null];
+  return { ok: false, missing: missing.filter((k): k is string => k !== null) };
 }
 
 /**
@@ -168,15 +194,26 @@ export class IndexSeries implements IndexLookup {
  * Así nivel(hasta) ÷ nivel(desde) = producto de los coeficientes de
  * desde+1 … hasta, que es el ajuste, y el punto de partida no importa.
  *
- * Con un mes faltante no se puede encadenar a través de él: se usa sólo el
- * último tramo sin huecos (lo que importa son los ajustes que vienen). Un
- * ajuste que necesita meses de antes del hueco queda "esperando el índice";
- * nunca se saltea un mes en silencio, que daría un aumento menor al real.
+ * Con un mes faltante no se puede encadenar a través de él: la serie queda
+ * partida en tramos sin huecos, cada uno con su propio nivel 1. Una ventana
+ * se calcula si sus dos puntas caen en el mismo tramo (`windowValues()`); si
+ * cruza el hueco queda "esperando el índice" — nunca se saltea un mes en silencio,
+ * que daría un aumento menor al real —, y un hueco fuera de la ventana (antes
+ * o después) no la frena: cargar junio antes que mayo no puede trabar un
+ * ajuste que va de octubre a abril.
+ *
+ * `get()` sigue devolviendo sólo el último tramo (gráfico, resumen de la
+ * tarjeta): dos niveles de tramos distintos no se pueden dividir entre sí.
  */
 export class CoefficientSeries implements IndexLookup {
+  /** Niveles del último tramo sin huecos: lo que devuelve `get()`. */
   private readonly levels = new Map<string, number>();
+  /** Nivel de cada mes dentro de SU tramo (cada uno arranca en 1) y a qué tramo pertenece. */
+  private readonly runLevels = new Map<string, { run: number; level: number }>();
+  /** Meses con coeficiente cargado. */
+  private readonly loaded = new Set<string>();
   readonly lastDate: string | null;
-  /** Primer mes del tramo que se usa (su ancla, nivel 1, es el mes anterior). */
+  /** Primer mes del último tramo (su ancla, nivel 1, es el mes anterior). */
   readonly firstDate: string | null;
 
   constructor(points: IndexPoint[]) {
@@ -191,20 +228,46 @@ export class CoefficientSeries implements IndexLookup {
       this.firstDate = null;
       return;
     }
-    let start = months.length - 1;
-    while (start > 0 && addMonthsToMonth(months[start - 1], 1) === months[start]) start--;
+    let run = -1;
+    let runStart = 0;
     let level = 1;
-    this.levels.set(addMonthsToMonth(months[start], -1), level);
-    for (let i = start; i < months.length; i++) {
+    for (let i = 0; i < months.length; i++) {
+      // Un mes que no sigue al anterior abre un tramo nuevo, anclado en 1 en
+      // el mes de antes (que es el hueco: nunca pertenece a otro tramo).
+      if (i === 0 || addMonthsToMonth(months[i - 1], 1) !== months[i]) {
+        run++;
+        runStart = i;
+        level = 1;
+        this.runLevels.set(addMonthsToMonth(months[i], -1), { run, level });
+      }
       level *= coefs.get(months[i]) as number;
-      this.levels.set(months[i], level);
+      this.runLevels.set(months[i], { run, level });
+      this.loaded.add(months[i]);
     }
-    this.firstDate = months[start];
+    for (const [m, v] of this.runLevels) if (v.run === run) this.levels.set(m, v.level);
+    this.firstDate = months[runStart];
     this.lastDate = months[months.length - 1];
   }
 
   get(key: string): number | undefined {
     return this.levels.get(key);
+  }
+
+  windowValues(fromKey: string, toKey: string): IndexWindowLookup {
+    const from = this.runLevels.get(monthOf(fromKey));
+    const to = this.runLevels.get(monthOf(toKey));
+    if (from && to && from.run === to.run) return { ok: true, fromValue: from.level, toValue: to.level };
+    return { ok: false, missing: this.missingIn(fromKey, toKey) };
+  }
+
+  /** Meses de la ventana (desde+1 … hasta) sin coeficiente cargado. */
+  private missingIn(fromKey: string, toKey: string): string[] {
+    const to = monthOf(toKey);
+    const out: string[] = [];
+    for (let m = addMonthsToMonth(fromKey, 1), i = 0; m <= to && i < 600; m = addMonthsToMonth(m, 1), i++) {
+      if (!this.loaded.has(m)) out.push(m);
+    }
+    return out.length ? out : [to];
   }
 }
 
@@ -223,4 +286,47 @@ export function missingMonths(months: string[]): string[] {
     if (!have.has(m)) out.push(m);
   }
   return out;
+}
+
+/**
+ * Qué meses hay cargados de un índice que se carga mes a mes (Casa Propia):
+ * el primero, el último y los que faltan en el medio. Es chico y viaja a las
+ * pantallas, que así nombran el mes que frena un ajuste sin leer la serie.
+ */
+export interface MonthCoverage {
+  first: string;
+  last: string;
+  gaps: string[];
+}
+
+export function monthCoverage(keys: string[]): MonthCoverage | null {
+  const months = [...new Set(keys.map(monthOf))].sort();
+  if (!months.length) return null;
+  return { first: months[0], last: months[months.length - 1], gaps: missingMonths(months) };
+}
+
+/**
+ * El mes sin coeficiente más reciente de una ventana (desde+1 … hasta): el
+ * que hay que nombrar en un ajuste que espera Casa Propia. La ventana se
+ * calcula por tramos (`windowValues()`), así que si espera es porque le
+ * falta un mes adentro: `toKey` si todavía no se cargó, o un hueco del medio
+ * — nunca un mes que ya está. Sin `fromKey` no se miran los meses anteriores
+ * al primero cargado (no se sabe si la ventana los usa).
+ * null = a la ventana no le falta ningún mes de los que se ven. Con `fromKey`
+ * eso quiere decir que el ajuste ya se puede calcular y lo frena otra cosa:
+ * la corrida de la noche (el índice es de todas las inmobiliarias y al
+ * cargarlo sólo se recalcula la de quien lo cargó) o un ajuste anterior.
+ */
+export function lastMissingMonthIn(
+  fromKey: string | null | undefined,
+  toKey: string,
+  coverage: MonthCoverage | null | undefined,
+): string | null {
+  const to = monthOf(toKey);
+  const from = fromKey ? monthOf(fromKey) : null;
+  if (!coverage || to > coverage.last || to < coverage.first) return to;
+  const inWindow = coverage.gaps.filter((g) => g <= to && (from === null || g > from)).sort();
+  if (inWindow.length) return inWindow[inWindow.length - 1];
+  const beforeFirst = addMonthsToMonth(coverage.first, -1);
+  return from !== null && from < beforeFirst ? beforeFirst : null;
 }

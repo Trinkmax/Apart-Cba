@@ -7,6 +7,7 @@ import { adjustmentCount } from "@/lib/rentals/schedule";
 import { addDays } from "@/lib/rentals/ymd";
 import { ymdInTz } from "@/lib/dates";
 import { dbFailure, logRentalsError, rentalsContext, type ActionResult, type RentalsCtx } from "@/lib/rentals/server/access";
+import { AUTO_APPLY_HORIZON_DAYS } from "@/lib/rentals/adjustments";
 import { logRentalEvent } from "@/lib/rentals/server/contract-sync";
 import { resyncContract } from "@/lib/rentals/server/contracts";
 import { revalidateRentals } from "@/lib/rentals/server/revalidate";
@@ -131,12 +132,17 @@ export async function listAdjustments(opts: { window: AdjustmentWindowKey }): Pr
   const { today } = ctx;
   const window: AdjustmentWindowKey = ["proximos", "pendientes", "aplicados"].includes(opts?.window) ? opts.window : "proximos";
   const in60 = addDays(today, 60);
+  // "Para resolver" = lo que ya está por regir. Un ajuste de % fijo o
+  // escalonado se calcula apenas se carga el contrato (hasta años antes) y se
+  // aplica solo cuando faltan AUTO_APPLY_HORIZON_DAYS: antes de eso no hay nada
+  // que hacer, y listarlo como pendiente era ruido.
+  const horizon = addDays(today, AUTO_APPLY_HORIZON_DAYS);
 
   let q = baseQuery(ctx, ADJ_SELECT);
   if (window === "proximos") {
     q = q.gte("effective_date", today).lte("effective_date", in60).neq("status", "omitido").eq("contract.status", "vigente").order("effective_date", { ascending: true });
   } else if (window === "pendientes") {
-    q = q.in("status", PENDING).eq("contract.status", "vigente").order("effective_date", { ascending: true });
+    q = q.in("status", PENDING).lte("effective_date", horizon).eq("contract.status", "vigente").order("effective_date", { ascending: true });
   } else {
     q = q.in("status", ["aplicado", "omitido"]).neq("contract.status", "borrador").gte("effective_date", addDays(today, -180)).order("effective_date", { ascending: false });
   }
@@ -145,7 +151,7 @@ export async function listAdjustments(opts: { window: AdjustmentWindowKey }): Pr
   const [list, proximos, pendientes, sinAviso] = await Promise.all([
     q.limit(200),
     baseQuery(ctx, lite, head).gte("effective_date", today).lte("effective_date", in60).neq("status", "omitido").eq("contract.status", "vigente"),
-    baseQuery(ctx, lite, head).in("status", PENDING).eq("contract.status", "vigente"),
+    baseQuery(ctx, lite, head).in("status", PENDING).lte("effective_date", horizon).eq("contract.status", "vigente"),
     baseQuery(ctx, lite, head)
       .eq("status", "aplicado")
       .is("notified_at", null)
@@ -178,13 +184,13 @@ export interface ContractAdjustmentsSummary {
 
 /** Todos los ajustes de UN contrato (historial + próximos) para su pestaña "Ajustes". */
 export async function listContractAdjustments(contractId: string): Promise<
-  ActionResult<{ contract: ContractAdjustmentsSummary; items: AdjustmentView[]; today: string }>
+  ActionResult<{ contract: ContractAdjustmentsSummary; items: AdjustmentView[]; today: string; autoApply: boolean }>
 > {
   const r = await rentalsContext("view");
   if (!r.ok) return r;
   const { ctx } = r;
   if (!z.string().uuid().safeParse(contractId).success) return { ok: false, error: "Contrato inválido." };
-  const [contractRes, adjRes] = await Promise.all([
+  const [contractRes, adjRes, settingsRes] = await Promise.all([
     ctx.admin
       .from("rental_contracts")
       .select("id, status, adjustment_method, index_code, adjustment_every_months, index_lag_months, fixed_pct, current_rent, initial_rent, currency, start_date")
@@ -192,6 +198,7 @@ export async function listContractAdjustments(contractId: string): Promise<
       .eq("id", contractId)
       .maybeSingle(),
     baseQuery(ctx, ADJ_SELECT).eq("contract_id", contractId).order("sequence", { ascending: true }),
+    ctx.admin.from("rental_settings").select("auto_apply_adjustments").eq("organization_id", ctx.organization.id).maybeSingle(),
   ]);
   if (contractRes.error) return dbFailure("listContractAdjustments", contractRes.error, "No se pudo leer el contrato.");
   if (!contractRes.data) return { ok: false, error: "No encontramos el contrato." };
@@ -203,6 +210,8 @@ export async function listContractAdjustments(contractId: string): Promise<
   return {
     ok: true,
     today: ctx.today,
+    // Sin fila de configuración rige el default (encendido), igual que el cron.
+    autoApply: (settingsRes.data as { auto_apply_adjustments: boolean } | null)?.auto_apply_adjustments ?? true,
     contract: {
       id: c.id,
       status: c.status,

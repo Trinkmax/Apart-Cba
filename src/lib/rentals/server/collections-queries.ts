@@ -18,6 +18,7 @@ import {
   type ChargeDisplayState,
 } from "@/lib/rentals/labels";
 import { buildSchedule } from "@/lib/rentals/schedule";
+import { chargingSchedule } from "@/lib/rentals/plan";
 import { addDays, monthOf } from "@/lib/rentals/ymd";
 import { waivedAmountOf } from "@/lib/rentals/late-fees";
 import {
@@ -32,6 +33,7 @@ import {
 import type { RentalReceiptData } from "@/lib/pdf/rental-receipt-pdf";
 import { getRentalSettings, portalPathOf } from "./contracts";
 import { logRentalsError, type AdminClient } from "./access";
+import { loadContinuationBilled, withContinuationFlags } from "./continuation";
 
 /**
  * Lecturas de Cobranzas (tablero del mes, cuenta corriente, datos del recibo,
@@ -214,7 +216,10 @@ type BoardContract = Pick<
   | "id" | "number" | "property_id" | "status" | "currency" | "collector" | "start_date" | "duration_months"
   | "adjustment_every_months" | "payment_window_days" | "billing_starts_on" | "terminated_at"
   | "late_fee_type" | "late_fee_value" | "expensas_mode"
->;
+> & {
+  /** 068f: se lee aparte y tolerante (withContinuationFlags), no en BOARD_CONTRACT_COLS. */
+  continuation_billing?: boolean;
+};
 
 const BOARD_CONTRACT_COLS =
   "id, number, property_id, status, currency, collector, start_date, duration_months, adjustment_every_months, payment_window_days, billing_starts_on, terminated_at, late_fee_type, late_fee_value, expensas_mode";
@@ -238,12 +243,14 @@ const BOARD_CHARGE_COLS = "id, contract_id, kind, label, due_date, subtotal, pai
 
 /** Período del cronograma que arranca dentro del mes (o null si no hay / no se cobra). */
 function periodStartingIn(c: BoardContract, month: string, end: string) {
-  const schedule = buildSchedule({
+  const base = buildSchedule({
     startDate: c.start_date,
     durationMonths: c.duration_months,
     adjustmentEveryMonths: c.adjustment_every_months,
     paymentWindowDays: c.payment_window_days,
   });
+  // Los meses de continuación (art. 1218) se facturan sólo si una persona lo encendió: mismo criterio que ensureContractCharges.
+  const schedule = chargingSchedule(base, c, end);
   const p = schedule.find((s) => s.start >= month && s.start <= end);
   if (!p) return null;
   const billingFrom = c.billing_starts_on ?? c.start_date;
@@ -291,7 +298,7 @@ export async function loadCollectionsBoard(
   const end = monthEnd(month);
   const monthFilter = `and(kind.eq.mensual,period_start.gte.${month},period_start.lte.${end}),and(kind.neq.mensual,due_date.gte.${month},due_date.lte.${end})`;
   const prevFilter = `and(kind.eq.mensual,period_start.lt.${month}),and(kind.neq.mensual,due_date.lt.${month})`;
-  const [monthRes, prevRes, vigRes, settings] = await Promise.all([
+  const [monthRes, prevRes, vigRes, settings, continuationOn] = await Promise.all([
     admin.from("rental_charges").select(BOARD_CHARGE_COLS).eq("organization_id", orgId).is("voided_at", null).or(monthFilter),
     admin
       .from("rental_charges")
@@ -302,6 +309,7 @@ export async function loadCollectionsBoard(
       .or(prevFilter),
     admin.from("rental_contracts").select(BOARD_CONTRACT_COLS).eq("organization_id", orgId).eq("status", "vigente"),
     getRentalSettings(admin, orgId),
+    loadContinuationBilled(admin, orgId),
   ]);
   const failed = !!(monthRes.error || prevRes.error || vigRes.error);
   if (monthRes.error) logRentalsError("collections:board:month", monthRes.error);
@@ -310,7 +318,7 @@ export async function loadCollectionsBoard(
 
   const monthCharges = (monthRes.data ?? []) as BoardChargeRow[];
   const prevCharges = ((prevRes.data ?? []) as BoardChargeRow[]).filter((c) => Number(c.subtotal) - Number(c.paid_amount) > 0.004);
-  const vig = (vigRes.data ?? []) as BoardContract[];
+  const vig = ((vigRes.data ?? []) as BoardContract[]).map((c) => ({ ...c, continuation_billing: continuationOn.has(c.id) }));
   const contracts = new Map<string, BoardContract>(vig.map((c) => [c.id, c]));
   const otherIds = [...new Set([...monthCharges, ...prevCharges].map((c) => c.contract_id))].filter((id) => !contracts.has(id));
   if (otherIds.length) {
@@ -513,6 +521,8 @@ export interface ContractLedger {
     number: number;
     currency: string;
     collector: RentalMoneyOwner;
+    /** Quién guarda el depósito según el contrato (un renglón de depósito va para él). */
+    depositHolder: RentalMoneyOwner;
     status: RentalContract["status"];
     address: string;
     tenantName: string;
@@ -605,7 +615,7 @@ export async function loadContractLedger(
   const [cRes, chRes, payRes] = await Promise.all([
     admin
       .from("rental_contracts")
-      .select("id, number, currency, collector, status, property_id, late_fee_type, late_fee_value")
+      .select("id, number, currency, collector, status, property_id, late_fee_type, late_fee_value, deposit_holder")
       .eq("id", contractId)
       .eq("organization_id", orgId)
       .maybeSingle(),
@@ -628,7 +638,7 @@ export async function loadContractLedger(
   ]);
   if (chRes.error) logRentalsError("collections:ledger:charges", chRes.error);
   if (payRes.error) logRentalsError("collections:ledger:payments", payRes.error);
-  const c = cRes.data as (Pick<RentalContract, "id" | "number" | "currency" | "collector" | "status" | "property_id" | "late_fee_type" | "late_fee_value">) | null;
+  const c = cRes.data as (Pick<RentalContract, "id" | "number" | "currency" | "collector" | "status" | "property_id" | "late_fee_type" | "late_fee_value" | "deposit_holder">) | null;
   if (!c) return null;
   const chargeRows = (chRes.data ?? []) as unknown as LedgerChargeRow[];
   const payRows = (payRes.data ?? []) as unknown as LedgerPaymentRow[];
@@ -724,6 +734,7 @@ export async function loadContractLedger(
       number: c.number,
       currency: c.currency,
       collector: c.collector,
+      depositHolder: c.deposit_holder,
       status: c.status,
       address: addressOf(props.get(c.property_id)),
       tenantName: tenant?.name ?? "Sin inquilino",
@@ -1023,7 +1034,7 @@ export async function loadExpensasGrid(admin: AdminClient, orgId: string, month:
     .eq("expensas_mode", "cobra_inmobiliaria")
     .order("number", { ascending: true });
   if (error) logRentalsError("collections:expensas:contracts", error);
-  const contracts = (cData ?? []) as BoardContract[];
+  const contracts = await withContinuationFlags(admin, orgId, (cData ?? []) as BoardContract[]);
   if (!contracts.length) return [];
   const ids = contracts.map((c) => c.id);
   const end = monthEnd(month);

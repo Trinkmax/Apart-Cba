@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { RENTALS_ACCENT } from "@/components/rentals/ui";
 import { formatDate, getInitials } from "@/lib/format";
 import { GUARANTEE_TYPE_LABEL } from "@/lib/rentals/labels";
+import { isValidConsent } from "@/lib/rentals/renewal";
 import { toWhatsappDigits } from "@/lib/marketplace/staff-helpers";
 import { termGroups, type ContractTerms, type TermGroup } from "./contract-terms";
 import type { ContractDetailData, ContractPartyView } from "./types";
@@ -65,10 +66,12 @@ function ContactLinks({ phone, email }: { phone: string | null; email: string | 
   );
 }
 
-function PartyCard({ p }: { p: ContractPartyView }) {
+/** `renewal` (con `today`): el contrato renueva a otro, así que cada garante tiene que haberlo firmado (art. 1225 CCyC). */
+function PartyCard({ p, renewal = false, today = "" }: { p: ContractPartyView; renewal?: boolean; today?: string }) {
   const guarantor = p.role === "garante";
+  const unsigned = guarantor && renewal && !isValidConsent(p.consentAt, today);
   return (
-    <div className="rounded-xl border bg-card p-3.5 min-w-0">
+    <div className={unsigned ? "rounded-xl border border-amber-500/50 bg-card p-3.5 min-w-0" : "rounded-xl border bg-card p-3.5 min-w-0"}>
       <div className="flex items-start gap-3">
         <span
           className="size-10 rounded-full flex items-center justify-center text-xs font-semibold shrink-0"
@@ -92,7 +95,16 @@ function PartyCard({ p }: { p: ContractPartyView }) {
             {p.docLabel ? ` · ${p.docLabel}` : ""}
           </p>
           {guarantor && p.guaranteeDetail && <p className="text-xs mt-1 leading-snug">{p.guaranteeDetail}</p>}
-          {guarantor && p.consentAt && <p className="text-[11px] text-muted-foreground mt-1">Conformidad para renovar: {formatDate(p.consentAt)}</p>}
+          {guarantor && p.consentAt && !unsigned && (
+            <p className="text-[11px] text-muted-foreground mt-1">
+              {renewal ? "Firmó la renovación el" : "Conformidad para renovar:"} {formatDate(p.consentAt)}
+            </p>
+          )}
+          {unsigned && (
+            <p className="text-[11px] text-amber-800 dark:text-amber-200 mt-1 leading-snug">
+              Falta que firme la renovación (art. 1225 CCyC): hasta entonces no garantiza este contrato.
+            </p>
+          )}
           <ContactLinks phone={p.phone} email={p.email} />
         </div>
       </div>
@@ -131,7 +143,7 @@ export function ContractOverview({ detail }: { detail: ContractDetailData }) {
             <ShieldCheck size={13} /> Garantías
           </h3>
           {guarantors.length ? (
-            guarantors.map((p) => <PartyCard key={`${p.personId}-g`} p={p} />)
+            guarantors.map((p) => <PartyCard key={`${p.personId}-g`} p={p} renewal={Boolean(detail.renewedFrom)} today={detail.today} />)
           ) : (
             <p className="text-xs text-muted-foreground rounded-lg border border-dashed px-3 py-2.5">Sin garantes cargados.</p>
           )}

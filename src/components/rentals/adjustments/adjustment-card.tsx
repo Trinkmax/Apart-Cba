@@ -2,8 +2,9 @@ import Link from "next/link";
 import { ArrowRight, BellRing, CheckCircle2, ChevronDown, Clock3, PencilLine } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { INDEX_META, isCoefficientIndex, isIndexCode } from "@/lib/rentals/indices";
-import { addMonthsToMonth } from "@/lib/rentals/ymd";
+import { INDEX_META, isCoefficientIndex, isIndexCode, type MonthCoverage } from "@/lib/rentals/indices";
+import { AUTO_APPLY_HORIZON_DAYS } from "@/lib/rentals/adjustments";
+import { addDays, addMonthsToMonth } from "@/lib/rentals/ymd";
 import { ADJUSTMENT_STATUS_META, formatContractNumber } from "@/lib/rentals/labels";
 import { DateTile, Money, RENTALS_ACCENT, StatusBadge } from "@/components/rentals/ui";
 import {
@@ -91,14 +92,22 @@ export function AdjustmentCard({
   today,
   canEdit,
   showContract = true,
+  autoApply,
+  coverage,
 }: {
   adj: AdjustmentView;
   today: string;
   canEdit: boolean;
   /** false dentro de la ficha del contrato (ya se sabe de qué contrato es). */
   showContract?: boolean;
+  /** "Aplicar ajustes automáticamente" de la org: si está, un ajuste lejano se aplica solo. */
+  autoApply?: boolean;
+  /** Casa Propia: lo cargado (IndexSummary.coverage) para nombrar el mes que de verdad falta; sin esto se nombra el final de la ventana. */
+  coverage?: MonthCoverage | null;
 }) {
   const meta = ADJUSTMENT_STATUS_META[adj.status];
+  // Calculado y lejos de regir con auto-aplicación: se aplica solo, nada que hacer.
+  const scheduled = adj.status === "calculado" && !!autoApply && adj.effectiveDate > addDays(today, AUTO_APPLY_HORIZON_DAYS);
   const amount = newAmountOf(adj);
   const variation = effectiveVariation(adj);
   const overridden = isOverridden(adj);
@@ -165,12 +174,14 @@ export function AdjustmentCard({
         {(adj.status === "pendiente_indice" || adj.status === "programado") && adj.method === "indice" && amount == null && (
           <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
             <Clock3 size={13} className="mt-px shrink-0" />
-            {waitingForIndexText(adj.indexCode, adj.toKey)}
+            {waitingForIndexText(adj.indexCode, adj.toKey, { coverage, fromKey: adj.fromKey })}
           </p>
         )}
         {adj.status === "calculado" && (
           <p className="text-xs text-blue-700 dark:text-blue-300">
-            Ya está calculado. Aplicalo para que los cargos salgan con el monto nuevo.
+            {scheduled
+              ? `Ya está calculado: se aplica solo el ${shortDate(addDays(adj.effectiveDate, -AUTO_APPLY_HORIZON_DAYS))}, con tiempo para avisarle al inquilino. No hace falta hacer nada.`
+              : "Ya está calculado. Aplicalo para que los cargos salgan con el monto nuevo."}
           </p>
         )}
         {overridden && (
@@ -203,7 +214,7 @@ export function AdjustmentCard({
 
       {canEdit && Object.values(adjustmentActions(adj)).some(Boolean) && (
         <div className="pl-0 sm:pl-[3.75rem]">
-          <AdjustmentActions adj={adj} today={today} canEdit={canEdit} />
+          <AdjustmentActions adj={adj} today={today} canEdit={canEdit} scheduled={scheduled} />
         </div>
       )}
     </Card>

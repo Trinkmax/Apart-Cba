@@ -4,10 +4,12 @@ import { Card } from "@/components/ui/card";
 import { Money, PeriodPill } from "@/components/rentals/ui";
 import { cn } from "@/lib/utils";
 import { formatDate, formatMoney } from "@/lib/format";
-import { ADJUSTMENT_STATUS_META, DEPOSIT_STATUS_LABEL, cyclePositionLabel } from "@/lib/rentals/labels";
+import { ADJUSTMENT_STATUS_META, cyclePositionLabel } from "@/lib/rentals/labels";
+import { depositStatusHint } from "@/lib/rentals/deposit";
 import { INDEX_META, isIndexCode } from "@/lib/rentals/indices";
 import { diffDays } from "@/lib/rentals/ymd";
 import { adjustmentSummary, pctLabel } from "./adjustment-view";
+import type { RentalMoneyOwner } from "@/lib/types/database";
 import type { ContractDetailData } from "./types";
 
 /** Las 6 tarjetas de la ficha: alquiler, próximo ajuste, saldo, próximo vencimiento, depósito y seguro. */
@@ -49,7 +51,14 @@ function inDays(days: number): string {
   return days > 0 ? `en ${days} días` : `hace ${-days} días`;
 }
 
-export function ContractSummaryCards({ detail }: { detail: ContractDetailData }) {
+export function ContractSummaryCards({
+  detail,
+  depositHeldBy,
+}: {
+  detail: ContractDetailData;
+  /** Quién tiene la plata del depósito de verdad (loadDepositFlags().heldBy). */
+  depositHeldBy?: RentalMoneyOwner | null;
+}) {
   const { contract: c, today, balance } = detail;
   // Un ajuste que ya rige y todavía no tiene monto (o falta confirmarlo) pesa más que el próximo.
   const pendingNow = detail.adjustments.find(
@@ -161,7 +170,9 @@ export function ContractSummaryCards({ detail }: { detail: ContractDetailData })
       <SummaryCard
         icon={PiggyBank}
         label="Depósito"
-        hint={c.deposit_amount > 0 ? `${DEPOSIT_STATUS_LABEL[c.deposit_status]} · lo guarda ${c.deposit_holder === "propietario" ? "el propietario" : "la inmobiliaria"}` : "El contrato no tiene depósito"}
+        // Terminado con el depósito todavía en garantía: falta devolverlo, aplicarlo o pasarlo a la renovación.
+        tone={c.deposit_amount > 0 && c.deposit_status === "retenido" && (c.status === "finalizado" || c.status === "rescindido") ? "warn" : undefined}
+        hint={depositStatusHint(c, depositHeldBy)}
       >
         {c.deposit_amount > 0 ? <Money amount={c.deposit_amount} currency={c.deposit_currency || c.currency} /> : <span className="text-muted-foreground text-base">Sin depósito</span>}
       </SummaryCard>

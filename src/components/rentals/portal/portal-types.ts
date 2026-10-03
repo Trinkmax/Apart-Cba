@@ -105,6 +105,8 @@ export interface TenantPortalView {
     statusLabel: string;
     startDate: string;
     endDate: string;
+    /** Día que desocupa si hay una salida registrada (rescisión notificada o entrega programada). */
+    moveOutDate: string | null;
     currency: string;
     currentRent: number;
     /** "Se actualiza cada 3 meses por IPC". */

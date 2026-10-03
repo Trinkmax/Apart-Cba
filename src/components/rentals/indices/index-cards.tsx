@@ -48,6 +48,13 @@ export function MonthlyBars({ data, className }: { data: MonthlyVariation[]; cla
 
 function freshnessText(s: IndexSummary): string {
   if (s.freshness === "empty") return s.code === "casa_propia" ? "Se carga a mano cuando sale" : "Sin datos todavía";
+  // Casa Propia: un mes salteado frena los ajustes que lo cruzan, en todas las
+  // inmobiliarias. Va antes que "Próximo": es lo primero que hay que cargar.
+  const gaps = s.coverage?.gaps ?? [];
+  if (gaps.length) {
+    const more = gaps.length - 1;
+    return `Falta cargar ${monthName(gaps[0], true)}${more ? ` y ${more} ${more === 1 ? "mes" : "meses"} más` : ""}`;
+  }
   if (s.frequency === "daily") {
     return s.lastPublished && s.refDate && s.lastPublished > s.refDate
       ? `Publicado hasta el ${shortDate(s.lastPublished)}`
@@ -60,7 +67,8 @@ function freshnessText(s: IndexSummary): string {
 }
 
 export function IndexCard({ s, inUse, compact }: { s: IndexSummary; inUse?: boolean; compact?: boolean }) {
-  const dot = s.freshness === "ok" ? "bg-emerald-500" : s.freshness === "late" ? "bg-amber-500" : "bg-muted-foreground/40";
+  const dot =
+    s.coverage?.gaps.length || s.freshness === "late" ? "bg-amber-500" : s.freshness === "ok" ? "bg-emerald-500" : "bg-muted-foreground/40";
   const headline = s.monthlyPct;
   return (
     <Card className={cn("gap-0 p-3.5 sm:p-4 min-w-0", s.freshness === "empty" && "border-dashed")}>

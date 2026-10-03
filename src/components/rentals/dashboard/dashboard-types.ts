@@ -43,6 +43,7 @@ export interface UpcomingAdjustmentRow {
   currency: string;
   indexCode: string | null;
   toKey: string | null;
+  fromKey: string | null;
 }
 
 export interface ExpiringContractRow {

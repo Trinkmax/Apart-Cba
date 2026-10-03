@@ -12,9 +12,11 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatDate, formatMoney, parseAmountInput } from "@/lib/format";
 import { EARLY_TERMINATION_LABEL } from "@/lib/rentals/labels";
+import { continuationGap } from "@/lib/rentals/exit";
 import { addDays, minYmd } from "@/lib/rentals/ymd";
 import type { RentalEarlyTerminationRule } from "@/lib/types/database";
 import { previewTermination, rescindRentalContract } from "@/lib/actions/rentals-contracts";
+import { ContinuationGapNotice } from "./lifecycle-dialogs";
 import { editableNumber } from "./wizard-state";
 
 /**
@@ -34,6 +36,7 @@ export function RescindContractDialog({
   endDate,
   currency,
   rule: contractRule,
+  continuationBilling = false,
 }: {
   contractId: string;
   open: boolean;
@@ -42,6 +45,8 @@ export function RescindContractDialog({
   endDate: string;
   currency: string;
   rule: RentalEarlyTerminationRule;
+  /** Ya cobra los meses de continuación (art. 1218). */
+  continuationBilling?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -55,7 +60,10 @@ export function RescindContractDialog({
   const [charge, setCharge] = useState(true);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Vencido sin cobrar la continuación: por defecto se cobran los meses hasta que desocupa (los sigue debiendo).
+  const [billContinuation, setBillContinuation] = useState(true);
   const touched = useRef(false);
+  const gap = Boolean(moveOutDate) && continuationGap({ status: "vigente", end_date: endDate, continuation_billing: continuationBilling }, moveOutDate, today);
 
   useEffect(() => {
     if (!open || !noticeDate || !moveOutDate) return;
@@ -100,6 +108,7 @@ export function RescindContractDialog({
         reason: reason.trim() || "Rescisión anticipada del inquilino",
         penaltyAmount,
         chargePenalty: charge && penaltyAmount > 0,
+        continuationBilling: gap && billContinuation,
       });
       if (!res.ok) {
         toast.error("No se pudo rescindir", { description: res.error });
@@ -145,9 +154,12 @@ export function RescindContractDialog({
           </div>
           {moveOutDate > today && (
             <p className="text-xs text-muted-foreground -mt-2">
-              Hasta que desocupe, el contrato sigue vigente y se le siguen cobrando los alquileres (art. 1221 CCyC). Ese día se cierra solo.
+              {gap && !billContinuation
+                ? "Hasta que desocupe, el contrato sigue vigente, pero sin cobrar los meses desde el vencimiento. Ese día se cierra solo."
+                : "Hasta que desocupe, el contrato sigue vigente y se le siguen cobrando los alquileres (art. 1221 CCyC). Ese día se cierra solo."}
             </p>
           )}
+          {gap && <ContinuationGapNotice endDate={endDate} checked={billContinuation} onCheckedChange={setBillContinuation} until="hasta que desocupe" />}
           <div className="space-y-1.5">
             <Label>Indemnización según</Label>
             <Select value={rule} onValueChange={(v) => setRule(v as RentalEarlyTerminationRule)}>

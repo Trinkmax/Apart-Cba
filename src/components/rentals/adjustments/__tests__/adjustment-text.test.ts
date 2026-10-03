@@ -125,4 +125,23 @@ describe("aviso al inquilino", () => {
     expect(waitingForIndexText("icl", "2026-12-01")).toContain("ICL del 01/12/2026");
     expect(waitingForIndexText(null, null)).toBe("Esperando que se publique el índice.");
   });
+
+  it("Casa Propia nombra el mes que de verdad falta, no un mes que ya está cargado", () => {
+    // Cargado nov-25 … abr-26 salvo enero (un hueco).
+    const coverage = { first: "2025-11-01", last: "2026-04-01", gaps: ["2026-01-01"] };
+    // Sin lo cargado, como antes: el final de la ventana (ahora con año).
+    expect(waitingForIndexText("casa_propia", "2026-04-01")).toBe("Esperando el coeficiente Casa Propia de abril de 2026 (se carga a mano cuando sale).");
+    // Abril está: lo que falta es el hueco de enero.
+    expect(waitingForIndexText("casa_propia", "2026-04-01", { coverage, fromKey: "2025-10-01" })).toBe(
+      "Esperando el coeficiente Casa Propia de enero de 2026 (se carga a mano cuando sale).",
+    );
+    // Todavía no salió junio.
+    expect(waitingForIndexText("casa_propia", "2026-06-01", { coverage, fromKey: "2026-02-01" })).toContain("de junio de 2026");
+    // A la ventana feb → abr no le falta nada.
+    expect(waitingForIndexText("casa_propia", "2026-04-01", { coverage, fromKey: "2026-02-01" })).toBe(
+      "Ya están cargados los coeficientes Casa Propia que usa este ajuste.",
+    );
+    // Sin nada cargado falta el final de la ventana.
+    expect(waitingForIndexText("casa_propia", "2026-04-01", { coverage: null })).toContain("de abril de 2026");
+  });
 });

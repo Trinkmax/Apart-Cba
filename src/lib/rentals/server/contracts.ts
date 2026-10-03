@@ -2,12 +2,24 @@ import "server-only";
 import { z } from "zod";
 import { round2 } from "@/lib/finance/booking-economics";
 import { formatMoney } from "@/lib/format";
-import type { RentalContract, RentalSettings } from "@/lib/types/database";
+import type { RentalChargeItem, RentalContract, RentalSettings } from "@/lib/types/database";
+import { isEngineItem, monthIsBillable, rentDiscountOf } from "@/lib/rentals/charges";
+import { depositItemPayee } from "@/lib/rentals/deposit";
 import { INDEX_CODES, type IndexLookup } from "@/lib/rentals/indices";
 import { formatContractNumber } from "@/lib/rentals/labels";
 import { deriveRentalToken, hashRentalToken, tenantPortalPath } from "@/lib/rentals/link-token";
-import { guarantorConsentError, joinNamesEs, planGuarantorConsents, renewalLegalPatch, type GuarantorConsent } from "@/lib/rentals/renewal";
-import { contractEndDate } from "@/lib/rentals/schedule";
+import { guarantorConsentError, isValidConsent, joinNamesEs, planGuarantorConsents, renewalLegalPatch, type GuarantorConsent } from "@/lib/rentals/renewal";
+import { chargingSchedule } from "@/lib/rentals/plan";
+import { buildSchedule, contractEndDate } from "@/lib/rentals/schedule";
+import {
+  continuationGap,
+  findOccupancyConflict,
+  isRenewalHandover,
+  occupancyEnd,
+  planRenewalCut,
+  rangesOverlap,
+  type OccupancyInput,
+} from "@/lib/rentals/exit";
 import { addDays, isYmd, maxYmd } from "@/lib/rentals/ymd";
 import { loadSeriesForContract } from "./series";
 import {
@@ -16,6 +28,7 @@ import {
   dropStaleDifferences,
   logRentalEvent,
   syncContract,
+  unallocatedCreditOf,
   voidContractCharges,
   type ContractSyncSummary,
   type VoidChargesResult,
@@ -367,8 +380,35 @@ export async function updateContract(ctx: RentalsCtx, contractId: string, input:
   }
   const refErr = await verifyRefs(ctx, v);
   if (refErr) return { ok: false, error: refErr };
+  // Una renovación vigente sólo tiene garantes que la firmaron (art. 1225 CCyC): la activación ya lo exige.
+  if (
+    contract.status === "vigente" &&
+    contract.renewed_from_id &&
+    v.parties.some((p) => p.role === "garante" && !isValidConsent(p.guarantor_consent_at, ctx.today))
+  ) {
+    return {
+      ok: false,
+      error: "En una renovación vigente cada garante tiene que tener la fecha en que firmó la renovación (art. 1225 CCyC): cargala o sacalo del contrato.",
+      field: "parties",
+    };
+  }
 
   const cols = contractColumns(v);
+  // Depósito: sacarlo (monto 0) cuando ya se cobró dejaría plata en garantía sin
+  // registro; volver a ponerlo después de un "sin depósito" lo reabre a cobrar.
+  if (cols.deposit_status === "no_aplica" && contract.deposit_status === "retenido") {
+    return {
+      ok: false,
+      error: "El depósito ya figura cobrado: no se puede sacar del contrato. Cuando termine, devolvelo o aplicalo a deudas desde la ficha.",
+      field: "deposit_amount",
+    };
+  }
+  // El estado del depósito se escribe sólo si cambia (sacarlo o volver a ponerlo)
+  // y sólo si sigue como se leyó: desde la 068h un cobro del renglón de depósito
+  // lo pasa a "retenido" por trigger, y reescribirlo con lo leído al principio de
+  // la edición lo volvía a "a cobrar" con el renglón pagado.
+  const depositNext = cols.deposit_status === "no_aplica" ? "no_aplica" : contract.deposit_status === "no_aplica" ? "pendiente" : null;
+  const depositChange = depositNext && depositNext !== contract.deposit_status ? depositNext : null;
   const economicChange =
     ECONOMIC_FIELDS.some((f) => String((cols as Record<string, unknown>)[f] ?? "") !== String((contract as unknown as Record<string, unknown>)[f] ?? "")) ||
     JSON.stringify(cols.steps ?? null) !== JSON.stringify(contract.steps ?? null) ||
@@ -378,6 +418,7 @@ export async function updateContract(ctx: RentalsCtx, contractId: string, input:
     const { count } = await ctx.admin
       .from("rental_payments")
       .select("id", { count: "exact", head: true })
+      .eq("organization_id", ctx.organization.id)
       .eq("contract_id", contractId)
       .is("voided_at", null);
     if ((count ?? 0) > 0) {
@@ -387,24 +428,39 @@ export async function updateContract(ctx: RentalsCtx, contractId: string, input:
       };
     }
   }
+  if (contract.status === "vigente" && cols.currency !== contract.currency) {
+    const blocker = await currencyChangeBlocker(ctx, contract, cols.currency);
+    if (blocker) return { ok: false, error: blocker, field: "currency" };
+  }
 
-  const { error } = await ctx.admin
+  let save = ctx.admin
     .from("rental_contracts")
     .update({
       ...cols,
-      deposit_status: cols.deposit_status ?? contract.deposit_status,
+      // undefined no viaja: sin cambio, la columna queda como está en la base.
+      deposit_status: depositChange ?? undefined,
       current_rent: contract.status === "borrador" ? cols.initial_rent : contract.current_rent,
       updated_by: ctx.session.userId,
     })
     .eq("id", contractId)
     .eq("organization_id", ctx.organization.id);
+  if (depositChange) save = save.eq("deposit_status", contract.deposit_status);
+  const { data: saved, error } = await save.select("id");
   if (error) return dbFailure("updateContract", error, "No se pudo guardar el contrato.");
+  if (!saved?.length) {
+    return {
+      ok: false,
+      error: "El depósito cambió mientras editabas el contrato (por ejemplo, se registró su cobro). Recargá la página y volvé a guardar.",
+      field: "deposit_amount",
+    };
+  }
   const partiesErr = await replaceParties(ctx, contractId, v);
   if (partiesErr) return dbFailure("updateContract:parties", { message: partiesErr }, "No se pudieron guardar las partes.");
 
   const recalculated = contract.status === "vigente" && economicChange;
   let notice: string | null = null;
   let keptLabels: string[] = [];
+  let carryParts: string[] = [];
   if (recalculated) {
     // Sin cobros: se rehace lo que sale de las condiciones (ajustes y alquileres
     // MENSUALES impagos). Los gastos de ingreso y los cargos extra o de salida
@@ -413,19 +469,23 @@ export async function updateContract(ctx: RentalsCtx, contractId: string, input:
     const org = ctx.organization.id;
     const reason = "Se cambiaron las condiciones del contrato";
     await ctx.admin.from("rental_adjustments").delete().eq("organization_id", org).eq("contract_id", contractId);
+    let redone: MonthlyBeingRedone[] = [];
     try {
       const { data: monthly, error: mErr } = await ctx.admin
         .from("rental_charges")
-        .select("id")
+        .select("id, label, period_start, items:rental_charge_items(id, kind, ref_type, description, amount, original_amount)")
         .eq("organization_id", org)
         .eq("contract_id", contractId)
         .eq("kind", "mensual")
         .is("voided_at", null)
         .eq("paid_amount", 0);
       if (mErr) throw new Error(mErr.message);
-      // Libera también los gastos que iban en esos cargos ANTES de regenerar: el
-      // primer mensual nuevo los vuelve a llevar.
-      const voids = await voidContractCharges(ctx.admin, org, contractId, ((monthly ?? []) as { id: string }[]).map((r) => r.id), reason);
+      const rows = (monthly ?? []) as MonthlyBeingRedone[];
+      // Los gastos trasladados vuelven a "pendiente" ANTES de regenerar (el primer
+      // mensual nuevo los vuelve a llevar). Las expensas y lo agregado a mano pasan
+      // al cargo nuevo de su mes cuando se genera (ensureContractCharges).
+      const voids = await voidContractCharges(ctx.admin, org, contractId, rows.map((r) => r.id), reason);
+      redone = rows.filter((r) => voids.voided.includes(r.id));
       await dropStaleDifferences(ctx.admin, org, contractId, voids.voided, reason);
     } catch (e) {
       logRentalsError("updateContract:recalculate", e);
@@ -444,24 +504,24 @@ export async function updateContract(ctx: RentalsCtx, contractId: string, input:
         .eq("due_date", contract.start_date);
     }
     await resyncContract(ctx, contractId);
-    const { data: keptRows } = await ctx.admin
-      .from("rental_charges")
-      .select("label")
-      .eq("organization_id", org)
-      .eq("contract_id", contractId)
-      .neq("kind", "mensual")
-      .is("voided_at", null);
+    const [{ data: keptRows }, carry] = await Promise.all([
+      ctx.admin.from("rental_charges").select("label").eq("organization_id", org).eq("contract_id", contractId).neq("kind", "mensual").is("voided_at", null),
+      carryOutcome(ctx, contractId, redone),
+    ]);
     keptLabels = [...new Set(((keptRows ?? []) as { label: string }[]).map((r) => r.label))];
-    if (!notice && keptLabels.length) {
-      notice = `Se recalcularon los ajustes y los alquileres impagos. Sin cambios: ${listLabels(keptLabels)}. Si dependen del precio (honorarios, sellado), revisalos en la cuenta.`;
-    }
+    carryParts = carryNotice(carry, cols.currency);
+    const parts = [
+      ...carryParts,
+      keptLabels.length ? `Sin cambios: ${listLabels(keptLabels)}. Si dependen del precio (honorarios, sellado), revisalos en la cuenta.` : null,
+    ].filter(Boolean);
+    if (!notice && parts.length) notice = `Se recalcularon los ajustes y los alquileres impagos. ${parts.join(" ")}`;
   }
   await logRentalEvent(ctx.admin, {
     organizationId: ctx.organization.id,
     contractId,
     type: "contrato_editado",
     summary: recalculated
-      ? `Se editaron las condiciones económicas del contrato: se recalcularon los ajustes y los alquileres impagos.${keptLabels.length ? ` Sin cambios: ${listLabels(keptLabels)}.` : ""}`
+      ? `Se editaron las condiciones económicas del contrato: se recalcularon los ajustes y los alquileres impagos.${carryParts.length ? ` ${carryParts.join(" ")}` : ""}${keptLabels.length ? ` Sin cambios: ${listLabels(keptLabels)}.` : ""}`
       : economicChange
         ? "Se editaron las condiciones del borrador."
         : "Se editaron datos del contrato.",
@@ -475,6 +535,117 @@ export async function updateContract(ctx: RentalsCtx, contractId: string, input:
 function listLabels(labels: string[]): string {
   const quoted = labels.map((l) => `«${l}»`);
   return quoted.length <= 1 ? (quoted[0] ?? "") : `${quoted.slice(0, -1).join(", ")} y ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * Cambiar la moneda de un contrato vigente (sin cobros): lo que está cargado en
+ * la moneda vieja y el motor no rehace (gastos de ingreso, cargos extra,
+ * expensas y conceptos agregados a un mensual) se quedaría en esa moneda y los
+ * cobros nuevos se le imputarían 1 a 1, o se perdería al rehacer el mensual.
+ * Devuelve el mensaje para la persona, o null si no hay nada así.
+ */
+async function currencyChangeBlocker(ctx: RentalsCtx, contract: RentalContract, newCurrency: string): Promise<string | null> {
+  const { data, error } = await ctx.admin
+    .from("rental_charges")
+    .select("kind, label, subtotal, paid_amount, items:rental_charge_items(kind, ref_type, description, amount)")
+    .eq("organization_id", ctx.organization.id)
+    .eq("contract_id", contract.id)
+    .eq("currency", contract.currency)
+    .is("voided_at", null);
+  if (error) {
+    logRentalsError("updateContract:currency", error);
+    return "No se pudo revisar la cuenta del contrato para cambiar la moneda. Probá de nuevo.";
+  }
+  type Row = { kind: string; label: string; subtotal: number; paid_amount: number; items: Pick<RentalChargeItem, "kind" | "ref_type" | "description" | "amount">[] };
+  const found: string[] = [];
+  for (const c of (data ?? []) as Row[]) {
+    if (c.kind !== "mensual") {
+      if (round2(Number(c.subtotal) - Number(c.paid_amount)) > 0) found.push(`«${c.label}»`);
+      continue;
+    }
+    for (const i of c.items) if (!isEngineItem(i) && Number(i.amount) > 0) found.push(`«${i.description}» (en ${c.label})`);
+  }
+  if (!found.length) return null;
+  const shown = found.length > 4 ? [...found.slice(0, 3), `${found.length - 3} más`] : found;
+  return `Para pasar el contrato a ${newCurrency}, primero sacá lo que está cargado en ${contract.currency} y no se recalcula solo: ${joinNamesEs(shown)}. Anulá esos cargos (las expensas se ponen en 0 desde «Cargar expensas» y un concepto agregado se bonifica entero) y, con la moneda cambiada, volvé a cargarlos en ${newCurrency}.`;
+}
+
+type MonthlyBeingRedone = {
+  id: string;
+  label: string;
+  period_start: string | null;
+  items: Pick<RentalChargeItem, "id" | "kind" | "ref_type" | "description" | "amount" | "original_amount">[];
+};
+
+/** Qué pasó con lo cargado a mano en los mensuales que se rehicieron (para avisar). */
+interface CarryOutcome {
+  /** Ya está en el cargo nuevo de su mes. */
+  carried: string[];
+  /** Su mes todavía no tiene cargo: pasa solo cuando se genere. */
+  waiting: string[];
+  /** Su mes ya no se factura (cambió el inicio o la duración): quedó anulado. */
+  dropped: string[];
+  /** El cargo nuevo se generó sin ellos (la base los rechazó): hay que cargarlos de nuevo. */
+  failed: string[];
+  /** Bonificaciones del alquiler, que no pasan (el alquiler sale del contrato). */
+  discounts: { label: string; amount: number }[];
+}
+
+async function carryOutcome(ctx: RentalsCtx, contractId: string, redone: MonthlyBeingRedone[]): Promise<CarryOutcome> {
+  const out: CarryOutcome = { carried: [], waiting: [], dropped: [], failed: [], discounts: [] };
+  const discounted = redone.map((r) => ({ label: r.label, month: r.period_start?.slice(0, 7) ?? "", amount: rentDiscountOf(r.items) })).filter((d) => d.amount > 0);
+  const pending = redone.flatMap((r) => r.items.filter((i) => !isEngineItem(i) && Number(i.amount) > 0).map((i) => ({ ...i, month: r.period_start?.slice(0, 7) ?? "" })));
+  if (!pending.length && !discounted.length) return out;
+  const [{ data: live }, { data: fresh }] = await Promise.all([
+    ctx.admin
+      .from("rental_charges")
+      .select("period_start, items:rental_charge_items(meta)")
+      .eq("organization_id", ctx.organization.id)
+      .eq("contract_id", contractId)
+      .eq("kind", "mensual")
+      .is("voided_at", null),
+    ctx.admin.from("rental_contracts").select("*").eq("id", contractId).eq("organization_id", ctx.organization.id).maybeSingle(),
+  ]);
+  const liveRows = (live ?? []) as { period_start: string | null; items: { meta: Record<string, unknown> | null }[] }[];
+  const carriedFrom = new Set(liveRows.flatMap((r) => r.items.map((i) => String(i.meta?.carried_from ?? ""))).filter(Boolean));
+  const liveMonths = new Set(liveRows.map((r) => r.period_start?.slice(0, 7) ?? ""));
+  const c = fresh as RentalContract | null;
+  const schedule = c
+    ? chargingSchedule(
+        buildSchedule({ startDate: c.start_date, durationMonths: c.duration_months, adjustmentEveryMonths: c.adjustment_every_months, paymentWindowDays: c.payment_window_days }),
+        c,
+        addDays([...pending, ...discounted].map((p) => `${p.month}-01`).reduce((a, b) => (a > b ? a : b)), 31),
+      )
+    : [];
+  const billable = (month: string) =>
+    Boolean(c && monthIsBillable(schedule, `${month}-01`, { billingStartsOn: c.billing_starts_on ?? c.start_date, terminatedAt: c.terminated_at }));
+  for (const p of pending) {
+    if (carriedFrom.has(p.id)) out.carried.push(p.description);
+    else if (liveMonths.has(p.month)) out.failed.push(p.description);
+    else if (billable(p.month)) out.waiting.push(p.description);
+    else out.dropped.push(p.description);
+  }
+  // Sólo si el mes se sigue cobrando: si quedó afuera del contrato no hay alquiler que bonificar.
+  out.discounts = discounted.filter((d) => liveMonths.has(d.month) || billable(d.month)).map((d) => ({ label: d.label, amount: d.amount }));
+  return out;
+}
+
+/** Lo que la persona tiene que saber de lo cargado a mano después de rehacer los mensuales. */
+function carryNotice(o: CarryOutcome, currency: string): string[] {
+  const one = (list: string[], singular: string, plural: string) => (list.length === 1 ? singular : plural);
+  return [
+    o.carried.length ? `${one(o.carried, "Pasó", "Pasaron")} a los cargos nuevos: ${listLabels(o.carried)}.` : null,
+    o.waiting.length
+      ? `${listLabels(o.waiting)} ${one(o.waiting, "pasa solo", "pasan solos")} al cargo de su mes cuando se genere: no ${one(o.waiting, "lo", "los")} cargues de nuevo.`
+      : null,
+    o.dropped.length
+      ? `${listLabels(o.dropped)} ${one(o.dropped, "quedó anulado", "quedaron anulados")} con su cargo porque ese mes ya no se cobra en el contrato: si corresponde, ${one(o.dropped, "cargalo", "cargalos")} aparte.`
+      : null,
+    o.failed.length ? `No se ${one(o.failed, "pudo pasar", "pudieron pasar")} ${listLabels(o.failed)} al cargo nuevo: ${one(o.failed, "cargalo", "cargalos")} de nuevo.` : null,
+    ...o.discounts.map(
+      (d) => `La bonificación de ${formatMoney(d.amount, currency)} del alquiler de ${d.label} no pasó al cargo nuevo: si sigue correspondiendo, volvé a bonificarlo.`,
+    ),
+  ].filter((s): s is string => Boolean(s));
 }
 
 /**
@@ -510,6 +681,95 @@ export async function resyncContract(ctx: RentalsCtx, contractId: string): Promi
   }
 }
 
+// ─── Ocupación de la propiedad ──────────────────────────────────────────────
+//
+// Dos contratos vigentes no ocupan la misma propiedad el mismo día
+// (rental_contracts_no_overlap). La ocupación se mide hasta la salida REAL
+// (ver occupancyEnd en exit.ts, la misma cuenta que la 068i): se chequea antes
+// de escribir para decir con qué contrato choca y hasta cuándo, en vez del
+// mensaje genérico de la base.
+
+type Occupant = OccupancyInput & {
+  id: string;
+  number: number;
+  renewed_from_id: string | null;
+  termination_notice_date: string | null;
+};
+
+/** Contratos vigentes de la propiedad. Si no se pueden leer, no se frena nada acá: frena la base. */
+async function vigentesOfProperty(ctx: RentalsCtx, propertyId: string): Promise<Occupant[]> {
+  const { data, error } = await ctx.admin
+    .from("rental_contracts")
+    .select("id, number, start_date, end_date, terminated_at, termination_notice_date, continuation_billing, renewed_from_id")
+    .eq("organization_id", ctx.organization.id)
+    .eq("property_id", propertyId)
+    .eq("status", "vigente");
+  if (error) {
+    logRentalsError("vigentesOfProperty", error);
+    return [];
+  }
+  return (data ?? []) as Occupant[];
+}
+
+/** "El contrato N° 0003 ocupa la propiedad hasta el 15/12/2026 (rescisión notificada)". */
+function occupantText(o: Occupant): string {
+  const label = formatContractNumber(o.number);
+  if (o.terminated_at) {
+    return `El contrato ${label} ocupa la propiedad hasta el ${ddmmyyyy(o.terminated_at)} (${o.termination_notice_date ? "rescisión notificada" : "salida registrada"})`;
+  }
+  if (o.continuation_billing) return `El contrato ${label} venció el ${ddmmyyyy(o.end_date)} y sigue ocupando la propiedad (se le cobran los meses de continuación)`;
+  return `El contrato ${label} rige en la propiedad hasta el ${ddmmyyyy(o.end_date)}`;
+}
+
+function isOverlapError(error: { message?: string } | null | undefined): boolean {
+  return Boolean(error?.message?.includes("rental_contracts_no_overlap"));
+}
+
+/**
+ * La base frenó una superposición. Si la cuenta de la app no la ve, la base
+ * todavía mide [inicio, fin] (falta la 068i) o alguien activó otro contrato
+ * recién: se dice cuál y hasta cuándo.
+ */
+async function overlapMessage(
+  ctx: RentalsCtx,
+  propertyId: string,
+  range: { selfId: string; start: string; end: string | null },
+  renewedId: string | null = null,
+): Promise<string> {
+  const others = await vigentesOfProperty(ctx, propertyId);
+  const conflict = findOccupancyConflict(others, range);
+  if (conflict) return `${occupantText(conflict)}. Cambiá las fechas o registrá antes la salida de ese contrato.`;
+  const legacy = others.find((o) => o.id !== range.selfId && rangesOverlap(range.start, range.end, o.start_date, o.end_date));
+  if (legacy && legacy.id === renewedId) {
+    return `Todavía no se puede activar una renovación que empieza antes del fin del contrato anterior (${formatContractNumber(legacy.number)}, termina el ${ddmmyyyy(legacy.end_date)}). Hacela empezar el ${ddmmyyyy(addDays(legacy.end_date, 1))} o probá de nuevo en unos días.`;
+  }
+  if (legacy?.terminated_at) {
+    return `Todavía no se puede: el contrato ${formatContractNumber(legacy.number)} desocupa el ${ddmmyyyy(legacy.terminated_at)}, pero hasta que se cierre figura vigente hasta su fin (${ddmmyyyy(legacy.end_date)}). Probá de nuevo el ${ddmmyyyy(addDays(legacy.terminated_at, 1))}.`;
+  }
+  return "Ya hay un contrato vigente para esa propiedad en esas fechas. Recargá la página: puede que alguien lo haya activado recién.";
+}
+
+/** Renovación (no borrador, misma propiedad) que arranca a más tardar el día siguiente a la salida. */
+async function renewalTakingOver(
+  admin: AdminClient,
+  contract: RentalContract,
+  exitDate: string,
+): Promise<{ id: string; number: number; start_date: string } | null> {
+  const { data, error } = await admin
+    .from("rental_contracts")
+    .select("id, number, start_date")
+    .eq("organization_id", contract.organization_id)
+    .eq("renewed_from_id", contract.id)
+    .eq("property_id", contract.property_id)
+    .neq("status", "borrador")
+    .order("start_date", { ascending: true })
+    .limit(1);
+  // Sin saber si lo sigue una renovación no se cierra: tratarlo como mudanza le cobraría la salida.
+  if (error) throw new Error(`No se pudo leer la renovación: ${error.message}`);
+  const r = ((data ?? []) as { id: string; number: number; start_date: string }[])[0];
+  return r && isRenewalHandover(exitDate, r.start_date) ? r : null;
+}
+
 // ─── Activar ────────────────────────────────────────────────────────────────
 
 export interface EntryChargeItemInput {
@@ -522,46 +782,177 @@ export interface EntryChargeItemInput {
  * Borrador → vigente. Genera el link del inquilino, el cronograma de ajustes y
  * los cargos que ya tocan; opcionalmente el "cargo de ingreso" (depósito,
  * honorarios, sellado…) con lo que confirmó la persona en la pantalla.
+ *
+ * Una renovación sólo se activa con cada garante en regla (art. 1225 CCyC):
+ * la fecha en que firmó —`guarantorConsents` la carga desde el mismo diálogo—
+ * o fuera del contrato (`removeGuarantors`). Ver renewal.ts.
+ *
+ * Desde el inicio de la renovación los meses los cobra ella: el contrato
+ * anterior termina el día antes (si hace falta se le registra esa salida,
+ * se anulan sus cargos impagos posteriores y se cierra como traspaso, sin
+ * cargo de salida). Si ya tiene cobrado alguno de esos meses, no se activa
+ * hasta que una persona lo resuelva. `previousId`: el anterior, para revalidarlo.
  */
 export async function activateContract(
   ctx: RentalsCtx,
   contractId: string,
-  opts: { entryItems?: EntryChargeItemInput[]; entryDueDate?: string | null } = {},
-): Promise<ActionResult<{ portalPath: string }>> {
+  opts: {
+    entryItems?: EntryChargeItemInput[];
+    entryDueDate?: string | null;
+    guarantorConsents?: GuarantorConsent[];
+    removeGuarantors?: string[];
+  } = {},
+): Promise<ActionResult<{ portalPath: string; previousId: string | null }>> {
+  const orgId = ctx.organization.id;
   const { data } = await ctx.admin
     .from("rental_contracts")
     .select("*")
     .eq("id", contractId)
-    .eq("organization_id", ctx.organization.id)
+    .eq("organization_id", orgId)
     .maybeSingle();
   const contract = data as RentalContract | null;
   if (!contract) return { ok: false, error: "No encontramos el contrato." };
   if (contract.status !== "borrador") return { ok: false, error: "El contrato ya está activo o terminado." };
 
-  const [{ data: parties }, { data: owners }] = await Promise.all([
-    ctx.admin.from("rental_contract_parties").select("role, is_primary").eq("contract_id", contractId),
+  const [{ data: parties }, { data: owners }, { data: previousRow }] = await Promise.all([
+    ctx.admin.from("rental_contract_parties").select("person_id, role, is_primary, guarantor_consent_at").eq("contract_id", contractId).eq("organization_id", orgId),
     ctx.admin.from("rental_property_owners").select("ownership_pct").eq("property_id", contract.property_id),
+    contract.renewed_from_id
+      ? ctx.admin.from("rental_contracts").select("*").eq("id", contract.renewed_from_id).eq("organization_id", orgId).maybeSingle()
+      : Promise.resolve({ data: null }),
   ]);
-  if (!(parties ?? []).some((p) => p.role === "inquilino")) return { ok: false, error: "Falta cargar el inquilino." };
+  const partyRows = (parties ?? []) as { person_id: string; role: string; is_primary: boolean; guarantor_consent_at: string | null }[];
+  if (!partyRows.some((p) => p.role === "inquilino")) return { ok: false, error: "Falta cargar el inquilino." };
   const pct = round2(((owners ?? []) as { ownership_pct: number }[]).reduce((s, o) => s + Number(o.ownership_pct), 0));
   if (!owners?.length) return { ok: false, error: "La propiedad no tiene propietario cargado: agregalo antes de activar." };
   if (Math.abs(pct - 100) > 0.01) {
     return { ok: false, error: `Los porcentajes de los propietarios suman ${pct.toLocaleString("es-AR")} %; tienen que sumar 100 %.` };
   }
 
+  let renewalNote = "";
+  const label = formatContractNumber(contract.number);
+  // Contrato anterior todavía vigente: desde que empieza la renovación los meses
+  // los cobra ella. Se corta el día antes; antes de tocar nada se ve que se pueda.
+  const previous = contract.renewed_from_id ? ((previousRow as RentalContract | null) ?? null) : null;
+  const previousLive = previous?.status === "vigente" ? previous : null;
+  let cut: string | null = null;
+  if (previousLive) {
+    const prevLabel = formatContractNumber(previousLive.number);
+    const renewalCut = planRenewalCut(previousLive, contract.start_date);
+    if (renewalCut.kind === "starts_before") {
+      return { ok: false, error: `La renovación empieza antes que el contrato anterior (${prevLabel}, desde el ${ddmmyyyy(previousLive.start_date)}): revisá la fecha de inicio.` };
+    }
+    if (renewalCut.kind === "exit_after_start") {
+      return {
+        ok: false,
+        error: `El contrato anterior (${prevLabel}) tiene ${renewalCut.rescission ? "una rescisión notificada" : "la entrega de llaves registrada"} para el ${ddmmyyyy(renewalCut.exitDate)}, después de que empiece la renovación (${ddmmyyyy(contract.start_date)}). Si el inquilino se queda, anulá esa salida desde su ficha («Cambiar la salida») y activá la renovación.`,
+      };
+    }
+    const paidErr = await paidOverlapWithRenewal(ctx, previousLive, contract);
+    if (paidErr) return { ok: false, error: paidErr };
+    if (renewalCut.kind === "cut") cut = renewalCut.cutDate;
+  }
+  // Con quién más choca en la propiedad (el anterior, ya con su corte).
+  const occupants = (await vigentesOfProperty(ctx, contract.property_id)).map((o) => (cut && o.id === previousLive?.id ? { ...o, terminated_at: cut } : o));
+  const ownRange = { selfId: contract.id, start: contract.start_date, end: occupancyEnd(contract) };
+  const occupied = findOccupancyConflict(occupants, ownRange);
+  if (occupied) {
+    return {
+      ok: false,
+      error: `${occupantText(occupied)}. Este contrato empieza el ${ddmmyyyy(contract.start_date)}: hacelo empezar después, o registrá antes la salida de ese contrato desde su ficha.`,
+    };
+  }
+
+  if (contract.renewed_from_id) {
+    const plan = planGuarantorConsents(partyRows, { consents: opts.guarantorConsents, remove: opts.removeGuarantors, today: ctx.today });
+    const guarantorIds = partyRows.filter((p) => p.role === "garante").map((p) => p.person_id);
+    const names = await personNames(ctx, guarantorIds);
+    const nameOf = (id: string) => names.get(id) ?? "un garante";
+    const consentErr = guarantorConsentError(plan, nameOf);
+    if (consentErr) return { ok: false, error: consentErr, field: "guarantors" };
+    // Antes de activar: si la activación fallara, la conformidad cargada igual es un hecho y queda.
+    for (const u of plan.updates) {
+      const { error: upErr } = await ctx.admin
+        .from("rental_contract_parties")
+        .update({ guarantor_consent_at: u.consentAt })
+        .eq("organization_id", orgId)
+        .eq("contract_id", contractId)
+        .eq("person_id", u.personId)
+        .eq("role", "garante");
+      if (upErr) return dbFailure("activateContract:consent", upErr, "No se pudo guardar la conformidad de los garantes.");
+    }
+    if (plan.removals.length) {
+      const { error: rmErr } = await ctx.admin
+        .from("rental_contract_parties")
+        .delete()
+        .eq("organization_id", orgId)
+        .eq("contract_id", contractId)
+        .eq("role", "garante")
+        .in("person_id", plan.removals);
+      if (rmErr) return dbFailure("activateContract:removeGuarantors", rmErr, "No se pudo sacar del contrato a los garantes que no firmaron.");
+    }
+    const signedOn = new Map(partyRows.filter((p) => p.role === "garante" && p.guarantor_consent_at).map((p) => [p.person_id, p.guarantor_consent_at as string]));
+    for (const u of plan.updates) signedOn.set(u.personId, u.consentAt);
+    for (const id of plan.removals) signedOn.delete(id);
+    const signed = [...signedOn].map(([id, d]) => `${nameOf(id)} (${ddmmyyyy(d)})`);
+    if (signed.length) renewalNote += ` Firmaron la renovación como garantes (art. 1225 CCyC): ${joinNamesEs(signed)}.`;
+    if (plan.removals.length) {
+      renewalNote += ` ${plan.removals.length === 1 ? "Salió" : "Salieron"} del contrato por no firmar la renovación: ${joinNamesEs(plan.removals.map(nameOf))}.`;
+    }
+  }
+
+  // El corte del anterior va justo antes de activar: es lo que deja libre la propiedad
+  // desde el inicio de la renovación. Si la activación falla, se deshace.
+  const cutReason = `Renovado por ${label}`;
+  if (previousLive && cut) {
+    const { data: cutRows, error: cutErr } = await ctx.admin
+      .from("rental_contracts")
+      .update({ terminated_at: cut, termination_reason: cutReason, updated_by: ctx.session.userId })
+      .eq("id", previousLive.id)
+      .eq("organization_id", orgId)
+      .eq("status", "vigente")
+      .is("terminated_at", null)
+      .select("id");
+    if (cutErr) return dbFailure("activateContract:cut", cutErr, "No se pudo cerrar el contrato anterior en la fecha de la renovación.");
+    if (!cutRows?.length) return { ok: false, error: "El contrato anterior cambió mientras tanto. Recargá y probá de nuevo." };
+  }
+  const undoCut = async () => {
+    if (!previousLive || !cut) return;
+    const { error: undoErr } = await ctx.admin
+      .from("rental_contracts")
+      .update({ terminated_at: null, termination_reason: previousLive.termination_reason })
+      .eq("id", previousLive.id)
+      .eq("organization_id", orgId)
+      .eq("status", "vigente")
+      .eq("terminated_at", cut);
+    if (undoErr) logRentalsError("activateContract:undoCut", undoErr);
+  };
+
   const version = contract.portal_token_version || 1;
   const portalHash = hashRentalToken(deriveRentalToken("inquilino", contract.id, version));
-  const { error } = await ctx.admin
+  const { data: flipped, error } = await ctx.admin
     .from("rental_contracts")
     .update({ status: "vigente", portal_token_hash: portalHash, updated_by: ctx.session.userId })
     .eq("id", contractId)
-    .eq("status", "borrador");
-  if (error) return dbFailure("activateContract", error, "No se pudo activar el contrato.");
+    .eq("organization_id", orgId)
+    .eq("status", "borrador")
+    .select("id");
+  if (error) {
+    // Con el corte todavía puesto: así el mensaje ve la salida que se le registró al anterior.
+    const overlap = isOverlapError(error) ? await overlapMessage(ctx, contract.property_id, ownRange, previousLive && cut ? previousLive.id : null) : null;
+    await undoCut();
+    return overlap ? { ok: false, error: overlap } : dbFailure("activateContract", error, "No se pudo activar el contrato.");
+  }
+  // Otra pestaña lo activó entre la lectura y acá: seguir generaba un segundo cargo de ingreso.
+  if (!flipped?.length) {
+    await undoCut();
+    return { ok: false, error: "El contrato ya está activo o terminado." };
+  }
 
   const entry = (opts.entryItems ?? []).filter((i) => i.amount > 0 && i.description.trim());
   if (entry.length) {
     const payeeOf = (kind: EntryChargeItemInput["kind"]) =>
-      kind === "honorarios" ? "inmobiliaria" : kind === "deposito" ? (contract.deposit_holder === "propietario" ? "propietario" : "tercero") : "tercero";
+      kind === "honorarios" ? "inmobiliaria" : kind === "deposito" ? depositItemPayee(contract.deposit_holder) : "tercero";
     const { error: chErr } = await ctx.admin.rpc("rental_create_charge", {
       p_organization_id: ctx.organization.id,
       p_contract_id: contract.id,
@@ -583,17 +974,136 @@ export async function activateContract(
     if (chErr) logRentalsError("activateContract:entry", chErr);
   }
 
+  // El anterior, antes de sincronizar este: si se cierra ya, sus gastos pendientes
+  // pasan a la renovación y entran en su primer cargo.
+  if (previousLive) {
+    const prevLabel = formatContractNumber(previousLive.number);
+    const handoverAtEnd = !cut && !previousLive.terminated_at && isRenewalHandover(previousLive.end_date, contract.start_date);
+    const lastDay = cut ?? previousLive.terminated_at ?? previousLive.end_date;
+    try {
+      if (cut && cut >= ctx.today) {
+        // Sigue vigente hasta el corte: se anulan ya los cargos posteriores y lo cierra el cron.
+        await scheduleExit(ctx, previousLive.id, cut, cutReason);
+      } else if (cut) {
+        await resyncContract(ctx, previousLive.id);
+      } else if (handoverAtEnd && previousLive.end_date < ctx.today) {
+        await closeRenewedAtEnd(ctx.admin, previousLive, { number: contract.number }, { today: ctx.today, actorId: ctx.session.userId, actorName: ctx.actorName });
+      }
+    } catch (e) {
+      // Queda vigente con su salida (o su fin) y el cron lo cierra a la noche.
+      logRentalsError("activateContract:previous", e);
+    }
+    // Traspaso: la renovación arranca al día siguiente. Si no, quedan días sin cubrir que decide una persona.
+    const handover = Boolean(cut) || isRenewalHandover(lastDay, contract.start_date);
+    renewalNote += handover
+      ? ` ${prevLabel} sigue hasta el ${ddmmyyyy(lastDay)}: desde el ${ddmmyyyy(contract.start_date)} cobra esta renovación.`
+      : ` Entre el fin del ${prevLabel} (${ddmmyyyy(lastDay)}) y el inicio de esta quedan días sin cubrir.`;
+    await logRentalEvent(ctx.admin, {
+      organizationId: orgId,
+      contractId: previousLive.id,
+      propertyId: previousLive.property_id,
+      type: "renovacion_activada",
+      summary: handover
+        ? `Se activó la renovación ${label} desde el ${ddmmyyyy(contract.start_date)}. Este contrato sigue hasta el ${ddmmyyyy(lastDay)} y ese día se cierra solo, sin cargo de salida${cut ? "; se anularon sus cargos impagos posteriores" : ""}.`
+        : `Se activó la renovación ${label} desde el ${ddmmyyyy(contract.start_date)}. Entre el fin de este contrato (${ddmmyyyy(lastDay)}) y el inicio de la renovación quedan días sin cubrir: si el inquilino sigue, cobralos con la continuación o registrá la salida.`,
+      actorId: ctx.session.userId,
+      actorName: ctx.actorName,
+    });
+  }
+
   await resyncContract(ctx, contractId);
   await logRentalEvent(ctx.admin, {
     organizationId: ctx.organization.id,
     contractId,
     propertyId: contract.property_id,
     type: "contrato_activado",
-    summary: `Contrato ${formatContractNumber(contract.number)} activado.`,
+    summary: `Contrato ${label} activado.${renewalNote}`,
     actorId: ctx.session.userId,
     actorName: ctx.actorName,
   });
-  return { ok: true, portalPath: tenantPortalPath(contract.id, version) };
+  return { ok: true, portalPath: tenantPortalPath(contract.id, version), previousId: previous?.id ?? null };
+}
+
+/**
+ * Alquileres del contrato anterior ya cobrados para meses que también va a
+ * cobrar la renovación: anularlos devolvería plata que se cobró (y quizás se
+ * rindió), así que lo decide una persona. Lo imputado con saldo a favor no
+ * frena: al anular el cargo vuelve como saldo a favor. Mira desde el inicio de
+ * la renovación, o desde que empieza a cobrar si se corrió ("Se empieza a
+ * cobrar desde"): esa es la salida que se le ofrece a la persona.
+ */
+async function paidOverlapWithRenewal(
+  ctx: RentalsCtx,
+  previous: RentalContract,
+  renewal: Pick<RentalContract, "number" | "start_date" | "billing_starts_on">,
+): Promise<string | null> {
+  const orgId = ctx.organization.id;
+  const billingFrom = maxYmd(renewal.start_date, renewal.billing_starts_on ?? renewal.start_date);
+  const { data, error } = await ctx.admin
+    .from("rental_charges")
+    .select("id, label")
+    .eq("organization_id", orgId)
+    .eq("contract_id", previous.id)
+    .eq("kind", "mensual")
+    .is("voided_at", null)
+    .gte("period_start", renewal.start_date)
+    .gte("period_end", billingFrom)
+    .gt("paid_amount", 0);
+  if (error) return dbFailure("paidOverlapWithRenewal", error, "No se pudo revisar la cuenta del contrato anterior. Probá de nuevo.").error;
+  const charges = (data ?? []) as { id: string; label: string }[];
+  if (!charges.length) return null;
+  const { data: allocs, error: aErr } = await ctx.admin
+    .from("rental_payment_allocations")
+    .select("charge_id, source")
+    .eq("organization_id", orgId)
+    .eq("voided", false)
+    .in(
+      "charge_id",
+      charges.map((c) => c.id),
+    );
+  // Si no se puede saber de dónde salió la plata, cuenta como cobro.
+  const paidDirectly = aErr
+    ? new Set(charges.map((c) => c.id))
+    : new Set(((allocs ?? []) as { charge_id: string; source: string | null }[]).filter((a) => a.source !== "credit").map((a) => a.charge_id));
+  const blocked = charges.filter((c) => paidDirectly.has(c.id));
+  if (!blocked.length) return null;
+  const prevLabel = formatContractNumber(previous.number);
+  const one = blocked.length === 1;
+  return `El contrato anterior (${prevLabel}) ya tiene cobrado ${listLabels(blocked.map((c) => c.label))}, y esos meses también los cobra la renovación desde el ${ddmmyyyy(billingFrom)}. Para no cobrarlos dos veces, editá la renovación para que empiece a cobrar después («Se empieza a cobrar desde»), o anulá ${one ? "ese cobro" : "esos cobros"} en el ${prevLabel} y registralo${one ? "" : "s"} en la renovación.`;
+}
+
+/**
+ * Contrato vencido al que lo sigue su renovación desde el día siguiente al fin:
+ * se cierra en su fecha de fin como un traspaso, no como una mudanza. Lo usan
+ * el cron (cada noche) y la activación de una renovación que llega tarde.
+ */
+export async function closeRenewedAtEnd(
+  admin: AdminClient,
+  contract: RentalContract,
+  renewal: { number: number },
+  opts: { today: string; actorId?: string | null; actorName?: string | null; settings?: RentalSettings; series?: IndexLookup | null },
+): Promise<ContractCloseOut | null> {
+  if (contract.status !== "vigente" || contract.terminated_at || contract.end_date >= opts.today) return null;
+  const reason = `Renovado por ${formatContractNumber(renewal.number)}`;
+  const { data, error } = await admin
+    .from("rental_contracts")
+    .update({ terminated_at: contract.end_date, termination_reason: reason, ...(opts.actorId ? { updated_by: opts.actorId } : {}) })
+    .eq("id", contract.id)
+    .eq("organization_id", contract.organization_id)
+    .eq("status", "vigente")
+    .is("terminated_at", null)
+    .select("id");
+  if (error) throw new Error(`No se pudo registrar el fin por la renovación: ${error.message}`);
+  if (!data?.length) return null;
+  // Si lo que sigue falla, queda con la salida registrada y el cron lo retoma (finishContract es idempotente hasta el cambio de estado).
+  return finishContract(admin, { ...contract, terminated_at: contract.end_date, termination_reason: reason }, opts);
+}
+
+/** Nombre de cada persona de la org (para los mensajes y el historial). */
+async function personNames(ctx: RentalsCtx, ids: string[]): Promise<Map<string, string>> {
+  if (!ids.length) return new Map();
+  const { data } = await ctx.admin.from("rental_people").select("id, full_name").eq("organization_id", ctx.organization.id).in("id", [...new Set(ids)]);
+  return new Map(((data ?? []) as { id: string; full_name: string }[]).map((p) => [p.id, p.full_name]));
 }
 
 // ─── Terminar ───────────────────────────────────────────────────────────────
@@ -647,6 +1157,8 @@ export interface ContractCloseOut {
   creditRestored: number;
   expenses: { total: number; count: number };
   sync: ContractSyncSummary;
+  /** Lo siguió su renovación: fue un traspaso, no una mudanza (sin cargo de salida; el depósito puede pasar a la renovación). */
+  renewal: { id: string; number: number; startDate: string } | null;
 }
 
 /**
@@ -656,7 +1168,12 @@ export interface ContractCloseOut {
  * inquilino a un cargo de salida. Lo anterior al cambio de estado es
  * idempotente: si algo falla, el contrato sigue vigente y la próxima corrida
  * (cron o pantalla) lo retoma sin duplicar nada. Devuelve null si no había
- * nada que cerrar (u otro proceso lo cerró primero).
+ * nada que cerrar (u otro proceso lo cerró primero o le cambió la salida).
+ *
+ * Si lo sigue su renovación desde el día siguiente, el inquilino no se va:
+ * los gastos pendientes pasan a la renovación (los cobra con su próximo
+ * alquiler) en vez de ir a un cargo de salida, y el depósito queda para
+ * pasarlo a la renovación.
  */
 export async function finishContract(
   admin: AdminClient,
@@ -667,7 +1184,9 @@ export async function finishContract(
   const org = contract.organization_id;
   const endDate = contract.terminated_at;
   const status = contract.termination_notice_date ? "rescindido" : "finalizado";
-  const voids = await voidChargesAfter(admin, org, contract.id, endDate, status === "rescindido" ? "Contrato rescindido" : "Contrato finalizado");
+  const renewal = await renewalTakingOver(admin, contract, endDate);
+  const voidReason = renewal ? `Renovado por ${formatContractNumber(renewal.number)}` : status === "rescindido" ? "Contrato rescindido" : "Contrato finalizado";
+  const voids = await voidChargesAfter(admin, org, contract.id, endDate, voidReason);
   const settings = opts.settings ?? (await getRentalSettings(admin, org));
   const series = opts.series !== undefined ? opts.series : await loadSeriesForContract(admin, contract);
   const sync = await syncContract(
@@ -676,12 +1195,19 @@ export async function finishContract(
     { autoApply: settings.auto_apply_adjustments, leadDays: settings.charge_lead_days },
     { series, today: opts.today, actorId: opts.actorId ?? null },
   );
+  // Con la misma salida que se acaba de procesar: si alguien la corrió (o la anuló)
+  // mientras tanto, no se cierra; lo anulado se vuelve a generar en la próxima sincronización.
   const { data: closed, error } = await admin
     .from("rental_contracts")
-    .update({ status, ...(opts.actorId ? { updated_by: opts.actorId } : {}) })
+    .update({
+      status,
+      ...(renewal && !contract.termination_reason ? { termination_reason: voidReason } : {}),
+      ...(opts.actorId ? { updated_by: opts.actorId } : {}),
+    })
     .eq("id", contract.id)
     .eq("organization_id", org)
     .eq("status", "vigente")
+    .eq("terminated_at", endDate)
     .select("id");
   if (error) throw new Error(`No se pudo cerrar el contrato: ${error.message}`);
   if (!closed?.length) return null;
@@ -690,30 +1216,66 @@ export async function finishContract(
   // simultáneos (cron y pantalla) no los cobran dos veces. Si esto falla, los
   // gastos quedan "pendientes" a la vista, para cargarlos a mano.
   let expenses = { total: 0, count: 0, failed: false };
+  let movedToRenewal = 0;
   try {
-    const billed = await billPendingTenantExpenses(admin, contract, {
-      dueDate: addDays(maxYmd(endDate, opts.today), contract.payment_window_days || 10),
-      actorId: opts.actorId ?? null,
-    });
-    expenses = { total: billed.total, count: billed.count, failed: false };
-    if (billed.chargeId) await applyAvailableCredit(admin, org, contract.id);
+    if (renewal) {
+      // Sigue el mismo inquilino: los gastos van con el próximo alquiler de la renovación.
+      const { data: moved, error: mvErr } = await admin
+        .from("rental_expenses")
+        .update({ contract_id: renewal.id })
+        .eq("organization_id", org)
+        .eq("contract_id", contract.id)
+        .eq("charged_to", "inquilino")
+        .eq("status", "pendiente")
+        .select("id");
+      if (mvErr) throw new Error(mvErr.message);
+      movedToRenewal = moved?.length ?? 0;
+    } else {
+      const billed = await billPendingTenantExpenses(admin, contract, {
+        dueDate: addDays(maxYmd(endDate, opts.today), contract.payment_window_days || 10),
+        actorId: opts.actorId ?? null,
+      });
+      expenses = { total: billed.total, count: billed.count, failed: false };
+      if (billed.chargeId) await applyAvailableCredit(admin, org, contract.id);
+    }
   } catch (e) {
     logRentalsError("finishContract:expenses", e);
     expenses = { total: 0, count: 0, failed: true };
   }
+  // Lo que de verdad le quedó a favor: la sincronización pudo usar parte en deudas anteriores.
+  const creditLeft = voids.creditRestored > 0 ? await unallocatedCreditOf(admin, org, contract.id, contract.currency) : null;
 
   let keptLabels: string[] = [];
   if (voids.kept.length) {
     const { data: kept } = await admin.from("rental_charges").select("label").eq("organization_id", org).in("id", voids.kept);
     keptLabels = ((kept ?? []) as { label: string }[]).map((k) => k.label);
   }
+  const renewalLabel = renewal ? formatContractNumber(renewal.number) : "";
   const parts = [
-    `Contrato ${formatContractNumber(contract.number)} ${status}: ${status === "rescindido" ? "desocupó" : "entregó las llaves"} el ${ddmmyyyy(endDate)}.`,
+    renewal
+      ? `Contrato ${formatContractNumber(contract.number)} ${status}: siguió con la renovación ${renewalLabel} desde el ${ddmmyyyy(renewal.start_date)}.`
+      : `Contrato ${formatContractNumber(contract.number)} ${status}: ${status === "rescindido" ? "desocupó" : "entregó las llaves"} el ${ddmmyyyy(endDate)}.`,
     voids.voided.length ? `Se anul${voids.voided.length === 1 ? "ó 1 cargo" : `aron ${voids.voided.length} cargos`} de meses posteriores.` : null,
-    voids.creditRestored > 0 ? `Volvieron ${formatMoney(voids.creditRestored, contract.currency)} de saldo a favor al inquilino.` : null,
+    voids.creditRestored > 0
+      ? `Se deshicieron ${formatMoney(voids.creditRestored, contract.currency)} de saldo a favor imputado a meses posteriores a la salida${
+          creditLeft == null
+            ? "."
+            : creditLeft > 0.004
+              ? `: el inquilino queda con ${formatMoney(creditLeft, contract.currency)} a favor (devolvéselo o aplicalo a lo que deba).`
+              : ": se usaron para pagar deudas anteriores."
+        }`
+      : null,
     expenses.count ? `Gastos sin cobrar: ${formatMoney(expenses.total, contract.currency)} en el cargo «Gastos pendientes».` : null,
-    expenses.failed ? "No se pudieron pasar los gastos pendientes del inquilino a un cargo de salida: cargalos a mano." : null,
+    movedToRenewal ? `${movedToRenewal === 1 ? "El gasto pendiente del inquilino pasó" : `Los ${movedToRenewal} gastos pendientes del inquilino pasaron`} a la renovación ${renewalLabel}: se cobran con su próximo alquiler.` : null,
+    expenses.failed
+      ? renewal
+        ? `No se pudieron pasar los gastos pendientes del inquilino a la renovación ${renewalLabel}: cargalos a mano.`
+        : "No se pudieron pasar los gastos pendientes del inquilino a un cargo de salida: cargalos a mano."
+      : null,
     keptLabels.length ? `Revisá ${keptLabels.join(", ")}: es posterior a la salida y tiene cobros, así que quedó como estaba.` : null,
+    renewal && contract.deposit_status === "retenido" && Number(contract.deposit_amount) > 0
+      ? `El depósito sigue en garantía: pasalo a la renovación ${renewalLabel} desde «Cerrar el depósito».`
+      : null,
   ].filter(Boolean);
   await logRentalEvent(admin, {
     organizationId: org,
@@ -721,7 +1283,14 @@ export async function finishContract(
     propertyId: contract.property_id,
     type: status === "rescindido" ? "contrato_rescindido" : "contrato_finalizado",
     summary: parts.join(" "),
-    payload: { voided: voids.voided, kept: voids.kept, credit_restored: voids.creditRestored, expenses_billed: expenses.total },
+    payload: {
+      voided: voids.voided,
+      kept: voids.kept,
+      credit_restored: voids.creditRestored,
+      credit_left: creditLeft,
+      expenses_billed: expenses.total,
+      ...(renewal ? { renewal_id: renewal.id, expenses_moved: movedToRenewal } : {}),
+    },
     actorId: opts.actorId ?? null,
     actorName: opts.actorName ?? null,
   });
@@ -732,6 +1301,7 @@ export async function finishContract(
     creditRestored: voids.creditRestored,
     expenses: { total: expenses.total, count: expenses.count },
     sync,
+    renewal: renewal ? { id: renewal.id, number: renewal.number, startDate: renewal.start_date } : null,
   };
 }
 
@@ -745,10 +1315,35 @@ async function scheduleExit(ctx: RentalsCtx, contractId: string, endDate: string
   await resyncContract(ctx, contractId);
 }
 
+/**
+ * Antes de alargar la ocupación de un contrato (una salida posterior a la que
+ * tenía, o cobrar la continuación sin fecha): con qué contrato vigente de la
+ * propiedad chocaría. null = no choca, o no se alarga (acortar nunca se frena).
+ */
+async function extensionConflict(ctx: RentalsCtx, contract: RentalContract, newEnd: string | null): Promise<string | null> {
+  const current = occupancyEnd(contract);
+  if (current === null || (newEnd !== null && newEnd <= current)) return null;
+  const conflict = findOccupancyConflict(await vigentesOfProperty(ctx, contract.property_id), {
+    selfId: contract.id,
+    start: contract.start_date,
+    end: newEnd,
+  });
+  if (!conflict) return null;
+  if (conflict.renewed_from_id === contract.id) {
+    return `Ya está activa la renovación ${formatContractNumber(conflict.number)}, que empieza el ${ddmmyyyy(conflict.start_date)}: este contrato termina, a más tardar, el ${ddmmyyyy(addDays(conflict.start_date, -1))}.`;
+  }
+  return `El contrato ${formatContractNumber(conflict.number)} ocupa la propiedad desde el ${ddmmyyyy(conflict.start_date)}: este no puede seguir ${newEnd ? `hasta el ${ddmmyyyy(newEnd)}` : "sin fecha de salida"}. Poné una salida anterior a esa fecha o revisá ese contrato.`;
+}
+
+/**
+ * Finalizar = registrar la entrega de llaves. Con `continuationBilling`, si el
+ * contrato ya venció y no cobraba la continuación, se activa en el mismo paso:
+ * así se facturan los meses desde el vencimiento hasta la entrega (art. 1218).
+ */
 export async function finalizeContract(
   ctx: RentalsCtx,
   contractId: string,
-  input: { endedOn: string; reason?: string | null },
+  input: { endedOn: string; reason?: string | null; continuationBilling?: boolean },
 ): Promise<ActionResult<{ closesOn: string | null }>> {
   if (!isYmd(input.endedOn)) return { ok: false, error: "La fecha no es válida.", field: "endedOn" };
   const { data } = await ctx.admin
@@ -766,20 +1361,34 @@ export async function finalizeContract(
   if (scheduled && input.endedOn > ctx.today) {
     return {
       ok: false,
-      error: `Ya tiene la salida registrada para el ${ddmmyyyy(scheduled)} y ese día se cierra solo. Si entregó las llaves antes, poné la fecha real (hoy o antes).`,
+      error: `Ya tiene la salida registrada para el ${ddmmyyyy(scheduled)} y ese día se cierra solo. Si entregó las llaves antes, poné la fecha real (hoy o antes). Para correrla, usá «Cambiar la salida».`,
       field: "endedOn",
     };
   }
+  const conflict = await extensionConflict(ctx, contract, input.endedOn);
+  if (conflict) return { ok: false, error: conflict, field: "endedOn" };
+  const billContinuation = Boolean(input.continuationBilling) && continuationGap(contract, input.endedOn, ctx.today);
   const reason = input.reason?.trim() || contract.termination_reason || "Fin del contrato";
   const base = ctx.admin
     .from("rental_contracts")
-    .update({ terminated_at: input.endedOn, termination_reason: reason, updated_by: ctx.session.userId })
+    .update({
+      terminated_at: input.endedOn,
+      termination_reason: reason,
+      ...(billContinuation ? { continuation_billing: true } : {}),
+      updated_by: ctx.session.userId,
+    })
     .eq("id", contractId)
     .eq("organization_id", ctx.organization.id)
     .eq("status", "vigente");
   const { data: saved, error } = await (scheduled ? base.eq("terminated_at", scheduled) : base.is("terminated_at", null)).select("id");
-  if (error) return dbFailure("finalizeContract", error, "No se pudo finalizar el contrato.");
+  if (error) {
+    if (isOverlapError(error)) return { ok: false, error: await overlapMessage(ctx, contract.property_id, { selfId: contract.id, start: contract.start_date, end: input.endedOn }) };
+    return dbFailure("finalizeContract", error, "No se pudo finalizar el contrato.");
+  }
   if (!saved?.length) return { ok: false, error: "El contrato cambió mientras tanto. Recargá y probá de nuevo." };
+  const continuationNote = billContinuation
+    ? ` Se cobran también los meses desde el vencimiento (${ddmmyyyy(contract.end_date)}) hasta la entrega, al último alquiler (continuación, art. 1218 CCyC).`
+    : "";
 
   if (input.endedOn > ctx.today) {
     await scheduleExit(ctx, contractId, input.endedOn, "Contrato finalizado");
@@ -788,16 +1397,27 @@ export async function finalizeContract(
       contractId,
       propertyId: contract.property_id,
       type: "contrato_salida_programada",
-      summary: `Entrega de llaves programada para el ${ddmmyyyy(input.endedOn)} (${reason}). Hasta ese día sigue vigente y se le sigue cobrando; después se finaliza solo.`,
+      summary: `Entrega de llaves programada para el ${ddmmyyyy(input.endedOn)} (${reason}). Hasta ese día sigue vigente y se le sigue cobrando; después se finaliza solo.${continuationNote}`,
       actorId: ctx.session.userId,
       actorName: ctx.actorName,
     });
     return { ok: true, closesOn: input.endedOn };
   }
+  if (continuationNote) {
+    await logRentalEvent(ctx.admin, {
+      organizationId: ctx.organization.id,
+      contractId,
+      propertyId: contract.property_id,
+      type: "continuacion_activada",
+      summary: `Al registrar la entrega del ${ddmmyyyy(input.endedOn)}:${continuationNote}`,
+      actorId: ctx.session.userId,
+      actorName: ctx.actorName,
+    });
+  }
   try {
     await finishContract(
       ctx.admin,
-      { ...contract, terminated_at: input.endedOn, termination_reason: reason },
+      { ...contract, terminated_at: input.endedOn, termination_reason: reason, ...(billContinuation ? { continuation_billing: true } : {}) },
       { today: ctx.today, actorId: ctx.session.userId, actorName: ctx.actorName },
     );
   } catch (e) {
@@ -810,7 +1430,7 @@ export async function finalizeContract(
 export async function rescindContract(
   ctx: RentalsCtx,
   contractId: string,
-  input: { noticeDate: string; moveOutDate: string; reason: string; penaltyAmount: number; chargePenalty: boolean },
+  input: { noticeDate: string; moveOutDate: string; reason: string; penaltyAmount: number; chargePenalty: boolean; continuationBilling?: boolean },
 ): Promise<ActionResult<{ closesOn: string | null }>> {
   if (!isYmd(input.noticeDate) || !isYmd(input.moveOutDate)) return { ok: false, error: "Revisá las fechas." };
   if (input.moveOutDate < input.noticeDate) return { ok: false, error: "La desocupación no puede ser anterior a la notificación." };
@@ -827,10 +1447,14 @@ export async function rescindContract(
   if (contract.terminated_at) {
     return {
       ok: false,
-      error: `Ya hay una salida registrada para este contrato (desocupa el ${ddmmyyyy(contract.terminated_at)}): no se puede registrar otra rescisión.`,
+      error: `Ya hay una salida registrada para este contrato (desocupa el ${ddmmyyyy(contract.terminated_at)}): no se puede registrar otra rescisión. Para correr la fecha o anularla, usá «Cambiar la salida».`,
     };
   }
   if (input.moveOutDate < contract.start_date) return { ok: false, error: "La desocupación no puede ser anterior al inicio del contrato." };
+  const conflict = await extensionConflict(ctx, contract, input.moveOutDate);
+  if (conflict) return { ok: false, error: conflict };
+  // Vencido sin cobrar la continuación: los meses hasta que desocupa se cobran sólo si la persona lo pidió.
+  const billContinuation = Boolean(input.continuationBilling) && continuationGap(contract, input.moveOutDate, ctx.today);
   const penalty = round2(Math.max(0, input.penaltyAmount || 0));
   const reason = input.reason.trim() || "Rescisión anticipada";
   const { data: saved, error } = await ctx.admin
@@ -840,6 +1464,7 @@ export async function rescindContract(
       termination_notice_date: input.noticeDate,
       termination_reason: reason,
       termination_penalty: penalty,
+      ...(billContinuation ? { continuation_billing: true } : {}),
       updated_by: ctx.session.userId,
     })
     .eq("id", contractId)
@@ -847,8 +1472,14 @@ export async function rescindContract(
     .eq("status", "vigente")
     .is("terminated_at", null)
     .select("id");
-  if (error) return dbFailure("rescindContract", error, "No se pudo rescindir el contrato.");
+  if (error) {
+    if (isOverlapError(error)) return { ok: false, error: await overlapMessage(ctx, contract.property_id, { selfId: contract.id, start: contract.start_date, end: input.moveOutDate }) };
+    return dbFailure("rescindContract", error, "No se pudo rescindir el contrato.");
+  }
   if (!saved?.length) return { ok: false, error: "El contrato cambió mientras tanto. Recargá y probá de nuevo." };
+  const continuationNote = billContinuation
+    ? ` Se cobran también los meses desde el vencimiento (${ddmmyyyy(contract.end_date)}) hasta que desocupa, al último alquiler (continuación, art. 1218 CCyC).`
+    : "";
 
   // Hasta la desocupación el contrato sigue vigente y debe el alquiler (art. 1221).
   const future = input.moveOutDate > ctx.today;
@@ -874,7 +1505,7 @@ export async function rescindContract(
     contractId,
     propertyId: contract.property_id,
     type: future ? "contrato_rescision_notificada" : "contrato_rescision_registrada",
-    summary: `Rescisión: notificó el ${ddmmyyyy(input.noticeDate)}, desocupa el ${ddmmyyyy(input.moveOutDate)}${penalty > 0 ? ` · indemnización ${formatMoney(penalty, contract.currency)}` : ""}.${future ? " Hasta ese día sigue vigente y se le sigue cobrando el alquiler; después se cierra solo." : ""}`,
+    summary: `Rescisión: notificó el ${ddmmyyyy(input.noticeDate)}, desocupa el ${ddmmyyyy(input.moveOutDate)}${penalty > 0 ? ` · indemnización ${formatMoney(penalty, contract.currency)}` : ""}.${future ? " Hasta ese día sigue vigente y se le sigue cobrando el alquiler; después se cierra solo." : ""}${continuationNote}`,
     actorId: ctx.session.userId,
     actorName: ctx.actorName,
   });
@@ -885,7 +1516,14 @@ export async function rescindContract(
   try {
     await finishContract(
       ctx.admin,
-      { ...contract, terminated_at: input.moveOutDate, termination_notice_date: input.noticeDate, termination_reason: reason, termination_penalty: penalty },
+      {
+        ...contract,
+        terminated_at: input.moveOutDate,
+        termination_notice_date: input.noticeDate,
+        termination_reason: reason,
+        termination_penalty: penalty,
+        ...(billContinuation ? { continuation_billing: true } : {}),
+      },
       { today: ctx.today, actorId: ctx.session.userId, actorName: ctx.actorName },
     );
   } catch (e) {
@@ -904,13 +1542,21 @@ export async function rescindContract(
  * no acumula deuda fantasma). Al encenderlo se generan en el momento los que
  * ya tocan, al último alquiler aplicado y sin ajustes nuevos; al apagarlo,
  * los que ya se generaron quedan en la cuenta (se anulan a mano si no van).
+ *
+ * Con la salida registrada se cobra hasta esa fecha. Con la renovación activa
+ * los meses los cobra ella: si arranca al día siguiente del fin no hay nada
+ * que cobrar acá; si deja un hueco, se cobra sólo hasta el día anterior a que
+ * empiece (se le registra esa salida). Tampoco se enciende si otro contrato
+ * vigente ya ocupa la propiedad después del fin: serían dos inquilinos
+ * facturados por los mismos meses.
  */
 export async function setContinuationBilling(ctx: RentalsCtx, contractId: string, on: boolean): Promise<ActionResult<{ created: number }>> {
+  const orgId = ctx.organization.id;
   const { data } = await ctx.admin
     .from("rental_contracts")
     .select("*")
     .eq("id", contractId)
-    .eq("organization_id", ctx.organization.id)
+    .eq("organization_id", orgId)
     .maybeSingle();
   const contract = data as RentalContract | null;
   if (!contract) return { ok: false, error: "No encontramos el contrato." };
@@ -919,17 +1565,56 @@ export async function setContinuationBilling(ctx: RentalsCtx, contractId: string
     return { ok: false, error: `El contrato todavía no venció (termina el ${ddmmyyyy(contract.end_date)}): los meses de continuación se cobran recién después.` };
   }
   if (Boolean(contract.continuation_billing) === on) return { ok: true, created: 0 };
-  const { error } = await ctx.admin
+  let bound: { date: string; reason: string; renewal: string } | null = null;
+  if (on) {
+    const { data: ren, error: renErr } = await ctx.admin
+      .from("rental_contracts")
+      .select("id, number, start_date")
+      .eq("organization_id", orgId)
+      .eq("renewed_from_id", contract.id)
+      .eq("property_id", contract.property_id)
+      .neq("status", "borrador")
+      .order("start_date", { ascending: true })
+      .limit(1);
+    if (renErr) return dbFailure("setContinuationBilling:renewal", renErr, "No se pudo revisar la renovación del contrato. Probá de nuevo.");
+    const renewal = ((ren ?? []) as { id: string; number: number; start_date: string }[])[0];
+    if (renewal) {
+      const renLabel = formatContractNumber(renewal.number);
+      if (isRenewalHandover(contract.end_date, renewal.start_date)) {
+        return { ok: false, error: `Ya está activa la renovación ${renLabel} desde el ${ddmmyyyy(renewal.start_date)}: los meses después del vencimiento los cobra ella, no este contrato.` };
+      }
+      const lastDay = addDays(renewal.start_date, -1);
+      if (!contract.terminated_at || contract.terminated_at > lastDay) bound = { date: lastDay, reason: `Renovado por ${renLabel}`, renewal: renLabel };
+    }
+    const conflict = await extensionConflict(ctx, contract, bound?.date ?? contract.terminated_at ?? null);
+    if (conflict) return { ok: false, error: conflict };
+  }
+  const base = ctx.admin
     .from("rental_contracts")
-    .update({ continuation_billing: on, updated_by: ctx.session.userId })
+    .update({
+      continuation_billing: on,
+      ...(bound ? { terminated_at: bound.date, termination_reason: bound.reason } : {}),
+      updated_by: ctx.session.userId,
+    })
     .eq("id", contractId)
-    .eq("organization_id", ctx.organization.id)
-    .eq("status", "vigente");
-  if (error) return dbFailure("setContinuationBilling", error, "No se pudo cambiar el cobro de la continuación.");
+    .eq("organization_id", orgId)
+    .eq("status", "vigente")
+    .eq("continuation_billing", !on);
+  const { data: saved, error } = await (bound
+    ? contract.terminated_at
+      ? base.eq("terminated_at", contract.terminated_at)
+      : base.is("terminated_at", null)
+    : base
+  ).select("id");
+  if (error) {
+    if (isOverlapError(error)) return { ok: false, error: await overlapMessage(ctx, contract.property_id, { selfId: contract.id, start: contract.start_date, end: bound?.date ?? contract.terminated_at ?? null }) };
+    return dbFailure("setContinuationBilling", error, "No se pudo cambiar el cobro de la continuación.");
+  }
+  if (!saved?.length) return { ok: false, error: "El contrato cambió mientras tanto. Recargá y probá de nuevo." };
   let created = 0;
   if (on) {
     try {
-      const fresh: RentalContract = { ...contract, continuation_billing: true };
+      const fresh: RentalContract = { ...contract, continuation_billing: true, ...(bound ? { terminated_at: bound.date, termination_reason: bound.reason } : {}) };
       const settings = await getRentalSettings(ctx.admin, ctx.organization.id);
       const series = await loadSeriesForContract(ctx.admin, fresh);
       const sync = await syncContract(
@@ -949,12 +1634,156 @@ export async function setContinuationBilling(ctx: RentalsCtx, contractId: string
     propertyId: contract.property_id,
     type: on ? "continuacion_activada" : "continuacion_desactivada",
     summary: on
-      ? `Se activó el cobro de los meses de continuación (art. 1218 CCyC): se facturan al último alquiler, sin ajustes nuevos.${created ? ` Se ${created === 1 ? "generó 1 cargo" : `generaron ${created} cargos`}.` : ""}`
+      ? `Se activó el cobro de los meses de continuación (art. 1218 CCyC): se facturan al último alquiler, sin ajustes nuevos.${bound ? ` Hasta el ${ddmmyyyy(bound.date)}: desde el día siguiente cobra la renovación ${bound.renewal}.` : ""}${created ? ` Se ${created === 1 ? "generó 1 cargo" : `generaron ${created} cargos`}.` : ""}`
       : "Se desactivó el cobro de los meses de continuación: no se generan más cargos después del fin. Los que ya estaban siguen en la cuenta.",
     actorId: ctx.session.userId,
     actorName: ctx.actorName,
   });
   return { ok: true, created };
+}
+
+// ─── Cambiar la salida ──────────────────────────────────────────────────────
+
+/**
+ * Corre o anula una salida ya registrada (rescisión notificada o entrega
+ * programada). Sin esto, si el inquilino pedía quedarse unas semanas más o se
+ * arrepentía, el cron lo cerraba igual el día anotado: anulaba los meses
+ * siguientes y dejaba de cobrar con el inquilino adentro.
+ *   - Correrla más tarde: los meses hasta la fecha nueva se vuelven a facturar.
+ *     Adelantarla: se anulan los posteriores, como al registrarla.
+ *   - Anularla: vuelve a regir como antes (hasta su fin, o como vencido). La
+ *     indemnización se anula si no tiene cobros; si ya se cobró, queda y se avisa.
+ * `expected` es la salida que vio la persona: si cambió mientras tanto, no se pisa.
+ * Con `continuationBilling`, un vencido que no la cobraba la empieza a cobrar.
+ */
+export async function changeContractExit(
+  ctx: RentalsCtx,
+  contractId: string,
+  input: { expected: string; newDate: string | null; continuationBilling?: boolean },
+): Promise<ActionResult<{ closesOn: string | null; notice: string | null }>> {
+  const orgId = ctx.organization.id;
+  const newDate = input.newDate;
+  if (!isYmd(input.expected) || (newDate !== null && !isYmd(newDate))) return { ok: false, error: "Revisá la fecha.", field: "newDate" };
+  const { data } = await ctx.admin.from("rental_contracts").select("*").eq("id", contractId).eq("organization_id", orgId).maybeSingle();
+  const contract = data as RentalContract | null;
+  if (!contract) return { ok: false, error: "No encontramos el contrato." };
+  const old = contract.terminated_at;
+  if (contract.status !== "vigente" || !old) return { ok: false, error: "Este contrato no tiene una salida registrada para cambiar." };
+  if (old !== input.expected) return { ok: false, error: "La salida cambió mientras tanto. Recargá y probá de nuevo." };
+  if (newDate !== null) {
+    if (newDate === old) return { ok: true, closesOn: old, notice: null };
+    if (newDate <= ctx.today) {
+      return { ok: false, error: "Para una fecha de hoy o anterior usá «Registrar entrega de llaves»: la cuenta se cierra en el momento.", field: "newDate" };
+    }
+  }
+  // La salida que puso la renovación (el día antes de que empiece) no se mueve desde acá.
+  const { data: ren, error: renErr } = await ctx.admin
+    .from("rental_contracts")
+    .select("number, start_date")
+    .eq("organization_id", orgId)
+    .eq("renewed_from_id", contract.id)
+    .eq("property_id", contract.property_id)
+    .neq("status", "borrador")
+    .order("start_date", { ascending: true })
+    .limit(1);
+  if (renErr) return dbFailure("changeContractExit:renewal", renErr, "No se pudo revisar la renovación del contrato. Probá de nuevo.");
+  const renewal = ((ren ?? []) as { number: number; start_date: string }[])[0];
+  if (renewal && isRenewalHandover(old, renewal.start_date)) {
+    return {
+      ok: false,
+      error: `Esta salida la pone la renovación ${formatContractNumber(renewal.number)}, que empieza el ${ddmmyyyy(renewal.start_date)}: este contrato termina el día anterior. Si cambió la fecha de la renovación, revisala desde su ficha.`,
+    };
+  }
+  const billContinuation = Boolean(input.continuationBilling) && continuationGap(contract, newDate, ctx.today);
+  const after = { ...contract, terminated_at: newDate, continuation_billing: contract.continuation_billing || billContinuation };
+  const conflict = await extensionConflict(ctx, contract, occupancyEnd(after));
+  if (conflict) return { ok: false, error: conflict, field: "newDate" };
+
+  const withdraw = newDate === null;
+  const rescission = Boolean(contract.termination_notice_date);
+  const { data: saved, error } = await ctx.admin
+    .from("rental_contracts")
+    .update({
+      ...(withdraw
+        ? { terminated_at: null, termination_notice_date: null, termination_reason: null, termination_penalty: null }
+        : { terminated_at: newDate }),
+      ...(billContinuation ? { continuation_billing: true } : {}),
+      updated_by: ctx.session.userId,
+    })
+    .eq("id", contractId)
+    .eq("organization_id", orgId)
+    .eq("status", "vigente")
+    .eq("terminated_at", old)
+    .select("id");
+  if (error) {
+    if (isOverlapError(error)) return { ok: false, error: await overlapMessage(ctx, contract.property_id, { selfId: contract.id, start: contract.start_date, end: occupancyEnd(after) }) };
+    return dbFailure("changeContractExit", error, "No se pudo cambiar la salida.");
+  }
+  if (!saved?.length) return { ok: false, error: "La salida cambió mientras tanto. Recargá y probá de nuevo." };
+
+  // Anulada la rescisión, la indemnización ya no corresponde: se anula si nadie la pagó.
+  let notice: string | null = null;
+  let penaltyNote = "";
+  let creditRestored = 0;
+  if (withdraw && rescission) {
+    try {
+      const { data: rows, error: penErr } = await ctx.admin
+        .from("rental_charges")
+        .select("id, items:rental_charge_items(kind)")
+        .eq("organization_id", orgId)
+        .eq("contract_id", contractId)
+        .eq("kind", "salida")
+        .is("voided_at", null);
+      if (penErr) throw new Error(penErr.message);
+      const ids = ((rows ?? []) as { id: string; items: { kind: string }[] | null }[]).filter((r) => (r.items ?? []).some((i) => i.kind === "rescision")).map((r) => r.id);
+      if (ids.length) {
+        const res = await voidContractCharges(ctx.admin, orgId, contractId, ids, "Se anuló la rescisión", { undoCredit: true });
+        if (res.voided.length) penaltyNote = " Se anuló la indemnización.";
+        creditRestored = res.creditRestored;
+        if (res.kept.length) {
+          notice = "La indemnización ya tiene cobros, así que quedó en la cuenta: si hay que devolverla, anulá el cobro y después el cargo.";
+          penaltyNote += " La indemnización ya tenía cobros y quedó en la cuenta.";
+        }
+      }
+    } catch (e) {
+      logRentalsError("changeContractExit:penalty", e);
+      notice = "No se pudo anular la indemnización: anulala a mano desde la cuenta del contrato.";
+      penaltyNote = " No se pudo anular la indemnización.";
+    }
+  }
+
+  // Adelantada: se anula lo posterior. Corrida o anulada: la sincronización vuelve a facturar los meses que faltan.
+  if (newDate !== null && newDate < old) await scheduleExit(ctx, contractId, newDate, rescission ? "Contrato rescindido" : "Contrato finalizado");
+  else await resyncContract(ctx, contractId);
+
+  // El saldo que volvió de la indemnización: la sincronización pudo aplicarlo a los meses que se vuelven a cobrar.
+  if (creditRestored > 0) {
+    const left = await unallocatedCreditOf(ctx.admin, orgId, contractId, contract.currency);
+    penaltyNote += ` Se deshicieron ${formatMoney(creditRestored, contract.currency)} de saldo a favor imputado a la indemnización${
+      left == null
+        ? "."
+        : left > 0.004
+          ? `: el inquilino queda con ${formatMoney(left, contract.currency)} a favor.`
+          : ": se aplicaron a los meses que se vuelven a cobrar."
+    }`;
+  }
+
+  const continuationNote = billContinuation
+    ? ` Se cobran los meses desde el vencimiento (${ddmmyyyy(contract.end_date)}), al último alquiler (continuación, art. 1218 CCyC).`
+    : "";
+  const what = rescission ? "la rescisión" : "la entrega programada";
+  await logRentalEvent(ctx.admin, {
+    organizationId: orgId,
+    contractId,
+    propertyId: contract.property_id,
+    type: withdraw ? "contrato_salida_anulada" : "contrato_salida_cambiada",
+    summary: withdraw
+      ? `Se anuló ${what} del ${ddmmyyyy(old)}: el inquilino se queda y el contrato sigue ${contract.end_date < ctx.today ? `como vencido (terminó el ${ddmmyyyy(contract.end_date)})` : `hasta su fin (${ddmmyyyy(contract.end_date)})`}.${penaltyNote}${continuationNote}`
+      : `La salida pasó del ${ddmmyyyy(old)} al ${ddmmyyyy(newDate as string)}: ${(newDate as string) > old ? "se vuelven a facturar los meses hasta la fecha nueva" : "se anularon los cargos posteriores"}.${contract.termination_penalty ? " La indemnización no se recalculó: si cambia, corregila desde la cuenta." : ""}${continuationNote}`,
+    actorId: ctx.session.userId,
+    actorName: ctx.actorName,
+  });
+  return { ok: true, closesOn: newDate, notice };
 }
 
 // ─── Renovar / link / borrar borrador ───────────────────────────────────────

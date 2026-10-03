@@ -5,6 +5,7 @@ import { Search, ShieldCheck, Trash2, UserPlus, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PersonFormDialog } from "@/components/rentals/people/person-form-dialog";
@@ -12,6 +13,7 @@ import { RENTALS_ACCENT } from "@/components/rentals/ui";
 import { cn } from "@/lib/utils";
 import { formatMoney, getInitials } from "@/lib/format";
 import { GUARANTEE_TYPE_LABEL } from "@/lib/rentals/labels";
+import { isValidConsent } from "@/lib/rentals/renewal";
 import type { RentalGuaranteeType, RentalPerson } from "@/lib/types/database";
 import type { PersonOption } from "./types";
 import { StepIntro } from "./wizard-fields";
@@ -123,7 +125,7 @@ function PersonPicker({
   );
 }
 
-export function StepParties({ state, set, errors, people, addPerson }: StepProps) {
+export function StepParties({ state, set, errors, people, addPerson, today }: StepProps) {
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
   const tenants = state.parties.filter((p) => p.role === "inquilino");
   const guarantors = state.parties.filter((p) => p.role === "garante");
@@ -217,11 +219,18 @@ export function StepParties({ state, set, errors, people, addPerson }: StepProps
         {guarantors.length === 0 && (
           <p className="text-xs text-muted-foreground">Opcional. Si la garantía es un seguro de caución sin garante, igual podés cargar a la aseguradora como persona jurídica.</p>
         )}
+        {state.is_renewal && guarantors.length > 0 && (
+          <p className="text-xs text-muted-foreground leading-snug">
+            Es una renovación: la garantía del contrato anterior no sigue sola (art. 1225 CCyC). Cargá la fecha en que cada garante firmó la renovación; si alguno no firma, sacalo. Sin
+            esas fechas el borrador se guarda, pero no se activa.
+          </p>
+        )}
         {guarantors.map((p) => {
           const person = byId.get(p.person_id);
           const type = p.guarantee_type ?? "otra";
+          const consentMissing = state.is_renewal && !isValidConsent(p.guarantor_consent_at, today);
           return (
-            <div key={p.key} className="rounded-xl border px-3 py-3 space-y-2.5">
+            <div key={p.key} className={cn("rounded-xl border px-3 py-3 space-y-2.5", consentMissing && "border-amber-500/50")}>
               <div className="flex items-center gap-3">
                 <span className="size-9 rounded-full bg-muted flex items-center justify-center shrink-0">
                   <ShieldCheck size={15} className="text-muted-foreground" />
@@ -251,6 +260,21 @@ export function StepParties({ state, set, errors, people, addPerson }: StepProps
                 </Select>
                 <Input value={p.guarantee_detail} onChange={(e) => update(p.key, { guarantee_detail: e.target.value })} placeholder={DETAIL_PLACEHOLDER[type]} className="h-10" aria-label="Detalle de la garantía" />
               </div>
+              {state.is_renewal && (
+                <div className="grid gap-1.5 sm:grid-cols-[minmax(0,1fr)_11rem] sm:items-center">
+                  <Label htmlFor={`consent-${p.key}`} className={cn("text-xs", consentMissing ? "text-amber-800 dark:text-amber-200" : "text-muted-foreground")}>
+                    {!consentMissing ? "Firmó la renovación el" : p.guarantor_consent_at ? "La fecha de firma no puede ser posterior a hoy" : "Falta la fecha en que firmó la renovación"}
+                  </Label>
+                  <Input
+                    id={`consent-${p.key}`}
+                    type="date"
+                    max={today}
+                    value={p.guarantor_consent_at}
+                    onChange={(e) => update(p.key, { guarantor_consent_at: e.target.value })}
+                    className={cn("h-9", consentMissing && "border-amber-500/60")}
+                  />
+                </div>
+              )}
             </div>
           );
         })}

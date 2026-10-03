@@ -20,7 +20,7 @@ export async function ContractAdjustmentsSection({ contractId }: { contractId: s
   if (!res.ok) {
     return <Card className="p-4 text-sm text-muted-foreground border-dashed">{res.error}</Card>;
   }
-  const { contract: c, items, today } = res;
+  const { contract: c, items, today, autoApply } = res;
   const canEdit = can(role, "rentals", "update");
 
   if (c.method === "sin_ajuste") {
@@ -70,7 +70,7 @@ export async function ContractAdjustmentsSection({ contractId }: { contractId: s
         </SectionTitle>
         <div className="space-y-3">
           {list.map((a) => (
-            <AdjustmentCard key={a.id} adj={a} today={today} canEdit={canEdit} showContract={false} />
+            <AdjustmentCard key={a.id} adj={a} today={today} canEdit={canEdit} showContract={false} autoApply={autoApply} />
           ))}
         </div>
       </section>

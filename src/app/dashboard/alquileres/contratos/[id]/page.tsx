@@ -5,7 +5,7 @@ import { AlertTriangle, ArrowLeft, CalendarRange, DoorOpen, FileSignature, Histo
 import { Card } from "@/components/ui/card";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
 import { RENTALS_ACCENT, StatusBadge } from "@/components/rentals/ui";
-import { ContinuationBillingButton, ContractActions, DraftBanner } from "@/components/rentals/contracts/contract-actions";
+import { ChangeExitButton, ContinuationBillingButton, ContractActions, DraftBanner } from "@/components/rentals/contracts/contract-actions";
 import { ContractHistory } from "@/components/rentals/contracts/contract-history";
 import { ContractOverview } from "@/components/rentals/contracts/contract-overview";
 import { ContractSummaryCards } from "@/components/rentals/contracts/contract-summary-cards";
@@ -19,10 +19,12 @@ import { ContractProofsSection } from "@/components/rentals/proofs/contract-proo
 import { ExpensesSection } from "@/components/rentals/expenses/expenses-section";
 import { DocumentsSection } from "@/components/rentals/documents/documents-section";
 import { formatDate, formatMoney } from "@/lib/format";
-import { CONTRACT_STATE_META, DEPOSIT_STATUS_LABEL, contractStateLabel, formatContractNumber } from "@/lib/rentals/labels";
+import { CONTRACT_STATE_META, contractStateLabel, formatContractNumber } from "@/lib/rentals/labels";
 import { INDEX_META, isIndexCode } from "@/lib/rentals/indices";
 import { requireRentalsPage } from "@/lib/rentals/server/access";
 import { loadContractDetail, loadContractEvents } from "@/lib/rentals/server/contracts-queries";
+import { loadDepositFlags } from "@/lib/rentals/server/deposit";
+import { DepositBanner } from "@/components/rentals/contracts/deposit-dialog";
 
 export const metadata = { title: "Contrato · rentOS" };
 
@@ -87,6 +89,13 @@ export default async function ContractPage({
   const indexLabel = c.adjustment_method === "indice" && c.index_code && isIndexCode(c.index_code) ? INDEX_META[c.index_code].label : null;
   const org = ctx.organization;
   const basePath = `/dashboard/alquileres/contratos/${c.id}`;
+  const depositFlags = await loadDepositFlags(ctx, c);
+  // Ya rige su renovación: el inquilino no se va ni hay continuación que cobrar; se cierra solo el día antes.
+  const renewalActive = c.status === "vigente" && detail.renewal?.status === "vigente";
+  const displayState = renewalActive ? "renovado" : detail.displayState;
+  const lastDay = c.terminated_at ?? c.end_date;
+  // Vencido con la salida registrada: los meses desde el fin se cobran sólo con la continuación (art. 1218).
+  const expiredWithExit = !renewalActive && c.status === "vigente" && Boolean(c.terminated_at) && c.end_date < detail.today;
 
   return (
     <div className="page-x page-y space-y-4 sm:space-y-5 max-w-5xl mx-auto">
@@ -112,7 +121,7 @@ export default async function ContractPage({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-xl sm:text-2xl font-semibold tracking-tight font-mono">{formatContractNumber(c.number)}</h1>
-              <StatusBadge meta={{ ...CONTRACT_STATE_META[detail.displayState], label: contractStateLabel(c, detail.today) }} />
+              <StatusBadge meta={{ ...CONTRACT_STATE_META[displayState], label: contractStateLabel({ ...c, renewed: renewalActive }, detail.today) }} />
             </div>
             <div className="mt-1 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-x-4 gap-y-1 text-sm">
               <Link href={`/dashboard/alquileres/propiedades/${detail.property.id}`} className="inline-flex items-center gap-1.5 hover:underline min-w-0">
@@ -138,11 +147,25 @@ export default async function ContractPage({
             </div>
           </div>
         </div>
-        <ContractActions detail={detail} org={{ name: org.name, legal_name: org.legal_name, tax_id: org.tax_id, logo_url: org.logo_url, primary_color: org.primary_color }} />
+        <ContractActions
+          detail={detail}
+          deposit={depositFlags}
+          org={{ name: org.name, legal_name: org.legal_name, tax_id: org.tax_id, logo_url: org.logo_url, primary_color: org.primary_color }}
+        />
       </div>
 
       {draft && <DraftBanner detail={detail} />}
-      {detail.displayState === "vencido_ocupado" && (
+      {renewalActive && detail.renewal && (
+        <div className="rounded-xl border border-teal-500/30 bg-teal-500/[0.07] px-4 py-3 flex items-start gap-3">
+          <RefreshCcw size={18} className="text-teal-700 dark:text-teal-400 shrink-0 mt-0.5" />
+          <p className="text-sm">
+            Lo sigue la renovación {formatContractNumber(detail.renewal.number)}: este contrato sigue hasta el {formatDate(lastDay)} y ese día se cierra solo, sin cargo de
+            salida. Desde el día siguiente cobra la renovación.{" "}
+            <span className="text-muted-foreground">Los gastos pendientes del inquilino pasan a la renovación; el depósito, pasalo desde «Cerrar el depósito» cuando se cierre.</span>
+          </p>
+        </div>
+      )}
+      {displayState === "vencido_ocupado" && (
         <div className="rounded-xl border border-orange-500/30 bg-orange-500/[0.07] px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
           <div className="flex items-start gap-3 min-w-0 flex-1">
             <AlertTriangle size={18} className="text-orange-600 shrink-0 mt-0.5" />
@@ -159,17 +182,33 @@ export default async function ContractPage({
           <ContinuationBillingButton contractId={c.id} on={Boolean(c.continuation_billing)} />
         </div>
       )}
-      {(detail.displayState === "rescision_notificada" || detail.displayState === "salida_programada") && c.terminated_at && (
-        <div className="rounded-xl border border-rose-500/30 bg-rose-500/[0.06] px-4 py-3 flex items-start gap-3">
-          <DoorOpen size={18} className="text-rose-600 shrink-0 mt-0.5" />
-          <p className="text-sm">
-            {c.termination_notice_date
-              ? `El inquilino notificó la rescisión el ${formatDate(c.termination_notice_date)} y desocupa el ${formatDate(c.terminated_at)}.`
-              : `Entrega las llaves el ${formatDate(c.terminated_at)}.`}{" "}
-            Hasta ese día el contrato sigue vigente y se le sigue cobrando el alquiler; ese día se cierra solo y se anulan los cargos posteriores.
-            {c.termination_penalty ? ` Indemnización: ${formatMoney(c.termination_penalty, c.currency)}.` : ""}{" "}
-            <span className="text-muted-foreground">Si entrega las llaves antes, registralo desde «Más».</span>
-          </p>
+      {(displayState === "rescision_notificada" || displayState === "salida_programada") && c.terminated_at && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/[0.06] px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex items-start gap-3 min-w-0 flex-1">
+            <DoorOpen size={18} className="text-rose-600 shrink-0 mt-0.5" />
+            <p className="text-sm">
+              {c.termination_notice_date
+                ? `El inquilino notificó la rescisión el ${formatDate(c.termination_notice_date)} y desocupa el ${formatDate(c.terminated_at)}.`
+                : `Entrega las llaves el ${formatDate(c.terminated_at)}.`}{" "}
+              {c.terminated_at < detail.today ? (
+                <span className="font-medium">
+                  Esa fecha ya pasó y el contrato sigue abierto: si ya entregó las llaves, registrá la entrega desde «Más»; si sigue adentro, cambiá la salida.{" "}
+                </span>
+              ) : expiredWithExit && !c.continuation_billing ? (
+                <span className="font-medium">
+                  Hasta ese día sigue vigente, pero venció el {formatDate(c.end_date)} y los meses desde entonces no se están cobrando.{" "}
+                </span>
+              ) : (
+                <>Hasta ese día el contrato sigue vigente y se le sigue cobrando el alquiler{expiredWithExit ? " (desde el vencimiento, como continuación)" : ""}; ese día se cierra solo y se anulan los cargos posteriores. </>
+              )}
+              {c.termination_penalty ? `Indemnización: ${formatMoney(c.termination_penalty, c.currency)}. ` : ""}
+              <span className="text-muted-foreground">Si cambia la fecha o se queda, usá «Cambiar la salida»; si entrega las llaves antes, registralo desde «Más».</span>
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            {expiredWithExit && <ContinuationBillingButton contractId={c.id} on={Boolean(c.continuation_billing)} />}
+            <ChangeExitButton detail={detail} />
+          </div>
         </div>
       )}
       {ended && (
@@ -180,11 +219,15 @@ export default async function ContractPage({
             {c.termination_reason ? ` · ${c.termination_reason}` : ""}
             {c.termination_penalty ? ` · indemnización ${formatMoney(c.termination_penalty, c.currency)}` : ""}
           </p>
-          {c.deposit_amount > 0 && (c.deposit_status === "retenido" || c.deposit_status === "pendiente") && (
-            <p className="text-xs text-amber-800 dark:text-amber-200">
-              Depósito de {formatMoney(c.deposit_amount, c.deposit_currency || c.currency)}: {DEPOSIT_STATUS_LABEL[c.deposit_status].toLowerCase()}. Acordate de devolverlo o aplicarlo a deudas.
-            </p>
-          )}
+          {/* Depósito todavía abierto: qué falta y el botón para resolverlo (se va al cerrarlo). */}
+          <DepositBanner
+            contractId={c.id}
+            amount={Number(c.deposit_amount)}
+            currency={c.deposit_currency || c.currency}
+            status={c.deposit_status}
+            tracked={depositFlags.tracked}
+            renewalNumber={detail.renewal && detail.renewal.status !== "borrador" ? detail.renewal.number : null}
+          />
         </div>
       )}
       {(detail.renewal || detail.renewedFrom) && (
@@ -216,7 +259,7 @@ export default async function ContractPage({
         />
       </Card>
 
-      <ContractSummaryCards detail={detail} />
+      <ContractSummaryCards detail={detail} depositHeldBy={depositFlags.heldBy} />
 
       <ContractTabs basePath={basePath} active={tab} tabs={[...tabs]}>
         <Suspense key={tab} fallback={<TabSkeleton />}>

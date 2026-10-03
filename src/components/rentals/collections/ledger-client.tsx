@@ -126,7 +126,7 @@ export function LedgerView({ ledger }: { ledger: ContractLedger }) {
           {canCharge && (
             <div className="flex flex-wrap items-center gap-2">
               <ReminderMenu contractId={contract.id} tenantName={contract.tenantName} tenantEmail={contract.tenantEmail} />
-              <ExtraChargeDialog contractId={contract.id} currency={currency} today={ledger.today}>
+              <ExtraChargeDialog contractId={contract.id} currency={currency} today={ledger.today} depositHolder={contract.depositHolder}>
                 <Button variant="outline" size="sm" className="gap-1.5">
                   <FilePlus2 size={14} /> Nuevo cargo
                 </Button>
@@ -224,7 +224,14 @@ export function LedgerView({ ledger }: { ledger: ContractLedger }) {
       )}
 
       {addFor && (
-        <AddItemDialog open onOpenChange={(o) => !o && setAddFor(null)} chargeId={addFor.id} chargeLabel={addFor.label} currency={currency} />
+        <AddItemDialog
+          open
+          onOpenChange={(o) => !o && setAddFor(null)}
+          chargeId={addFor.id}
+          chargeLabel={addFor.label}
+          currency={currency}
+          depositHolder={contract.depositHolder}
+        />
       )}
       {discountFor && (
         <DiscountDialog
@@ -243,8 +250,14 @@ export function LedgerView({ ledger }: { ledger: ContractLedger }) {
         warning={
           voidChargeFor?.kind === "mensual" ? (
             <>
-              Un cargo mensual anulado <strong>se vuelve a generar</strong> con los valores actuales del contrato (sin los conceptos que le agregaste a
-              mano). Si este mes no se cobra, mejor <strong>bonificá</strong> el alquiler.
+              Un cargo mensual anulado <strong>se vuelve a generar</strong> con los valores actuales del contrato. Las expensas, los conceptos que le
+              agregaste a mano y los intereses ya cargados o condonados pasan al cargo nuevo; una bonificación del alquiler, no. Si este mes no se
+              cobra, mejor <strong>bonificá</strong> el alquiler.
+            </>
+          ) : voidChargeFor?.items.some((i) => i.kind === "diferencia_ajuste") ? (
+            <>
+              Anular un cargo aparte de diferencia por ajuste la <strong>perdona</strong>: no se vuelve a cobrar. Para bajarla sin anular,{" "}
+              <strong>bonificala</strong>.
             </>
           ) : undefined
         }
@@ -254,7 +267,8 @@ export function LedgerView({ ledger }: { ledger: ContractLedger }) {
           if (!voidChargeFor) return { ok: false as const, error: "No encontramos el cargo." };
           const res = await voidCharge(voidChargeFor.id, reason);
           if (!res.ok) return res;
-          toast.success("Cargo anulado", { description: res.regenerated ? "Se volvió a generar con los valores actuales del contrato." : undefined });
+          const description = [res.regenerated ? "Se volvió a generar con los valores actuales del contrato." : null, res.notice].filter(Boolean).join(" ");
+          toast.success("Cargo anulado", { description: description || undefined, duration: res.notice ? 10000 : undefined });
           router.refresh();
           return { ok: true as const };
         }}

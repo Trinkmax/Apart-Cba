@@ -66,13 +66,15 @@ export function PortalContractCard({ view }: { view: TenantPortalView }) {
       <dl className="divide-y">
         <Row label="Contrato">
           <span className="font-mono text-[13px]">{c.number}</span>
-          <span className={cn("ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium", c.status === "vigente" ? "bg-emerald-100 text-emerald-800" : c.status === "por_vencer" ? "bg-amber-100 text-amber-800" : "bg-muted text-muted-foreground")}>
+          <span className={cn("ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium", c.status === "vigente" ? "bg-emerald-100 text-emerald-800" : c.status === "por_vencer" || c.status === "vencido_ocupado" || c.status === "rescision_notificada" || c.status === "salida_programada" ? "bg-amber-100 text-amber-800" : "bg-muted text-muted-foreground")}>
             {c.statusLabel}
           </span>
         </Row>
         <Row label="Plazo">
           del {formatDate(c.startDate)} al {formatDate(c.endDate)}
-          <span className="block text-xs text-muted-foreground">{remainingLabel(today, c.endDate)}</span>
+          <span className="block text-xs text-muted-foreground">
+            {c.moveOutDate ? `Entregás las llaves el ${formatDate(c.moveOutDate)} · ${remainingLabel(today, c.moveOutDate)}` : remainingLabel(today, c.endDate)}
+          </span>
         </Row>
         <Row label="Alquiler hoy">
           <span className="font-semibold tabular-nums">{formatMoney(c.currentRent, c.currency)}</span> por mes

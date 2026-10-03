@@ -2410,7 +2410,7 @@ export interface RentalPerson {
 export type RentalContractStatus = "borrador" | "vigente" | "finalizado" | "rescindido";
 export type RentalUsage = "vivienda" | "comercial" | "mixto" | "cochera" | "otro";
 export type RentalLegalRegime = "ccyc_2015" | "ley_27551" | "ley_27737" | "dnu_70_2023";
-export type RentalDepositStatus = "pendiente" | "retenido" | "devuelto" | "aplicado" | "no_aplica";
+export type RentalDepositStatus = "pendiente" | "retenido" | "devuelto" | "aplicado" | "trasladado" | "no_aplica";
 export type RentalStampTaxStatus = "pendiente" | "pagado" | "exento" | "no_aplica";
 export type RentalExpensasPayer = "inquilino" | "propietario" | "no_aplica";
 export type RentalExpensasMode = "paga_inquilino" | "cobra_inmobiliaria" | "no_aplica";
@@ -2473,6 +2473,8 @@ export interface RentalContract {
   deposit_status: RentalDepositStatus;
   deposit_returned_amount: number | null;
   deposit_returned_at: string | null;
+  /** 068h: registro del depósito {received, settlement, inherited}; lo leen las funciones de la base para deshacer. */
+  deposit_meta: Record<string, unknown>;
   stamp_tax_status: RentalStampTaxStatus;
   stamp_tax_amount: number | null;
   expensas_payer: RentalExpensasPayer;

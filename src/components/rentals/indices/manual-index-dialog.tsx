@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { parsePercentInput } from "@/lib/format";
+import { todayYmdInTz } from "@/lib/dates";
 import {
   INDEX_CODES,
   INDEX_META,
@@ -30,6 +31,12 @@ const COEF_SUSPICIOUS = 1.1;
 
 const pctOf = (coef: number) => Math.round((coef - 1) * 10000) / 100;
 
+/** "enero de 2026" · "diciembre de 2025 y marzo de 2026" (cada mes con su año: un hueco puede cruzar el año). */
+function joinMonths(months: string[]): string {
+  const names = months.map((m) => monthName(m, true));
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} y ${names[names.length - 1]}` : (names[0] ?? "");
+}
+
 /**
  * Carga manual de un índice (sólo superadmin): Casa Propia no tiene fuente
  * que se pueda leer sola. De los índices de nivel se guarda el NIVEL, no la
@@ -49,6 +56,9 @@ export function ManualIndexDialog({ defaultCode = "casa_propia", children }: { d
   const coef = isCoefficientIndex(code);
   const typed = parsePercentInput(value);
   const gaps = coef && rows ? missingMonths(rows.map((r) => r.period)) : [];
+  // Un mes que todavía no empezó no tiene dato (el server también lo frena):
+  // "YYYY-MM" del mes actual en Argentina, que es donde se publica.
+  const maxMonth = todayYmdInTz().slice(0, 7);
 
   useEffect(() => {
     if (!open) return;
@@ -67,6 +77,12 @@ export function ManualIndexDialog({ defaultCode = "casa_propia", children }: { d
     const n = parsePercentInput(value);
     const key = monthly ? (period ? `${period}-01` : "") : period;
     if (!key) return toast.error(monthly ? "Elegí el mes" : "Elegí el día");
+    // Sólo con "YYYY-MM" bien formado (Safari no tiene selector de mes): lo demás lo rechaza el server.
+    if (monthly && /^\d{4}-\d{2}$/.test(period) && period > maxMonth) {
+      return toast.error(`Todavía no llegó ${monthName(key, true)}`, {
+        description: `Revisá el mes: se puede cargar hasta ${monthName(`${maxMonth}-01`, true)}.`,
+      });
+    }
     if (coef) {
       if (n == null || !(n > MONTHLY_COEFFICIENT_RANGE.min && n < MONTHLY_COEFFICIENT_RANGE.max)) {
         return toast.error("Ingresá el coeficiente del mes", {
@@ -139,7 +155,7 @@ export function ManualIndexDialog({ defaultCode = "casa_propia", children }: { d
             </div>
             <div className="space-y-1.5 col-span-2 sm:col-span-1">
               <Label htmlFor="mi-period">{monthly ? "Mes" : "Día"}</Label>
-              <Input id="mi-period" type={monthly ? "month" : "date"} className="h-10" value={period} onChange={(e) => setPeriod(e.target.value)} />
+              <Input id="mi-period" type={monthly ? "month" : "date"} max={monthly ? maxMonth : undefined} className="h-10" value={period} onChange={(e) => setPeriod(e.target.value)} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -159,7 +175,8 @@ export function ManualIndexDialog({ defaultCode = "casa_propia", children }: { d
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Últimos valores</p>
           {gaps.length > 0 && (
             <p className="text-xs text-amber-700 dark:text-amber-300">
-              Falta cargar {gaps.map((g) => monthName(g, true)).join(", ")}: sin {gaps.length === 1 ? "ese mes" : "esos meses"} no se pueden calcular los ajustes que {gaps.length === 1 ? "lo incluyen" : "los incluyen"}.
+              {/* Un hueco frena sólo las ventanas que lo cruzan (la serie se calcula por tramos), pero en todas las inmobiliarias. */}
+              Falta cargar {joinMonths(gaps)}. {gaps.length === 1 ? "Cargalo" : "Cargalos"} cuanto antes: los ajustes que usan {gaps.length === 1 ? "ese mes" : "esos meses"} quedan esperando, en todas las inmobiliarias.
             </p>
           )}
           {rows == null ? (

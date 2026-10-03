@@ -10,7 +10,10 @@ import { rentalsContext, dbFailure, logRentalsError, type RentalsCtx } from "@/l
 import { revalidateRentals } from "@/lib/rentals/server/revalidate";
 import { applyAvailableCredit, computePaymentPreview, registerRentalPayment, voidRentalPayment } from "@/lib/rentals/server/payments";
 import { resyncContract } from "@/lib/rentals/server/contracts";
-import { logRentalEvent, voidContractCharges } from "@/lib/rentals/server/contract-sync";
+import { depositItemGate } from "@/lib/rentals/server/deposit";
+import { dropStaleDifferences, logRentalEvent, voidContractCharges, type StaleDifferencesResult } from "@/lib/rentals/server/contract-sync";
+import { isEngineItem, rentDiscountOf } from "@/lib/rentals/charges";
+import type { RentalChargeItemKind } from "@/lib/types/database";
 import {
   loadCollectionsBoard,
   loadContractLedger,
@@ -186,7 +189,15 @@ export async function addChargeItem(chargeId: string, input: z.input<typeof item
   const charge = uuid.safeParse(chargeId).success ? await contractIdOfCharge(ctx, chargeId) : null;
   if (!charge) return { ok: false as const, error: "No encontramos el cargo." };
   if (charge.voided_at) return { ok: false as const, error: "El cargo está anulado." };
-  const { kind, description, amount, payee } = parsed.data;
+  const { kind, description, amount } = parsed.data;
+  let payee = parsed.data.payee;
+  // Depósito: sólo si se puede cobrar por la cuenta, y para quien lo guarda según
+  // el contrato (no lo que venga del diálogo): si no, se le rendiría a quien no corresponde.
+  if (kind === "deposito") {
+    const gate = await depositItemGate(ctx.admin, ctx.organization.id, charge.contract_id);
+    if (!gate.ok) return { ok: false as const, error: gate.error };
+    payee = gate.payee;
+  }
   const { error } = await ctx.admin.from("rental_charge_items").insert({
     organization_id: ctx.organization.id,
     charge_id: charge.id,
@@ -272,11 +283,16 @@ export async function discountChargeItem(itemId: string, input: z.input<typeof d
   return { ok: true as const, newAmount };
 }
 
-/** Anula un cargo sin cobros. Un mensual anulado se vuelve a generar con los valores actuales del contrato. */
+/**
+ * Anula un cargo sin cobros. Un mensual anulado se vuelve a generar con los
+ * valores actuales del contrato, y lo cargado a mano (expensas, conceptos,
+ * punitorios y lo condonado) pasa al cargo nuevo del mismo mes.
+ */
 export async function voidCharge(chargeId: string, reason: string) {
   const r = await rentalsContext("update");
   if (!r.ok) return r;
   const { ctx } = r;
+  const org = ctx.organization.id;
   const clean = (reason ?? "").trim();
   if (clean.length < 3) return { ok: false as const, error: "Contá brevemente por qué se anula (queda en el historial).", field: "reason" };
   const charge = uuid.safeParse(chargeId).success ? await contractIdOfCharge(ctx, chargeId) : null;
@@ -288,63 +304,139 @@ export async function voidCharge(chargeId: string, reason: string) {
   const { count } = await ctx.admin
     .from("rental_payment_allocations")
     .select("id", { count: "exact", head: true })
-    .eq("organization_id", ctx.organization.id)
+    .eq("organization_id", org)
     .eq("charge_id", charge.id);
   if ((count ?? 0) > 0) return { ok: false as const, error: "Este cargo ya tiene cobros imputados. Anulá primero esos recibos." };
 
-  const { data: items } = await ctx.admin
-    .from("rental_charge_items")
-    .select("id, kind, ref_type, ref_id")
-    .eq("charge_id", charge.id)
-    .eq("organization_id", ctx.organization.id);
-  const carriesDifference = ((items ?? []) as { kind: string; ref_type: string | null }[]).some(
-    (i) => i.kind === "diferencia_ajuste" && i.ref_type === "rental_charge",
-  );
+  const isMonthly = charge.kind === "mensual";
+  const [{ data: itemsData }, { data: periodRow }] = await Promise.all([
+    ctx.admin
+      .from("rental_charge_items")
+      .select("id, kind, ref_type, ref_id, description, amount, original_amount")
+      .eq("charge_id", charge.id)
+      .eq("organization_id", org),
+    ctx.admin.from("rental_charges").select("period_index").eq("id", charge.id).eq("organization_id", org).maybeSingle(),
+  ]);
+  type Item = { id: string; kind: string; ref_type: string | null; ref_id: string | null; description: string; amount: number; original_amount: number | null };
+  const items = (itemsData ?? []) as Item[];
+  const carriesDifference = items.some((i) => i.kind === "diferencia_ajuste" && i.ref_type === "rental_charge");
+
+  if (isMonthly) {
+    // La diferencia por ajuste de ESTE mes ya cobrada en otro cargo: el mes vuelve
+    // con el precio ajustado y esa diferencia se pagaría dos veces.
+    const { data: diffs } = await ctx.admin
+      .from("rental_charge_items")
+      .select("charge_id")
+      .eq("organization_id", org)
+      .eq("kind", "diferencia_ajuste")
+      .eq("ref_type", "rental_charge")
+      .eq("ref_id", charge.id)
+      .gt("paid_amount", 0);
+    const holders = [...new Set(((diffs ?? []) as { charge_id: string }[]).map((d) => d.charge_id))];
+    if (holders.length) {
+      const { data: live } = await ctx.admin.from("rental_charges").select("label").eq("organization_id", org).in("id", holders).is("voided_at", null);
+      const labels = ((live ?? []) as { label: string }[]).map((l) => `«${l.label}»`);
+      if (labels.length) {
+        return {
+          ok: false as const,
+          error: `La diferencia por ajuste de este mes ya se cobró (en todo o en parte) en ${labels.join(" y ")}: si lo anulás, el mes vuelve con el precio ajustado y esa diferencia se pagaría dos veces. Si hay que corregirlo, bonificá en lugar de anular.`,
+        };
+      }
+    }
+  }
 
   // Anula y, en la misma transacción, devuelve a "pendiente" los gastos que se le
   // trasladaban al inquilino en este cargo (si no, no se cobrarían nunca).
   let voided = false;
   try {
-    const res = await voidContractCharges(ctx.admin, ctx.organization.id, charge.contract_id, [charge.id], clean.slice(0, 300));
+    const res = await voidContractCharges(ctx.admin, org, charge.contract_id, [charge.id], clean.slice(0, 300));
     voided = res.voided.includes(charge.id);
   } catch (e) {
     return dbFailure("voidCharge", e as { message?: string }, "No se pudo anular el cargo.");
   }
   if (!voided) return { ok: false as const, error: "El cargo cambió mientras tanto (¿entró un cobro?). Recargá y probá de nuevo." };
 
-  // Una diferencia por ajuste en un cargo aparte anulado queda perdonada: la
-  // reconciliación la cuenta como saldada y no la vuelve a cobrar.
-  const notice =
-    carriesDifference && charge.kind !== "mensual"
-      ? "La diferencia por ajuste queda perdonada: no se vuelve a cobrar."
-      : carriesDifference
-        ? "Si este cargo llevaba la diferencia por ajuste de otro mes, se vuelve a cobrar aparte. Para perdonarla, bonificala en lugar de anular."
-        : null;
-
+  const notes: string[] = [];
   let regenerated = false;
-  if (charge.kind === "mensual") {
+  if (!isMonthly) {
+    // Una diferencia por ajuste en un cargo aparte anulado queda perdonada: la
+    // reconciliación la cuenta como saldada y no la vuelve a cobrar.
+    if (carriesDifference) notes.push("La diferencia por ajuste queda perdonada: no se vuelve a cobrar.");
+  } else {
+    // La diferencia de este mes que se cobraba en otro cargo sobra: el mes vuelve
+    // con el precio ajustado (o ya no se cobra). Antes de regenerar, como al editar el contrato.
+    // El cargo ya está anulado: si esto falla no se puede lanzar (la persona vería un
+    // error genérico y el mes no se volvería a generar). Se avisa qué revisar.
+    let stale: StaleDifferencesResult = { dropped: 0, amount: 0, chargeLabels: [] };
+    try {
+      stale = await dropStaleDifferences(ctx.admin, org, charge.contract_id, [charge.id], `Se anuló ${charge.label}`);
+    } catch (e) {
+      logRentalsError("voidCharge:staleDifferences", e);
+      notes.push("No se pudo revisar si la diferencia por ajuste de este mes se cobraba en otro cargo: revisá la cuenta para no cobrarla dos veces.");
+    }
     await resyncContract(ctx, charge.contract_id);
-    const { count: again } = await ctx.admin
-      .from("rental_charges")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", ctx.organization.id)
-      .eq("contract_id", charge.contract_id)
-      .eq("label", charge.label)
-      .eq("kind", "mensual")
-      .is("voided_at", null);
-    regenerated = (again ?? 0) > 0;
+    const periodIndex = (periodRow as { period_index: number | null } | null)?.period_index;
+    const { data: again } =
+      periodIndex == null
+        ? { data: null }
+        : await ctx.admin
+            .from("rental_charges")
+            .select("id, items:rental_charge_items(meta)")
+            .eq("organization_id", org)
+            .eq("contract_id", charge.contract_id)
+            .eq("kind", "mensual")
+            .eq("period_index", periodIndex)
+            .is("voided_at", null)
+            .maybeSingle();
+    const fresh = again as { id: string; items: { meta: Record<string, unknown> | null }[] } | null;
+    regenerated = Boolean(fresh);
+    const carriedFrom = new Set((fresh?.items ?? []).map((i) => String(i.meta?.carried_from ?? "")).filter(Boolean));
+    const manual = items.filter((i) => !isEngineItem({ kind: i.kind as RentalChargeItemKind, ref_type: i.ref_type }) && Number(i.amount) > 0);
+    const carried = manual.filter((i) => carriedFrom.has(i.id)).map((i) => i.description);
+    const missing = manual.filter((i) => !carriedFrom.has(i.id)).map((i) => i.description);
+    const rentDiscount = rentDiscountOf(items.map((i) => ({ kind: i.kind as RentalChargeItemKind, amount: i.amount, original_amount: i.original_amount })));
+    if (stale.dropped) {
+      notes.push(
+        `Se sacó la diferencia por ajuste de este mes que se cobraba en ${quoteList(stale.chargeLabels)} (${formatMoney(stale.amount, charge.currency)}): ${regenerated ? "el mes nuevo ya sale con el precio ajustado" : "el mes ya no se cobra"}.`,
+      );
+    }
+    if (carriesDifference) notes.push("Si este cargo llevaba la diferencia por ajuste de otro mes, se vuelve a cobrar aparte. Para perdonarla, bonificala en lugar de anular.");
+    if (carried.length) {
+      notes.push(
+        carried.length === 1
+          ? `Pasó al cargo nuevo: ${quoteList(carried)}. Si no corresponde, bonificalo.`
+          : `Pasaron al cargo nuevo: ${quoteList(carried)}. Si alguno no corresponde, bonificalo.`,
+      );
+    }
+    if (missing.length) {
+      notes.push(
+        regenerated
+          ? `No se ${missing.length === 1 ? "pudo pasar" : "pudieron pasar"} ${quoteList(missing)} al cargo nuevo: ${missing.length === 1 ? "cargalo de nuevo si corresponde" : "cargalos de nuevo si corresponden"}.`
+          : `Este mes no se vuelve a generar, así que ${quoteList(missing)} ${missing.length === 1 ? "quedó anulado" : "quedaron anulados"} con él.`,
+      );
+    }
+    if (rentDiscount > 0 && regenerated) {
+      notes.push(`La bonificación de ${formatMoney(rentDiscount, charge.currency)} del alquiler no pasó al cargo nuevo: si sigue correspondiendo, volvé a bonificarlo.`);
+    }
   }
+  const notice = notes.length ? notes.join(" ") : null;
   await logRentalEvent(ctx.admin, {
-    organizationId: ctx.organization.id,
+    organizationId: org,
     contractId: charge.contract_id,
     type: "cargo_anulado",
-    summary: `Se anuló el cargo ${charge.label}: ${clean}${regenerated ? " (se volvió a generar con los valores actuales)" : ""}${carriesDifference && charge.kind !== "mensual" ? ". La diferencia por ajuste queda perdonada." : ""}`,
-    payload: { charge_id: charge.id, regenerated, forgave_difference: carriesDifference && charge.kind !== "mensual" },
+    summary: `Se anuló el cargo ${charge.label}: ${clean}${regenerated ? " (se volvió a generar con los valores actuales)" : ""}.${notice ? ` ${notice}` : ""}`,
+    payload: { charge_id: charge.id, regenerated, forgave_difference: carriesDifference && !isMonthly },
     actorId: ctx.session.userId,
     actorName: ctx.actorName,
   });
   revalidateRentals({ contractId: charge.contract_id });
   return { ok: true as const, regenerated, notice };
+}
+
+/** «A», «A» y «B», «A», «B» y «C». */
+function quoteList(labels: string[]): string {
+  const quoted = [...new Set(labels)].map((l) => `«${l}»`);
+  return quoted.length <= 1 ? (quoted[0] ?? "") : `${quoted.slice(0, -1).join(", ")} y ${quoted[quoted.length - 1]}`;
 }
 
 const extraChargeSchema = z.object({
@@ -370,13 +462,20 @@ export async function createExtraCharge(contractId: string, input: z.input<typeo
   if (!c) return { ok: false as const, error: "No encontramos el contrato." };
   if (c.status === "borrador") return { ok: false as const, error: "El contrato todavía es un borrador: activalo antes de cargarle cobros." };
   const { label, dueDate, kind, items } = parsed.data;
+  // Depósito: igual que en addChargeItem, para quien lo guarda según el contrato.
+  let depositPayee: (typeof PAYEES)[number] | null = null;
+  if (items.some((i) => i.kind === "deposito")) {
+    const gate = await depositItemGate(ctx.admin, ctx.organization.id, contractId);
+    if (!gate.ok) return { ok: false as const, error: gate.error };
+    depositPayee = gate.payee;
+  }
   const { data, error } = await ctx.admin.rpc("rental_create_charge", {
     p_organization_id: ctx.organization.id,
     p_contract_id: contractId,
     p_charge: { kind, label, due_date: dueDate, currency: c.currency, created_by: ctx.session.userId },
     p_items: items.map((i, idx) => ({
       kind: i.kind,
-      payee: i.payee,
+      payee: i.kind === "deposito" && depositPayee ? depositPayee : i.payee,
       description: i.description,
       amount: round2(i.amount),
       meta: { manual: true },

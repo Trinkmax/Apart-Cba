@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   REGIME_IN_FORCE,
   guarantorConsentError,
-  guarantorsWithoutConsent,
+  isValidConsent,
   joinNamesEs,
   planGuarantorConsents,
   renewalLegalPatch,
@@ -109,9 +109,14 @@ describe("planGuarantorConsents", () => {
     expect(plan.missing).toEqual(["g3"]);
   });
 
-  it("garantes sin fecha (para una renovación vigente que se edita)", () => {
-    expect(guarantorsWithoutConsent(parties).map((p) => p.person_id)).toEqual(["g1", "g3"]);
+  it("conformidad: fecha válida de hoy o anterior", () => {
+    expect(isValidConsent("2026-10-02", TODAY)).toBe(true);
+    expect(isValidConsent("2026-10-03", TODAY)).toBe(false);
+    expect(isValidConsent("", TODAY)).toBe(false);
+    expect(isValidConsent(null, TODAY)).toBe(false);
+    expect(isValidConsent("2026-02-30", TODAY)).toBe(false);
   });
+
 });
 
 describe("mensajes", () => {

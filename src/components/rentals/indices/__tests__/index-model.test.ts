@@ -61,6 +61,22 @@ describe("summarizeIndex · mensual", () => {
     expect(cp.monthly.length).toBe(12);
     expect(cp.monthly.every((m) => m.pct === 2 || m.pct === 3)).toBe(true);
   });
+
+  it("Casa Propia trae qué meses hay cargados (para nombrar el que falta); los demás índices, no", () => {
+    const pts: IndexPoint[] = [
+      { date: "2026-01-01", value: 1.02 },
+      { date: "2026-03-01", value: 1.03 },
+      { date: "2026-04-01", value: 0 },
+      { date: "2026-05-01", value: 1.01 },
+    ];
+    expect(summarizeIndex("casa_propia", pts, "2026-06-02").coverage).toEqual({
+      first: "2026-01-01",
+      last: "2026-05-01",
+      gaps: ["2026-02-01", "2026-04-01"],
+    });
+    expect(summarizeIndex("casa_propia", [], "2026-06-02").coverage).toBeNull();
+    expect(s.coverage).toBeNull();
+  });
 });
 
 describe("summarizeIndex · diario", () => {

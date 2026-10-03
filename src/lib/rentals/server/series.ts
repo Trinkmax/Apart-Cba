@@ -9,8 +9,9 @@ import type { AdminClient } from "./access";
  * leen paginados.
  *
  * Casa Propia (coeficientes mensuales) se lee SIEMPRE entera, ignorando el
- * rango: los coeficientes se encadenan y, con un mes faltante, sólo vale el
- * último tramo sin huecos (`CoefficientSeries`). Si cada pantalla leyera un
+ * rango: los coeficientes se encadenan y, con un mes faltante, la serie queda
+ * en tramos y una ventana se calcula sólo si cae entera en uno
+ * (`CoefficientSeries.windowValues`). Si cada pantalla leyera un
  * rango distinto, el mismo hueco frenaría un ajuste en el cron y no en la
  * ficha. Son ~12 filas por año.
  */

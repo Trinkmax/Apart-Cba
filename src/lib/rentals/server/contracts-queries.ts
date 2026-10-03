@@ -188,21 +188,38 @@ export async function loadContractFormOptions(ctx: RentalsCtx): Promise<Contract
 // ─── Lista ──────────────────────────────────────────────────────────────────
 
 const LIST_COLS =
-  "id, number, status, property_id, start_date, end_date, duration_months, currency, initial_rent, current_rent, adjustment_method, index_code, adjustment_every_months, index_lag_months, fixed_pct, steps, rounding, cap_pct, allow_decrease, payment_window_days, terminated_at";
+  "id, number, status, property_id, start_date, end_date, duration_months, currency, initial_rent, current_rent, adjustment_method, index_code, adjustment_every_months, index_lag_months, fixed_pct, steps, rounding, cap_pct, allow_decrease, payment_window_days, terminated_at, termination_notice_date";
 
 const ADJ_COLS =
   "contract_id, sequence, period_index, effective_date, status, from_key, to_key, variation_pct, base_amount, computed_amount, applied_amount, override_reason, notified_at";
 
 type ListContract = Pick<
   RentalContract,
-  "id" | "number" | "status" | "property_id" | "start_date" | "end_date" | "duration_months" | "currency" | "initial_rent" | "current_rent" | "terminated_at"
+  | "id"
+  | "number"
+  | "status"
+  | "property_id"
+  | "start_date"
+  | "end_date"
+  | "duration_months"
+  | "currency"
+  | "initial_rent"
+  | "current_rent"
+  | "terminated_at"
+  | "termination_notice_date"
 > &
   PlanContract;
 
 export function viewOfRow(r: Pick<ContractListRow, "status" | "displayState">): ContractListView[] {
   if (r.status === "borrador") return ["borradores"];
   if (r.status === "finalizado" || r.status === "rescindido") return ["terminados"];
-  return r.displayState === "por_vencer" || r.displayState === "vencido_ocupado" ? ["vigentes", "por_vencer"] : ["vigentes"];
+  // Con salida registrada (rescisión notificada o entrega programada) también termina pronto: va con los por vencer.
+  return r.displayState === "por_vencer" ||
+    r.displayState === "vencido_ocupado" ||
+    r.displayState === "rescision_notificada" ||
+    r.displayState === "salida_programada"
+    ? ["vigentes", "por_vencer"]
+    : ["vigentes"];
 }
 
 export async function loadContractList(ctx: RentalsCtx): Promise<ContractListResult> {
@@ -428,7 +445,8 @@ export async function loadContractDetail(ctx: RentalsCtx, contractId: string): P
   return {
     // El hash del token no sale del servidor (la ficha viaja entera al cliente).
     contract: { ...contract, portal_token_hash: null },
-    displayState: contractDisplayState(contract, today),
+    // Con la renovación vigente el inquilino no se va: "Renovado", no "Por vencer" ni "Entrega programada".
+    displayState: contractDisplayState({ ...contract, renewed: contract.status === "vigente" && renewal?.status === "vigente" }, today),
     today,
     property: prop
       ? { id: prop.id, code: prop.code, address: propertyAddress(prop), city: prop.city, propertyType: prop.property_type }

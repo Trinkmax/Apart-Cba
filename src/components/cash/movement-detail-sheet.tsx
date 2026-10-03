@@ -613,8 +613,12 @@ function LockedNotice({ detail }: { detail: MovementDetail }) {
         <div className="text-sm text-amber-900 dark:text-amber-200">
           <div className="font-semibold">Movimiento de Alquileres</div>
           <p className="mt-1">
-            {detail.linked_rental ? `${detail.linked_rental.title}. ` : ""}Se corrige desde Alquileres (anulando el cobro, la rendición o el gasto) para que la
-            cuenta del inquilino y las rendiciones queden bien.
+            {detail.linked_rental ? `${detail.linked_rental.title}. ` : ""}
+            {detail.linked_rental?.kind === "deposito" ||
+            detail.ref_type === "rental_deposit_return" ||
+            detail.ref_type === "rental_deposit_received"
+              ? "Se corrige desde la ficha del contrato, con «Deshacer cierre del depósito» o «Desmarcar depósito cobrado», para que el depósito y la cuenta del inquilino queden bien."
+              : "Se corrige desde Alquileres (anulando el cobro, la rendición o el gasto) para que la cuenta del inquilino y las rendiciones queden bien."}
           </p>
           <Button asChild variant="outline" size="sm" className="mt-3">
             <Link href={detail.linked_rental?.href ?? "/dashboard/alquileres"}>Abrir en Alquileres</Link>

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { CheckCircle2, Loader2, Plus, Rocket, Trash2 } from "lucide-react";
+import { CheckCircle2, Loader2, Plus, Rocket, ShieldCheck, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -11,7 +11,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { RENTALS_ACCENT } from "@/components/rentals/ui";
-import { formatMoney, parseAmountInput } from "@/lib/format";
+import { formatDate, formatMoney, parseAmountInput } from "@/lib/format";
+import { formatContractNumber } from "@/lib/rentals/labels";
+import { isValidConsent, joinNamesEs } from "@/lib/rentals/renewal";
 import { activateRentalContract } from "@/lib/actions/rentals-contracts";
 import type { EntryChargeItemDraft, EntryChargeKind } from "./entry-breakdown";
 import { editableNumber } from "./wizard-state";
@@ -47,6 +49,8 @@ export function ActivateContractDialog({
   currency,
   startDate,
   today,
+  renewalOf = null,
+  guarantors = [],
 }: {
   contractId: string;
   open: boolean;
@@ -56,12 +60,21 @@ export function ActivateContractDialog({
   startDate: string;
   /** Si el contrato ya venía corriendo, el cargo de ingreso vence hoy (no en el pasado). */
   today: string;
+  /** Número del contrato que renueva (null si no es renovación). */
+  renewalOf?: number | null;
+  /** Garantes, con la fecha en que firmaron la renovación si ya se cargó. */
+  guarantors?: { personId: string; name: string; consentAt: string | null }[];
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [generate, setGenerate] = useState(suggestion.length > 0);
   const [items, setItems] = useState<ItemRow[]>(() => suggestion.map(rowOf));
   const [dueDate, setDueDate] = useState(startDate > today ? startDate : today);
+  // Renovación (art. 1225 CCyC): la fecha en que firmó cada garante, o que no firmó y sale del contrato.
+  const [consents, setConsents] = useState<Record<string, string>>({});
+  const [removed, setRemoved] = useState<Set<string>>(() => new Set());
+  // Una fecha futura guardada tampoco cuenta: se vuelve a pedir acá en vez de trabar la activación.
+  const unsigned = renewalOf != null ? guarantors.filter((g) => !isValidConsent(g.consentAt, today)) : [];
 
   const parsed = items.map((i) => parseAmountInput(i.amount));
   const total = parsed.reduce<number>((s, n) => s + (n ?? 0), 0);
@@ -80,8 +93,28 @@ export function ActivateContractDialog({
       }
       entryItems = items.map((i, idx) => ({ kind: i.kind, description: i.description.trim(), amount: parsed[idx] as number }));
     }
+    const removeGuarantors = unsigned.filter((g) => removed.has(g.personId)).map((g) => g.personId);
+    const signing = unsigned.filter((g) => !removed.has(g.personId));
+    const future = signing.filter((g) => (consents[g.personId] ?? "") > today);
+    if (future.length) {
+      toast.error("Revisá la fecha de firma", {
+        description: `${future.length > 1 ? "Las de" : "La de"} ${joinNamesEs(future.map((g) => g.name))} ${future.length > 1 ? "son posteriores" : "es posterior"} a hoy.`,
+      });
+      return;
+    }
+    const missing = signing.filter((g) => !consents[g.personId]);
+    if (missing.length) {
+      toast.error(missing.length === 1 ? "Falta la firma de un garante" : "Faltan las firmas de los garantes", {
+        description:
+          missing.length > 1
+            ? `Cargá la fecha en que firmaron la renovación ${joinNamesEs(missing.map((g) => g.name))}, o marcá quién no firmó.`
+            : `Cargá la fecha en que ${missing[0].name} firmó la renovación, o marcá que no firmó.`,
+      });
+      return;
+    }
+    const guarantorConsents = signing.map((g) => ({ personId: g.personId, consentAt: consents[g.personId] }));
     startTransition(async () => {
-      const res = await activateRentalContract(contractId, { entryItems, entryDueDate: dueDate || null });
+      const res = await activateRentalContract(contractId, { entryItems, entryDueDate: dueDate || null, guarantorConsents, removeGuarantors });
       if (!res.ok) {
         toast.error("No se pudo activar el contrato", { description: res.error });
         return;
@@ -112,6 +145,62 @@ export function ActivateContractDialog({
         </DialogHeader>
 
         <div className="space-y-4">
+          {renewalOf != null && guarantors.length > 0 && (
+            <section
+              className={`rounded-lg border p-3 space-y-2.5 ${unsigned.length ? "border-amber-500/40 bg-amber-500/[0.06]" : "bg-muted/30"}`}
+              aria-label="Garantes de la renovación"
+            >
+              <div>
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  <ShieldCheck size={14} className="text-muted-foreground" /> Garantes de la renovación
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5 leading-snug">
+                  La garantía del {formatContractNumber(renewalOf)} no sigue sola (art. 1225 CCyC): cada garante tiene que firmar la renovación. Si alguno no firmó, sacalo de este
+                  contrato.
+                </p>
+              </div>
+              {guarantors.map((g) =>
+                g.consentAt && isValidConsent(g.consentAt, today) ? (
+                  <p key={g.personId} className="text-xs flex items-center gap-1.5">
+                    <CheckCircle2 size={13} className="shrink-0 text-emerald-600" />
+                    <span className="truncate">
+                      {g.name} · firmó el {formatDate(g.consentAt)}
+                    </span>
+                  </p>
+                ) : (
+                  <div key={g.personId} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem] sm:items-center">
+                    <div className="min-w-0">
+                      <p className={`text-sm truncate ${removed.has(g.personId) ? "line-through text-muted-foreground" : ""}`}>{g.name}</p>
+                      <label className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+                        <Checkbox
+                          checked={removed.has(g.personId)}
+                          onCheckedChange={(v) =>
+                            setRemoved((s) => {
+                              const next = new Set(s);
+                              if (v === true) next.add(g.personId);
+                              else next.delete(g.personId);
+                              return next;
+                            })
+                          }
+                        />
+                        No firmó: sacarlo de este contrato
+                      </label>
+                    </div>
+                    <Input
+                      type="date"
+                      max={today}
+                      value={consents[g.personId] ?? ""}
+                      onChange={(e) => setConsents((c) => ({ ...c, [g.personId]: e.target.value }))}
+                      disabled={removed.has(g.personId)}
+                      aria-label={`Fecha en que ${g.name} firmó la renovación`}
+                      className="h-9"
+                    />
+                  </div>
+                ),
+              )}
+            </section>
+          )}
+
           <label className="flex items-start gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-accent/30 transition-colors">
             <Checkbox checked={generate} onCheckedChange={(v) => setGenerate(v === true)} className="mt-0.5" />
             <span>
@@ -185,6 +274,12 @@ export function ActivateContractDialog({
                 </Label>
                 <Input id="entry-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="h-9" />
               </div>
+              {renewalOf != null && items.some((i) => i.kind === "deposito") && (
+                // La sugerencia trae el depósito completo, como en un alta: en una renovación suele seguir el del contrato anterior.
+                <p className="text-xs text-amber-800 dark:text-amber-200 leading-snug">
+                  Es una renovación: si el depósito del {formatContractNumber(renewalOf)} sigue en garantía, cobrá sólo la diferencia o sacá ese renglón. Si no, se cobra dos veces.
+                </p>
+              )}
             </div>
           )}
           <p className="text-xs text-muted-foreground flex items-start gap-1.5">
