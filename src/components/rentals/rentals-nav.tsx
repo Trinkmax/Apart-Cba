@@ -134,7 +134,7 @@ export function RentalsNav({ counts }: { counts: Promise<RentalsNavCounts> }) {
                     aria-current={isActive ? "page" : undefined}
                     data-active={isActive ? "true" : undefined}
                     className={cn(
-                      "relative my-1.5 flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:px-3",
+                      "relative my-1.5 flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                       isActive ? "font-medium text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                     )}
                   >

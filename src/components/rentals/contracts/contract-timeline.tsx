@@ -78,7 +78,10 @@ export function ContractTimeline(props: ContractTimelineProps) {
 function TodayFlag({ pct, children }: { pct: number; children: ReactNode }) {
   const shift = pct < 7 ? "translate-x-0" : pct > 93 ? "-translate-x-full" : "-translate-x-1/2";
   return (
-    <div className="absolute top-0 bottom-0 pointer-events-none z-10" style={{ left: `${pct}%` }}>
+    // top-8: arranca donde arrancan los tramos (el pt-8 del contenedor); con top-0
+    // la etiqueta subía hasta la línea "Período… / Faltan N días" y la tapaba
+    // cuando hoy cae cerca de un extremo del contrato.
+    <div className="absolute top-8 bottom-0 pointer-events-none z-10" style={{ left: `${pct}%` }}>
       <div className={cn("absolute -top-7 whitespace-nowrap", shift)}>
         <span
           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm"
