@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { changeSettlementStatus } from "@/lib/actions/settlements";
+import { toastActionFailure } from "@/lib/action-failure";
 import {
   MANUAL_SETTLEMENT_STATUSES,
   SETTLEMENT_STATUS_META,
@@ -91,9 +92,9 @@ export function SettlementStatusMenu({
         setOpen(false);
         router.refresh();
       } catch (e) {
-        toast.error("No se pudo cambiar el estado", {
-          description: (e as Error).message,
-        });
+        // En producción el mensaje de un throw viene enmascarado: lo útil es
+        // distinguir un deploy nuevo (recargar) de un corte de conexión.
+        toastActionFailure(e, "No se pudo cambiar el estado");
       }
     });
   }

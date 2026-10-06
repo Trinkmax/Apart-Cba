@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { Loader2, Sparkles, Plus, AlertTriangle, Info } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Dialog,
@@ -31,6 +32,8 @@ import {
   SETTLEMENT_STATUS_META,
   formatPeriod,
 } from "@/lib/settlements/labels";
+import { settlementRegenerateHint } from "@/lib/settlements/payment-undo";
+import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { cn } from "@/lib/utils";
 import type { Owner } from "@/lib/types/database";
 
@@ -96,9 +99,19 @@ export function GenerateSettlementDialog({
         const res = await previewSettlement(next.ownerId, next.year, next.month);
         if (id !== previewReq.current) return; // respuesta vieja
         setPreview(res);
-      } catch {
+      } catch (e) {
         if (id !== previewReq.current) return;
-        setPreview(null);
+        // Antes quedaba null y el recuadro mostraba "Calculando qué entra…"
+        // para siempre. Generar no depende de la previsualización: se avisa
+        // y se puede generar igual (salvo con un deploy nuevo, que pide
+        // recargar para todo).
+        setPreview({
+          ok: false,
+          reason: "unknown",
+          message: isStaleDeployError(e)
+            ? "Se actualizó el sistema mientras tenías esto abierto: recargá la página para seguir."
+            : "No se pudo calcular qué entra (revisá la conexión). Podés generarla igual.",
+        });
       }
     });
   }
@@ -153,9 +166,9 @@ export function GenerateSettlementDialog({
         setOpen(false);
         router.push(`/dashboard/liquidaciones/${result.settlement.id}`);
       } catch (e) {
-        // Reservado para errores inesperados (red, DB caída). Los errores de
-        // negocio (sin unidades, ya cerrada, etc.) llegan como result.ok=false.
-        toast.error("Error", { description: (e as Error).message });
+        // Reservado para errores inesperados (red, deploy nuevo). Los errores
+        // de negocio (sin unidades, ya cerrada, etc.) llegan como result.ok=false.
+        toastActionFailure(e, "No se pudo generar la liquidación");
       }
     });
   }
@@ -347,11 +360,10 @@ function PreviewSummary({
     : null;
   const existingClosed =
     !!preview.existing && preview.existing.status !== "borrador";
-  // Regenerar sólo pisa borradores; para cualquier otro estado (anulada
-  // incluida — el índice único ignora el status) el camino es ELIMINAR la
-  // liquidación desde su detalle. Si está pagada ni eso: primero hay que
-  // anular el pago en Caja.
-  const existingPaid = preview.existing?.status === "pagada";
+  // Regenerar sólo pisa borradores (el índice único ignora el status, así que
+  // tampoco se crea otra al lado). Para el resto, settlementRegenerateHint
+  // dice el camino real: una pagada sale con «Anular el pago» desde su
+  // estado; sin pago, Borrador desde el mismo estado o el tacho de la lista.
 
   return (
     <div className="border-t pt-2 space-y-1.5">
@@ -470,9 +482,13 @@ function PreviewSummary({
                   {existingMeta?.label.toLowerCase() ?? preview.existing.status}
                 </span>{" "}
                 de {label} para este propietario: no se puede regenerar.{" "}
-                {existingPaid
-                  ? "Si hace falta rehacerla, primero anulá el pago en Caja y después eliminala desde su detalle."
-                  : "Eliminala desde su detalle si hace falta rehacerla."}
+                {settlementRegenerateHint(preview.existing.status)}{" "}
+                <Link
+                  href={`/dashboard/liquidaciones/${preview.existing.id}`}
+                  className="font-medium underline underline-offset-2 hover:no-underline"
+                >
+                  Abrir la liquidación
+                </Link>
               </>
             ) : (
               <>

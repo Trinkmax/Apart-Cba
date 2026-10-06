@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { deleteMovement, type MovementDetail } from "@/lib/actions/cash";
+import { settlementLockHint } from "@/lib/settlements/payment-undo";
 
 interface Props {
   movement: MovementDetail;
@@ -34,7 +35,9 @@ export function MovementDeleteAlert({ movement, onDeleted, trigger }: Props) {
     if (isLockedSettlement) {
       return {
         title: "Movimiento bloqueado",
-        body: `Este movimiento está vinculado a la liquidación ${String(movement.linked_settlement!.period_month).padStart(2, "0")}/${movement.linked_settlement!.period_year} en estado "${movement.linked_settlement!.status}". Anulá la liquidación primero para poder eliminarlo.`,
+        // Mismo texto que el aviso del detalle del movimiento. Antes decía
+        // "Anulá la liquidación primero", y una pagada no se puede anular.
+        body: `Este movimiento está vinculado a la liquidación ${String(movement.linked_settlement!.period_month).padStart(2, "0")}/${movement.linked_settlement!.period_year} en estado ${movement.linked_settlement!.status}. ${settlementLockHint(movement.linked_settlement!.status)}`,
         action: null as null | string,
       };
     }

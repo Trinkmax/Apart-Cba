@@ -12,6 +12,7 @@ import {
   samePaymentMovementSet,
   settlementLockedMessage,
   settlementLockHint,
+  settlementRegenerateHint,
   sortPaymentUndoMovements,
   summarizePaymentUndo,
   type PaymentUndoMovement,
@@ -262,6 +263,35 @@ describe("settlementLockHint / settlementLockedMessage", () => {
     const msg = settlementLockedMessage("SETTLEMENT_LOCKED");
     expect(msg).toMatch(/Anular el pago/);
     expect(msg).toMatch(/Borrador/);
+  });
+});
+
+describe("settlementRegenerateHint: cómo rehacer una liquidación cerrada", () => {
+  it("pagada: «Anular el pago» → Revisada → Borrador, sin mandar a Caja ni al detalle a eliminar", () => {
+    const hint = settlementRegenerateHint("pagada");
+    expect(hint).toMatch(/Anular el pago/);
+    expect(hint).toMatch(/Revisada/);
+    expect(hint).toMatch(/Borrador/);
+    expect(hint).toMatch(/lista de Liquidaciones/);
+    // Los dos caminos circulares de antes.
+    expect(hint).not.toMatch(/en Caja/);
+    expect(hint).not.toMatch(/desde su detalle/);
+  });
+
+  it("revisada / enviada / disputada: Borrador desde su estado o eliminarla desde la lista", () => {
+    for (const status of ["revisada", "enviada", "disputada"]) {
+      const hint = settlementRegenerateHint(status);
+      expect(hint).toMatch(/Borrador desde su estado/);
+      expect(hint).toMatch(/lista de Liquidaciones/);
+      expect(hint).not.toMatch(/Anular el pago/);
+      expect(hint).not.toMatch(/desde su detalle/);
+    }
+  });
+
+  it("anulada: no ofrece pasos que no existen (no está en la lista ni se reabre)", () => {
+    const hint = settlementRegenerateHint("anulada");
+    expect(hint).not.toMatch(/Borrador/);
+    expect(hint).not.toMatch(/eliminala/);
   });
 });
 

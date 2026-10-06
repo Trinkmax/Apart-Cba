@@ -17,6 +17,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { deleteSettlement } from "@/lib/actions/settlements";
+import { toastActionFailure } from "@/lib/action-failure";
 
 /**
  * Botón de borrado definitivo de una liquidación, para la lista. Una
@@ -48,9 +49,7 @@ export function SettlementDeleteButton({
         toast.success("Liquidación eliminada");
         router.refresh();
       } catch (e) {
-        toast.error("No se pudo eliminar", {
-          description: (e as Error).message,
-        });
+        toastActionFailure(e, "No se pudo eliminar");
       }
     });
   }
@@ -58,7 +57,7 @@ export function SettlementDeleteButton({
   if (paid) {
     // El título dice la salida: antes sólo decía que no se podía.
     const why =
-      "Está pagada: para eliminarla, abrila y anulá el pago desde su estado";
+      "Está pagada: para eliminarla, abrila y usá «Anular el pago» en su estado";
     return (
       <span title={why} className="inline-flex">
         <Button

@@ -25,6 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { registerSettlementPayment } from "@/lib/actions/settlements";
+import { toastActionFailure } from "@/lib/action-failure";
+import { SETTLEMENT_PAYMENT_NOTES_MAX } from "@/lib/settlements/payment-input";
 import { formatMoney, parseAmountInput } from "@/lib/format";
 import { todayYmdInTz, zonedTimeToUtc } from "@/lib/dates";
 import { cn } from "@/lib/utils";
@@ -135,12 +137,16 @@ export function RecordPaymentDialog({
     }
     start(async () => {
       try {
-        await registerSettlementPayment({
+        const res = await registerSettlementPayment({
           settlement_id: settlementId,
           splits: rows,
           paid_at: paidAt ? zonedTimeToUtc(paidAt, "12:00").toISOString() : undefined,
           notes: notes.trim() || undefined,
         });
+        if (!res.ok) {
+          toast.error("No se pudo registrar el pago", { description: res.error });
+          return;
+        }
         toast.success("Pago registrado", {
           description:
             rows.length > 1
@@ -150,8 +156,11 @@ export function RecordPaymentDialog({
         setOpen(false);
         router.refresh();
       } catch (e) {
-        toast.error("No se pudo registrar el pago", {
-          description: (e as Error).message,
+        // Sin respuesta no sabemos si llegó a registrarse. Reintentar no
+        // duplica (el servidor rechaza un segundo pago), pero conviene mirar.
+        toastActionFailure(e, "No se pudo registrar el pago", {
+          retry:
+            "Revisá la conexión. Antes de reintentar, recargá la página y fijate si la liquidación quedó pagada.",
         });
       }
     });
@@ -293,8 +302,17 @@ export function RecordPaymentDialog({
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
+                maxLength={SETTLEMENT_PAYMENT_NOTES_MAX}
                 placeholder="Referencia de la transferencia…"
               />
+              {/* El navegador corta al tope sin avisar (p. ej. al pegar un
+                  comprobante entero): el contador aparece cerca del tope y
+                  muestra cuándo se llegó. */}
+              {notes.length >= SETTLEMENT_PAYMENT_NOTES_MAX - 50 && (
+                <p className="text-right text-[11px] tabular-nums text-muted-foreground">
+                  {notes.length}/{SETTLEMENT_PAYMENT_NOTES_MAX}
+                </p>
+              )}
             </div>
           </div>
         )}

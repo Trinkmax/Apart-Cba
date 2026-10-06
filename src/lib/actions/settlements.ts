@@ -28,12 +28,17 @@ import {
   parsePaymentUndoRpcMovements,
   paymentMovementKind,
   paymentUndoErrorMessage,
+  settlementRegenerateHint,
   sortPaymentUndoMovements,
   summarizePaymentUndo,
   type PaymentUndoMovement,
   type PaymentUndoPreview,
   type PaymentUndoResult,
 } from "@/lib/settlements/payment-undo";
+import {
+  SETTLEMENT_PAYMENT_NOTES_MAX,
+  settlementPaymentInvalidMessage,
+} from "@/lib/settlements/payment-input";
 import {
   computeBookingEconomics,
   channelCommissionPctFor,
@@ -693,7 +698,11 @@ async function persistSettlement(opts: {
   );
 
   if (existing && existing.status !== "borrador") {
-    throw new Error(`Esta liquidación ya está ${existing.status}; no se puede regenerar`);
+    // "ya está" lo usan generateSettlement y el lote para reconocer el caso;
+    // el resto es la salida, la misma que muestra el diálogo «Generar».
+    throw new Error(
+      `Esta liquidación ya está ${existing.status}; no se puede regenerar. ${settlementRegenerateHint(existing.status)}`,
+    );
   }
   for (const sib of siblings) {
     if (sib.status === "pagada" || sib.paid_movement_id) {
@@ -1551,9 +1560,9 @@ async function loadEditableSettlement(
     .maybeSingle();
   if (!s) throw new Error("Liquidación no encontrada");
   if (!EDITABLE_STATUSES.includes(s.status as SettlementStatus)) {
-    throw new Error(
-      `La liquidación está ${s.status}: anulá o regenerá antes de editar`,
-    );
+    // Sólo "anulada" queda afuera de EDITABLE_STATUSES. Antes decía "anulá o
+    // regenerá antes de editar": ya está anulada y una anulada no se regenera.
+    throw new Error(`La liquidación está ${s.status}: no se puede editar.`);
   }
   const snapshot = await captureSettlementSnapshot(admin, settlementId);
   return {
@@ -2816,9 +2825,9 @@ async function loadEditableSettlementMinimal(
     .maybeSingle();
   if (!s) throw new Error("Liquidación no encontrada");
   if (!EDITABLE_STATUSES.includes(s.status as SettlementStatus)) {
-    throw new Error(
-      `La liquidación está ${s.status}: anulá o regenerá antes de editar`,
-    );
+    // Sólo "anulada" queda afuera de EDITABLE_STATUSES. Antes decía "anulá o
+    // regenerá antes de editar": ya está anulada y una anulada no se regenera.
+    throw new Error(`La liquidación está ${s.status}: no se puede editar.`);
   }
   // Los reordenamientos también son deshacibles: sin snapshot, un drag&drop
   // desafortunado sobre un documento largo no tendría vuelta atrás.
@@ -4289,18 +4298,36 @@ const registerPaymentSchema = z.object({
   account_id: z.string().uuid().optional(),
   amount: z.coerce.number().positive().optional(),
   paid_at: z.string().optional(),
-  notes: z.string().max(300).optional().nullable(),
+  notes: z.string().max(SETTLEMENT_PAYMENT_NOTES_MAX).optional().nullable(),
 });
 
+/**
+ * Devuelve el error en vez de lanzarlo: en producción Next.js pisa el mensaje
+ * de cualquier throw y quien paga vería un texto en inglés sin saber si el
+ * egreso se registró. Es el paso que sigue a «Anular el pago», así que lo que
+ * diga (sobre todo "la suma no da el neto") tiene que llegar a la pantalla.
+ */
 export async function registerSettlementPayment(
   input: z.input<typeof registerPaymentSchema>,
-) {
+): Promise<
+  | { ok: true; movement_id: string; movement_ids: string[] }
+  | { ok: false; error: string }
+> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
-    throw new Error("No tenés permisos para registrar pagos de liquidación");
+    return { ok: false, error: "No tenés permisos para registrar pagos de liquidación" };
   }
-  const v = registerPaymentSchema.parse(input);
+  const parsed = registerPaymentSchema.safeParse(input);
+  if (!parsed.success) {
+    // Los mensajes de Zod vienen en inglés: se elige uno en castellano según
+    // el campo que falló (una nota larga no es un problema de importes).
+    return {
+      ok: false,
+      error: settlementPaymentInvalidMessage(parsed.error.issues[0]?.path),
+    };
+  }
+  const v = parsed.data;
   const admin = createAdminClient();
 
   const { data: settlement } = await admin
@@ -4311,21 +4338,23 @@ export async function registerSettlementPayment(
     .eq("id", v.settlement_id)
     .eq("organization_id", organization.id)
     .maybeSingle();
-  if (!settlement) throw new Error("Liquidación no encontrada");
+  if (!settlement) return { ok: false, error: "Liquidación no encontrada" };
   if (settlement.paid_movement_id || settlement.status === "pagada") {
-    throw new Error("Esta liquidación ya tiene un pago registrado");
+    return { ok: false, error: "Esta liquidación ya tiene un pago registrado" };
   }
   if (!["revisada", "enviada"].includes(settlement.status)) {
-    throw new Error(
-      'Marcá la liquidación como "revisada" o "enviada" antes de registrar el pago',
-    );
+    return {
+      ok: false,
+      error: 'Marcá la liquidación como "revisada" o "enviada" antes de registrar el pago',
+    };
   }
 
   const net = round2(Number(settlement.net_payable));
   if (!(net > 0)) {
-    throw new Error(
-      "El neto por pagar no es positivo: no se puede registrar el pago",
-    );
+    return {
+      ok: false,
+      error: "El neto por pagar no es positivo: no se puede registrar el pago",
+    };
   }
 
   // Normalizar entrada: splits explícitos, o el par legacy account_id/amount.
@@ -4336,7 +4365,7 @@ export async function registerSettlementPayment(
         ? [{ account_id: v.account_id, amount: v.amount ?? net }]
         : [];
   if (rawSplits.length === 0) {
-    throw new Error("Elegí al menos una cuenta de Caja para el pago");
+    return { ok: false, error: "Elegí al menos una cuenta de Caja para el pago" };
   }
 
   // Consolidar importes por cuenta (por si repiten la misma cuenta) y validar.
@@ -4348,9 +4377,10 @@ export async function registerSettlementPayment(
     Array.from(byAccount.values()).reduce((a, b) => a + b, 0),
   );
   if (Math.abs(splitTotal - net) > 0.01) {
-    throw new Error(
-      `La suma de las cuentas (${formatMoney(splitTotal, settlement.currency)}) debe igualar el neto por pagar (${formatMoney(net, settlement.currency)})`,
-    );
+    return {
+      ok: false,
+      error: `La suma de las cuentas (${formatMoney(splitTotal, settlement.currency)}) debe igualar el neto por pagar (${formatMoney(net, settlement.currency)})`,
+    };
   }
 
   // Validar todas las cuentas de una sola lectura.
@@ -4365,12 +4395,15 @@ export async function registerSettlementPayment(
   );
   for (const id of accountIds) {
     const acc = accountMap.get(id);
-    if (!acc) throw new Error("Cuenta de caja no encontrada");
-    if (!acc.active) throw new Error(`La cuenta "${acc.name}" está inactiva`);
+    if (!acc) return { ok: false, error: "Cuenta de caja no encontrada" };
+    if (!acc.active) {
+      return { ok: false, error: `La cuenta "${acc.name}" está inactiva` };
+    }
     if (acc.currency !== settlement.currency) {
-      throw new Error(
-        `Moneda incompatible: "${acc.name}" es ${acc.currency} y la liquidación ${settlement.currency}`,
-      );
+      return {
+        ok: false,
+        error: `Moneda incompatible: "${acc.name}" es ${acc.currency} y la liquidación ${settlement.currency}`,
+      };
     }
   }
 
@@ -4410,9 +4443,10 @@ export async function registerSettlementPayment(
     .insert(rows)
     .select("id, account_id, amount");
   if (movErr || !movements || movements.length === 0) {
-    throw new Error(
-      `No se pudo registrar el movimiento de caja: ${movErr?.message ?? "sin filas"}`,
-    );
+    return {
+      ok: false,
+      error: `No se pudo registrar el movimiento de caja: ${movErr?.message ?? "sin filas"}`,
+    };
   }
 
   // Movimiento principal (ancla de paid_movement_id + de los ajustes futuros).
@@ -4452,16 +4486,21 @@ export async function registerSettlementPayment(
     // Cualquier fallo tras insertar los egresos (error de la query O un fetch
     // rechazado) revierte para no dejarlos huérfanos.
     await rollbackMovements();
-    throw new Error(`No se pudo cerrar la liquidación: ${(e as Error).message}`);
+    return {
+      ok: false,
+      error: `No se pudo cerrar la liquidación: ${(e as Error).message}`,
+    };
   }
 
   if (!closedRows || closedRows.length === 0) {
     // Ninguna fila matcheó las guardas: otra operación registró el pago en
     // paralelo. Revertimos nuestros egresos duplicados.
     await rollbackMovements();
-    throw new Error(
-      "Esta liquidación ya tiene un pago registrado (se registró en paralelo). Actualizá la pantalla.",
-    );
+    return {
+      ok: false,
+      error:
+        "Esta liquidación ya tiene un pago registrado (se registró en paralelo). Actualizá la pantalla.",
+    };
   }
 
   const sideEffects = accountIds.map(
@@ -4495,7 +4534,7 @@ export async function registerSettlementPayment(
   }
 
   return {
-    ok: true as const,
+    ok: true,
     movement_id: primaryId,
     movement_ids: movements.map((m) => m.id as string),
   };
@@ -4911,18 +4950,35 @@ export async function sendSettlementToOwner(settlementId: string) {
   });
   if (!sent.ok) throw new Error(`No se pudo enviar el email: ${sent.error}`);
 
-  const update: Record<string, unknown> = {
+  // El mail ya salió: sent_at/sent_to se anotan siempre. El paso a 'enviada'
+  // va condicionado al estado leído (como en changeSettlementStatus): armar
+  // los adjuntos y mandar tarda segundos, y si en ese rato alguien registró
+  // el pago, pisarla con 'enviada' dejaba una liquidación "enviada" con pago
+  // en Caja sin salida en la UI («Anular el pago» exige 'pagada' y el resto
+  // de los caminos manda a «Anular el pago»).
+  const sentFields = {
     sent_at: new Date().toISOString(),
     sent_to: owner.email,
   };
+  let recorded = false;
   if (detail.status === "borrador" || detail.status === "revisada") {
-    update.status = "enviada";
+    const { data: moved } = await admin
+      .from("owner_settlements")
+      .update({ ...sentFields, status: "enviada" })
+      .eq("id", id)
+      .eq("organization_id", organization.id)
+      .eq("status", detail.status)
+      .is("paid_movement_id", null)
+      .select("id");
+    recorded = (moved?.length ?? 0) > 0;
   }
-  await admin
-    .from("owner_settlements")
-    .update(update)
-    .eq("id", id)
-    .eq("organization_id", organization.id);
+  if (!recorded) {
+    await admin
+      .from("owner_settlements")
+      .update(sentFields)
+      .eq("id", id)
+      .eq("organization_id", organization.id);
+  }
 
   revalidateSettlement(id);
   return { ok: true as const, to: owner.email };

@@ -40,9 +40,15 @@ export const PAYMENT_UNDO_REASON_MAX = 300;
 /** Mínimo del motivo: "x" o "." no le explican nada a quien lea el historial. */
 export const PAYMENT_UNDO_REASON_MIN = 3;
 
-/** La advertencia de la confirmación: se borra plata registrada en Caja. */
+/**
+ * La advertencia de la confirmación: se borra plata registrada en Caja.
+ * Nombra los dos usos, porque Caja manda acá también para corregir la cuenta
+ * o la fecha (`settlementLockHint`): ese egreso no se puede editar, y anular
+ * y volver a pagar es la única forma. Si dijera "sólo si la transferencia no
+ * se hizo", quien llega desde Caja frenaría con la cuenta mal cargada.
+ */
 export const PAYMENT_UNDO_WARNING =
-  "Hacelo sólo si la transferencia no se hizo o se devolvió: borra el egreso de Caja.";
+  "Borra el pago de Caja. Usalo si la transferencia no se hizo o se devolvió, o para volver a registrarlo con la cuenta o la fecha correctas.";
 
 /**
  * Mismo criterio que el RPC: el movimiento de `paid_movement_id` y los
@@ -323,6 +329,32 @@ export function settlementLockHint(status: string | null | undefined): string {
     return "La liquidación está cerrada: pasala a Borrador desde su estado para poder editarlo.";
   }
   return "Si la liquidación está pagada y el pago no se hizo, usá «Anular el pago» en la liquidación; si no, pasala a Borrador desde su estado.";
+}
+
+/**
+ * Cómo rehacer una liquidación que ya no es borrador: «Generar» sólo pisa
+ * borradores. Lo muestran el diálogo «Generar liquidación» y el error de
+ * `generateSettlement`, así los dos dicen lo mismo.
+ *
+ * Antes decía "anulá el pago en Caja y después eliminala desde su detalle":
+ * Caja no deja tocar ese egreso (manda de vuelta a la liquidación) y el
+ * detalle no tiene cómo eliminarla. Cada paso que se nombra acá existe:
+ * «Anular el pago» en el estado de una pagada; Borrador desde ese mismo
+ * estado una vez sin pago; «Regenerar» en el detalle de un borrador; el
+ * tacho en la lista de Liquidaciones (bloqueado sólo si está pagada).
+ * Una anulada no aparece en la lista ni se reabre: no hay paso que ofrecer.
+ */
+export function settlementRegenerateHint(
+  status: string | null | undefined,
+): string {
+  if (status === "pagada") {
+    return "Si el pago no se hizo, abrila y usá «Anular el pago» en su estado: vuelve a Revisada. Después pasala a Borrador desde ahí mismo y regenerala, o eliminala desde la lista de Liquidaciones.";
+  }
+  if (status === "anulada") {
+    // Va después de "no se puede regenerar": no lo repite.
+    return "Quedó sin efecto y no se puede reabrir.";
+  }
+  return "Para rehacerla, pasala a Borrador desde su estado y regenerala, o eliminala desde la lista de Liquidaciones.";
 }
 
 /**

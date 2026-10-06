@@ -11,6 +11,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +30,9 @@ import {
   previewRegenerateMergeImpact,
 } from "@/lib/actions/settlements";
 import { formatMoney } from "@/lib/format";
+import { toastActionFailure } from "@/lib/action-failure";
+import { SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
+import type { SettlementStatus } from "@/lib/types/database";
 import {
   SettlementExportButtons,
   type ExportBranding,
@@ -83,7 +87,7 @@ export function SettlementActions({
         toast.success(`Marcada como ${next}`);
         router.refresh();
       } catch (e) {
-        toast.error("Error", { description: (e as Error).message });
+        toastActionFailure(e, "No se pudo cambiar el estado");
       }
     });
   }
@@ -110,7 +114,7 @@ export function SettlementActions({
         });
         router.refresh();
       } catch (e) {
-        toast.error("Error", { description: (e as Error).message });
+        toastActionFailure(e, "No se pudo regenerar");
       }
     });
   }
@@ -130,7 +134,7 @@ export function SettlementActions({
         }
         setConfirmMerge(impact);
       } catch (e) {
-        toast.error("Error", { description: (e as Error).message });
+        toastActionFailure(e, "No se pudo regenerar");
       }
     });
   }
@@ -253,8 +257,23 @@ export function SettlementActions({
                       key={sib.id}
                       className="flex items-center justify-between gap-3"
                     >
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {sib.currency}
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {sib.currency}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {SETTLEMENT_STATUS_META[sib.status as SettlementStatus]
+                            ?.label ?? sib.status}
+                        </span>
+                        {sib.status === "pagada" && (
+                          <Link
+                            href={`/dashboard/liquidaciones/${sib.id}`}
+                            onClick={() => setConfirmMerge([])}
+                            className="text-xs font-medium underline underline-offset-2 hover:no-underline"
+                          >
+                            Abrir
+                          </Link>
+                        )}
                       </span>
                       <span className="tabular-nums font-medium">
                         {formatMoney(sib.net_payable, sib.currency)}
@@ -264,8 +283,10 @@ export function SettlementActions({
                 </ul>
                 <p className="text-xs text-muted-foreground">
                   No vas a perder datos: las líneas manuales que hayas editado
-                  se preservan. Si alguna hermana está pagada, la operación se
-                  bloqueará y vas a tener que anularla primero.
+                  se preservan. Si alguna está pagada, no se va a poder
+                  unificar: si ese pago no se hizo, abrila y usá «Anular el
+                  pago» en su estado (vuelve a Revisada); después volvé a
+                  regenerar.
                 </p>
               </div>
             </AlertDialogDescription>
