@@ -6,6 +6,7 @@ import { formatMoney } from "@/lib/format";
 import { toWhatsappDigits } from "@/lib/marketplace/staff-helpers";
 import { formatReceiptNumber, monthLabelOf } from "@/lib/rentals/labels";
 import { isYmd } from "@/lib/rentals/ymd";
+import { PAYMENT_ROUTES } from "@/lib/rentals/payment-split-record";
 import { rentalsContext, dbFailure, logRentalsError, type RentalsCtx } from "@/lib/rentals/server/access";
 import { revalidateRentals } from "@/lib/rentals/server/revalidate";
 import { applyAvailableCredit, computePaymentPreview, registerRentalPayment, voidRentalPayment } from "@/lib/rentals/server/payments";
@@ -50,6 +51,9 @@ const registerSchema = previewSchema.extend({
   amount: z.coerce.number().positive("Ingresá un importe mayor a cero").max(10_000_000_000, "El importe es demasiado grande"),
   method: z.enum(["efectivo", "transferencia", "mp", "cheque", "deposito", "otro"], { errorMap: () => ({ message: "Elegí el medio de pago" }) }),
   accountId: uuid.nullable(),
+  agencyAccountId: uuid.nullable().optional(),
+  /** Cobra el propietario: cómo le llegó la plata a cada uno (sin el dato, a cada uno su parte). */
+  route: z.enum(PAYMENT_ROUTES, { errorMap: () => ({ message: "Elegí cómo pagó el inquilino" }) }).nullable().optional(),
   reference: z.string().max(120, "La referencia es muy larga").nullable().optional(),
   payerName: z.string().max(120, "El nombre es muy largo").nullable().optional(),
   notes: z.string().max(500, "La nota es muy larga").nullable().optional(),
@@ -91,7 +95,7 @@ export async function openPaymentDialog(input: {
   if (!r.ok) return r;
   const { ctx } = r;
   if (!uuid.safeParse(input.contractId).success) return { ok: false as const, error: "No encontramos el contrato." };
-  const setup = await loadPaymentSetup(ctx.admin, ctx.organization.id, input.contractId, ctx.today);
+  const setup = await loadPaymentSetup(ctx.admin, ctx.organization.id, input.contractId, ctx.today, ctx.organization.name);
   if (!setup) return { ok: false as const, error: "No encontramos el contrato." };
   if (setup.contract.status === "borrador") return { ok: false as const, error: "El contrato todavía es un borrador: activalo antes de cobrar." };
   const paidAt = input.paidAt && isYmd(input.paidAt) && input.paidAt <= ctx.today ? input.paidAt : ctx.today;

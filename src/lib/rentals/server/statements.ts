@@ -131,6 +131,10 @@ export async function computePendingForOwners(
           .in("charge.contract_id", contractIds)
           .eq("item.payee", "propietario")
           .is("payment.voided_at", null)
+          // 070: un cobro con reparto lo cobró el propietario directo (ya tiene esa
+          // plata): nunca se rinde, aunque el contrato pase a cobrarlo la inmobiliaria.
+          // La RPC lo frena igual (COBRO_DIRECTO).
+          .is("payment.split", null)
           .lte("payment.paid_at", opts.cutoff)
           .order("id", { ascending: true })
           .range(from, to),

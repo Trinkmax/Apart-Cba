@@ -11,16 +11,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { openPaymentDialog, previewPayment, registerPayment } from "@/lib/actions/rentals-collections";
 import type { PaymentPreview } from "@/lib/rentals/server/payments";
-import type { PaymentSetup } from "@/lib/rentals/server/collections-queries";
+import type { LedgerPaymentSplit, PaymentSetup } from "@/lib/rentals/server/collections-queries";
 import type { RentalPaymentMethod } from "@/lib/types/database";
 import { formatContractNumber, PAYMENT_METHOD_LABEL } from "@/lib/rentals/labels";
 import { formatDate, formatMoney, parseAmountInput } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ChargePicker } from "./charge-picker";
 import { PaymentPreviewPanel } from "./payment-preview-panel";
+import { PaymentSplitSection } from "./payment-split-section";
 import { PaymentSuccess } from "./payment-success";
+import { agencyNameOf, joinNames, needsAgencyAccount, routeNoteText, routeReady, toLedgerSplit, withRouteNote, type PayRoute } from "./split-view";
 import { Spinner } from "./whatsapp-message-dialog";
 
 export interface PaymentRegistered {
@@ -87,6 +90,12 @@ function editableAmount(n: number): string {
   return n.toLocaleString("es-AR", { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
 }
 
+/** Hubo un deploy con la pantalla abierta: reintentar no sirve, recargar sí. */
+const STALE_DEPLOY_TEXT = "Se actualizó el sistema mientras tenías esto abierto: recargá la página para seguir.";
+/** Se cortó antes de la respuesta: el cobro pudo haber entrado igual (reintentar a ciegas lo duplica). */
+const UNKNOWN_OUTCOME_TEXT =
+  "Se cortó antes de la respuesta y el cobro pudo haber quedado registrado. Recargá la página y mirá la cuenta del inquilino antes de volver a intentar.";
+
 export function PaymentDialog(props: PaymentDialogProps) {
   const { open, onOpenChange } = props;
   return (
@@ -106,9 +115,20 @@ export function PaymentDialog(props: PaymentDialogProps) {
 
 type Phase =
   | { kind: "loading" }
-  | { kind: "error"; error: string }
+  | { kind: "error"; error: string; stale?: boolean }
   | { kind: "form" }
-  | { kind: "success"; paymentId: string; receiptNumber: number; remainder: number; amount: number; stillOwes: number };
+  | {
+      kind: "success";
+      paymentId: string;
+      receiptNumber: number;
+      remainder: number;
+      amount: number;
+      stillOwes: number;
+      /** Cobra el propietario: cómo se repartió (el reparto que guardó el servidor). */
+      split: LedgerPaymentSplit | null;
+      /** Cómo pagó el inquilino (sólo si hubo parte de la inmobiliaria). */
+      route: PayRoute | null;
+    };
 
 type Settled = { key: string; preview: PaymentPreview | null; error: string | null };
 
@@ -145,8 +165,20 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
   const [notes, setNotes] = useState("");
   const [fieldError, setFieldError] = useState<{ field?: string; error: string } | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [refreshingOwners, setRefreshingOwners] = useState(false);
+  // Cobra el propietario: cómo pagó de verdad el inquilino. Arranca en «cada uno su parte»
+  // porque es como trabaja la inmobiliaria (dos transferencias, lo eligió el usuario el
+  // 06/10/2026); las otras dos opciones quedan a la vista para la excepción, y con «todo al
+  // propietario» no se registra hasta que él pase la parte de la inmobiliaria.
+  const [route, setRoute] = useState<PayRoute | null>("cada_uno");
+  const [ownerPassed, setOwnerPassed] = useState(false);
+  // El registro reventó sin respuesta: el cobro pudo haber entrado. Volver a tocar «Registrar»
+  // lo duplicaría (y duplicaría el ingreso en Caja), así que el botón pasa a «Recargar la página».
+  const [mustReload, setMustReload] = useState(false);
   const [submitting, startSubmit] = useTransition();
   const reqId = useRef(0);
+  // La vista previa se pide en cada tecla: si falla en racha (deploy nuevo, sin red), un solo aviso.
+  const previewFailNotified = useRef(false);
 
   const parsedAmount = parseAmountInput(amountText);
   const amountEmpty = amountText.trim() === "";
@@ -193,7 +225,12 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
         setSettled({ key: previewKeyOf(amount, res.paidAt, initial.preferChargeIds, false), preview: res.preview, error: null });
         setPhase({ kind: "form" });
       })
-      .catch(() => alive && setPhase({ kind: "error", error: "No pudimos abrir el cobro. Revisá la conexión y probá de nuevo." }));
+      .catch((e: unknown) => {
+        if (!alive) return;
+        toastActionFailure(e, "No se pudo abrir el cobro");
+        const stale = isStaleDeployError(e);
+        setPhase({ kind: "error", error: stale ? STALE_DEPLOY_TEXT : "No pudimos abrir el cobro. Revisá la conexión y probá de nuevo.", stale });
+      });
     return () => {
       alive = false;
     };
@@ -208,11 +245,18 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
       previewPayment({ contractId, amount: previewAmount, paidAt, preferChargeIds: ids, waiveLateFees: waive })
         .then((res) => {
           if (id !== reqId.current) return;
+          previewFailNotified.current = false;
           if (!res.ok) setSettled((prev) => ({ key: queryKey, preview: prev.preview, error: res.error }));
           else setSettled({ key: queryKey, preview: res.preview, error: null });
         })
-        .catch(() => {
-          if (id === reqId.current) setSettled((prev) => ({ key: queryKey, preview: prev.preview, error: "No pudimos recalcular. Revisá la conexión." }));
+        .catch((e: unknown) => {
+          if (id !== reqId.current) return;
+          if (!previewFailNotified.current) {
+            previewFailNotified.current = true;
+            toastActionFailure(e, "No se pudo recalcular el cobro");
+          }
+          const error = isStaleDeployError(e) ? STALE_DEPLOY_TEXT : "No pudimos recalcular. Revisá la conexión.";
+          setSettled((prev) => ({ key: queryKey, preview: prev.preview, error }));
         });
     }, 350);
     return () => clearTimeout(timer);
@@ -222,6 +266,13 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
   const currency = setup?.contract.currency ?? "ARS";
   const needsAccount = setup?.contract.collector === "inmobiliaria";
   const noAccounts = !!setup && needsAccount && setup.accounts.length === 0;
+  // Cobra el propietario: el inquilino le transfiere su parte a él y la de la inmobiliaria
+  // (honorarios…) entra a la cuenta de Caja que se elija acá (la misma `accountId`).
+  // Sin reparto (servidor viejo o contrato sin datos) queda como antes: nada entra a Caja.
+  const ownerCollects = setup?.contract.collector === "propietario";
+  const split = ownerCollects ? (preview?.split ?? null) : null;
+  const needsAgency = needsAgencyAccount(split);
+  const agencyName = agencyNameOf(setup?.orgName);
   const allocated = Math.round((preview?.allocations ?? []).reduce((s, a) => s + a.amount, 0) * 100) / 100;
   const stillOwes = preview ? Math.max(0, Math.round((preview.totalDebt - allocated) * 100) / 100) : 0;
   const canSubmit =
@@ -232,11 +283,53 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
     parsedAmount != null &&
     parsedAmount > 0 &&
     (!needsAccount || !!accountId) &&
+    (!needsAgency || !!accountId) &&
     !submitting;
 
   function changeMethod(m: RentalPaymentMethod) {
     setMethod(m);
     if (!accountTouched && setup) setAccountId(pickAccount(setup.accounts, m));
+  }
+
+  function changeAccount(id: string) {
+    setAccountId(id);
+    setAccountTouched(true);
+    if (fieldError?.field === "accountId" || fieldError?.field === "agencyAccountId") setFieldError(null);
+  }
+
+  function changeRoute(r: PayRoute) {
+    setRoute(r);
+    if (fieldError?.field === "route") setFieldError(null);
+  }
+
+  function changeOwnerPassed(v: boolean) {
+    setOwnerPassed(v);
+    if (fieldError?.field === "route") setFieldError(null);
+  }
+
+  /** Después de cargar el CBU / alias en la ficha del propietario: trae sus datos sin perder lo escrito. */
+  function refreshOwners() {
+    setRefreshingOwners(true);
+    openPaymentDialog({ contractId, amount: parsedAmount != null && parsedAmount > 0 ? parsedAmount : null, paidAt, preferChargeIds: [] })
+      .then((res) => {
+        if (!res.ok) {
+          toast.error("No se pudieron leer los datos del propietario", { description: res.error });
+          return;
+        }
+        // Todo el setup: si de paso creó una cuenta de Caja en otra pestaña, también aparece.
+        setSetup(res.setup);
+        setAccountId((cur) => (res.setup.accounts.some((a) => a.id === cur) ? cur : pickAccount(res.setup.accounts, method, readPrefs().accountId)));
+        const missing = res.setup.owners.filter((o) => !o.cbu?.trim() && !o.alias?.trim()).map((o) => o.name);
+        if (!res.setup.owners.length) {
+          toast.info("La propiedad no tiene propietario cargado", { description: "Agregalo en la ficha de la propiedad." });
+        } else if (missing.length) {
+          toast.info(`Todavía falta el CBU o alias de ${joinNames(missing)}`, { description: "Cargalo en su ficha y volvé a tocar «Ya lo cargué»." });
+        } else {
+          toast.success("Listo: ya están los datos para transferir");
+        }
+      })
+      .catch((e: unknown) => toastActionFailure(e, "No se pudieron leer los datos del propietario"))
+      .finally(() => setRefreshingOwners(false));
   }
 
   function submit() {
@@ -249,31 +342,73 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
       setFieldError({ field: "accountId", error: "Elegí la cuenta de Caja donde entró la plata." });
       return;
     }
+    if (needsAgency && !routeReady(route, ownerPassed)) {
+      setFieldError({
+        field: "route",
+        error:
+          route === "todo_propietario"
+            ? `Registralo cuando el propietario te pase los ${formatMoney(split?.agency.total ?? 0, currency)} de ${agencyName}. Si ya te los pasó, tildá «El propietario ya me pasó…».`
+            : "Elegí cómo pagó el inquilino.",
+      });
+      document.getElementById("pay-route")?.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    if (needsAgency && !accountId) {
+      setFieldError({ field: "agencyAccountId", error: `Elegí la cuenta de Caja donde entró la parte de ${agencyName}.` });
+      return;
+    }
     setFieldError(null);
     const owes = stillOwes;
+    const chosenAccountName = setup.accounts.find((a) => a.id === accountId)?.name ?? null;
+    const usedAccount = needsAccount || needsAgency ? accountId : null;
+    const usedRoute = needsAgency ? route : null;
+    // Si no le pagó a cada uno su parte, queda dicho en la nota interna del cobro.
+    const routeNote = usedRoute && split ? routeNoteText(usedRoute, split, agencyName, currency) : "";
     startSubmit(async () => {
-      const res = await registerPayment({
-        contractId,
-        amount: parsedAmount,
-        paidAt,
-        preferChargeIds: choosing ? prefer : [],
-        waiveLateFees: waive,
-        method,
-        accountId: needsAccount ? accountId : null,
-        reference: reference.trim() || null,
-        payerName: payerName.trim() || null,
-        notes: notes.trim() || null,
-        reportId: initial.reportId,
-      });
-      if (!res.ok) {
-        setFieldError({ field: "field" in res ? res.field : undefined, error: res.error });
-        toast.error("No se pudo registrar el cobro", { description: res.error });
-        return;
+      try {
+        const res = await registerPayment({
+          contractId,
+          amount: parsedAmount,
+          paidAt,
+          preferChargeIds: choosing ? prefer : [],
+          waiveLateFees: waive,
+          method,
+          accountId: needsAccount ? accountId : null,
+          agencyAccountId: needsAgency ? accountId : null,
+          reference: reference.trim() || null,
+          payerName: payerName.trim() || null,
+          notes: withRouteNote(notes, routeNote),
+          reportId: initial.reportId,
+        });
+        if (!res.ok) {
+          setFieldError({ field: "field" in res ? res.field : undefined, error: res.error });
+          toast.error("No se pudo registrar el cobro", { description: res.error });
+          // La cuenta del inquilino pudo cambiar (otro cobro, un cargo nuevo): se vuelve a pedir la
+          // vista previa, así el reparto y la imputación que se ven son los de ahora.
+          setSettled((prev) => ({ ...prev, key: "" }));
+          return;
+        }
+        // Un cobro sin cuenta (todo del propietario) no pisa la última cuenta elegida.
+        savePrefs({ method, accountId: usedAccount ?? readPrefs().accountId ?? null });
+        setPhase({
+          kind: "success",
+          paymentId: res.paymentId,
+          receiptNumber: res.receiptNumber,
+          remainder: res.remainder,
+          amount: parsedAmount,
+          stillOwes: owes,
+          // El reparto que guardó el servidor (lo recalcula con datos frescos), no la vista previa.
+          split: res.split ? toLedgerSplit(res.split, chosenAccountName) : null,
+          route: usedRoute,
+        });
+        props.onRegistered?.({ paymentId: res.paymentId, receiptNumber: res.receiptNumber, remainder: res.remainder });
+        router.refresh();
+      } catch (e) {
+        const stale = isStaleDeployError(e);
+        toastActionFailure(e, "No se pudo registrar el cobro", { retry: UNKNOWN_OUTCOME_TEXT });
+        setFieldError({ error: stale ? STALE_DEPLOY_TEXT : UNKNOWN_OUTCOME_TEXT });
+        setMustReload(true);
       }
-      savePrefs({ method, accountId: needsAccount ? accountId : null });
-      setPhase({ kind: "success", paymentId: res.paymentId, receiptNumber: res.receiptNumber, remainder: res.remainder, amount: parsedAmount, stillOwes: owes });
-      props.onRegistered?.({ paymentId: res.paymentId, receiptNumber: res.receiptNumber, remainder: res.remainder });
-      router.refresh();
     });
   }
 
@@ -307,6 +442,9 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
           remainder={phase.remainder}
           tenantEmail={setup.contract.tenantEmail}
           tenantPhone={setup.contract.tenantPhone}
+          split={phase.split}
+          route={phase.route}
+          agencyName={agencyName}
           onClose={props.close}
         />
       </>
@@ -338,15 +476,21 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
           <Button variant="outline" onClick={props.close}>
             Cerrar
           </Button>
-          <Button
-            className="gap-2"
-            onClick={() => {
-              setPhase({ kind: "loading" });
-              setAttempt((a) => a + 1);
-            }}
-          >
-            <RotateCcw size={14} /> Reintentar
-          </Button>
+          {phase.stale ? (
+            <Button className="gap-2" onClick={() => window.location.reload()}>
+              <RotateCcw size={14} /> Recargar la página
+            </Button>
+          ) : (
+            <Button
+              className="gap-2"
+              onClick={() => {
+                setPhase({ kind: "loading" });
+                setAttempt((a) => a + 1);
+              }}
+            >
+              <RotateCcw size={14} /> Reintentar
+            </Button>
+          )}
         </DialogFooter>
       </>
     );
@@ -464,12 +608,36 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
               No hay cuentas de Caja activas en {currency}. <Link href="/dashboard/caja" className="underline hover:no-underline">Creá una en Caja</Link> para registrar el cobro.
             </p>
           )}
-          {!needsAccount && (
-            <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground flex items-start gap-2">
-              <Landmark size={14} className="mt-px shrink-0" />
-              Este contrato lo cobra el propietario directamente: queda registrado y sale el recibo, pero no entra a Caja.
-            </p>
-          )}
+          {ownerCollects &&
+            (split ? (
+              <PaymentSplitSection
+                split={split}
+                owners={setup.owners}
+                agencyName={agencyName}
+                currency={currency}
+                method={method}
+                loading={previewLoading}
+                stale={!!inputError || (settled.key === queryKey && !!settled.error)}
+                accounts={setup.accounts}
+                accountId={accountId}
+                onAccountChange={changeAccount}
+                accountError={errorFor("agencyAccountId")}
+                route={route}
+                onRouteChange={changeRoute}
+                ownerPassed={ownerPassed}
+                onOwnerPassedChange={changeOwnerPassed}
+                routeError={errorFor("route")}
+                debt={preview?.totalDebt}
+                onAmountToDebt={preview && preview.totalDebt > 0 ? () => setAmountText(editableAmount(preview.totalDebt)) : undefined}
+                onRefreshOwners={refreshOwners}
+                refreshingOwners={refreshingOwners}
+              />
+            ) : (
+              <p className="rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground flex items-start gap-2">
+                <Landmark size={14} className="mt-px shrink-0" />
+                Este contrato lo cobra el propietario directamente: queda registrado y sale el recibo, pero no entra a Caja.
+              </p>
+            ))}
 
           {preview && (
             <ChargePicker
@@ -543,10 +711,16 @@ function PaymentDialogBody(props: PaymentDialogProps & { close: () => void }) {
         <Button variant="outline" onClick={props.close} disabled={submitting}>
           Cancelar
         </Button>
-        <Button onClick={submit} disabled={!canSubmit} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white min-w-44">
-          {submitting ? <Spinner /> : <HandCoins size={14} />}
-          {parsedAmount && parsedAmount > 0 ? `Registrar ${formatMoney(parsedAmount, currency)}` : "Registrar cobro"}
-        </Button>
+        {mustReload ? (
+          <Button onClick={() => window.location.reload()} className="gap-2 min-w-44">
+            <RotateCcw size={14} /> Recargar la página
+          </Button>
+        ) : (
+          <Button onClick={submit} disabled={!canSubmit} className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white min-w-44">
+            {submitting ? <Spinner /> : <HandCoins size={14} />}
+            {parsedAmount && parsedAmount > 0 ? `Registrar ${formatMoney(parsedAmount, currency)}` : "Registrar cobro"}
+          </Button>
+        )}
       </DialogFooter>
     </>
   );

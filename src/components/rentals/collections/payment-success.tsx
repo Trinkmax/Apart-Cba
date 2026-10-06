@@ -4,10 +4,12 @@ import { useState } from "react";
 import { Check, Download, Mail, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getReceiptWhatsapp } from "@/lib/actions/rentals-collections";
+import type { LedgerPaymentSplit } from "@/lib/rentals/server/collections-queries";
 import { formatMoney } from "@/lib/format";
 import { formatReceiptNumber } from "@/lib/rentals/labels";
 import { cn } from "@/lib/utils";
 import { useReceiptEmail, useReceiptPdf } from "./receipt-actions";
+import { capitalizeFirst, joinNames, successOwnerLines, type PayRoute } from "./split-view";
 import { Spinner, WhatsappMessageDialog } from "./whatsapp-message-dialog";
 
 function ActionTile({
@@ -54,6 +56,50 @@ function ActionTile({
   );
 }
 
+/** A dónde fue la plata cuando el inquilino le paga directo al propietario. */
+function SplitSummary({
+  split,
+  agencyName,
+  currency,
+  route,
+}: {
+  split: LedgerPaymentSplit;
+  agencyName: string;
+  currency: string;
+  route: PayRoute | null;
+}) {
+  const hasAgency = split.agencyTotal > 0.004;
+  const owners = joinNames(split.owners.map((o) => o.name));
+  const ownerLines = successOwnerLines(route, owners, agencyName);
+  const rawLabel = (split.agencyLabel ?? "").trim();
+  const label = rawLabel === "nada" ? "" : rawLabel;
+  return (
+    <div className="rounded-xl border bg-muted/30 divide-y text-sm text-left">
+      {(split.ownerTotal > 0.004 || !hasAgency) && (
+        <div className="flex items-start justify-between gap-3 px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="font-medium break-words">{ownerLines.title}</p>
+            <p className={cn("text-[11px]", ownerLines.warn ? "font-medium text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>{ownerLines.note}</p>
+          </div>
+          <span className="tabular-nums whitespace-nowrap font-semibold">{formatMoney(split.ownerTotal, currency)}</span>
+        </div>
+      )}
+      {hasAgency && (
+        <div className="flex items-start justify-between gap-3 px-3 py-2.5">
+          <div className="min-w-0">
+            <p className="font-medium break-words">A {agencyName}</p>
+            <p className="text-[11px] text-muted-foreground break-words">
+              {split.agencyAccountName ? `Entró a Caja en ${split.agencyAccountName}` : "Entró a Caja"}
+              {label ? ` · ${capitalizeFirst(label)}` : ""}
+            </p>
+          </div>
+          <span className="tabular-nums whitespace-nowrap font-semibold">{formatMoney(split.agencyTotal, currency)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PaymentSuccess({
   paymentId,
   receiptNumber,
@@ -63,6 +109,9 @@ export function PaymentSuccess({
   remainder,
   tenantEmail,
   tenantPhone,
+  split = null,
+  route = null,
+  agencyName = "la inmobiliaria",
   onClose,
 }: {
   paymentId: string;
@@ -73,6 +122,12 @@ export function PaymentSuccess({
   remainder: number;
   tenantEmail: string | null;
   tenantPhone: string | null;
+  /** Cobra el propietario: cuánto fue a su cuenta y cuánto entró a Caja. */
+  split?: LedgerPaymentSplit | null;
+  /** Cómo pagó el inquilino (si le pagó todo a la inmobiliaria, recuerda pasarle su parte al propietario). */
+  route?: PayRoute | null;
+  /** "Apart CBA" (o "la inmobiliaria" si no hay nombre). */
+  agencyName?: string;
   onClose: () => void;
 }) {
   const { download, pending: pdfPending } = useReceiptPdf();
@@ -104,6 +159,8 @@ export function PaymentSuccess({
               : "Quedó al día"}
         </p>
       </div>
+
+      {split && <SplitSummary split={split} agencyName={agencyName} currency={currency} route={route} />}
 
       <div className="grid gap-2 sm:grid-cols-3">
         <ActionTile icon={<Download size={16} />} title="Descargar PDF" hint="Recibo listo para imprimir" onClick={() => download(paymentId)} pending={pdfPending} />

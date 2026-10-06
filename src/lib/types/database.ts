@@ -800,6 +800,8 @@ export interface SettlementAuditEntry {
     | "row_update"
     | "status_change"
     | "payment"
+    /** «Anular el pago» (migración 069): fuera de la pila de deshacer. */
+    | "payment_undo"
     | "regenerate"
     | "undo"
     | "redo";
@@ -2646,6 +2648,61 @@ export interface RentalPayment {
   voided_by: string | null;
   created_at: string;
   created_by: string | null;
+  /** Cobro con reparto (070): cuenta de Caja donde entró la parte de la inmobiliaria. */
+  agency_account_id: string | null;
+  /** Cobro con reparto (070): lo que le tocó a la inmobiliaria (honorarios + lo que recibe para pagarle a otro); el resto lo cobró el propietario directo. */
+  agency_amount: number | null;
+  /** Cobro con reparto (070): ingreso en Caja de lo que es plata de la inmobiliaria (honorarios + IVA + conceptos propios; categoría agency_fee). */
+  agency_movement_id: string | null;
+  /** Cobro con reparto (070): ingreso en Caja de lo que la inmobiliaria recibe para pagarle al consorcio o a terceros (categoría rent_collection). */
+  pass_through_movement_id: string | null;
+  /** Cobro con reparto (070): foto del reparto. No nulo = el propietario cobró directo: nunca se le rinde. */
+  split: RentalPaymentSplitSnapshot | null;
+}
+
+/**
+ * Foto del reparto de un cobro que el inquilino le pagó directo al propietario
+ * (`rental_payments.split`, migración 070). Se guarda al registrar y no cambia:
+ * lleva los datos bancarios de cada titular de ese momento.
+ */
+export interface RentalPaymentSplitSnapshot {
+  v: 1;
+  /**
+   * Cómo le llegó la plata a cada uno: a cada uno su parte (lo esperado), todo
+   * al propietario (que le pasó a la inmobiliaria la suya) o todo a la
+   * inmobiliaria (que le pasa al propietario la suya). Sin el dato: 'cada_uno'.
+   */
+  route?: "cada_uno" | "todo_propietario" | "todo_inmobiliaria";
+  /** Lo que pagó el inquilino (= amount del cobro). */
+  total: number;
+  owner: {
+    /** Lo que transfirió directo a los propietarios (no entró a Caja). */
+    total: number;
+    shares: {
+      owner_id: string;
+      name: string;
+      /** 0..100 */
+      pct: number;
+      amount: number;
+      bank_name: string | null;
+      cbu: string | null;
+      alias: string | null;
+    }[];
+  };
+  agency: {
+    /** Lo que entró a Caja (= agency_amount). */
+    total: number;
+    fee_base: number;
+    fee_pct: number;
+    fee: number;
+    vat: number;
+    own: number;
+    pass_through: number;
+    /** "honorarios 8 % + IVA", tal como se mostró al cobrar. */
+    label: string;
+  };
+  /** Saldo a favor que quedó (está en la parte del propietario). */
+  remainder: number;
 }
 
 export interface RentalPaymentAllocation {

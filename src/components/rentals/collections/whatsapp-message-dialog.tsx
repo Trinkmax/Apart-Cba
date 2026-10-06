@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { isStaleDeployError } from "@/lib/action-failure";
 
 export type WhatsappLoadResult = { ok: true; text: string; waUrl: string | null } | { ok: false; error: string };
 
@@ -66,7 +67,15 @@ function MessageBody({ load, onDone }: { load: () => Promise<WhatsappLoadResult>
         setText(res.text);
         setState({ status: "ready", waUrl: res.waUrl });
       })
-      .catch(() => alive && setState({ status: "error", error: "No pudimos armar el mensaje. Probá de nuevo." }));
+      .catch((e: unknown) => {
+        if (!alive) return;
+        setState({
+          status: "error",
+          error: isStaleDeployError(e)
+            ? "Se actualizó el sistema mientras tenías esto abierto: recargá la página para seguir."
+            : "No pudimos armar el mensaje. Revisá la conexión y probá de nuevo.",
+        });
+      });
     return () => {
       alive = false;
     };

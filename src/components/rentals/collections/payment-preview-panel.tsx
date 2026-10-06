@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Número que se vuelve "esqueleto" mientras el servidor recalcula (las etiquetas quedan quietas). */
-function Num({ loading, children, className }: { loading: boolean; children: ReactNode; className?: string }) {
+export function Num({ loading, children, className }: { loading: boolean; children: ReactNode; className?: string }) {
   if (loading) return <span className="inline-block h-4 w-20 rounded bg-muted animate-pulse align-middle" aria-hidden />;
   return <span className={cn("tabular-nums whitespace-nowrap", className)}>{children}</span>;
 }

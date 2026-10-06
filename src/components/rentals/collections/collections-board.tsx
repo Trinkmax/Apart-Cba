@@ -127,7 +127,7 @@ function BoardRowItem({ row: r, today }: { row: BoardRow; today: string }) {
           </Link>
           {r.periodLabel && <PeriodPill>{r.periodLabel}</PeriodPill>}
           {r.collector === "propietario" && (
-            <span className="rounded-full border px-1.5 py-px text-[10px] text-muted-foreground" title="El alquiler lo cobra el propietario directo: no entra a Caja">
+            <span className="rounded-full border px-1.5 py-px text-[10px] text-muted-foreground" title="El inquilino le paga el alquiler directo al propietario. Si el contrato cobra honorarios, esa parte sí entra a Caja.">
               Cobra el dueño
             </span>
           )}

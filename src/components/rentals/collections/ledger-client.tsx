@@ -25,6 +25,7 @@ import { PaymentDialog } from "./payment-dialog";
 import { ReceiptMenu } from "./receipt-actions";
 import { RegisterPaymentButton } from "./register-payment-button";
 import { ReminderMenu } from "./reminder-menu";
+import { splitSummaryText } from "./split-view";
 
 const KIND_CHIP: Record<string, string> = { ingreso: "Ingreso", extra: "Extra", salida: "Salida" };
 type Filter = "todo" | "saldo" | "cobros";
@@ -281,7 +282,13 @@ export function LedgerView({ ledger }: { ledger: ContractLedger }) {
         warning={
           voidPaymentFor ? (
             <>
-              Se deshace la imputación, se borra el ingreso de Caja{voidPaymentFor.statementNumber ? "" : " (si lo hubo)"} y el recibo queda marcado como anulado.
+              {voidPaymentFor.split
+                ? `Se deshace la imputación, ${
+                    voidPaymentFor.split.agencyTotal > 0.004
+                      ? `se borra de Caja lo que entró en ${voidPaymentFor.split.agencyAccountName ?? "la cuenta elegida"} (${formatMoney(voidPaymentFor.split.agencyTotal, currency)}) `
+                      : ""
+                  }y el recibo queda marcado como anulado. Lo que el inquilino le transfirió directo al propietario no pasa por Caja: si hay que devolverlo, se arregla con él.`
+                : <>Se deshace la imputación, se borra el ingreso de Caja{voidPaymentFor.statementNumber ? "" : " (si lo hubo)"} y el recibo queda marcado como anulado.</>}{" "}
               Los intereses por mora que se condonaron o se cargaron con este cobro (y siguen sin pagar) también se deshacen.
               {voidPaymentFor.statementNumber
                 ? ` Este cobro ya está en la rendición N° ${String(voidPaymentFor.statementNumber).padStart(4, "0")}: primero hay que anular esa rendición.`
@@ -489,6 +496,7 @@ function PaymentRow({
             {p.reference ? ` · ref. ${p.reference}` : ""}
             {p.payerName ? ` · pagó ${p.payerName}` : ""}
           </p>
+          {p.split && <p className="text-[11px] text-foreground/80 mt-0.5 break-words">{splitSummaryText(p.split, currency)}</p>}
           {imputed.length > 0 && (
             <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">
               Imputado a {imputed.map((x) => `${x.label} (${formatMoney(x.amount, currency)})`).join(", ")}

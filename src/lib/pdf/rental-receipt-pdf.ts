@@ -17,6 +17,7 @@ import {
 } from "./org-header";
 import { pdfSafe } from "./text";
 import { RECEIPT_LEGEND } from "@/components/rentals/collections/messages";
+import { receiptSplitRows, type LedgerPaymentSplit } from "@/lib/rentals/payment-split-record";
 
 /**
  * Recibo de alquiler (módulo Alquileres tradicionales).
@@ -74,6 +75,11 @@ export interface RentalReceiptData {
     isCompany: boolean;
   };
   lines: RentalReceiptLine[];
+  /**
+   * Cobro con reparto (cobra el propietario, migración 070): cuánto le
+   * transfirió el inquilino directo al propietario y cuánto a la inmobiliaria.
+   */
+  split?: LedgerPaymentSplit | null;
   /** Lo que este pago dejó como saldo a favor del inquilino. */
   creditLeft: number;
   /** Deuda que sigue abierta al día en que se emite el documento. */
@@ -275,12 +281,51 @@ function drawDetail(doc: jsPDF, data: RentalReceiptData, brand: RGB, y: number):
   return (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 5;
 }
 
+/**
+ * Cobro con reparto (cobra el propietario): qué parte se le pagó directo al
+ * propietario y qué parte a la inmobiliaria, o a quién le pagó todo
+ * (`receiptSplitRows`). Sólo si hubo reparto.
+ */
+function drawSplit(doc: jsPDF, data: RentalReceiptData, y: number): number {
+  const split = data.split;
+  if (!split) return y;
+  const currency = data.receipt.currency;
+  const labelW = CONTENT_W - 8 - 42;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  const rows = receiptSplitRows(split, data.org.name).map((r) => ({
+    lines: doc.splitTextToSize(pdfSafe(r.label), labelW) as string[],
+    amount: r.amount,
+  }));
+  const rowH = (r: { lines: string[] }) => r.lines.length * 4.4 + 0.8;
+  const h = 9 + rows.reduce((s, r) => s + rowH(r), 0) + 2;
+  y = ensureSpace(doc, y, h + 2);
+  doc.setFillColor(SOFT_BG[0], SOFT_BG[1], SOFT_BG[2]);
+  doc.roundedRect(MARGIN_X, y, CONTENT_W, h, 2, 2, "F");
+  ink(doc, TEXT_MUTED);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.text(pdfSafe("CÓMO SE PAGÓ"), MARGIN_X + 4, y + 6, { charSpace: 0.3 });
+  let cy = y + 11.5;
+  doc.setFontSize(9);
+  ink(doc, TEXT_INK);
+  for (const r of rows) {
+    doc.setFont("helvetica", "normal");
+    r.lines.forEach((l, i) => doc.text(l, MARGIN_X + 4, cy + i * 4.4));
+    doc.setFont("helvetica", "bold");
+    doc.text(money(r.amount, currency), PAGE_W - MARGIN_X - 4, cy, { align: "right" });
+    cy += rowH(r);
+  }
+  return y + h + 5;
+}
+
 function drawPaymentInfo(doc: jsPDF, data: RentalReceiptData, y: number): number {
   const r = data.receipt;
   const parts = [
     `Medio de pago: ${r.methodLabel}`,
     r.reference ? `Referencia: ${r.reference}` : null,
-    r.collectedByOwner ? "Lo cobró directamente el propietario" : r.accountName ? `Ingresó en: ${r.accountName}` : null,
+    // Con reparto, el bloque "Cómo se pagó" ya dice a quién fue cada parte.
+    r.collectedByOwner ? (data.split ? null : "Lo cobró directamente el propietario") : r.accountName ? `Ingresó en: ${r.accountName}` : null,
     r.payerName ? `Pagó: ${r.payerName}` : null,
   ].filter((p): p is string => !!p);
   doc.setFont("helvetica", "normal");
@@ -391,6 +436,7 @@ export async function buildRentalReceiptDoc(data: RentalReceiptData, opts: { log
   if (data.receipt.voided) y = drawVoidedNotice(doc, data, y);
   y = drawStatement(doc, data, brand, y);
   y = drawDetail(doc, data, brand, y);
+  y = drawSplit(doc, data, y);
   y = drawPaymentInfo(doc, data, y);
   y = drawPending(doc, data, y);
   drawLegendAndSignature(doc, data, y);

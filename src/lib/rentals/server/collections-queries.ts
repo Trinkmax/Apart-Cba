@@ -31,9 +31,11 @@ import {
   type MoneyTotals,
 } from "@/components/rentals/collections/board-helpers";
 import type { RentalReceiptData } from "@/lib/pdf/rental-receipt-pdf";
+import { directPaymentGuide, ledgerSplitFromSnapshot, type DirectPaymentGuide, type LedgerPaymentSplit } from "@/lib/rentals/payment-split-record";
 import { getRentalSettings, portalPathOf } from "./contracts";
 import { logRentalsError, type AdminClient } from "./access";
 import { loadContinuationBilled, withContinuationFlags } from "./continuation";
+import { computePaymentPreview, propertyOwnersOf } from "./payments";
 
 /**
  * Lecturas de Cobranzas (tablero del mes, cuenta corriente, datos del recibo,
@@ -512,7 +514,12 @@ export interface LedgerPayment {
   allocations: { chargeId: string; chargeLabel: string; description: string; amount: number }[];
   /** Ya se le rindió al propietario (no se puede anular sin anular la rendición). */
   statementNumber: number | null;
+  /** Cobra el propietario: cómo se repartió este cobro (null si cobra la inmobiliaria o es anterior al reparto). */
+  split: LedgerPaymentSplit | null;
 }
+
+/** Definido junto a la foto que se guarda (070), para que el recibo y los tests lo usen sin el servidor. */
+export type { LedgerPaymentSplit };
 
 export interface ContractLedger {
   today: string;
@@ -578,6 +585,9 @@ type LedgerPaymentRow = {
   voided_at: string | null;
   void_reason: string | null;
   created_at: string;
+  /** 070: cobro con reparto (cobra el propietario). */
+  agency_account_id: string | null;
+  split: unknown;
   allocations: { id: string; charge_id: string; charge_item_id: string; amount: number }[];
 };
 
@@ -630,7 +640,7 @@ export async function loadContractLedger(
     admin
       .from("rental_payments")
       .select(
-        "id, paid_at, amount, method, account_id, reference, payer_name, receipt_number, unallocated_amount, voided_at, void_reason, created_at, allocations:rental_payment_allocations(id, charge_id, charge_item_id, amount)",
+        "id, paid_at, amount, method, account_id, reference, payer_name, receipt_number, unallocated_amount, voided_at, void_reason, created_at, agency_account_id, split, allocations:rental_payment_allocations(id, charge_id, charge_item_id, amount)",
       )
       .eq("organization_id", orgId)
       .eq("contract_id", contractId)
@@ -643,7 +653,7 @@ export async function loadContractLedger(
   const chargeRows = (chRes.data ?? []) as unknown as LedgerChargeRow[];
   const payRows = (payRes.data ?? []) as unknown as LedgerPaymentRow[];
 
-  const accountIds = [...new Set(payRows.map((p) => p.account_id).filter((x): x is string => !!x))];
+  const accountIds = [...new Set(payRows.flatMap((p) => [p.account_id, p.agency_account_id]).filter((x): x is string => !!x))];
   const allocIds = payRows.flatMap((p) => p.allocations.map((a) => a.id));
   const [tenants, props, accRes, stByAlloc] = await Promise.all([
     primaryTenants(admin, orgId, [c.id]),
@@ -717,6 +727,7 @@ export async function loadContractLedger(
       amount: Number(a.amount),
     })),
     statementNumber: p.allocations.map((a) => stByAlloc.get(a.id)).find((n) => n != null) ?? null,
+    split: ledgerSplitFromSnapshot(p.split, p.agency_account_id ? accountName.get(p.agency_account_id) ?? null : null),
   }));
 
   const movements = buildRunningBalance(
@@ -758,8 +769,22 @@ export async function loadContractLedger(
 
 // ─── Diálogo de cobro ───────────────────────────────────────────────────────
 
+/** Titular de la propiedad, con sus datos bancarios (a dónde transfiere el inquilino su parte). */
+export interface PaymentOwner {
+  ownerId: string;
+  name: string;
+  /** 0..100 */
+  pct: number;
+  isPrimary: boolean;
+  bankName: string | null;
+  cbu: string | null;
+  alias: string | null;
+}
+
 export interface PaymentSetup {
   today: string;
+  /** Nombre de la organización ("Apart CBA") para los textos del reparto. */
+  orgName: string;
   contract: {
     id: string;
     number: number;
@@ -771,23 +796,39 @@ export interface PaymentSetup {
     tenantEmail: string | null;
     tenantPhone: string | null;
     lateFeeHint: string | null;
+    /** % de honorarios de administración (8 = 8 %). */
+    adminFeePct: number;
+    adminFeeVat: boolean;
   };
   /** Cuentas de Caja activas en la moneda del contrato. */
   accounts: { id: string; name: string; type: string; isDefault: boolean }[];
+  /** Titulares de la propiedad (para el reparto cuando cobra el propietario). */
+  owners: PaymentOwner[];
 }
 
-export async function loadPaymentSetup(admin: AdminClient, orgId: string, contractId: string, today: string): Promise<PaymentSetup | null> {
+export async function loadPaymentSetup(
+  admin: AdminClient,
+  orgId: string,
+  contractId: string,
+  today: string,
+  orgName: string,
+): Promise<PaymentSetup | null> {
   const { data } = await admin
     .from("rental_contracts")
-    .select("id, number, status, currency, collector, property_id, late_fee_type, late_fee_value, grace_days")
+    .select("id, number, status, currency, collector, property_id, late_fee_type, late_fee_value, grace_days, admin_fee_pct, admin_fee_vat")
     .eq("id", contractId)
     .eq("organization_id", orgId)
     .maybeSingle();
-  const c = data as (Pick<RentalContract, "id" | "number" | "status" | "currency" | "collector" | "property_id" | "late_fee_type" | "late_fee_value" | "grace_days">) | null;
+  const c = data as (Pick<
+    RentalContract,
+    "id" | "number" | "status" | "currency" | "collector" | "property_id" | "late_fee_type" | "late_fee_value" | "grace_days" | "admin_fee_pct" | "admin_fee_vat"
+  >) | null;
   if (!c) return null;
-  const [tenants, props, accRes] = await Promise.all([
+  const [tenants, props, accRes, ownersRes] = await Promise.all([
     primaryTenants(admin, orgId, [c.id]),
     propertiesById(admin, orgId, [c.property_id]),
+    // Las mismas cuentas sirven para el total (cobra la inmobiliaria) o para su
+    // parte (cobra el propietario): activas y en la moneda del contrato.
     admin
       .from("cash_accounts")
       .select("id, name, type, is_expense_default, display_order")
@@ -796,8 +837,11 @@ export async function loadPaymentSetup(admin: AdminClient, orgId: string, contra
       .eq("currency", c.currency)
       .order("display_order", { ascending: true })
       .order("name", { ascending: true }),
+    c.collector === "propietario" ? propertyOwnersOf(admin, orgId, c.property_id) : Promise.resolve({ ok: true as const, owners: [] }),
   ]);
   if (accRes.error) logRentalsError("collections:setup:accounts", accRes.error);
+  // Si no se pudieron leer (ya quedó logueado) el diálogo igual abre, sin datos bancarios.
+  const owners = ownersRes.ok ? ownersRes.owners : [];
   const tenant = tenants.get(c.id);
   const value = Number(c.late_fee_value).toLocaleString("es-AR");
   const lateFeeHint =
@@ -810,6 +854,7 @@ export async function loadPaymentSetup(admin: AdminClient, orgId: string, contra
           : `${value} ${c.currency} por día de atraso`;
   return {
     today,
+    orgName: orgName.trim() || "la inmobiliaria",
     contract: {
       id: c.id,
       number: c.number,
@@ -821,6 +866,8 @@ export async function loadPaymentSetup(admin: AdminClient, orgId: string, contra
       tenantEmail: tenant?.email ?? null,
       tenantPhone: tenant?.phone ?? null,
       lateFeeHint: lateFeeHint && c.grace_days > 0 ? `${lateFeeHint} (con ${c.grace_days} días de gracia)` : lateFeeHint,
+      adminFeePct: Number(c.admin_fee_pct) || 0,
+      adminFeeVat: !!c.admin_fee_vat,
     },
     accounts: ((accRes.data ?? []) as { id: string; name: string; type: string; is_expense_default: boolean | null }[]).map((a) => ({
       id: a.id,
@@ -828,6 +875,7 @@ export async function loadPaymentSetup(admin: AdminClient, orgId: string, contra
       type: a.type,
       isDefault: !!a.is_expense_default,
     })),
+    owners,
   };
 }
 
@@ -857,7 +905,7 @@ export async function loadReceiptData(admin: AdminClient, orgId: string, payment
   const { data: payData } = await admin
     .from("rental_payments")
     .select(
-      "id, contract_id, paid_at, amount, currency, method, account_id, reference, payer_name, receipt_number, unallocated_amount, voided_at, void_reason, created_by, allocations:rental_payment_allocations(amount, item:rental_charge_items(description, sort_order), charge:rental_charges(label, due_date))",
+      "id, contract_id, paid_at, amount, currency, method, account_id, reference, payer_name, receipt_number, unallocated_amount, voided_at, void_reason, created_by, agency_account_id, split, allocations:rental_payment_allocations(amount, item:rental_charge_items(description, sort_order), charge:rental_charges(label, due_date))",
     )
     .eq("id", paymentId)
     .eq("organization_id", orgId)
@@ -877,12 +925,14 @@ export async function loadReceiptData(admin: AdminClient, orgId: string, payment
     voided_at: string | null;
     void_reason: string | null;
     created_by: string | null;
+    agency_account_id: string | null;
+    split: unknown;
     allocations: { amount: number; item: { description: string; sort_order: number } | null; charge: { label: string; due_date: string } | null }[];
   };
   const pay = payData as unknown as PayRow | null;
   if (!pay) return null;
 
-  const [orgRes, cRes, settings, tenants, open, accRes, profRes] = await Promise.all([
+  const [orgRes, cRes, settings, tenants, open, accRes, profRes, agencyAccRes] = await Promise.all([
     admin.from("organizations").select("name, legal_name, tax_id, logo_url, primary_color, address, contact_phone, contact_email").eq("id", orgId).maybeSingle(),
     admin.from("rental_contracts").select("id, number, property_id, collector").eq("id", pay.contract_id).eq("organization_id", orgId).maybeSingle(),
     getRentalSettings(admin, orgId),
@@ -894,6 +944,9 @@ export async function loadReceiptData(admin: AdminClient, orgId: string, payment
     pay.created_by
       ? admin.from("user_profiles").select("full_name").eq("user_id", pay.created_by).maybeSingle()
       : Promise.resolve({ data: null as { full_name: string | null } | null }),
+    pay.agency_account_id
+      ? admin.from("cash_accounts").select("name").eq("id", pay.agency_account_id).eq("organization_id", orgId).maybeSingle()
+      : Promise.resolve({ data: null as { name: string } | null }),
   ]);
   const org = orgRes.data as (RentalReceiptData["org"]) | null;
   const contract = cRes.data as (Pick<RentalContract, "id" | "number" | "property_id" | "collector">) | null;
@@ -939,6 +992,7 @@ export async function loadReceiptData(admin: AdminClient, orgId: string, payment
       isCompany: tenant?.isCompany ?? false,
     },
     lines,
+    split: ledgerSplitFromSnapshot(pay.split, (agencyAccRes.data as { name: string } | null)?.name ?? null),
     creditLeft: pay.voided_at ? 0 : Number(pay.unallocated_amount),
     pending: {
       asOf: today,
@@ -963,13 +1017,20 @@ export interface ReminderData {
   hasLateFees: boolean;
   paymentInstructions: string | null;
   portalUrl: string | null;
+  /**
+   * Cobra el propietario: a quién le transfiere el inquilino cada parte de lo
+   * que debe (al propietario, con su CBU/alias, y a la inmobiliaria sus
+   * honorarios…, a la cuenta de las instrucciones de pago). Sin punitorios
+   * nuevos, igual que `lines`. null si cobra la inmobiliaria o no se pudo armar.
+   */
+  split?: DirectPaymentGuide | null;
 }
 
 export async function loadReminderData(admin: AdminClient, orgId: string, contractId: string, today: string): Promise<ReminderData | null> {
   const [cRes, orgRes] = await Promise.all([
     admin
       .from("rental_contracts")
-      .select("id, number, property_id, currency, late_fee_type, late_fee_value, portal_enabled, portal_token_hash, portal_token_version")
+      .select("id, number, property_id, currency, collector, late_fee_type, late_fee_value, portal_enabled, portal_token_hash, portal_token_version")
       .eq("id", contractId)
       .eq("organization_id", orgId)
       .maybeSingle(),
@@ -977,16 +1038,26 @@ export async function loadReminderData(admin: AdminClient, orgId: string, contra
   ]);
   type C = Pick<
     RentalContract,
-    "id" | "number" | "property_id" | "currency" | "late_fee_type" | "late_fee_value" | "portal_enabled" | "portal_token_hash" | "portal_token_version"
+    | "id"
+    | "number"
+    | "property_id"
+    | "currency"
+    | "collector"
+    | "late_fee_type"
+    | "late_fee_value"
+    | "portal_enabled"
+    | "portal_token_hash"
+    | "portal_token_version"
   >;
   const c = cRes.data as C | null;
   const org = orgRes.data as ReminderData["org"] | null;
   if (!c || !org) return null;
-  const [tenants, props, open, settings] = await Promise.all([
+  const [tenants, props, open, settings, split] = await Promise.all([
     primaryTenants(admin, orgId, [c.id]),
     propertiesById(admin, orgId, [c.property_id]),
     openChargesOf(admin, orgId, c.id),
     getRentalSettings(admin, orgId),
+    c.collector === "propietario" ? reminderSplitOf(admin, orgId, c.id, today) : Promise.resolve(null),
   ]);
   return {
     today,
@@ -1000,7 +1071,26 @@ export async function loadReminderData(admin: AdminClient, orgId: string, contra
     hasLateFees: hasLateFeesOf(c),
     paymentInstructions: settings.payment_instructions,
     portalUrl: portalUrlOf(c),
+    split,
   };
+}
+
+/**
+ * Reparto de lo que debe hoy un inquilino que le paga al propietario (mismas
+ * reglas que el cobro: `computePaymentPreview` + `directPaymentGuide`). Sin
+ * punitorios nuevos (se condonan sólo para esta cuenta), como el resto del aviso.
+ */
+async function reminderSplitOf(admin: AdminClient, orgId: string, contractId: string, today: string): Promise<DirectPaymentGuide | null> {
+  const pre = await computePaymentPreview(admin, orgId, { contractId, amount: 0, paidAt: today, waiveLateFees: true });
+  if (!pre.ok) {
+    logRentalsError("collections:reminderSplit", pre.error);
+    return null;
+  }
+  return directPaymentGuide({
+    items: pre.preview.charges.flatMap((ch) => ch.items),
+    rule: { adminFeePct: Number(pre.contract.admin_fee_pct) || 0, adminFeeVat: !!pre.contract.admin_fee_vat },
+    owners: pre.owners,
+  });
 }
 
 // ─── Expensas del mes (contratos cuyas expensas cobra la inmobiliaria) ──────

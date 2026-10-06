@@ -9,11 +9,24 @@ import type {
   RentalPayee,
   RentalPaymentMethod,
 } from "@/lib/types/database";
+import { formatMoney } from "@/lib/format";
 import { allocatePayment, type OpenItem } from "@/lib/rentals/allocation";
 import { computeLateFee, lateFeeAlreadyBilled, type BasePayment } from "@/lib/rentals/late-fees";
 import { LATE_FEE_TYPE_LABEL } from "@/lib/rentals/labels";
+import { agencyPartLabel, primaryOwnerIndex, splitDirectPayment, type PaymentSplit, type SplitLine } from "@/lib/rentals/payment-split";
+import {
+  agencyMovementLabel,
+  isPaymentRoute,
+  passThroughMovementLabel,
+  paymentRouteText,
+  splitLinesFromAllocations,
+  splitSnapshot,
+  type PaymentRoute,
+  type SplitItemRef,
+  type SplitOwnerBank,
+} from "@/lib/rentals/payment-split-record";
 import { applyAvailableCredit, logRentalEvent } from "./contract-sync";
-import { dbFailure, type ActionResult, type AdminClient, type RentalsCtx } from "./access";
+import { dbFailure, logRentalsError, type ActionResult, type AdminClient, type RentalsCtx } from "./access";
 
 /**
  * Cobros del inquilino.
@@ -85,6 +98,12 @@ export interface PaymentPreview {
   /** Lo que sobra del pago: queda como saldo a favor. */
   remainder: number;
   coversAll: boolean;
+  /**
+   * Reparto del cobro cuando el inquilino le paga directo al propietario
+   * (`collector = 'propietario'`): cuánto va a la cuenta del propietario y
+   * cuánto a la cuenta de la inmobiliaria (honorarios…). null si cobra la inmobiliaria.
+   */
+  split: PaymentSplit | null;
 }
 
 export interface PaymentPreviewInput {
@@ -99,11 +118,54 @@ type ChargeWithItems = Pick<RentalCharge, "id" | "label" | "due_date" | "subtota
   items: Pick<RentalChargeItem, "id" | "kind" | "payee" | "description" | "amount" | "original_amount" | "paid_amount" | "sort_order" | "meta">[];
 };
 
+type OwnerLinkRow = {
+  owner_id: string;
+  ownership_pct: number;
+  is_primary: boolean;
+  owner: { full_name: string | null; cbu: string | null; alias_cbu: string | null; bank_name: string | null } | null;
+};
+
+/**
+ * Titulares de la propiedad con sus datos bancarios: a dónde le transfiere el
+ * inquilino su parte cuando cobra el propietario, y el titular del ingreso en Caja.
+ * El principal primero (el marcado; si no, el de mayor %).
+ */
+export async function propertyOwnersOf(
+  admin: AdminClient,
+  organizationId: string,
+  propertyId: string,
+): Promise<{ ok: true; owners: SplitOwnerBank[] } | { ok: false; error: string }> {
+  const { data, error } = await admin
+    .from("rental_property_owners")
+    .select("owner_id, ownership_pct, is_primary, owner:owners(full_name, cbu, alias_cbu, bank_name)")
+    .eq("organization_id", organizationId)
+    .eq("property_id", propertyId)
+    .order("is_primary", { ascending: false })
+    .order("ownership_pct", { ascending: false })
+    .order("created_at", { ascending: true });
+  if (error) return dbFailure("propertyOwnersOf", error, "No se pudieron leer los propietarios de la propiedad.");
+  return {
+    ok: true,
+    owners: ((data ?? []) as unknown as OwnerLinkRow[]).map((r) => ({
+      ownerId: r.owner_id,
+      name: r.owner?.full_name?.trim() || "Propietario",
+      pct: Number(r.ownership_pct),
+      isPrimary: !!r.is_primary,
+      bankName: r.owner?.bank_name?.trim() || null,
+      cbu: r.owner?.cbu?.trim() || null,
+      alias: r.owner?.alias_cbu?.trim() || null,
+    })),
+  };
+}
+
 export async function computePaymentPreview(
   admin: AdminClient,
   organizationId: string,
   input: PaymentPreviewInput,
-): Promise<{ ok: true; preview: PaymentPreview; contract: RentalContract } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; preview: PaymentPreview; contract: RentalContract; owners: SplitOwnerBank[]; splitLines: SplitLine[] }
+  | { ok: false; error: string }
+> {
   const { data: contractData } = await admin
     .from("rental_contracts")
     .select("*")
@@ -115,16 +177,24 @@ export async function computePaymentPreview(
 
   // Sólo lo que está en la moneda del contrato (la del cobro): un cargo en otra
   // moneda no se paga 1 a 1 con éste (500 dólares no cancelan 500 pesos).
-  const { data: chargesData, error } = await admin
-    .from("rental_charges")
-    .select("id, label, due_date, subtotal, paid_amount, status, items:rental_charge_items(id, kind, payee, description, amount, original_amount, paid_amount, sort_order, meta)")
-    .eq("organization_id", organizationId)
-    .eq("contract_id", contract.id)
-    .eq("currency", contract.currency)
-    .is("voided_at", null)
-    .in("status", ["pendiente", "parcial"])
-    .order("due_date", { ascending: true });
+  // Si cobra el propietario, además sus titulares (para el reparto).
+  const [{ data: chargesData, error }, ownersRes] = await Promise.all([
+    admin
+      .from("rental_charges")
+      .select("id, label, due_date, subtotal, paid_amount, status, items:rental_charge_items(id, kind, payee, description, amount, original_amount, paid_amount, sort_order, meta)")
+      .eq("organization_id", organizationId)
+      .eq("contract_id", contract.id)
+      .eq("currency", contract.currency)
+      .is("voided_at", null)
+      .in("status", ["pendiente", "parcial"])
+      .order("due_date", { ascending: true }),
+    contract.collector === "propietario"
+      ? propertyOwnersOf(admin, organizationId, contract.property_id)
+      : Promise.resolve({ ok: true as const, owners: [] as SplitOwnerBank[] }),
+  ]);
   if (error) return dbFailure("computePaymentPreview:charges", error, "No se pudo leer la cuenta del inquilino.");
+  if (!ownersRes.ok) return ownersRes;
+  const owners = ownersRes.owners;
   const charges = (chargesData ?? []) as ChargeWithItems[];
 
   // Pagos ya imputados a la base de cada cargo vencido (para el punitorio por tramos).
@@ -218,10 +288,36 @@ export async function computePaymentPreview(
   const { allocations, remainder } = allocatePayment(amount, open, input.preferChargeIds ?? []);
   const descOf = new Map(previewCharges.flatMap((c) => c.items.map((i) => [i.itemId, i.description] as const)));
   const totalDebt = round2(previewCharges.reduce((s, c) => s + c.outstanding, 0));
+  const previewAllocations: PreviewAllocation[] = allocations.map((a) => ({
+    chargeId: a.chargeId,
+    itemId: a.itemId.startsWith("nuevo:") ? null : a.itemId,
+    newItemIndex: a.itemId.startsWith("nuevo:") ? Number(a.itemId.slice(6)) : null,
+    description: descOf.get(a.itemId) ?? "",
+    amount: a.amount,
+  }));
+
+  // Cobra el propietario: cuánto le transfiere el inquilino a él y cuánto a la
+  // inmobiliaria (honorarios…), con las mismas reglas que la rendición.
+  // El depósito va en la parte del propietario (splitLinesFromAllocations): es
+  // lo que da por hecho el módulo del depósito cuando cobra el propietario.
+  let split: PaymentSplit | null = null;
+  let splitLines: SplitLine[] = [];
+  if (contract.collector === "propietario") {
+    const itemRefs = new Map<string, SplitItemRef>(charges.flatMap((c) => c.items.map((i) => [i.id, { kind: i.kind, payee: i.payee }] as const)));
+    splitLines = splitLinesFromAllocations(previewAllocations, itemRefs, contract.late_fee_payee);
+    split = splitDirectPayment({
+      total: amount,
+      lines: splitLines,
+      rule: { adminFeePct: Number(contract.admin_fee_pct) || 0, adminFeeVat: !!contract.admin_fee_vat },
+      owners,
+    });
+  }
 
   return {
     ok: true,
     contract,
+    owners,
+    splitLines,
     preview: {
       contractId: contract.id,
       currency: contract.currency,
@@ -230,15 +326,10 @@ export async function computePaymentPreview(
       lateFees,
       waivedLateFees,
       totalDebt,
-      allocations: allocations.map((a) => ({
-        chargeId: a.chargeId,
-        itemId: a.itemId.startsWith("nuevo:") ? null : a.itemId,
-        newItemIndex: a.itemId.startsWith("nuevo:") ? Number(a.itemId.slice(6)) : null,
-        description: descOf.get(a.itemId) ?? "",
-        amount: a.amount,
-      })),
+      allocations: previewAllocations,
       remainder,
       coversAll: amount >= totalDebt - 0.005,
+      split,
     },
   };
 }
@@ -249,6 +340,17 @@ export interface RegisterPaymentInput extends PaymentPreviewInput {
   method: RentalPaymentMethod;
   /** Cuenta de Caja donde entró la plata. Obligatoria si cobra la inmobiliaria. */
   accountId: string | null;
+  /**
+   * Cobra el propietario: cuenta de Caja de la inmobiliaria donde entró SU parte
+   * (honorarios…). Obligatoria si esa parte es mayor a cero.
+   */
+  agencyAccountId?: string | null;
+  /**
+   * Cobra el propietario: cómo le llegó la plata a cada uno (a cada uno su
+   * parte, todo al propietario o todo a la inmobiliaria). Los montos son los
+   * mismos; queda en la foto del reparto y lo dice el recibo. Sin el dato: 'cada_uno'.
+   */
+  route?: PaymentRoute | null;
   reference?: string | null;
   payerName?: string | null;
   notes?: string | null;
@@ -292,27 +394,90 @@ export function paymentRpcItems(preview: PaymentPreview, latePayee: RentalPayee,
   };
 }
 
-/** Titular "principal" de la propiedad del contrato (para el owner_id del ingreso en Caja). */
-async function primaryOwnerOf(admin: AdminClient, propertyId: string): Promise<string | null> {
-  const { data } = await admin
-    .from("rental_property_owners")
-    .select("owner_id, ownership_pct, is_primary")
-    .eq("property_id", propertyId);
-  const rows = (data ?? []) as { owner_id: string; ownership_pct: number; is_primary: boolean }[];
-  if (!rows.length) return null;
-  const primary = rows.find((r) => r.is_primary);
-  if (primary) return primary.owner_id;
-  return [...rows].sort((a, b) => Number(b.ownership_pct) - Number(a.ownership_pct))[0].owner_id;
+/**
+ * Titular "principal" de la propiedad del contrato (para el owner_id del ingreso
+ * en Caja): el marcado; si no, el de mayor %. Es un dato de referencia: si no se
+ * puede leer, el ingreso queda sin titular (no frena el cobro).
+ */
+async function primaryOwnerIdOf(ctx: RentalsCtx, propertyId: string, loaded: readonly SplitOwnerBank[]): Promise<string | null> {
+  let owners = loaded;
+  if (!owners.length) {
+    const res = await propertyOwnersOf(ctx.admin, ctx.organization.id, propertyId);
+    if (!res.ok) return null;
+    owners = res.owners;
+  }
+  const i = primaryOwnerIndex(owners);
+  return i >= 0 ? owners[i].ownerId : null;
+}
+
+/**
+ * La base todavía no tiene la 070 (bloques 1–3) y la función vieja registró un
+ * cobro con reparto como uno común: sin la foto del reparto (si el contrato
+ * pasara a cobrarlo la inmobiliaria, se le volvería a rendir al propietario) y
+ * sin la parte de la inmobiliaria en Caja. Se anula en el acto con la función
+ * de siempre y se avisa; si ni eso se puede, se dice qué recibo anular.
+ */
+async function undoPaymentWithoutSplit(
+  ctx: RentalsCtx,
+  contractId: string,
+  paymentId: string,
+  receiptNumber: number,
+): Promise<{ ok: false; error: string }> {
+  const receipt = String(receiptNumber).padStart(6, "0");
+  const reason = "Se anuló solo: el sistema todavía no puede registrar cobros con reparto (falta actualizar la base).";
+  const { error } = await ctx.admin.rpc("rental_void_payment", {
+    p_organization_id: ctx.organization.id,
+    p_payment_id: paymentId,
+    p_reason: reason,
+    p_actor: ctx.session.userId,
+  });
+  logRentalsError(
+    "registerRentalPayment:sin-070",
+    `recibo ${receipt}: la base no tiene la migración 070 (rental_register_payment vieja)${error ? `; tampoco se pudo anular: ${error.message}` : "; se anuló"}`,
+  );
+  if (error) {
+    return {
+      ok: false,
+      error: `El recibo ${receipt} quedó registrado sin el reparto porque falta actualizar el sistema. Anulalo desde la cuenta del inquilino y avisá a soporte antes de volver a cobrarlo.`,
+    };
+  }
+  await logRentalEvent(ctx.admin, {
+    organizationId: ctx.organization.id,
+    contractId,
+    type: "cobro_anulado",
+    summary: `Se anuló el recibo ${receipt}: ${reason}`,
+    payload: { payment_id: paymentId, reason: "sin_migracion_070" },
+    actorId: ctx.session.userId,
+    actorName: ctx.actorName,
+  });
+  return {
+    ok: false,
+    error: "Todavía no se puede registrar un cobro con reparto: falta actualizar el sistema. El cobro no quedó registrado; avisá a soporte.",
+  };
 }
 
 export async function registerRentalPayment(
   ctx: RentalsCtx,
   input: RegisterPaymentInput,
-): Promise<ActionResult<{ paymentId: string; receiptNumber: number; remainder: number; contractId: string }>> {
+): Promise<
+  ActionResult<{
+    paymentId: string;
+    receiptNumber: number;
+    remainder: number;
+    contractId: string;
+    split: PaymentSplit | null;
+    /** Ingreso en Caja de los honorarios de un cobro con reparto (null si no hubo). */
+    agencyMovementId: string | null;
+    /** Ingreso en Caja de lo que la inmobiliaria recibió para pagarle a otro (null si no hubo). */
+    passThroughMovementId: string | null;
+  }>
+> {
   if (!(input.amount > 0)) return { ok: false, error: "Ingresá un importe mayor a cero.", field: "amount" };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.paidAt)) return { ok: false, error: "La fecha del pago no es válida.", field: "paidAt" };
   if (input.paidAt > ctx.today) return { ok: false, error: "La fecha del pago no puede ser futura.", field: "paidAt" };
 
+  // Todo se vuelve a calcular acá con datos frescos (también el reparto): lo que
+  // mandó el navegador sólo aporta el importe, la fecha y las cuentas elegidas.
   const pre = await computePaymentPreview(ctx.admin, ctx.organization.id, input);
   if (!pre.ok) return pre;
   const { preview, contract } = pre;
@@ -320,7 +485,18 @@ export async function registerRentalPayment(
   if (contract.collector === "inmobiliaria" && !input.accountId) {
     return { ok: false, error: "Elegí la cuenta de Caja donde entró la plata.", field: "accountId" };
   }
-  const ownerId = await primaryOwnerOf(ctx.admin, contract.property_id);
+  // Cobra el propietario: sólo la parte de la inmobiliaria entra a Caja.
+  const split = contract.collector === "propietario" ? preview.split : null;
+  const agencyAccountId = split && split.agency.total > 0 ? input.agencyAccountId || null : null;
+  if (split && split.agency.total > 0 && !agencyAccountId) {
+    return {
+      ok: false,
+      error: `Elegí la cuenta de Caja donde entran los ${formatMoney(split.agency.total, contract.currency)} de ${ctx.organization.name} (${agencyPartLabel(split)}).`,
+      field: "agencyAccountId",
+    };
+  }
+  const route: PaymentRoute = split && isPaymentRoute(input.route) ? input.route : "cada_uno";
+  const ownerId = await primaryOwnerIdOf(ctx, contract.property_id, pre.owners);
 
   const { data, error } = await ctx.admin.rpc("rental_register_payment", {
     p_organization_id: ctx.organization.id,
@@ -338,12 +514,43 @@ export async function registerRentalPayment(
       created_by: ctx.session.userId,
       owner_id: ownerId,
       occurred_at: zonedTimeToUtc(input.paidAt, "12:00", ctx.tz).toISOString(),
+      // 070: reparto (cobra el propietario). La foto lleva los datos bancarios de hoy.
+      // La parte de la inmobiliaria entra a Caja en dos: honorarios (agency_fee) y lo
+      // que recibe para pagarle al consorcio o a terceros (rent_collection).
+      ...(split
+        ? {
+            split: splitSnapshot(split, pre.owners, route),
+            agency_amount: split.agency.total,
+            agency_pass_through: split.agency.passThrough,
+            agency_account_id: agencyAccountId,
+            agency_movement_description: agencyMovementLabel(split),
+            agency_pass_description: passThroughMovementLabel(pre.splitLines),
+          }
+        : {}),
     },
     ...paymentRpcItems(preview, contract.late_fee_payee, input.paidAt),
   });
-  if (error) return dbFailure("registerRentalPayment", error, "No se pudo registrar el cobro. Probá de nuevo.");
-  const res = data as { payment_id: string; receipt_number: number; unallocated: number };
+  if (error) {
+    const failure = dbFailure("registerRentalPayment", error, "No se pudo registrar el cobro. Probá de nuevo.");
+    // La cuenta elegida ya no sirve (archivada, otra moneda…): que el diálogo marque el campo.
+    if (error.message?.includes("CUENTA_INVALIDA")) failure.field = split ? "agencyAccountId" : "accountId";
+    return failure;
+  }
+  const res = data as {
+    payment_id: string;
+    receipt_number: number;
+    unallocated: number;
+    agency_movement_id?: string | null;
+    pass_through_movement_id?: string | null;
+  };
+  if (split && !("agency_movement_id" in res && "pass_through_movement_id" in res)) {
+    // La base todavía no tiene la 070 entera: la función vieja ignora el reparto, así
+    // que el cobro quedó sin su foto y sin la parte de la inmobiliaria en Caja. Mejor
+    // no registrar que registrar mal: se anula en el acto y se avisa.
+    return undoPaymentWithoutSplit(ctx, contract.id, res.payment_id, res.receipt_number);
+  }
   const waivedTotal = round2(preview.waivedLateFees.reduce((s, f) => s + f.amount, 0));
+  const money = (n: number) => formatMoney(n, contract.currency);
 
   await logRentalEvent(ctx.admin, {
     organizationId: ctx.organization.id,
@@ -351,12 +558,45 @@ export async function registerRentalPayment(
     type: "cobro_registrado",
     summary: `Cobro de ${round2(input.amount).toLocaleString("es-AR", { minimumFractionDigits: 2 })} ${contract.currency} · recibo ${String(res.receipt_number).padStart(6, "0")}${
       preview.lateFees.length ? ` (incluye punitorios por ${round2(preview.lateFees.reduce((s, f) => s + f.amount, 0)).toLocaleString("es-AR")})` : ""
-    }${waivedTotal > 0 ? ` · se condonaron punitorios por ${waivedTotal.toLocaleString("es-AR")}` : ""}`,
-    payload: { payment_id: res.payment_id, receipt_number: res.receipt_number, waived: waivedTotal > 0, waived_amount: waivedTotal },
+    }${waivedTotal > 0 ? ` · se condonaron punitorios por ${waivedTotal.toLocaleString("es-AR")}` : ""}${
+      split
+        ? split.agency.total > 0
+          ? ` · ${money(split.owner.total)} directo al propietario y ${money(split.agency.total)} a ${ctx.organization.name} (${agencyPartLabel(split)})`
+          : " · todo directo al propietario"
+        : ""
+    }${split && paymentRouteText(route, ctx.organization.name) ? ` · ${paymentRouteText(route, ctx.organization.name)}` : ""}`,
+    payload: {
+      payment_id: res.payment_id,
+      receipt_number: res.receipt_number,
+      waived: waivedTotal > 0,
+      waived_amount: waivedTotal,
+      ...(split
+        ? {
+            split: {
+              route,
+              owner_total: split.owner.total,
+              agency_total: split.agency.total,
+              pass_through: split.agency.passThrough,
+              agency_account_id: agencyAccountId,
+              agency_movement_id: res.agency_movement_id ?? null,
+              pass_through_movement_id: res.pass_through_movement_id ?? null,
+            },
+          }
+        : {}),
+    },
     actorId: ctx.session.userId,
     actorName: ctx.actorName,
   });
-  return { ok: true, paymentId: res.payment_id, receiptNumber: res.receipt_number, remainder: Number(res.unallocated), contractId: contract.id };
+  return {
+    ok: true,
+    paymentId: res.payment_id,
+    receiptNumber: res.receipt_number,
+    remainder: Number(res.unallocated),
+    contractId: contract.id,
+    split,
+    agencyMovementId: res.agency_movement_id ?? null,
+    passThroughMovementId: res.pass_through_movement_id ?? null,
+  };
 }
 
 export async function voidRentalPayment(

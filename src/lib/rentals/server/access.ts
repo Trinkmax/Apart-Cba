@@ -105,6 +105,9 @@ const RPC_PREFIXES = [
   "RENDICION_DESACTUALIZADA",
   // 068h: depósito en garantía (marcar cobrado, cerrar, deshacer; y el trigger que frena "despagarlo").
   "DEPOSITO",
+  // 070: cobro con reparto (cobra el propietario) y la red que impide rendir lo que el propietario ya cobró.
+  "REPARTO_INVALIDO",
+  "COBRO_DIRECTO",
 ];
 
 const CONSTRAINT_MESSAGES: Record<string, string> = {

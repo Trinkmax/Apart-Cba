@@ -12,6 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { toastActionFailure } from "@/lib/action-failure";
 import { getReceiptData, getReceiptWhatsapp, sendReceiptEmail } from "@/lib/actions/rentals-collections";
 import { formatReceiptNumber } from "@/lib/rentals/labels";
 import { cn } from "@/lib/utils";
@@ -34,7 +35,8 @@ export function useReceiptPdf() {
         const { generateRentalReceiptPDF } = await import("@/lib/pdf/rental-receipt-pdf");
         await generateRentalReceiptPDF(res.data);
       } catch (e) {
-        toast.error("No se pudo armar el recibo", { description: (e as Error).message });
+        // Sin el mensaje crudo del error (en inglés y técnico); deploy nuevo → recargar.
+        toastActionFailure(e, "No se pudo armar el recibo", { retry: "Probá de nuevo. Si sigue fallando, recargá la página." });
       }
     });
   }
@@ -45,13 +47,18 @@ export function useReceiptEmail() {
   const [pending, startTransition] = useTransition();
   function send(paymentId: string, onSent?: (to: string) => void) {
     startTransition(async () => {
-      const res = await sendReceiptEmail(paymentId);
-      if (!res.ok) {
-        toast.error("No se pudo mandar el recibo", { description: res.error });
-        return;
+      try {
+        const res = await sendReceiptEmail(paymentId);
+        if (!res.ok) {
+          toast.error("No se pudo mandar el recibo", { description: res.error });
+          return;
+        }
+        toast.success("Recibo enviado", { description: `Le llegó a ${res.to} con el PDF adjunto.` });
+        onSent?.(res.to);
+      } catch (e) {
+        // Sin este catch el error de la acción tumbaba la pantalla entera (límite de error).
+        toastActionFailure(e, "No se pudo mandar el recibo");
       }
-      toast.success("Recibo enviado", { description: `Le llegó a ${res.to} con el PDF adjunto.` });
-      onSent?.(res.to);
     });
   }
   return { send, pending };

@@ -195,8 +195,10 @@ export async function getRentalsDashboard(): Promise<ActionResult<{ data: Rental
           addTo(feesExpected, ch.currency, n(it.amount));
           addTo(feesCollected, ch.currency, n(it.paid_amount));
         }
-        // Administración: % del alquiler que cobra la inmobiliaria para el propietario.
-        if (c && c.collector === "inmobiliaria" && it.payee === "propietario" && (it.kind === "alquiler" || it.kind === "diferencia_ajuste")) {
+        // Administración: % del alquiler del propietario. Vale cobre quien cobre: si cobra la
+        // inmobiliaria lo descuenta en la rendición; si cobra el propietario, el inquilino le
+        // transfiere esa parte a la inmobiliaria en cada cobro (reparto, migración 070).
+        if (c && it.payee === "propietario" && (it.kind === "alquiler" || it.kind === "diferencia_ajuste")) {
           const pct = n(c.admin_fee_pct) / 100;
           addTo(feesExpected, ch.currency, n(it.amount) * pct);
           addTo(feesCollected, ch.currency, n(it.paid_amount) * pct);
