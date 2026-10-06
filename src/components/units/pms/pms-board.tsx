@@ -124,6 +124,17 @@ import {
   listChannelRequestsInRange,
   type ChannelRequestRow,
 } from "@/lib/actions/channel-requests";
+import {
+  getAvailabilitySnapshot,
+  type AvailabilityBookingRow,
+  type AvailabilityRequestRow,
+} from "@/lib/actions/pms-availability";
+import {
+  checkAvailabilityRange,
+  computeUnitAvailability,
+  statusOccupies,
+} from "@/lib/units/availability";
+import { isStaleDeployError } from "@/lib/action-failure";
 import { useBookingStatusColors } from "@/lib/booking-status-colors";
 import { useFlashIds, useLiveTable } from "@/lib/realtime/use-live";
 import { cn } from "@/lib/utils";
@@ -164,6 +175,13 @@ import {
   type ZoomLevel,
 } from "./pms-constants";
 import { useIsMobile } from "@/hooks/use-mobile";
+import {
+  bookingSearchEmphasis,
+  normalizeSearchText,
+  offscreenSearchMatches,
+  searchPms,
+  type SearchEmphasis,
+} from "./pms-search";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
@@ -301,6 +319,18 @@ function NeedsGuestPanel({
     </>
   );
 }
+
+/**
+ * Estado de "Buscar disp" para el rango pedido. "off": no hay rango completo.
+ * "invalid"/"loading"/"error": hay rango pero no está verificado — la grilla no
+ * muestra ninguna unidad como disponible. "ready": veredicto autoritativo.
+ */
+type AvailabilityStatus =
+  | { kind: "off" }
+  | { kind: "invalid"; message: string }
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; from: string; to: string; busy: Set<string>; tentative: Set<string> };
 
 /** Forma mínima que el formulario de reservas necesita de una solicitud. */
 type RequestOverlap = {
@@ -665,6 +695,127 @@ export function PmsBoard({
   function clearUnitFilters() {
     setUnitFilters(EMPTY_UNIT_FILTERS);
   }
+  function clearAvailabilityDates() {
+    setUnitFilters((f) => ({ ...f, availableFrom: "", availableTo: "" }));
+  }
+
+  // ── Disponibilidad por rango ("Buscar disp") ───────────────────────────────
+  // El state `bookings` sólo tiene la ventana lazy-cargada: preguntar por
+  // fechas fuera de ella no encontraba nada y declaraba libres TODAS las
+  // unidades. Ahora se pide al server la foto del rango exacto (reservas +
+  // solicitudes) y se une con el state local (lo optimista y lo que llegó en
+  // vivo). Mientras no hay respuesta para ESE rango no se muestra ninguna
+  // unidad como disponible.
+  //
+  // Fechas "asentadas": las que quedaron quietas 350 ms. Un <input type="date">
+  // dispara un cambio por cada dígito del año ("0002-…", "0020-…", "2026-…"):
+  // sin esto se preguntaba (o se marcaba error) por cada uno. Mientras la
+  // persona tipea, el estado es "buscando", nunca el resultado del rango viejo.
+  const [settledDates, setSettledDates] = useState({ from: "", to: "" });
+  useEffect(() => {
+    const from = unitFilters.availableFrom;
+    const to = unitFilters.availableTo;
+    const handle = setTimeout(() => {
+      setSettledDates((prev) => (prev.from === from && prev.to === to ? prev : { from, to }));
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [unitFilters.availableFrom, unitFilters.availableTo]);
+  const datesSettled =
+    settledDates.from === unitFilters.availableFrom && settledDates.to === unitFilters.availableTo;
+  const availabilityRange = useMemo(
+    () => checkAvailabilityRange(settledDates.from, settledDates.to),
+    [settledDates],
+  );
+  const availabilityKey = datesSettled && availabilityRange.ok ? availabilityRange.key : null;
+  type AvailabilityFetch =
+    | { key: string; status: "ready"; bookings: AvailabilityBookingRow[]; requests: AvailabilityRequestRow[] }
+    | { key: string; status: "error"; error: string };
+  const [availabilityFetch, setAvailabilityFetch] = useState<AvailabilityFetch | null>(null);
+  // Cambió el rango (o se borró): la foto anterior deja de valer, incluso si
+  // después se vuelve a tipear el mismo rango — podría tener minutos. Patrón
+  // "ajuste de state durante render", como los prop-sync de arriba.
+  const [prevAvailabilityKey, setPrevAvailabilityKey] = useState<string | null>(null);
+  if (prevAvailabilityKey !== availabilityKey) {
+    setPrevAvailabilityKey(availabilityKey);
+    setAvailabilityFetch(null);
+  }
+  // Sube para volver a pedir el MISMO rango: después de un resync (lo que pasó
+  // con el socket caído no llega nunca solo), al cerrar una mutación propia y
+  // tras cada ráfaga de eventos en vivo (scheduleAvailabilityRefresh). Durante
+  // ese refresco se sigue viendo la foto anterior del mismo rango.
+  const [availabilityNonce, setAvailabilityNonce] = useState(0);
+  /** Última pregunta emitida / última respuesta aplicada (monótonas). */
+  const availabilitySeqRef = useRef(0);
+  const availabilityAppliedSeqRef = useRef(0);
+  /** El rango vigente, para descartar respuestas de un rango que ya no se mira. */
+  const availabilityKeyRef = useRef<string | null>(availabilityKey);
+  useEffect(() => {
+    availabilityKeyRef.current = availabilityKey;
+  }, [availabilityKey]);
+
+  useEffect(() => {
+    if (!availabilityKey) return;
+    const key = availabilityKey;
+    const [from, to] = key.split("|");
+    const seq = ++availabilitySeqRef.current;
+    // Las fechas ya vienen asentadas; el timeout sólo saca el setState del
+    // cuerpo del efecto (regla react-hooks/set-state-in-effect).
+    const handle = setTimeout(async () => {
+      let next: AvailabilityFetch;
+      try {
+        const res = await getAvailabilitySnapshot(from, to);
+        next = res.ok
+          ? { key, status: "ready", bookings: res.bookings, requests: res.requests }
+          : { key, status: "error", error: res.error };
+      } catch (err) {
+        next = {
+          key,
+          status: "error",
+          error: isStaleDeployError(err)
+            ? "Se actualizó el sistema mientras tenías esto abierto: recargá la página para buscar disponibilidad."
+            : "No se pudo verificar la disponibilidad. Revisá la conexión y probá de nuevo.",
+        };
+      }
+      // Cambiaron (o se borraron) las fechas mientras se preguntaba.
+      if (availabilityKeyRef.current !== key) return;
+      // Llegó desordenada: ya se aplicó una respuesta pedida DESPUÉS. Una
+      // pregunta en vuelo NO se descarta porque salga otra (los eventos en
+      // vivo re-preguntan seguido): con "sólo vale la última", una ráfaga
+      // más rápida que el server dejaría la foto vieja en pantalla para siempre.
+      if (seq <= availabilityAppliedSeqRef.current) return;
+      availabilityAppliedSeqRef.current = seq;
+      setAvailabilityFetch(next);
+    }, 0);
+    return () => clearTimeout(handle);
+  }, [availabilityKey, availabilityNonce]);
+
+  // Un evento en vivo (reserva o solicitud nueva, movida, cancelada, aceptada)
+  // actualiza el state local, pero NO la foto del rango de "Buscar disp", que
+  // suele estar fuera de la ventana cargada: una solicitud nueva fuera de la
+  // ventana ni siquiera entra al state (scheduleRequestsReload relee sólo la
+  // ventana) y una reserva que se cancela seguía contando como ocupada en la
+  // foto vieja. Se vuelve a preguntar UNA vez por ráfaga: el timer arranca con
+  // el primer evento, así que toda pregunta sale después de todo evento que la
+  // pidió. Sin rango activo no hace nada (ni un re-render).
+  const availabilityRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleAvailabilityRefresh = useCallback(() => {
+    if (!availabilityKeyRef.current || availabilityRefreshTimer.current) return;
+    availabilityRefreshTimer.current = setTimeout(() => {
+      availabilityRefreshTimer.current = null;
+      if (availabilityKeyRef.current) setAvailabilityNonce((n) => n + 1);
+    }, 1200);
+  }, []);
+  useEffect(() => {
+    const t = availabilityRefreshTimer;
+    return () => {
+      if (t.current) clearTimeout(t.current);
+    };
+  }, []);
+
+  const retryAvailability = useCallback(() => {
+    setAvailabilityFetch(null);
+    setAvailabilityNonce((n) => n + 1);
+  }, []);
 
   // ── modo edición de orden
   const [editMode, setEditMode] = useState(false);
@@ -1180,23 +1331,34 @@ export function PmsBoard({
   }, [schedule]);
 
   // ── filtrado
+  // Sólo los filtros EXPLÍCITOS (estado / canal / modo / cuotas vencidas). La
+  // búsqueda libre NO filtra reservas: elige qué unidades se muestran y resalta
+  // barras (`search`, abajo). Antes las filtraba con otra regla que la de
+  // unidades, y buscar una dirección dejaba filas vacías de unidades ocupadas.
   const visibleBookings = useMemo(() => {
-    const q = query.trim().toLowerCase();
     return bookings.filter((b) => {
       if (!statusFilter.has(b.status)) return false;
       if (!sourceFilter.has(b.source)) return false;
       if (modeFilter && (b.mode ?? "temporario") !== modeFilter) return false;
       if (overdueOnly && !bookingsWithOverdue.has(b.id)) return false;
-      if (!q) return true;
-      return (
-        b.guest?.full_name?.toLowerCase().includes(q) ||
-        b.unit?.code?.toLowerCase().includes(q) ||
-        b.unit?.name?.toLowerCase().includes(q) ||
-        b.external_id?.toLowerCase().includes(q) ||
-        false
-      );
+      return true;
     });
-  }, [bookings, statusFilter, sourceFilter, modeFilter, query, overdueOnly, bookingsWithOverdue]);
+  }, [bookings, statusFilter, sourceFilter, modeFilter, overdueOnly, bookingsWithOverdue]);
+
+  // Búsqueda libre: una sola regla para unidades y reservas (pms-search.ts).
+  const search = useMemo(
+    () => searchPms(query, units, visibleBookings),
+    [query, units, visibleBookings],
+  );
+  // Filas que aparecen sólo por una coincidencia que quedó fuera de la ventana
+  // dibujada (la búsqueda corre sobre todo lo cargado): se ven con barras
+  // atenuadas y sin anillo, así que llevan un aviso "Coincide el 12 nov" que
+  // salta a esa reserva.
+  const offscreenMatches = useMemo(
+    () =>
+      offscreenSearchMatches(search, visibleBookings, windowStart, isoAddDays(windowStart, windowDays)),
+    [search, visibleBookings, windowStart, windowDays],
+  );
 
   // ── búsqueda global: debounced fetch al servidor mientras el usuario tipea
   // Sólo dispara desde 2 chars; se cancela si la query cambia antes del
@@ -1318,10 +1480,63 @@ export function PmsBoard({
     return out;
   }, [bookings]);
 
+  // ── Disponibilidad: veredicto para el rango pedido ─────────────────────────
+  // "off": no hay rango completo → no filtra. "invalid"/"loading"/"error": hay
+  // un rango pero todavía (o nunca) se pudo verificar → NO se muestra ninguna
+  // unidad como disponible. "ready": la foto del server para ese rango unida al
+  // state local (optimista + en vivo) — alcanza con una versión que ocupe.
+  const availabilityStatus = useMemo((): AvailabilityStatus => {
+    if (!unitFilters.availableFrom || !unitFilters.availableTo) return { kind: "off" };
+    if (!datesSettled) return { kind: "loading" };
+    if (!availabilityRange.ok) {
+      return availabilityRange.reason === "incomplete" || !availabilityRange.message
+        ? { kind: "off" }
+        : { kind: "invalid", message: availabilityRange.message };
+    }
+    if (!availabilityFetch || availabilityFetch.key !== availabilityRange.key) {
+      return { kind: "loading" };
+    }
+    if (availabilityFetch.status === "error") {
+      return { kind: "error", message: availabilityFetch.error };
+    }
+    const { busy, tentative } = computeUnitAvailability({
+      from: availabilityRange.from,
+      to: availabilityRange.to,
+      // Todas las reservas y solicitudes, sin los filtros de pantalla: ocultar
+      // el canal Airbnb no libera las unidades que Airbnb ocupa.
+      bookings: [...availabilityFetch.bookings, ...bookings],
+      requests: [...availabilityFetch.requests, ...channelRequests],
+    });
+    return { kind: "ready", from: availabilityRange.from, to: availabilityRange.to, busy, tentative };
+  }, [
+    unitFilters.availableFrom,
+    unitFilters.availableTo,
+    datesSettled,
+    availabilityRange,
+    availabilityFetch,
+    bookings,
+    channelRequests,
+  ]);
+  const availabilityPending =
+    availabilityStatus.kind === "invalid" ||
+    availabilityStatus.kind === "loading" ||
+    availabilityStatus.kind === "error";
+  // Lo que se tipeó (no lo asentado): es lo que la persona está mirando.
+  const availabilityRangeLabel = (() => {
+    const raw = checkAvailabilityRange(unitFilters.availableFrom, unitFilters.availableTo);
+    if (!raw.ok) return null;
+    return `${format(parseISO(raw.from), "d MMM", { locale: es })} al ${format(parseISO(raw.to), "d MMM yyyy", { locale: es })}`;
+  })();
+
   // ── Filtrado de unidades (filtros de búsqueda) ─────────────────────────────
-  // Aplicado DESPUÉS del cálculo de bookingsByUnit para usar las reservas
-  // existentes en el chequeo de disponibilidad por rango.
-  const filteredUnits = useMemo(() => {
+  // Además de las filas, cuenta POR QUÉ quedó afuera cada unidad que coincide
+  // con la búsqueda: buscar "QUIROS1" con un rango en que está ocupada no es
+  // "nada coincide" (eso sugiere un typo), es "coincide, pero está ocupada".
+  const unitFilterResult = useMemo(() => {
+    // Rango sin verificar: ninguna fila, para no afirmar disponibilidad.
+    if (availabilityPending) {
+      return { units: [] as UnitWithRelations[], searchMatches: 0, attrMisses: 0, busyMatches: 0 };
+    }
     const f = unitFilters;
     const minGuests = f.minGuests ? Number(f.minGuests) : null;
     // Precio tipeado como importe es-AR: "80.000" son ochenta mil (con Number()
@@ -1330,20 +1545,18 @@ export function PmsBoard({
     const maxPrice = parseAmountInput(f.maxPrice);
     const minBedrooms = f.minBedrooms ? Number(f.minBedrooms) : null;
     const minBathrooms = f.minBathrooms ? Number(f.minBathrooms) : null;
-    const neighborhood = f.neighborhood.trim().toLowerCase();
-    const checkAvailability =
-      f.availableFrom && f.availableTo && f.availableTo > f.availableFrom;
-    const q = query.trim().toLowerCase();
+    const neighborhood = normalizeSearchText(f.neighborhood);
+    const busy = availabilityStatus.kind === "ready" ? availabilityStatus.busy : null;
 
-    return units.filter((u) => {
+    const passesAttributes = (u: UnitWithRelations) => {
       if (minGuests !== null && (u.max_guests ?? 0) < minGuests) return false;
       if (minPrice !== null && (Number(u.base_price) || 0) < minPrice) return false;
       if (maxPrice !== null && (Number(u.base_price) || 0) > maxPrice) return false;
       if (minBedrooms !== null && (u.bedrooms ?? 0) < minBedrooms) return false;
       if (minBathrooms !== null && (u.bathrooms ?? 0) < minBathrooms) return false;
       if (neighborhood) {
-        const n = (u.neighborhood ?? "").toLowerCase();
-        const a = (u.address ?? "").toLowerCase();
+        const n = normalizeSearchText(u.neighborhood);
+        const a = normalizeSearchText(u.address);
         if (!n.includes(neighborhood) && !a.includes(neighborhood)) return false;
       }
       if (f.defaultMode) {
@@ -1355,35 +1568,124 @@ export function PmsBoard({
           if (u.default_mode !== f.defaultMode && u.default_mode !== "mixto") return false;
         }
       }
-      if (checkAvailability) {
-        // Disponible si NINGUNA reserva activa overlapa con el rango pedido.
-        const unitBookings = bookings.filter(
-          (b) =>
-            b.unit_id === u.id &&
-            b.status !== "cancelada" &&
-            b.status !== "no_show"
-        );
-        const overlap = unitBookings.some(
-          (b) => b.check_in_date < f.availableTo && b.check_out_date > f.availableFrom
-        );
-        if (overlap) return false;
-      }
-      // Búsqueda libre: la unidad debe matchear directamente (código, nombre,
-      // barrio, dirección) o tener al menos una reserva visible que matchee
-      // (visibleBookings ya aplicó el filtro de query).
-      if (q) {
-        const matchesUnit =
-          (u.code ?? "").toLowerCase().includes(q) ||
-          (u.name ?? "").toLowerCase().includes(q) ||
-          (u.neighborhood ?? "").toLowerCase().includes(q) ||
-          (u.address ?? "").toLowerCase().includes(q);
-        if (!matchesUnit && (bookingsByUnit.get(u.id)?.length ?? 0) === 0) {
-          return false;
-        }
-      }
       return true;
-    });
-  }, [units, unitFilters, bookings, query, bookingsByUnit]);
+    };
+
+    const shown: UnitWithRelations[] = [];
+    let searchMatches = 0;
+    let attrMisses = 0;
+    let busyMatches = 0;
+    for (const u of units) {
+      // Búsqueda libre: coincide la unidad (código, nombre, barrio, dirección)
+      // o alguna de sus reservas. La fila se muestra con TODA su ocupación.
+      if (search.active && !search.shownUnitIds.has(u.id)) continue;
+      searchMatches += 1;
+      if (!passesAttributes(u)) {
+        attrMisses += 1;
+        continue;
+      }
+      // Disponible = ninguna reserva activa, cierre ni solicitud que retenga la
+      // venta se pisa con el rango (veredicto autoritativo, no la ventana cargada).
+      if (busy?.has(u.id)) {
+        busyMatches += 1;
+        continue;
+      }
+      shown.push(u);
+    }
+    return { units: shown, searchMatches, attrMisses, busyMatches };
+  }, [units, unitFilters, availabilityPending, availabilityStatus, search]);
+  const filteredUnits = unitFilterResult.units;
+
+  // Estado vacío: decir la verdad de por qué no hay filas. "Nada coincide"
+  // sólo cuando de verdad nada coincide; si la unidad buscada está ocupada en
+  // el rango (lo más común al combinar búsqueda + "Buscar disp"), decirlo.
+  const emptyStateCopy = (() => {
+    const q = query.trim();
+    const { searchMatches, attrMisses, busyMatches } = unitFilterResult;
+    const countUnits = (n: number) => `${n} ${n === 1 ? "unidad" : "unidades"}`;
+    const onDates = availabilityRangeLabel ? `del ${availabilityRangeLabel}` : "en esas fechas";
+    const otherFilters = "los otros filtros de búsqueda (huéspedes, precio, dormitorios, baños, barrio, modo)";
+    if (search.active && searchMatches === 0) {
+      return {
+        title: "Ninguna unidad coincide con la búsqueda",
+        body:
+          `Nada coincide con “${q}” en unidades (código, nombre, barrio, dirección) ni en las reservas cargadas.` +
+          // La búsqueda global (todas las fechas) es el popover del buscador
+          // de escritorio: en el celular no existe.
+          (isMobile ? "" : " La búsqueda global del buscador mira todas las fechas."),
+        busy: false,
+      };
+    }
+    if (availabilityStatus.kind === "ready" && busyMatches > 0) {
+      const busyVerb = busyMatches === 1 ? "está ocupada" : "están ocupadas";
+      const missVerb = attrMisses === 1 ? "no cumple" : "no cumplen";
+      if (search.active) {
+        return {
+          title:
+            attrMisses > 0
+              ? "Lo que buscás no está disponible en esas fechas"
+              : searchMatches === 1
+                ? "La unidad que buscás está ocupada en esas fechas"
+                : "Las unidades que buscás están ocupadas en esas fechas",
+          body:
+            attrMisses > 0
+              ? `“${q}” coincide con ${countUnits(searchMatches)}: ${busyMatches} ${busyVerb} ${onDates} y ${attrMisses} ${missVerb} ${otherFilters}.`
+              : `“${q}” coincide con ${countUnits(searchMatches)}, pero ${busyVerb} ${onDates}.`,
+          busy: true,
+        };
+      }
+      return {
+        title: "No hay unidades libres en esas fechas",
+        body:
+          attrMisses > 0
+            ? `${countUnits(busyMatches)} ${busyVerb} ${onDates} y ${attrMisses} ${missVerb} ${otherFilters}.`
+            : `${busyMatches === 1 ? "La única unidad está ocupada" : `Las ${busyMatches} unidades están ocupadas`} ${onDates}.`,
+        busy: true,
+      };
+    }
+    if (search.active) {
+      return {
+        title:
+          searchMatches === 1
+            ? "La unidad que buscás no cumple los filtros"
+            : "Las unidades que buscás no cumplen los filtros",
+        body: `“${q}” coincide con ${countUnits(searchMatches)}, pero ${searchMatches === 1 ? "no cumple" : "ninguna cumple"} ${otherFilters}.`,
+        busy: false,
+      };
+    }
+    return {
+      title: "Ninguna unidad coincide con los filtros",
+      body: "Probá relajar los criterios o limpiá los filtros para volver a ver todas las unidades.",
+      busy: false,
+    };
+  })();
+
+  // ── Contador del encabezado: lo que está EN PANTALLA (filas mostradas ×
+  // ventana visible), no todo lo lazy-cargado. Con búsqueda, además, cuántas
+  // barras coinciden por sí mismas (huésped, código de la OTA).
+  // `hidden`: lo que los filtros explícitos esconden en esas filas — se avisa
+  // para que una fila vacía por un filtro no se lea como "libre".
+  const headerCounts = useMemo(() => {
+    const shown = new Set(filteredUnits.map((u) => u.id));
+    const passing = new Set(visibleBookings.map((b) => b.id));
+    const endISO = isoAddDays(windowStart, windowDays);
+    let inView = 0;
+    let hits = 0;
+    let hidden = 0;
+    for (const b of bookings) {
+      if (!shown.has(b.unit_id)) continue;
+      if (b.check_in_date >= endISO || b.check_out_date <= windowStart) continue;
+      if (!passing.has(b.id)) {
+        // Una cancelada (p. ej. recién cambiada desde el menú) no ocupa nada.
+        if (statusOccupies(b.status)) hidden += 1;
+        continue;
+      }
+      if (b.is_block) continue; // un cierre no es una reserva
+      inView += 1;
+      if (search.ownMatchBookingIds.has(b.id)) hits += 1;
+    }
+    return { inView, hits, hidden };
+  }, [filteredUnits, bookings, visibleBookings, windowStart, windowDays, search]);
 
   // ── stats por unidad dentro del rango visible (para el popover de unidad)
   const statsByUnit = useMemo(() => {
@@ -1540,6 +1842,9 @@ export function PmsBoard({
       }
       // Al soltar el lock no confiamos en el snapshot local: preguntamos.
       scheduleHydrate(id);
+      // La foto de "Buscar disp" todavía ve la reserva en su lugar viejo (la
+      // unión la marca ocupada en los dos): se vuelve a pedir el rango.
+      setAvailabilityNonce((n) => n + 1);
     },
     [scheduleHydrate]
   );
@@ -1607,6 +1912,9 @@ export function PmsBoard({
       // salido ANTES de este resync trae una foto vieja y no puede pisarlo.
       lastResync.current = { at: startedAt, from, to };
       realtimeStamp.current.clear();
+      // La re-lectura cubre la ventana cargada; "Buscar disp" puede estar
+      // mirando otro rango, que también se perdió los eventos del corte.
+      setAvailabilityNonce((n) => n + 1);
     } catch (err) {
       console.error("PMS resync failed", err);
       // Que el llamador (el bus de re-sync) sepa que NO releímos: el indicador
@@ -1632,6 +1940,8 @@ export function PmsBoard({
     onChange: (change) => {
       const id = change.id;
       if (!id) return;
+      // La foto de "Buscar disp" no se entera sola (ver scheduleAvailabilityRefresh).
+      scheduleAvailabilityRefresh();
       // Mutación optimista propia en curso: no la pisamos.
       if (pendingMutateIds.current.has(id)) return;
       if (change.eventType === "DELETE") {
@@ -1688,6 +1998,9 @@ export function PmsBoard({
     (change: { id?: string | null; eventType?: string; new?: unknown }) => {
       const id = change.id;
       if (!id) return;
+      // Una solicitud que entra (o cuyas fechas mueve la OTA) fuera de la
+      // ventana cargada no llega nunca al state: sólo la foto del rango la ve.
+      scheduleAvailabilityRefresh();
       if (change.eventType === "DELETE") {
         setChannelRequests((prev) => prev.filter((x) => x.id !== id));
         return;
@@ -1716,7 +2029,7 @@ export function PmsBoard({
       // Fuera del updater: `setState` no es el lugar para disparar un efecto.
       if (!channelRequestsRef.current.some((x) => x.id === row.id)) scheduleRequestsReload();
     },
-    [scheduleRequestsReload],
+    [scheduleRequestsReload, scheduleAvailabilityRefresh],
   );
 
   // Cuotas: el punto ámbar de "vencida" mentía hasta recargar si otro cobraba.
@@ -1916,6 +2229,41 @@ export function PmsBoard({
       }
     });
   }, [CELL, windowStart, windowDays]);
+
+  // Lleva la grilla a una fecha (mismo criterio que jumpToday: scroll si ya
+  // está en la ventana, si no la mueve dejando dos días de contexto).
+  const goToDate = useCallback(
+    (target: string) => {
+      const el = scrollRef.current;
+      const off = dayOffset(windowStart, target);
+      if (el && off >= 2 && off < windowDays - 2) {
+        el.scrollTo({ left: Math.max(0, (off - 2) * CELL), behavior: "smooth" });
+        return;
+      }
+      setWindowStart(isoAddDays(target, -2));
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ left: 0, behavior: "smooth" });
+      });
+    },
+    [CELL, windowStart, windowDays],
+  );
+
+  // "Ver esas fechas": lleva la grilla al rango de "Buscar disp".
+  const goToAvailabilityDates = useCallback(() => {
+    if (availabilityStatus.kind !== "ready") return;
+    goToDate(availabilityStatus.from);
+  }, [availabilityStatus, goToDate]);
+
+  // Desde el estado vacío ("coincide, pero está ocupada"): las unidades
+  // ocupadas están filtradas, así que ir a las fechas sin más no muestra nada.
+  // Se quita el rango (la búsqueda y los demás filtros quedan) y se va a esas
+  // fechas, para ver quién la ocupa.
+  const showAvailabilityRangeOnCalendar = useCallback(() => {
+    if (availabilityStatus.kind !== "ready") return;
+    const from = availabilityStatus.from;
+    setUnitFilters((f) => ({ ...f, availableFrom: "", availableTo: "" }));
+    goToDate(from);
+  }, [availabilityStatus, goToDate]);
 
   // Helper: scroll horizontal suave dentro de la ventana actual (no toca
   // windowStart, sólo desplaza la vista). Usado por las flechas del teclado.
@@ -2564,6 +2912,17 @@ export function PmsBoard({
     return out;
   }, [windowStart, windowDays, CELL]);
 
+  // Franja del rango de "Buscar disp" sobre cada fila: deja a la vista QUÉ
+  // fechas se verificaron (y que en esas filas están libres). null si el rango
+  // no está verificado o cae fuera de la ventana visible.
+  const availabilityBand = (() => {
+    if (availabilityStatus.kind !== "ready") return null;
+    const start = Math.max(0, dayOffset(windowStart, availabilityStatus.from));
+    const end = Math.min(windowDays, dayOffset(windowStart, availabilityStatus.to));
+    if (end <= start) return null;
+    return { left: start * CELL, width: (end - start) * CELL };
+  })();
+
   return (
     <TooltipProvider delayDuration={300}>
       {/* Sólo con permiso de canales: la RLS de `channel_reservations` es por
@@ -2682,10 +3041,30 @@ export function PmsBoard({
                   Vista PMS
                 </h1>
                 <p className="text-[10px] text-muted-foreground mt-0.5">
-                  {activeUnitFilterCount > 0
-                    ? `${filteredUnits.length} de ${units.length} unidades · `
-                    : `${units.length} unidades · `}
-                  {visibleBookings.length} reservas
+                  {availabilityStatus.kind === "loading" ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Loader2 size={9} className="animate-spin" />
+                      Buscando disponibilidad…
+                    </span>
+                  ) : availabilityPending ? (
+                    <span className="text-destructive">Disponibilidad sin verificar</span>
+                  ) : (
+                    <>
+                      {activeUnitFilterCount > 0 || search.active
+                        ? `${filteredUnits.length} de ${units.length} unidades · `
+                        : `${units.length} unidades · `}
+                      {headerCounts.inView}{" "}
+                      {headerCounts.inView === 1 ? "reserva" : "reservas"} en pantalla
+                      {search.active && headerCounts.hits > 0
+                        ? ` · ${headerCounts.hits} ${headerCounts.hits === 1 ? "coincidencia" : "coincidencias"}`
+                        : null}
+                      {headerCounts.hidden > 0 ? (
+                        <span className="text-amber-700 dark:text-amber-400">
+                          {` · ${headerCounts.hidden} ${headerCounts.hidden === 1 ? "oculta" : "ocultas"} por filtros`}
+                        </span>
+                      ) : null}
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -3024,6 +3403,7 @@ export function PmsBoard({
                           }
                           className="h-8 text-xs"
                           placeholder="Desde"
+                          aria-label="Entrada"
                         />
                         <Input
                           type="date"
@@ -3033,12 +3413,21 @@ export function PmsBoard({
                           }
                           className="h-8 text-xs"
                           placeholder="Hasta"
+                          aria-label="Salida"
                           min={unitFilters.availableFrom || undefined}
                         />
                       </div>
-                      <p className="text-[10px] text-muted-foreground">
-                        Oculta unidades con reservas activas que solapan con ese rango.
-                      </p>
+                      <AvailabilityHint
+                        status={availabilityStatus}
+                        partial={Boolean(unitFilters.availableFrom || unitFilters.availableTo)}
+                        tentativeCount={
+                          availabilityStatus.kind === "ready"
+                            ? filteredUnits.filter((u) => availabilityStatus.tentative.has(u.id)).length
+                            : 0
+                        }
+                        onRetry={retryAvailability}
+                        onGoToDates={goToAvailabilityDates}
+                      />
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
@@ -3163,12 +3552,21 @@ export function PmsBoard({
                     </div>
                   </div>
                   <div className="border-t px-4 py-2 flex items-center justify-between bg-muted/30">
-                    <span className="text-[11px] text-muted-foreground">
-                      <span className="font-semibold tabular-nums text-foreground">
-                        {filteredUnits.length}
-                      </span>{" "}
-                      / {units.length} unidades
-                    </span>
+                    {availabilityPending ? (
+                      <span className="text-[11px] text-muted-foreground">
+                        {availabilityStatus.kind === "loading"
+                          ? "Buscando disponibilidad…"
+                          : "Disponibilidad sin verificar"}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">
+                        <span className="font-semibold tabular-nums text-foreground">
+                          {filteredUnits.length}
+                        </span>{" "}
+                        / {units.length} unidades
+                        {availabilityStatus.kind === "ready" ? " libres" : ""}
+                      </span>
+                    )}
                   </div>
                 </PopoverContent>
               </Popover>
@@ -3528,25 +3926,107 @@ export function PmsBoard({
             </div>
 
             {/* ─── Rows ─── */}
-            {filteredUnits.length === 0 && units.length > 0 && (
-              <div className="px-6 py-12 text-center">
-                <Hotel className="size-10 mx-auto text-muted-foreground/40 mb-3" />
-                <h3 className="font-semibold">Ninguna unidad coincide con los filtros</h3>
+            {/* Estados vacíos: `sticky left-0` + ancho acotado para que el
+                mensaje quede a la vista aunque la grilla esté scrolleada a
+                la derecha (centrado sobre miles de px quedaba fuera de pantalla). */}
+            {availabilityPending && units.length > 0 && (
+              <div
+                className="sticky left-0 px-6 py-12 text-center"
+                style={{ width: "min(36rem, 100vw)" }}
+                role={availabilityStatus.kind === "loading" ? "status" : "alert"}
+              >
+                {availabilityStatus.kind === "loading" ? (
+                  <Loader2 className="size-8 mx-auto mb-3 animate-spin text-primary/70" />
+                ) : (
+                  <CalendarRange className="size-10 mx-auto text-muted-foreground/40 mb-3" />
+                )}
+                <h3 className="font-semibold">
+                  {availabilityStatus.kind === "loading"
+                    ? "Buscando disponibilidad…"
+                    : availabilityStatus.kind === "invalid"
+                      ? "Revisá las fechas de la búsqueda"
+                      : "No se pudo verificar la disponibilidad"}
+                </h3>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Probá relajar los criterios o limpiá los filtros para volver a ver todas las unidades.
+                  {availabilityStatus.kind === "loading"
+                    ? availabilityRangeLabel
+                      ? `Revisando reservas, cierres y solicitudes del ${availabilityRangeLabel}.`
+                      : "Revisando reservas, cierres y solicitudes."
+                    : availabilityStatus.kind === "invalid"
+                      ? `${availabilityStatus.message} Corregilas para ver qué unidades están libres.`
+                      : availabilityStatus.kind === "error"
+                        ? `${availabilityStatus.message} Hasta verificarla no se muestra ninguna unidad como disponible.`
+                        : null}
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="mt-3 h-8 text-xs"
-                  onClick={clearUnitFilters}
-                >
-                  Limpiar filtros
-                </Button>
+                {availabilityStatus.kind !== "loading" && (
+                  <div className="mt-3 flex items-center justify-center gap-2">
+                    {availabilityStatus.kind === "error" && (
+                      <Button size="sm" className="h-8 text-xs" onClick={retryAvailability}>
+                        Reintentar
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={clearAvailabilityDates}
+                    >
+                      Quitar fechas
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+            {!availabilityPending && filteredUnits.length === 0 && units.length > 0 && (
+              <div
+                className="sticky left-0 px-6 py-12 text-center"
+                style={{ width: "min(36rem, 100vw)" }}
+              >
+                {emptyStateCopy.busy ? (
+                  <CalendarRange className="size-10 mx-auto text-muted-foreground/40 mb-3" />
+                ) : (
+                  <Hotel className="size-10 mx-auto text-muted-foreground/40 mb-3" />
+                )}
+                <h3 className="font-semibold">{emptyStateCopy.title}</h3>
+                <p className="text-xs text-muted-foreground mt-1">{emptyStateCopy.body}</p>
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                  {emptyStateCopy.busy && (
+                    <Button
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={showAvailabilityRangeOnCalendar}
+                    >
+                      Ver esas fechas en el calendario
+                    </Button>
+                  )}
+                  {search.active && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={() => setQuery("")}
+                    >
+                      {/* Sin la búsqueda, el rango queda: muestra qué OTRAS
+                          unidades están libres en esas fechas. */}
+                      {emptyStateCopy.busy ? "Ver otras libres en esas fechas" : "Borrar búsqueda"}
+                    </Button>
+                  )}
+                  {activeUnitFilterCount > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 text-xs"
+                      onClick={clearUnitFilters}
+                    >
+                      Limpiar filtros
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
             {filteredUnits.map((unit, rowIdx) => {
               const unitBookings = bookingsByUnit.get(unit.id) ?? [];
+              const offscreenMatch = offscreenMatches.get(unit.id);
               const overlay = UNIT_OVERLAY_STYLE[unit.status];
               const stats = statsByUnit.get(unit.id);
               const totalNights = windowDays;
@@ -3575,7 +4055,32 @@ export function PmsBoard({
                     sidebarWidth={SIDEBAR}
                     compact={isMobile}
                     canViewMoney={canViewMoney}
+                    requestWarning={
+                      availabilityStatus.kind === "ready" &&
+                      availabilityStatus.tentative.has(unit.id)
+                    }
                   />
+
+                  {/* La fila aparece por una coincidencia (huésped, código)
+                      que quedó fuera de las fechas en pantalla: sin esto se
+                      ve sólo con barras atenuadas y no dice por qué está.
+                      Contenedor sticky de ancho 0 pegado al borde izquierdo
+                      de la grilla: no corre las barras y sigue a la vista
+                      aunque se scrollee. */}
+                  {offscreenMatch && (
+                    <div className="sticky z-[15] w-0 shrink-0" style={{ left: SIDEBAR }}>
+                      <button
+                        type="button"
+                        onClick={() => goToDate(offscreenMatch.checkIn)}
+                        className="absolute left-1.5 top-1/2 -translate-y-1/2 inline-flex items-center gap-0.5 whitespace-nowrap rounded-full border border-amber-300/80 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950 px-1.5 py-0.5 text-[10px] font-medium leading-none text-amber-800 dark:text-amber-200 shadow-sm hover:bg-amber-100 dark:hover:bg-amber-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                        title="La reserva que coincide con la búsqueda está fuera de las fechas en pantalla. Click para ir."
+                      >
+                        {offscreenMatch.direction === "before" && <ChevronLeft size={10} aria-hidden />}
+                        Coincide el {format(parseISO(offscreenMatch.checkIn), "d MMM", { locale: es })}
+                        {offscreenMatch.direction === "after" && <ChevronRight size={10} aria-hidden />}
+                      </button>
+                    </div>
+                  )}
 
                   {/* Cells: single click-overlay por fila. Las gridlines y el
                       tinte de fin de semana se pintan via CSS (`cellBackground`,
@@ -3642,6 +4147,15 @@ export function PmsBoard({
                       />
                     )}
 
+                    {/* Rango verificado de "Buscar disp". */}
+                    {availabilityBand && (
+                      <div
+                        aria-hidden
+                        className="absolute top-0 bottom-0 pointer-events-none bg-emerald-500/[0.07] dark:bg-emerald-400/[0.08] border-x border-emerald-500/40"
+                        style={availabilityBand}
+                      />
+                    )}
+
                     {/* Bordes de mes — una vez calculado a nivel de board,
                         renderizamos como divs absolutos (≤ 4 por ventana). */}
                     {monthBoundaries.map((leftPx) => (
@@ -3673,6 +4187,7 @@ export function PmsBoard({
                         key={b.id}
                         commissionBase={commissionBase}
                         booking={b}
+                        searchEmphasis={bookingSearchEmphasis(search, b)}
                         leaseInfo={leaseGroupIndex.get(b.id) ?? null}
                         scheduleForBooking={scheduleByBooking.get(b.id) ?? []}
                         accounts={accounts}
@@ -3846,7 +4361,13 @@ export function PmsBoard({
             orgCommissionPct={orgCommissionPct}
             commissionBase={commissionBase}
             open
-            onOpenChange={(o) => { if (!o) setEditBooking(null); }}
+            onOpenChange={(o) => {
+              if (o) return;
+              setEditBooking(null);
+              // Red de seguridad si el socket está caído: la foto de "Buscar
+              // disp" se re-pide igual (sin rango activo no hace nada).
+              scheduleAvailabilityRefresh();
+            }}
           />
         )}
 
@@ -3864,7 +4385,10 @@ export function PmsBoard({
             unitId={quickAdd.unitId}
             checkIn={quickAdd.checkIn}
             checkOut={quickAdd.checkOut}
-            onClose={() => setQuickAdd(null)}
+            onClose={() => {
+              setQuickAdd(null);
+              scheduleAvailabilityRefresh();
+            }}
           />
         )}
 
@@ -3924,6 +4448,99 @@ export function PmsBoard({
 }
 
 // ─── Subcomponentes top-level ───────────────────────────────────────────────
+
+/**
+ * Línea de estado de "Disponible entre" dentro del popover de búsqueda. Nunca
+ * afirma disponibilidad que no se verificó: mientras carga lo dice, y si falla
+ * lo dice y ofrece reintentar.
+ */
+function AvailabilityHint({
+  status,
+  partial,
+  tentativeCount,
+  onRetry,
+  onGoToDates,
+}: {
+  status: AvailabilityStatus;
+  /** Hay una sola de las dos fechas cargada. */
+  partial: boolean;
+  /** Unidades mostradas que tienen una solicitud de OTA que no retiene. */
+  tentativeCount: number;
+  onRetry: () => void;
+  onGoToDates: () => void;
+}) {
+  if (status.kind === "off") {
+    return (
+      <p className="text-[10px] text-muted-foreground">
+        {partial
+          ? "Elegí la entrada y la salida para buscar."
+          : "Muestra sólo las unidades sin reservas, cierres ni solicitudes que retengan la venta en esas fechas. El día de salida queda libre."}
+      </p>
+    );
+  }
+  if (status.kind === "invalid") {
+    return (
+      <p role="alert" className="text-[10px] text-destructive">
+        {status.message}
+      </p>
+    );
+  }
+  if (status.kind === "loading") {
+    return (
+      <p role="status" className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <Loader2 size={11} className="animate-spin shrink-0" />
+        Buscando disponibilidad…
+      </p>
+    );
+  }
+  if (status.kind === "error") {
+    return (
+      <div
+        role="alert"
+        className="flex items-start justify-between gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1.5"
+      >
+        <p className="text-[10px] text-destructive">
+          {status.message} Mientras tanto no se muestra ninguna unidad como disponible.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-[10px] shrink-0"
+          onClick={onRetry}
+        >
+          Reintentar
+        </Button>
+      </div>
+    );
+  }
+  const nights = dayOffset(status.from, status.to);
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] text-muted-foreground">
+        Libres del {format(parseISO(status.from), "d MMM", { locale: es })} al{" "}
+        {format(parseISO(status.to), "d MMM yyyy", { locale: es })} ({nights}{" "}
+        {nights === 1 ? "noche" : "noches"}): sin reservas, cierres ni solicitudes que retengan
+        la venta. El día de salida queda libre.
+      </p>
+      {tentativeCount > 0 && (
+        <p className="text-[10px] text-amber-700 dark:text-amber-400">
+          {tentativeCount === 1
+            ? "1 unidad tiene una solicitud de OTA pendiente en esas fechas (marcada “Solicitud”)"
+            : `${tentativeCount} unidades tienen una solicitud de OTA pendiente en esas fechas (marcadas “Solicitud”)`}
+          : no retiene la venta, pero si la aceptan se superpone.
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={onGoToDates}
+        className="text-[10px] font-medium text-primary underline-offset-2 hover:underline"
+      >
+        Ver esas fechas en el calendario
+      </button>
+    </div>
+  );
+}
 
 interface ModeFilterToggleProps {
   value: BookingMode | null;
@@ -4137,6 +4754,7 @@ function UnitCellHeader({
   sidebarWidth = SIDEBAR_WIDTH,
   compact = false,
   canViewMoney = true,
+  requestWarning = false,
 }: {
   unit: UnitWithRelations;
   occupancyPct: number;
@@ -4149,6 +4767,11 @@ function UnitCellHeader({
   sidebarWidth?: number;
   compact?: boolean;
   canViewMoney?: boolean;
+  /**
+   * "Buscar disp": la unidad está libre pero tiene una solicitud de OTA que no
+   * retiene la venta en esas fechas. Se marca para que nadie la venda a ciegas.
+   */
+  requestWarning?: boolean;
 }) {
   const meta = UNIT_STATUS_META[unit.status];
   const overlay = UNIT_OVERLAY_STYLE[unit.status];
@@ -4202,6 +4825,14 @@ function UnitCellHeader({
                 className="size-1.5 rounded-full shrink-0"
                 style={{ backgroundColor: meta.color }}
               />
+              {requestWarning && (
+                <span
+                  className="shrink-0 rounded-full border border-amber-300/70 dark:border-amber-700/60 bg-amber-50 dark:bg-amber-950/40 px-1 py-px text-[9px] font-medium leading-none text-amber-700 dark:text-amber-300"
+                  title="Tiene una solicitud de OTA pendiente en esas fechas: no retiene la venta, pero si la aceptan se superpone."
+                >
+                  {compact ? "!" : "Solicitud"}
+                </span>
+              )}
             </div>
             {!compact && (
               <div className="text-[10px] text-muted-foreground truncate">
@@ -4297,6 +4928,12 @@ interface BookingBarProps {
   canViewMoney: boolean;
   /** Base de la comisión de administración de la org. */
   commissionBase?: CommissionBase;
+  /**
+   * Búsqueda libre activa: "match" resalta la barra que coincide; "dim" atenúa
+   * (sin esconder) otra reserva de una unidad que apareció por una coincidencia
+   * ajena. La ocupación se ve siempre.
+   */
+  searchEmphasis?: SearchEmphasis;
 }
 
 /**
@@ -4492,6 +5129,7 @@ function BookingBar({
   canViewMoney,
   commissionBase,
   justChanged = false,
+  searchEmphasis = "none",
 }: BookingBarProps) {
   // Un bloqueo OTA (is_block) no es una reserva: se pinta gris "Bloqueado" y no
   // se puede arrastrar/redimensionar/editar (lo gestiona el sync de iCal).
@@ -4564,6 +5202,10 @@ function BookingBar({
             // breve window post-drag, así no interfiere con navegación o
             // shift de windowStart.
             "transition-[transform,box-shadow] duration-150",
+            // Búsqueda: la barra que coincide se marca; las demás de esa
+            // unidad se atenúan pero siguen ahí (la unidad está ocupada).
+            searchEmphasis === "match" &&
+              "ring-2 ring-offset-1 ring-offset-background ring-amber-400 dark:ring-amber-300 z-10",
             // El "scale-[1.02]" durante el drag lo aplicamos via inline
             // `style.transform` desde syncDragFromPointer (que también
             // contiene la translate del puntero). Si lo agregamos acá
@@ -4571,6 +5213,9 @@ function BookingBar({
             isDragging && "ring-2 ring-primary z-20 shadow-xl cursor-grabbing",
             !isDragging && "cursor-grab",
             booking.status === "cancelada" && "opacity-55",
+            searchEmphasis === "dim" &&
+              !isDragging &&
+              "opacity-45 saturate-50 hover:opacity-100 hover:saturate-100",
             // Lo que cambió recién se ilumina y se apaga solo: si no se ve, el
             // equipo no se entera de que algo se movió abajo del cursor.
             justChanged && !isDragging && "live-flash live-flash-update z-10"

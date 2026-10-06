@@ -29,6 +29,7 @@ import { useFlashIds, useLiveRefresh } from "@/lib/realtime/use-live";
 import { defaultRefreshGate } from "@/lib/realtime/gates";
 import { LiveUpdatesPill } from "@/components/realtime/live-updates-pill";
 import type { MonthlyViewCell } from "@/lib/actions/bookings";
+import { searchPms } from "./pms-search";
 import type {
   BookingPaymentSchedule,
   CashAccount,
@@ -177,19 +178,21 @@ export function PmsMonthlyBoard({
     return m;
   }, [cells]);
 
-  // Filtrado por query + filtrar unidades sin reservas mensuales
+  // Filtrado por query: la MISMA regla que la grilla diaria (pms-search.ts).
+  // Elige qué unidades se muestran (por código/nombre o por un inquilino que
+  // coincide) y nunca toca las celdas: la ocupación de una fila mostrada se
+  // ve completa.
   const visibleUnits = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return Array.from(unitsMap.values())
-      .filter((u) => {
-        if (!q) return true;
-        return (
-          u.unit_code.toLowerCase().includes(q) ||
-          u.unit_name.toLowerCase().includes(q)
-        );
-      })
+    const all = Array.from(unitsMap.values());
+    const search = searchPms(
+      query,
+      all.map((u) => ({ id: u.unit_id, code: u.unit_code, name: u.unit_name })),
+      cells.flatMap((c) => c.bookings),
+    );
+    return all
+      .filter((u) => !search.active || search.shownUnitIds.has(u.unit_id))
       .sort((a, b) => a.unit_code.localeCompare(b.unit_code));
-  }, [unitsMap, query]);
+  }, [unitsMap, cells, query]);
 
   const totalRevenueExpected = cells.reduce((s, c) => s + c.total_expected, 0);
   const totalRevenueCollected = cells.reduce((s, c) => s + c.total_collected, 0);
@@ -316,7 +319,7 @@ export function PmsMonthlyBoard({
                   className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
                 />
                 <Input
-                  placeholder="Buscar unidad…"
+                  placeholder="Buscar unidad o inquilino…"
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   className="pl-7 h-8 w-36 sm:w-56 text-xs"
@@ -457,19 +460,17 @@ export function PmsMonthlyBoard({
                     const hasOverdue = cellSchedule.some(
                       (s) => s.status === "overdue"
                     );
-                    if (overdueOnly && !hasOverdue) {
-                      return (
-                        <td
-                          key={`${u.unit_id}-${m.year}-${m.month}`}
-                          className="border-b border-r p-1.5 sm:p-2 align-top min-w-[140px] sm:min-w-[180px] opacity-30"
-                        />
-                      );
-                    }
+                    // "Cuotas vencidas" ATENÚA los meses sin vencidas, no los
+                    // vacía: antes la celda quedaba en blanco y un mes con
+                    // inquilino se leía igual que uno libre (venta doble de
+                    // meses, no de noches).
+                    const dimmed = overdueOnly && !hasOverdue;
                     return (
                       <td
                         key={`${u.unit_id}-${m.year}-${m.month}`}
                         className={cn(
                           "border-b border-r p-1.5 sm:p-2 align-top min-w-[140px] sm:min-w-[180px]",
+                          dimmed && "opacity-40",
                           isFlashing(u.unit_id) && "live-flash live-flash-update"
                         )}
                       >
