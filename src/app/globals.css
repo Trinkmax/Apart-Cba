@@ -762,3 +762,14 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* ─────────────── Toasts clickeables con un modal abierto ───────────────
+   Un Dialog/Sheet/AlertDialog de Radix le pone `pointer-events: none` al body
+   mientras está abierto, y los toasts de sonner (que viven en el body) lo
+   heredaban: «Recargar» o «Deshacer» no se podían tocar justo cuando más
+   hacían falta. Los ocultos siguen sin recibir clics (la regla de sonner con
+   [data-visible='false'] es más específica). Que el clic en el toast no cierre
+   el modal lo resuelven DialogContent / SheetContent. */
+[data-sonner-toast] {
+  pointer-events: auto;
+}

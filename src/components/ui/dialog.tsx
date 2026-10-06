@@ -4,7 +4,7 @@ import * as React from "react"
 import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
-import { cn } from "@/lib/utils"
+import { cn, isToastEvent } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
 function Dialog({
@@ -51,6 +51,8 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onPointerDownOutside,
+  onInteractOutside,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
@@ -77,6 +79,14 @@ function DialogContent({
           "safe-bottom",
           className
         )}
+        onPointerDownOutside={(e) => {
+          if (isToastEvent(e)) e.preventDefault()
+          onPointerDownOutside?.(e)
+        }}
+        onInteractOutside={(e) => {
+          if (isToastEvent(e)) e.preventDefault()
+          onInteractOutside?.(e)
+        }}
         {...props}
       >
         {/* Drag handle visual en mobile (no funcional, solo afford) */}
