@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createProperty, getPropertyFormOptions, quickCreateOwner, updateProperty } from "@/lib/actions/rentals-properties";
-import { toastActionFailure } from "@/lib/action-failure";
-import { parseAmountInput } from "@/lib/format";
+import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { joinNamesEs } from "@/lib/rentals/renewal";
 import { checkPropertyInput, checkQuickOwnerInput, newClientId, OTHER_PERSON_HINT } from "@/lib/rentals/property-input";
 import { formatMoneyEditable } from "@/components/bookings/money-input";
@@ -16,11 +15,12 @@ import type {
 } from "@/lib/types/database";
 import { sameFormValues } from "@/components/rentals/people/form-draft";
 import { clearDraft, readDraft, usePersistDraft } from "@/components/rentals/people/use-form-draft";
-import { findCodeClash, validateOwnership } from "./property-helpers";
+import { findCodeClash, savedPropertyDiffs, validateOwnership } from "./property-helpers";
 import {
   adoptCreatedOwners,
   findOwnerByName,
   newKey,
+  newOwnerNameProblem,
   ownerRowsFrom,
   ownershipRowsOf,
   withProvisionalIds,
@@ -28,9 +28,19 @@ import {
   type OwnerRowState,
 } from "./owner-rows";
 import { dropUnknownOwners, propertyStateFromDraft } from "./property-draft";
+import { formDiffsFromSaved, parsePropertyForm } from "./property-form-input";
 import { ownerPickerId } from "./owners-editor";
 import { quickOwnerFieldId, type QuickOwnerError } from "./quick-owner-panel";
-import type { OwnerOption, PropertyCodeRef, PropertyInput, PropertyOwnerInput, QuickOwnerInput, SavedPropertyOwner } from "./property-types";
+import type {
+  CreatedOwnerRef,
+  OwnerOption,
+  PropertyCodeRef,
+  PropertyFormOptions,
+  PropertyInput,
+  PropertyOwnerInput,
+  QuickOwnerInput,
+  SavedPropertyOwner,
+} from "./property-types";
 import { PropertyFormBody } from "./property-form-body";
 
 /**
@@ -78,6 +88,12 @@ export interface PropertyFormState {
   mandate_signed_at: string;
   notes: string;
   owners: OwnerRowState[];
+  /**
+   * Propietarios nuevos que este formulario ya creó. Si la propiedad no llega
+   * a guardarse, siguen en Propietarios: la fila, el "¿Descartar?" y el aviso
+   * final lo dicen (el 05/10 quedaron dos sin propiedad y nadie se enteró).
+   */
+  created_owners: CreatedOwnerRef[];
 }
 
 export type SetPropertyField = <K extends keyof PropertyFormState>(key: K, value: PropertyFormState[K]) => void;
@@ -116,6 +132,7 @@ function initialState(p: RentalProperty | null | undefined, owners: PropertyOwne
     mandate_signed_at: p?.mandate_signed_at ?? "",
     notes: p?.notes ?? "",
     owners: ownerRowsFrom(owners),
+    created_owners: [],
   };
 }
 
@@ -129,23 +146,43 @@ export interface PropertyFormProps {
   /**
    * Avisa si hay algo sin guardar y si se está guardando: el diálogo pregunta
    * antes de cerrar. `createdOwners`: propietarios que este formulario ya creó
-   * (quedan en Propietarios aunque la propiedad no se guarde).
+   * (quedan en Propietarios aunque la propiedad no se guarde). `savedCode`: el
+   * alta ya había quedado guardada con ese código (lo que se cambió después, no).
    */
-  onStatusChange?: (dirty: boolean, busy: boolean, createdOwners: string[]) => void;
+  onStatusChange?: (dirty: boolean, busy: boolean, createdOwners: string[], savedCode: string | null) => void;
 }
 
 export type PropertyFieldError = { field?: string; message: string; suggestion?: string } | null;
 
-const text = (v: string) => (v.trim() ? v.trim() : null);
+const byName = (a: OwnerOption, b: OwnerOption) => a.full_name.localeCompare(b.full_name, "es");
 
-/** Entero tipeado ("3") → número; vacío → null; basura → undefined (error). */
-function intOrNull(v: string): number | null | undefined {
-  if (!v.trim()) return null;
-  const n = Number(v.trim());
-  return Number.isInteger(n) && n >= 0 ? n : undefined;
+/**
+ * Antes de crear a un propietario nuevo, la lista de propietarios y de
+ * códigos se vuelve a leer si es más vieja que esto (o si nunca cargó): con
+ * una lista vieja, un nombre o un código que alguien cargó recién pasaban el
+ * control, el primer propietario se creaba y el siguiente paso fallaba.
+ */
+const OPTIONS_FRESH_MS = 60_000;
+
+/** Hubo un deploy con el formulario abierto: guardar falla hasta recargar (un alta vuelve del borrador; una edición, no). */
+const staleSaveMessage = (isEdit: boolean) =>
+  isEdit
+    ? "Se actualizó el sistema: recargá la página para guardar. Ojo: al recargar se pierde lo que cambiaste acá."
+    : "Se actualizó el sistema: recargá la página para guardar. Lo que cargaste vuelve a aparecer.";
+
+/** Suma propietarios creados sin repetir (por id). */
+function withCreated(list: CreatedOwnerRef[], add: readonly CreatedOwnerRef[]): CreatedOwnerRef[] {
+  const out = [...list];
+  for (const o of add) if (!out.some((x) => x.id === o.id)) out.push({ id: o.id, full_name: o.full_name });
+  return out;
 }
 
-const byName = (a: OwnerOption, b: OwnerOption) => a.full_name.localeCompare(b.full_name, "es");
+/** "X quedó en Propietarios sin esta propiedad: si no va, eliminalo desde ahí." (vacío si no hay ninguno). */
+function orphanNote(list: readonly CreatedOwnerRef[], withoutProperty: boolean): string {
+  if (!list.length) return "";
+  const one = list.length === 1;
+  return `${joinNamesEs(list.map((o) => o.full_name))} ${one ? "quedó" : "quedaron"} en Propietarios${withoutProperty ? " sin esta propiedad" : ""}: si no ${one ? "va, eliminalo" : "van, eliminalos"} desde ahí.`;
+}
 
 export function PropertyForm({ property, owners, onDone, onCancel, draftKey = null, onStatusChange }: PropertyFormProps) {
   // Un alta arranca de lo que quedó sin guardar en esta pestaña (si hay); una edición, siempre de la base.
@@ -164,65 +201,123 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
   const [blank, setBlank] = useState<PropertyFormState>(init.blank);
   const [restoredAt, setRestoredAt] = useState<string | null>(init.restoredAt);
   const [ownerOptions, setOwnerOptions] = useState<OwnerOption[] | null>(null);
+  const [archivedOwners, setArchivedOwners] = useState<OwnerOption[] | null>(null);
   const [codes, setCodes] = useState<PropertyCodeRef[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // Cuándo se leyó bien la lista por última vez (null = nunca).
+  const [optionsAt, setOptionsAt] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState<{ message: string; stale: boolean } | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [fieldError, setFieldError] = useState<PropertyFieldError>(null);
   const [draftError, setDraftError] = useState<QuickOwnerError | null>(null);
-  // Propietarios nuevos que este formulario ya creó. Si la propiedad no llega a guardarse, siguen en
-  // Propietarios: el aviso de la fila y el "¿Descartar?" lo dicen (el 05/10 quedaron dos sin propiedad).
-  const [sessionCreated, setSessionCreated] = useState<OwnerOption[]>([]);
+  // Hubo un deploy con el formulario abierto: guardar falla hasta recargar. Lo dice el pie, con su botón.
+  const [staleNotice, setStaleNotice] = useState<string | null>(null);
+  // Este alta ya había quedado guardada (se perdió la respuesta, o se recargó en medio del guardado).
+  const [alreadySaved, setAlreadySaved] = useState<{ property: RentalProperty; owners: SavedPropertyOwner[]; diffs: string[] } | null>(null);
   const [pending, startTransition] = useTransition();
   const propertyId = property?.id ?? null;
   const ownersGiven = Boolean(owners?.length);
   const wasRestored = init.restoredAt != null;
+  const isEdit = Boolean(property);
+  // Lo último del formulario, para lo que llega después (la lista de propietarios, que tarda).
+  const latestForm = useRef(form);
+  useEffect(() => {
+    latestForm.current = form;
+  }, [form]);
+
+  function applyLists(opts: PropertyFormOptions) {
+    setOwnerOptions(opts.owners);
+    setArchivedOwners(opts.archived_owners ?? []);
+    setCodes(opts.codes);
+    setOptionsAt(Date.now());
+    setLoadError(null);
+  }
 
   useEffect(() => {
     let alive = true;
-    getPropertyFormOptions(propertyId).then((res) => {
-      if (!alive) return;
-      if (!res.ok) {
-        setLoadError(res.error);
-        setOwnerOptions([]);
-        return;
-      }
-      setOwnerOptions(res.options.owners);
-      setCodes(res.options.codes);
-      // Edición sin titulares en las props: se traen del servidor.
-      if (!ownersGiven && res.options.current_owners?.length) {
-        const rows = ownerRowsFrom(res.options.current_owners);
-        setForm((f) => ({ ...f, owners: rows }));
-        setBlank((b) => ({ ...b, owners: rows }));
-      }
-      if (wasRestored) {
-        const known = new Set(res.options.owners.map((o) => o.id));
+    // Un borrador recuperado manda su id: si esa propiedad ya quedó guardada, se dice en vez de cargarla otra vez.
+    getPropertyFormOptions(propertyId, wasRestored ? init.form.client_id : null)
+      .then((res) => {
+        if (!alive) return;
+        if (!res.ok) {
+          setLoadError({ message: res.error, stale: false });
+          // El buscador igual se puede usar: el servidor no deja crear a alguien que ya está.
+          setOwnerOptions((list) => list ?? []);
+          return;
+        }
+        const opts = res.options;
+        setOwnerOptions(opts.owners);
+        setArchivedOwners(opts.archived_owners ?? []);
+        setCodes(opts.codes);
+        setOptionsAt(Date.now());
+        setLoadError(null);
+        // Edición sin titulares en las props: se traen del servidor (si no se tocaron mientras tanto).
+        if (!ownersGiven && opts.current_owners?.length) {
+          const rows = ownerRowsFrom(opts.current_owners);
+          setForm((f) => (sameFormValues(f.owners, init.form.owners) ? { ...f, owners: rows } : f));
+          setBlank((b) => ({ ...b, owners: rows }));
+        }
+        if (!wasRestored) return;
+        const f = latestForm.current;
+        const known = new Set(opts.owners.map((o) => o.id));
         // Un propietario nuevo del borrador que sí se había creado (se recargó en medio del guardado) vuelve elegido.
         const draftIds = new Set(init.form.owners.flatMap((r) => (!r.owner_id && r.draft ? [r.draft.id] : [])));
-        const adopted = res.options.owners.filter((o) => draftIds.has(o.id));
-        setForm((f) => ({ ...f, owners: adoptCreatedOwners(dropUnknownOwners(f.owners, known), adopted).rows }));
-        if (adopted.length) setSessionCreated((prev) => [...prev, ...adopted.filter((o) => !prev.some((p) => p.id === o.id))]);
-      }
-    });
+        const adopted = opts.owners.filter((o) => draftIds.has(o.id));
+        const next: PropertyFormState = {
+          ...f,
+          owners: adoptCreatedOwners(dropUnknownOwners(f.owners, known), adopted).rows,
+          // Los que ya se habían creado se siguen avisando (si alguien los borró entretanto, ya no existen).
+          created_owners: withCreated(f.created_owners, adopted).filter((o) => known.has(o.id)),
+        };
+        setForm(next);
+        if (opts.saved) {
+          const diffs = formDiffsFromSaved(next, opts.saved);
+          setAlreadySaved({ ...opts.saved, diffs });
+          setRestoredAt(null);
+          if (!diffs.length) {
+            // Es lo mismo que quedó guardado: cerrar no pierde nada.
+            clearDraft(draftKey);
+            setBlank(next);
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        if (!alive) return;
+        const stale = isStaleDeployError(error);
+        setLoadError({
+          stale,
+          message: stale ? "Se actualizó el sistema: recargá la página para ver la lista de propietarios." : "No se pudo cargar la lista de propietarios: revisá la conexión.",
+        });
+        if (stale) setStaleNotice(staleSaveMessage(Boolean(propertyId)));
+        setOwnerOptions((list) => list ?? []);
+      });
     return () => {
       alive = false;
     };
-  }, [propertyId, ownersGiven, wasRestored, init]);
+  }, [propertyId, ownersGiven, wasRestored, init, draftKey, loadAttempt]);
+
+  const loadAction = loadError
+    ? loadError.stale
+      ? { label: "Recargar", onClick: () => window.location.reload() }
+      : {
+          label: "Reintentar",
+          onClick: () => {
+            setLoadError(null);
+            setLoadAttempt((n) => n + 1);
+          },
+        }
+    : null;
 
   const dirty = !sameFormValues(form, blank);
   usePersistDraft(property ? null : draftKey, form, blank);
+  const sessionCreated = form.created_owners;
   const createdOwnerNames = sessionCreated.map((o) => o.full_name);
+  const savedCode = alreadySaved?.property.code ?? null;
   useEffect(() => {
-    onStatusChange?.(dirty, pending, createdOwnerNames);
-  }, [dirty, pending, onStatusChange, createdOwnerNames]);
-  // El aviso "Listo: X quedó creado… falta guardar la propiedad", mientras siga elegido en una fila.
-  const createdNames = sessionCreated.filter((o) => form.owners.some((r) => r.owner_id === o.id)).map((o) => o.full_name);
+    onStatusChange?.(dirty, pending, createdOwnerNames, savedCode);
+  }, [dirty, pending, onStatusChange, createdOwnerNames, savedCode]);
 
   function addOwnerOption(owner: OwnerOption) {
     setOwnerOptions((list) => (list?.some((o) => o.id === owner.id) ? list : [...(list ?? []), owner].sort(byName)));
-  }
-
-  function rememberCreated(list: OwnerOption[]) {
-    if (!list.length) return;
-    setSessionCreated((prev) => [...prev, ...list.filter((o) => !prev.some((p) => p.id === o.id))]);
   }
 
   /**
@@ -235,17 +330,15 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
     try {
       const res = await getPropertyFormOptions(propertyId);
       if (!res.ok) return;
-      setOwnerOptions(res.options.owners);
-      setCodes(res.options.codes);
+      applyLists(res.options);
       const adopted = res.options.owners.filter((o) => draftIds.has(o.id));
       if (!adopted.length) return;
       setForm((f) => {
         const next = adoptCreatedOwners(f.owners, adopted);
-        return next.adopted.length ? { ...f, owners: next.rows } : f;
+        return next.adopted.length ? { ...f, owners: next.rows, created_owners: withCreated(f.created_owners, next.adopted) } : f;
       });
-      rememberCreated(adopted);
     } catch {
-      /* sin conexión o sistema actualizado: queda la lista que había */
+      /* sin conexión: queda la lista que había */
     }
   }
 
@@ -274,52 +367,43 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
   }
 
   function startOver() {
+    // Los propietarios que ya se crearon no se borran: se avisa (quedaban en Propietarios sin que nadie se enterara).
+    const orphans = form.created_owners.filter((o) => !alreadySaved?.owners.some((s) => s.owner_id === o.id));
     clearDraft(draftKey);
     // Formulario y referencia con el mismo id nuevo: si no, el vacío contaría como "algo sin guardar".
     const fresh = initialState(null, undefined);
     setForm(fresh);
     setBlank(fresh);
     setRestoredAt(null);
+    setAlreadySaved(null);
     setFieldError(null);
     setDraftError(null);
+    if (orphans.length) toast(orphanNote(orphans, false));
+  }
+
+  function openSaved() {
+    if (!alreadySaved) return;
+    onDone(alreadySaved.property, alreadySaved.owners);
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (pending) return;
     setDraftError(null);
-    if (form.street.trim().length < 2) return fail("street", "Escribí la calle.");
-    const ints = { rooms: intOrNull(form.rooms), bedrooms: intOrNull(form.bedrooms), bathrooms: intOrNull(form.bathrooms) };
-    for (const [k, v] of Object.entries(ints)) if (v === undefined) return fail(k, "Tiene que ser un número entero.");
-    const covered = form.covered_m2.trim() ? parseAmountInput(form.covered_m2) : null;
-    if (form.covered_m2.trim() && (covered == null || covered <= 0)) return fail("covered_m2", "Revisá los m².");
-    const total = form.total_m2.trim() ? parseAmountInput(form.total_m2) : null;
-    if (form.total_m2.trim() && (total == null || total <= 0)) return fail("total_m2", "Revisá los m².");
-    const listing = form.listing_rent.trim() ? parseAmountInput(form.listing_rent) : null;
-    if (form.listing_rent.trim() && (listing == null || listing <= 0)) return fail("listing_rent", "Revisá el precio: escribilo así, 450.000");
+    const parsed = parsePropertyForm(form, isEdit);
+    if (!parsed.ok) return fail(parsed.field, parsed.message);
 
     // Todo lo que el servidor puede rechazar se mira ACÁ, antes de crear al primer propietario nuevo:
     // si algo fallaba recién después, el propietario quedaba creado y la propiedad no (lo del 05/10).
     const rows = ownershipRowsOf(form.owners);
     // Con una sola fila, "elegí el propietario en cada fila" no se entiende: se dice qué falta y cómo.
     if (!rows.some((r) => r.owner_id || r.draft)) return fail("owners", "Falta el propietario: buscalo en la lista o, si no está, creálo desde el mismo buscador.");
-    const chosenIds = new Set(rows.map((r) => r.owner_id).filter(Boolean));
     const newOwners = new Map<string, QuickOwnerInput>();
     for (let i = 0; i < rows.length; i++) {
       const draft = rows[i].draft;
       if (!draft) continue;
       const name = draft.full_name.trim();
       if (name.length < 2) return failDraft(rows[i].key, "full_name", "Escribí el nombre del propietario nuevo.");
-      const existing = findOwnerByName(ownerOptions, name, draft.id);
-      if (existing) {
-        return failDraft(
-          rows[i].key,
-          "full_name",
-          chosenIds.has(existing.id)
-            ? `${existing.full_name} ya está en otra fila de esta propiedad: si es la misma persona, quitá esta fila. ${OTHER_PERSON_HINT}`
-            : `${existing.full_name} ya está en Propietarios: si es la misma persona, tocá «Usar ese propietario». ${OTHER_PERSON_HINT}`,
-        );
-      }
       const earlier = rows.slice(0, i).flatMap((r) => (r.draft ? [{ id: r.key, full_name: r.draft.full_name, phone: null, email: null, document_number: null }] : []));
       if (findOwnerByName(earlier, name)) return failDraft(rows[i].key, "full_name", `Ese nombre ya está en otra fila. ${OTHER_PERSON_HINT}`);
       const input: QuickOwnerInput = {
@@ -335,57 +419,20 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
       if (!ownerCheck.ok) return failDraft(rows[i].key, ownerCheck.field, ownerCheck.error);
       newOwners.set(rows[i].key, input);
     }
+    // Un nuevo con el nombre de uno que ya está (en la lista o archivado): se mira para TODOS antes de crear al primero.
+    const nameProblem = newOwnerNameProblem(rows, ownerOptions, archivedOwners);
+    if (nameProblem) return failDraft(nameProblem.rowKey, "full_name", nameProblem.message);
     // Cada nuevo ocupa su fila con el id con el que se va a crear (así pasa el mismo control que el servidor).
     const provisional = withProvisionalIds(rows);
     const ownership = validateOwnership(provisional);
     if (!ownership.ok) return fail("owners", ownership.error);
     // El mismo choque de código que muestra el campo (el servidor lo rechazaría con el dueño ya creado).
-    const clash = findCodeClash(codes, propertyId ?? form.client_id, form.code);
+    const selfId = propertyId ?? form.client_id;
+    const clash = findCodeClash(codes, selfId, form.code);
     if (clash) return fail("code", `Ya es el código de ${clash.label}.`, clash.fix);
 
-    const base: Omit<PropertyInput, "owners"> = {
-      // Alta: siempre el mismo id para esta propiedad (queda en el borrador): reintentar no la duplica.
-      id: property ? null : form.client_id,
-      code: form.code.trim(),
-      property_type: form.property_type,
-      street: form.street.trim(),
-      street_number: text(form.street_number),
-      floor: text(form.floor),
-      apartment: text(form.apartment),
-      tower: text(form.tower),
-      neighborhood: text(form.neighborhood),
-      city: form.city.trim() || "Córdoba",
-      province: form.province.trim() || "Córdoba",
-      postal_code: text(form.postal_code),
-      rooms: ints.rooms ?? null,
-      bedrooms: ints.bedrooms ?? null,
-      bathrooms: ints.bathrooms ?? null,
-      covered_m2: covered,
-      total_m2: total,
-      furnished: form.furnished,
-      has_garage: form.has_garage,
-      consortium_name: text(form.consortium_name),
-      consortium_phone: text(form.consortium_phone),
-      consortium_email: text(form.consortium_email),
-      functional_unit: text(form.functional_unit),
-      cadastral_id: text(form.cadastral_id),
-      services: form.services
-        .filter((s) => s.provider?.trim() || s.account_number?.trim() || s.holder?.trim() || s.notes?.trim())
-        .map((s) => ({
-          kind: s.kind,
-          provider: s.provider?.trim() || null,
-          account_number: s.account_number?.trim() || null,
-          holder: s.holder?.trim() || null,
-          notes: s.notes?.trim() || null,
-        })),
-      listing_rent: listing,
-      listing_currency: listing != null ? form.listing_currency : null,
-      availability: form.availability,
-      mandate_signed_at: form.mandate_signed_at || null,
-      notes: text(form.notes),
-    };
     const toInput = (list: OwnershipRow[]): PropertyInput => ({
-      ...base,
+      ...parsed.base,
       owners: list.map((r) => ({ owner_id: r.owner_id, ownership_pct: r.ownership_pct, is_primary: r.is_primary })),
     });
     const propertyCheck = checkPropertyInput(toInput(provisional));
@@ -396,11 +443,28 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
       return;
     }
 
-    const knownOwners = ownerOptions ?? [];
+    let knownOwners = ownerOptions ?? [];
     const draftIds = new Set(Array.from(newOwners.values(), (o) => o.id).filter((id): id is string => Boolean(id)));
+    const listIsOld = optionsAt == null || Date.now() - optionsAt > OPTIONS_FRESH_MS;
+    const createdBefore = form.created_owners;
     startTransition(async () => {
       let stage: "owner" | "property" = newOwners.size ? "owner" : "property";
       try {
+        if (newOwners.size && listIsOld) {
+          // Con la lista vieja (o que no cargó), un nombre o un código que alguien cargó recién pasaba el
+          // control: se relee y se vuelve a mirar ANTES de crear a nadie. Sin poder leerla, no se crea.
+          const fresh = await getPropertyFormOptions(propertyId);
+          if (!fresh.ok) {
+            fail("owners", "No pudimos revisar si los propietarios nuevos ya están cargados. Probá de nuevo en un momento.");
+            return;
+          }
+          applyLists(fresh.options);
+          knownOwners = fresh.options.owners;
+          const again = newOwnerNameProblem(rows, fresh.options.owners, fresh.options.archived_owners);
+          if (again) return failDraft(again.rowKey, "full_name", again.message);
+          const clashNow = findCodeClash(fresh.options.codes, selfId, form.code);
+          if (clashNow) return fail("code", `Ya es el código de ${clashNow.label}.`, clashNow.fix);
+        }
         // Primero los propietarios nuevos (un solo "Guardar" crea todo). Cada uno que se crea queda
         // elegido en su fila: si después algo falla, reintentar no lo duplica.
         let finalRows = rows;
@@ -418,10 +482,13 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
           }
           const owner = res.owner;
           created.push(owner);
-          rememberCreated([owner]);
           addOwnerOption(owner);
           finalRows = finalRows.map((x) => (x.key === r.key ? { ...x, owner_id: owner.id, draft: null } : x));
-          setForm((f) => ({ ...f, owners: f.owners.map((x) => (x.key === r.key ? { ...x, owner_id: owner.id, draft: null } : x)) }));
+          setForm((f) => ({
+            ...f,
+            owners: f.owners.map((x) => (x.key === r.key ? { ...x, owner_id: owner.id, draft: null } : x)),
+            created_owners: withCreated(f.created_owners, [owner]),
+          }));
         }
         stage = "property";
         const input = toInput(finalRows);
@@ -433,31 +500,55 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
           void refreshOptions(new Set());
           return;
         }
-        const names = new Map([...knownOwners, ...created].map((o) => [o.id, o.full_name]));
-        const saved: SavedPropertyOwner[] =
-          res.already_saved && res.owners?.length
-            ? res.owners
-            : input.owners.map((o) => ({ ...o, full_name: names.get(o.owner_id) ?? "Propietario" }));
+        let saved = res.property;
+        let savedOwners: SavedPropertyOwner[] | null = res.already_saved && res.owners?.length ? res.owners : null;
+        let replayNote: string | null = null;
         if (res.already_saved) {
-          // Reintento de un alta que ya había entrado (se perdió la respuesta): es la misma, no otra igual.
-          toast.success("La propiedad ya estaba guardada", {
-            description: `${res.property.code}: se había guardado en el intento anterior. Si después cambiaste algo, revisalo en la ficha.`,
-          });
+          // Reintento de un alta que ya había entrado (se perdió la respuesta). Vale lo que se ve ahora: si
+          // entretanto se cambió algo (otro dueño, la dirección), se guarda encima; si no, quedaba lo viejo.
+          const diffs = savedPropertyDiffs({ property: res.property, owners: res.owners ?? [] }, input);
+          if (diffs.length) {
+            // Antes de intentarlo: si esto también falla, el aviso de arriba y el "¿Descartar?" ya dicen que quedó guardada.
+            setAlreadySaved({ property: res.property, owners: res.owners ?? [], diffs });
+            const upd = await updateProperty(res.property.id, input);
+            if (!upd.ok) {
+              fail(upd.field, upd.error, upd.suggestion);
+              toast.error(`La propiedad ya estaba guardada como ${res.property.code}`, {
+                description: `Pero no se pudo guardar lo que cambiaste después (${joinNamesEs(diffs)}): ${upd.error}`,
+              });
+              return;
+            }
+            saved = upd.property;
+            savedOwners = null;
+            replayNote = `ya se había guardado en el intento anterior; quedó con lo de ahora (${joinNamesEs(diffs)}).`;
+          } else {
+            replayNote = "se había guardado en el intento anterior.";
+          }
+        }
+        const names = new Map([...knownOwners, ...created].map((o) => [o.id, o.full_name]));
+        const finalOwners: SavedPropertyOwner[] = savedOwners ?? input.owners.map((o) => ({ ...o, full_name: names.get(o.owner_id) ?? "Propietario" }));
+        // Creados por este formulario y sacados después de la propiedad: siguen en Propietarios.
+        const orphans = orphanNote(createdBefore.filter((o) => !finalOwners.some((f) => f.owner_id === o.id)), true);
+        if (replayNote) {
+          toast.success("La propiedad ya estaba guardada", { description: `${saved.code}: ${replayNote}${orphans ? ` ${orphans}` : ""}` });
         } else {
           const createdLine = created.length
             ? ` · ${joinNamesEs(created.map((o) => o.full_name))} ${created.length === 1 ? "quedó cargado como propietario" : "quedaron cargados como propietarios"}`
             : "";
-          toast.success(property ? "Cambios guardados" : "Propiedad cargada", { description: `${res.property.code}${createdLine}` });
+          toast.success(isEdit ? "Cambios guardados" : "Propiedad cargada", { description: `${saved.code}${createdLine}${orphans ? ` · ${orphans}` : ""}` });
         }
-        onDone(res.property, saved);
+        onDone(saved, finalOwners);
       } catch (error) {
         // No llegó respuesta: se cortó la conexión o hubo un deploy (ahí reintentar no sirve: hay que recargar).
         // Lo tipeado sigue en el formulario (y en el borrador); un propietario ya creado quedó elegido en su fila.
+        const stale = isStaleDeployError(error);
+        // El aviso flotante no se puede tocar con el diálogo abierto: el pie dice lo mismo, con su botón «Recargar».
+        if (stale) setStaleNotice(staleSaveMessage(isEdit));
         toastActionFailure(error, stage === "owner" ? "No se pudo crear el propietario" : "No se pudo guardar la propiedad", {
           retry: "Revisá la conexión y probá de nuevo: lo que cargaste sigue acá.",
-          afterReload: property ? "Ojo: al recargar se pierde lo que cambiaste acá." : draftKey ? "Lo que cargaste vuelve a aparecer." : undefined,
+          afterReload: isEdit ? "Ojo: al recargar se pierde lo que cambiaste acá." : draftKey ? "Lo que cargaste vuelve a aparecer." : undefined,
         });
-        void refreshOptions(draftIds);
+        if (!stale) void refreshOptions(draftIds);
       }
     });
   }
@@ -466,14 +557,18 @@ export function PropertyForm({ property, owners, onDone, onCancel, draftKey = nu
     <PropertyFormBody
       form={form}
       set={set}
-      isEdit={Boolean(property)}
+      isEdit={isEdit}
       propertyId={propertyId}
       ownerOptions={ownerOptions}
+      archivedOwners={archivedOwners}
       codes={codes}
-      loadError={loadError}
+      loadError={loadError?.message ?? null}
+      loadAction={loadAction}
       fieldError={fieldError}
       draftError={draftError}
-      createdNames={createdNames}
+      sessionCreated={sessionCreated}
+      staleNotice={staleNotice}
+      alreadySaved={alreadySaved ? { code: alreadySaved.property.code, diffs: alreadySaved.diffs, onOpen: openSaved } : null}
       restoredAt={restoredAt}
       onStartOver={startOver}
       pending={pending}

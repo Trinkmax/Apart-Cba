@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Building2, Check, ChevronDown, FileSignature, Hash, Loader2, MapPin, Ruler, Tag, Users, Zap } from "lucide-react";
+import { Building2, Check, CheckCircle2, ChevronDown, FileSignature, Hash, Loader2, MapPin, RotateCw, Ruler, Tag, Users, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,11 +14,12 @@ import { Field, FormSection } from "@/components/rentals/people/form-bits";
 import { DraftRestoredNotice, FormDialogBody, FormDialogFooter, formDialogFormClass } from "@/components/rentals/people/form-dialog-shell";
 import { PROPERTY_TEXT_MAX as MAX } from "@/lib/rentals/property-input";
 import { findCodeClash, firstFreeCode, normalizePropertyCode, suggestPropertyCode } from "./property-helpers";
-import type { OwnerOption, PropertyCodeRef } from "./property-types";
+import type { CreatedOwnerRef, OwnerOption, PropertyCodeRef } from "./property-types";
 import type { PropertyFieldError, PropertyFormState, SetPropertyField } from "./property-form";
 import type { QuickOwnerError } from "./quick-owner-panel";
 import { OwnersEditor } from "./owners-editor";
 import { ServicesEditor } from "./services-editor";
+import { enterMovesFocus } from "./enter-moves-focus";
 
 const AVAILABILITY_OPTIONS: { value: RentalPropertyAvailability; label: string; hint: string }[] = [
   { value: "disponible", label: "Disponible", hint: "Se puede alquilar." },
@@ -33,13 +34,24 @@ export interface PropertyFormBodyProps {
   isEdit: boolean;
   propertyId: string | null;
   ownerOptions: OwnerOption[] | null;
+  /** Propietarios archivados: no se eligen, pero no se puede crear otro con el mismo nombre. */
+  archivedOwners: OwnerOption[] | null;
   codes: PropertyCodeRef[];
   loadError: string | null;
+  /** Botón junto al error de carga de la lista: reintentar, o recargar si hubo un deploy. */
+  loadAction?: { label: string; onClick: () => void } | null;
   fieldError: PropertyFieldError;
   /** Error de un propietario nuevo (en su fila). */
   draftError: QuickOwnerError | null;
-  /** Propietarios creados en un guardado que después falló. */
-  createdNames: string[];
+  /** Propietarios que este formulario ya creó (en un guardado que después falló). */
+  sessionCreated: CreatedOwnerRef[];
+  /**
+   * Hubo un deploy con el formulario abierto: guardar falla hasta recargar.
+   * Va en el pie, con su botón: el aviso flotante no se puede tocar con el diálogo abierto.
+   */
+  staleNotice?: string | null;
+  /** La propiedad de este alta ya había quedado guardada (se perdió la respuesta o se recargó en medio). */
+  alreadySaved?: { code: string; diffs: string[]; onOpen: () => void } | null;
   /** Se recuperó un borrador: cuándo se había guardado. */
   restoredAt: string | null;
   onStartOver: () => void;
@@ -110,7 +122,16 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
   const missing = [form.street.trim().length < 2 ? "la calle" : null, ownerMissing ? "el propietario" : null].filter((x): x is string => Boolean(x));
   const newOwners = form.owners.filter((r) => !r.owner_id && r.draft).length;
   const errorLine = draftError?.message ?? fieldError?.message ?? null;
-  const status = pending ? (
+  const status = props.staleNotice ? (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+      <span className="min-w-0 flex-1 text-rose-600 dark:text-rose-400" role="alert">
+        {props.staleNotice}
+      </span>
+      <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => window.location.reload()}>
+        <RotateCw size={13} /> Recargar
+      </Button>
+    </span>
+  ) : pending ? (
     newOwners ? "Creando el propietario y guardando la propiedad…" : "Guardando…"
   ) : errorLine ? (
     <span className="line-clamp-2 text-rose-600 dark:text-rose-400">{errorLine}</span>
@@ -121,9 +142,34 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
   ) : null;
 
   return (
-    <form onSubmit={onSubmit} className={formDialogFormClass} noValidate>
+    // Enter pasa al campo siguiente y nunca guarda: guardar es sólo «Guardar propiedad» (ver enterMovesFocus).
+    <form onSubmit={onSubmit} onKeyDown={enterMovesFocus} className={formDialogFormClass} noValidate>
       <FormDialogBody>
-        {props.restoredAt && <DraftRestoredNotice savedAt={props.restoredAt} onReset={props.onStartOver} />}
+        {props.alreadySaved ? (
+          <div className="mb-5 space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.07] px-3 py-2.5" role="status">
+            <p className="flex items-start gap-2 text-sm">
+              <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span>
+                Esta propiedad ya quedó guardada como <strong>{props.alreadySaved.code}</strong>: se guardó aunque no llegó la confirmación.
+              </span>
+            </p>
+            {props.alreadySaved.diffs.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Lo de abajo tiene cambios que todavía no se guardaron ({joinNamesEs(props.alreadySaved.diffs)}): tocá «Guardar propiedad» para guardarlos.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" className="h-8" onClick={props.alreadySaved.onOpen}>
+                Ver la propiedad
+              </Button>
+              <Button type="button" size="sm" variant="ghost" className="h-8 text-muted-foreground" onClick={props.onStartOver}>
+                Cargar otra
+              </Button>
+            </div>
+          </div>
+        ) : (
+          props.restoredAt && <DraftRestoredNotice savedAt={props.restoredAt} onReset={props.onStartOver} />
+        )}
         <div className="space-y-6">
           <FormSection title="Dirección" icon={<MapPin size={14} />}>
             <div className="grid grid-cols-[minmax(0,1fr)_6rem] sm:grid-cols-[minmax(0,1fr)_120px] gap-3">
@@ -172,10 +218,12 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
               rows={form.owners}
               onChange={(rows) => set("owners", rows)}
               options={props.ownerOptions}
+              archived={props.archivedOwners}
               error={err("owners")}
               loadError={props.loadError}
+              loadAction={props.loadAction}
               draftError={draftError}
-              createdNames={props.createdNames}
+              sessionCreated={props.sessionCreated}
             />
           </FormSection>
 

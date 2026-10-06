@@ -17,8 +17,9 @@ import { isValidConsent } from "@/lib/rentals/renewal";
 import type { RentalGuaranteeType, RentalPerson } from "@/lib/types/database";
 import type { PersonOption } from "./types";
 import { StepIntro } from "./wizard-fields";
+import { personDialogReloadNote } from "./wizard-draft";
 import { newPartyKey, partyField, type WizardParty } from "./wizard-state";
-import type { StepProps } from "./wizard-step-props";
+import type { KeptForReload, StepProps } from "./wizard-step-props";
 
 /** Paso 2: inquilino(s) —uno es el titular de los recibos— y garantes con su garantía. */
 
@@ -57,6 +58,7 @@ function PersonPicker({
   intent,
   onPick,
   onCreated,
+  keepForReload,
   anchor,
   invalid,
 }: {
@@ -65,12 +67,15 @@ function PersonPicker({
   intent: "inquilino" | "garante";
   onPick: (id: string) => void;
   onCreated: (p: PersonOption) => void;
+  /** Si guardar la persona pide recargar (deploy nuevo), el asistente guarda ya lo suyo. */
+  keepForReload: () => KeptForReload;
   /** Campo del asistente al que se salta si falta (el buscador, o "nuevo" si todavía no hay nadie cargado). */
   anchor?: string;
   invalid?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const newLabel = intent === "garante" ? "Garante nuevo" : "Inquilino nuevo";
   const matches = useMemo(() => {
     const needle = norm(search.trim());
     return people
@@ -129,6 +134,7 @@ function PersonPicker({
           onPick(p.id);
           setSearch("");
         }}
+        onStaleDeploy={(formKept) => personDialogReloadNote(keepForReload(), formKept, newLabel)}
       >
         <Button
           type="button"
@@ -136,14 +142,14 @@ function PersonPicker({
           className="h-10 gap-2"
           data-wizard-field={people.length === 0 ? anchor : undefined}
         >
-          <UserPlus size={15} /> {intent === "garante" ? "Garante nuevo" : "Inquilino nuevo"}
+          <UserPlus size={15} /> {newLabel}
         </Button>
       </PersonFormDialog>
     </div>
   );
 }
 
-export function StepParties({ state, set, errors, people, addPerson, today }: StepProps) {
+export function StepParties({ state, set, errors, people, addPerson, today, keepForReload }: StepProps) {
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
   const tenants = state.parties.filter((p) => p.role === "inquilino");
   const guarantors = state.parties.filter((p) => p.role === "garante");
@@ -255,6 +261,7 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
           intent="inquilino"
           onPick={(id) => add("inquilino", id)}
           onCreated={addPerson}
+          keepForReload={keepForReload}
           anchor="tenant"
           invalid={Boolean(errors.tenant)}
         />
@@ -348,7 +355,14 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
             </div>
           );
         })}
-        <PersonPicker people={people} exclude={usedBy("garante")} intent="garante" onPick={(id) => add("garante", id)} onCreated={addPerson} />
+        <PersonPicker
+          people={people}
+          exclude={usedBy("garante")}
+          intent="garante"
+          onPick={(id) => add("garante", id)}
+          onCreated={addPerson}
+          keepForReload={keepForReload}
+        />
       </section>
     </div>
   );

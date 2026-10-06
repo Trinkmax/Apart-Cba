@@ -9,19 +9,20 @@ import { cn } from "@/lib/utils";
 import { OTHER_PERSON_HINT } from "@/lib/rentals/property-input";
 import { foldText } from "@/components/rentals/people/person-helpers";
 import type { OwnerOption } from "./property-types";
-import { findOwnerByName, ownerDetails } from "./owner-rows";
+import { archivedOwnerMessage, findOwnerByName, ownerDetails } from "./owner-rows";
 
 /**
  * Buscador de propietarios (tabla `owners` de la org) con "Crear «…»" al pie:
  * si no está, la fila pasa a "propietario nuevo" (se crea al guardar la propiedad).
- * Si el nombre buscado ya está cargado, no se ofrece crearlo: no se puede
- * cargar dos veces el mismo nombre. Se dice cómo distinguir a otra persona.
+ * Si el nombre buscado ya está cargado (o archivado), no se ofrece crearlo: no
+ * se puede cargar dos veces el mismo nombre. Se dice cómo distinguir a otra persona.
  */
 export function OwnerPicker({
   id,
   value,
   pendingName,
   options,
+  archived,
   excludeIds,
   onChange,
   onCreate,
@@ -32,6 +33,8 @@ export function OwnerPicker({
   /** La fila es un propietario nuevo a crear: el botón muestra su nombre. */
   pendingName?: string | null;
   options: OwnerOption[] | null;
+  /** Archivados: no se eligen, pero tampoco se puede crear otro con el mismo nombre. */
+  archived?: OwnerOption[] | null;
   excludeIds: string[];
   onChange: (ownerId: string) => void;
   onCreate: (name: string) => void;
@@ -46,6 +49,7 @@ export function OwnerPicker({
   const match = search.trim() ? findOwnerByName(options, search) : null;
   const matchElsewhere = Boolean(match && match.id !== value && excludeIds.includes(match.id));
   const matchDetails = match ? ownerDetails(match) : "";
+  const archivedMatch = !match && search.trim() ? findOwnerByName(archived, search) : null;
 
   return (
     <Popover
@@ -90,7 +94,7 @@ export function OwnerPicker({
         <Command filter={(itemValue, term) => (foldText(itemValue).includes(foldText(term).trim()) ? 1 : 0)}>
           <CommandInput placeholder="Nombre, DNI o teléfono…" value={search} onValueChange={setSearch} aria-label="Buscar propietario" />
           <CommandList className="max-h-72">
-            {!match && (
+            {!match && !archivedMatch && (
               <CommandEmpty className="py-3 text-center text-sm text-muted-foreground">
                 {search.trim() ? "No hay propietarios con ese nombre." : "Todavía no hay propietarios cargados."}
               </CommandEmpty>
@@ -123,6 +127,10 @@ export function OwnerPicker({
                   <strong className="font-semibold text-foreground">{match.full_name}</strong>
                   {matchElsewhere && matchDetails ? ` (${matchDetails})` : ""}{" "}
                   {matchElsewhere ? "ya está en otra fila de esta propiedad." : "ya está cargado: elegilo de la lista."} {OTHER_PERSON_HINT}
+                </p>
+              ) : archivedMatch ? (
+                <p className="px-2 py-2 text-xs leading-snug text-muted-foreground" role="note">
+                  {archivedOwnerMessage(archivedMatch)}
                 </p>
               ) : (
                 <CommandItem

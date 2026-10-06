@@ -9,8 +9,12 @@ import {
   encodeAutoRestoreMark,
   encodeWizardDraft,
   legacyWizardDraftKey,
+  ownWizardDraft,
+  personDialogReloadNote,
   planWizardDraft,
+  wizardAsideKey,
   wizardAutoRestoreKey,
+  wizardDraftAfterSave,
   wizardDraftIds,
   wizardDraftKey,
 } from "../wizard-draft";
@@ -173,6 +177,62 @@ describe("planWizardDraft (qué se ofrece y qué pasa con la clave vieja)", () =
       adopt: false,
       removeLegacy: true,
     });
+  });
+});
+
+describe("borrador de antes puesto aparte", () => {
+  const older = encodeWizardDraft(2, state({ property_id: PROP, notes: "el de antes" }), new Date("2026-10-03T10:00:00Z"));
+  const newer = encodeWizardDraft(4, state({ property_id: PROP, notes: "el de hoy" }), NOW);
+
+  it("la clave cuelga de la del borrador y es distinta de la marca", () => {
+    const key = wizardDraftKey(null, "org-a", "user-1");
+    expect(wizardAsideKey(key)).toBe(`${key}.anterior`);
+    expect(wizardAsideKey(key)).not.toBe(wizardAutoRestoreKey(key));
+    expect(wizardAsideKey(key)).not.toBe(wizardAsideKey(wizardDraftKey(null, "org-a", "user-2")));
+  });
+
+  it("al abrir manda el de la clave principal; el de aparte queda guardado sin ofrecerse", () => {
+    expect(ownWizardDraft(newer, older)).toEqual({ raw: newer, promoteAside: false });
+    expect(ownWizardDraft(newer, null)).toEqual({ raw: newer, promoteAside: false });
+  });
+
+  it("si la principal está vacía, el de aparte vuelve a ofrecerse (y pasa a la principal)", () => {
+    expect(ownWizardDraft(null, older)).toEqual({ raw: older, promoteAside: true });
+    expect(ownWizardDraft(null, null)).toEqual({ raw: null, promoteAside: false });
+  });
+
+  it("al guardar un alta, lo de antes sin elegir se conserva para la próxima", () => {
+    expect(wizardDraftAfterSave(true, null, older)).toEqual({ main: older, aside: null });
+    expect(wizardDraftAfterSave(true, older, null)).toEqual({ main: older, aside: null });
+    expect(wizardDraftAfterSave(true, newer, older)).toEqual({ main: newer, aside: older });
+    expect(wizardDraftAfterSave(true, null, null)).toEqual({ main: null, aside: null });
+  });
+
+  it("no deja el mismo borrador dos veces (si no, uno descartado volvería a ofrecerse)", () => {
+    expect(wizardDraftAfterSave(true, older, older)).toEqual({ main: older, aside: null });
+  });
+
+  it("al guardar una edición se tira: lo guardado es más nuevo y recuperarlo lo desharía", () => {
+    expect(wizardDraftAfterSave(false, null, older)).toEqual({ main: null, aside: null });
+    expect(wizardDraftAfterSave(false, newer, older)).toEqual({ main: null, aside: null });
+  });
+});
+
+describe("personDialogReloadNote (falló guardar una persona nueva desde el asistente)", () => {
+  it("si el asistente vuelve solo, dice dónde volver a abrir el formulario", () => {
+    expect(personDialogReloadNote("solo", true, "Inquilino nuevo")).toBe(
+      "Al volver, en «Inquilino y garantes» tocá de nuevo «Inquilino nuevo»: lo que cargaste vuelve a aparecer.",
+    );
+    expect(personDialogReloadNote("solo", true, "Garante nuevo")).toContain("«Garante nuevo»");
+  });
+
+  it("sin borrador del formulario sólo promete lo del contrato", () => {
+    expect(personDialogReloadNote("solo", false, "Inquilino nuevo")).toBe("Lo del contrato vuelve a aparecer.");
+  });
+
+  it("si quedó para recuperar, lo dice; si no se pudo guardar, no promete nada", () => {
+    expect(personDialogReloadNote("recuperar", true, "Inquilino nuevo")).toBe("Después, tocá «Recuperar» arriba de los pasos.");
+    expect(personDialogReloadNote(null, true, "Inquilino nuevo")).toBeNull();
   });
 });
 

@@ -107,6 +107,12 @@ export interface PropertyCodeRef {
   label: string;
 }
 
+/**
+ * Propietario que el formulario ya creó (en un guardado que después falló).
+ * Viaja en el borrador: aunque se recargue, se sigue avisando que existe.
+ */
+export type CreatedOwnerRef = Pick<OwnerOption, "id" | "full_name">;
+
 export interface PropertyFormOptions {
   owners: OwnerOption[];
   /**

@@ -1,12 +1,11 @@
 "use client";
 
-import type { KeyboardEvent } from "react";
 import { AlertTriangle, Check, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { OTHER_PERSON_HINT, OWNER_TEXT_MAX } from "@/lib/rentals/property-input";
 import { Field } from "@/components/rentals/people/form-bits";
-import { ownerDetails, type NewOwnerDraft } from "./owner-rows";
+import { archivedOwnerMessage, ownerDetails, type NewOwnerDraft } from "./owner-rows";
 import type { OwnerOption } from "./property-types";
 
 export interface QuickOwnerError {
@@ -17,36 +16,6 @@ export interface QuickOwnerError {
 
 /** id del input de un campo del propietario nuevo de una fila (para enfocarlo ante un error). */
 export const quickOwnerFieldId = (rowKey: string, field: string) => `quick-owner-${rowKey}-${field}`;
-
-const isVisible = (el: HTMLElement) => el.getClientRects().length > 0;
-
-/**
- * Enter (o "Ir" en el teclado del celular) en un campo del propietario nuevo
- * pasa al campo siguiente; en el último, al siguiente casillero del
- * formulario. No guarda: si no, guardaba la propiedad entera con lo demás
- * sin cargar. El único que guarda es «Guardar propiedad».
- */
-function focusNextOnEnter(e: KeyboardEvent<HTMLDivElement>) {
-  if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-  const target = e.target as HTMLElement;
-  if (target.tagName !== "INPUT") return;
-  e.preventDefault();
-  const panel = e.currentTarget;
-  const fields = Array.from(panel.querySelectorAll<HTMLInputElement>("input:not([disabled])")).filter(isVisible);
-  const index = fields.indexOf(target as HTMLInputElement);
-  const next = index >= 0 ? fields[index + 1] : undefined;
-  if (next) {
-    next.focus();
-    return;
-  }
-  const form = panel.closest("form");
-  const candidates = form?.querySelectorAll<HTMLElement>('input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), [role="combobox"]:not([disabled])');
-  const after = Array.from(candidates ?? []).find(
-    (el) => !panel.contains(el) && Boolean(panel.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) && isVisible(el),
-  );
-  if (after) after.focus();
-  else target.blur();
-}
 
 /**
  * Propietario nuevo adentro del formulario de la propiedad. Es parte del
@@ -63,6 +32,7 @@ export function QuickOwnerPanel({
   error,
   sameName,
   sameNameInOtherRow,
+  sameArchived,
   onUseExisting,
   autoFocus,
 }: {
@@ -75,6 +45,8 @@ export function QuickOwnerPanel({
   sameName: OwnerOption | null;
   /** …y ya está elegido en otra fila de esta propiedad. */
   sameNameInOtherRow: boolean;
+  /** Archivado con el mismo nombre: no se puede elegir ni crear otro igual. */
+  sameArchived?: OwnerOption | null;
   onUseExisting: (owner: OwnerOption) => void;
   autoFocus?: boolean;
 }) {
@@ -85,7 +57,8 @@ export function QuickOwnerPanel({
   const sameDetails = sameName ? ownerDetails(sameName) : "";
 
   return (
-    <div className="rounded-xl border border-teal-600/30 bg-teal-600/[0.04] p-3 sm:p-4 space-y-3 animate-fade-up" onKeyDown={focusNextOnEnter}>
+    // Enter pasa al campo siguiente: lo maneja el <form> (ver enterMovesFocus), nunca guarda desde acá.
+    <div className="rounded-xl border border-teal-600/30 bg-teal-600/[0.04] p-3 sm:p-4 space-y-3 animate-fade-up">
       <div className="flex items-start gap-2.5">
         <span className="size-8 shrink-0 rounded-lg bg-teal-600/15 text-teal-700 dark:text-teal-300 flex items-center justify-center">
           <UserPlus size={15} />
@@ -103,7 +76,7 @@ export function QuickOwnerPanel({
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {/* Con un homónimo, el aviso de abajo ya dice qué hacer: el mismo texto dos veces sobra (el pie lo repite igual). */}
-        <Field id={id("full_name")} label="Nombre y apellido" required error={sameName ? null : err("full_name")} className="sm:col-span-2">
+        <Field id={id("full_name")} label="Nombre y apellido" required error={sameName || sameArchived ? null : err("full_name")} className="sm:col-span-2">
           <Input
             id={id("full_name")}
             value={draft.full_name}
@@ -131,6 +104,12 @@ export function QuickOwnerPanel({
                 <Check size={13} /> Usar ese propietario
               </Button>
             )}
+          </div>
+        )}
+        {!sameName && sameArchived && (
+          <div className="sm:col-span-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 px-3 py-2" role="status">
+            <AlertTriangle size={15} className="mt-px shrink-0 text-amber-700 dark:text-amber-300" />
+            <p className="min-w-0 flex-1 text-xs text-amber-900 dark:text-amber-200">{archivedOwnerMessage(sameArchived)}</p>
           </div>
         )}
         <Field id={id("phone")} label="Teléfono" error={err("phone")}>

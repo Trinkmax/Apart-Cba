@@ -24,6 +24,8 @@ export interface PersonFormDialogProps {
   /** Control externo opcional (p. ej. abrir desde un buscador). */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Abierto desde otra pantalla con cosas cargadas: ver PersonForm. */
+  onStaleDeploy?: (formKept: boolean) => string | null;
 }
 
 /**
@@ -32,7 +34,7 @@ export interface PersonFormDialogProps {
  * El formulario se monta al abrir. Cerrar con algo tipeado pregunta antes; un
  * alta sin guardar queda como borrador de la pestaña hasta guardarla o descartarla.
  */
-export function PersonFormDialog({ person, intent, defaultName, children, onSaved, open: openProp, onOpenChange }: PersonFormDialogProps) {
+export function PersonFormDialog({ person, intent, defaultName, children, onSaved, open: openProp, onOpenChange, onStaleDeploy }: PersonFormDialogProps) {
   const router = useRouter();
   const [openState, setOpenState] = useState(false);
   const open = openProp ?? openState;
@@ -103,6 +105,7 @@ export function PersonFormDialog({ person, intent, defaultName, children, onSave
               onDone={done}
               onCancel={requestClose}
               onUseExisting={done}
+              onStaleDeploy={onStaleDeploy}
             />
           )}
         </FormDialogContent>

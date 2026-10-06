@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { RentalProperty } from "@/lib/types/database";
 import {
   findCodeClash,
   firstFreeCode,
   normalizePropertyCode,
   propertyDisplayState,
   propertyFeatures,
+  savedPropertyDiffs,
+  type PropertyDiffInput,
   sinceLabel,
   splitEvenly,
   suggestPropertyCode,
@@ -113,5 +116,97 @@ describe("propertyDisplayState / propertyFeatures / sinceLabel", () => {
     expect(sinceLabel("2026-09-20", "2026-10-02")).toBe("hace 12 días");
     expect(sinceLabel("2026-07-01", "2026-10-02")).toBe("hace 3 meses");
     expect(sinceLabel("2025-08-01", "2026-10-02")).toBe("hace 1 año y 2 meses");
+  });
+});
+
+describe("propiedad que ya había quedado guardada", () => {
+  const property = {
+    code: "DEANFUNES450-3B",
+    property_type: "departamento",
+    street: "Dean Funes",
+    street_number: "450",
+    floor: "3",
+    apartment: "B",
+    tower: null,
+    neighborhood: null,
+    city: "Córdoba",
+    province: "Córdoba",
+    postal_code: null,
+    rooms: 2,
+    bedrooms: null,
+    bathrooms: null,
+    covered_m2: "45.5",
+    total_m2: null,
+    furnished: false,
+    has_garage: false,
+    consortium_name: null,
+    consortium_phone: null,
+    consortium_email: null,
+    functional_unit: null,
+    cadastral_id: null,
+    services: [{ kind: "luz", provider: "EPEC", account_number: null, holder: null, notes: null }],
+    listing_rent: 450000,
+    listing_currency: "ARS",
+    availability: "disponible",
+    mandate_signed_at: null,
+    notes: null,
+  } as unknown as RentalProperty;
+  const saved = { property, owners: [{ owner_id: "o1", ownership_pct: "100", is_primary: true }] };
+  const now = {
+    code: "",
+    property_type: "departamento",
+    street: "Dean Funes",
+    street_number: "450",
+    floor: "3",
+    apartment: "B",
+    tower: null,
+    neighborhood: null,
+    city: "Córdoba",
+    province: "Córdoba",
+    postal_code: null,
+    rooms: 2,
+    bedrooms: null,
+    bathrooms: null,
+    covered_m2: 45.5,
+    total_m2: null,
+    furnished: false,
+    has_garage: false,
+    consortium_name: null,
+    consortium_phone: null,
+    consortium_email: null,
+    functional_unit: null,
+    cadastral_id: null,
+    services: [{ kind: "luz", provider: "EPEC", account_number: null, holder: null, notes: null }],
+    listing_rent: 450000,
+    listing_currency: null,
+    availability: "disponible",
+    mandate_signed_at: null,
+    notes: null,
+    owners: [{ owner_id: "o1", ownership_pct: 100, is_primary: true }],
+  } as PropertyDiffInput;
+
+  it("lo mismo (código vacío, numéricos como texto, moneda por defecto): nada que avisar", () => {
+    expect(savedPropertyDiffs(saved, now)).toEqual([]);
+    expect(savedPropertyDiffs(saved, { ...now, code: "deanfunes450-3b" })).toEqual([]);
+  });
+
+  it("dice qué cambió después, como se ve en pantalla", () => {
+    expect(savedPropertyDiffs(saved, { ...now, street_number: "452" })).toEqual(["la dirección"]);
+    expect(savedPropertyDiffs(saved, { ...now, owners: [{ owner_id: "o2", ownership_pct: 100, is_primary: true }] })).toEqual(["los propietarios"]);
+    expect(
+      savedPropertyDiffs(saved, {
+        ...now,
+        owners: [
+          { owner_id: "o1", ownership_pct: 50, is_primary: true },
+          { owner_id: "o3", ownership_pct: 50, is_primary: false },
+        ],
+      }),
+    ).toEqual(["los propietarios"]);
+    expect(savedPropertyDiffs(saved, { ...now, code: "DF450" })).toEqual(["el código"]);
+    expect(savedPropertyDiffs(saved, { ...now, rooms: 3 })).toEqual(["cómo es"]);
+    expect(savedPropertyDiffs(saved, { ...now, listing_rent: 480000, notes: "Llaves en la oficina" })).toEqual(["el precio", "las notas"]);
+    expect(savedPropertyDiffs(saved, { ...now, listing_currency: "USD" })).toEqual(["el precio"]);
+    expect(savedPropertyDiffs(saved, { ...now, services: [] })).toEqual(["los servicios"]);
+    expect(savedPropertyDiffs(saved, { ...now, availability: "reservada", mandate_signed_at: "2026-10-01" })).toEqual(["la disponibilidad", "el mandato"]);
   });
 });

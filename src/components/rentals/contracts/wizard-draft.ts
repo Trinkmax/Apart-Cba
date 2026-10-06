@@ -2,7 +2,8 @@
  * Borrador local del asistente de contratos. Va en localStorage (sobrevive a
  * cerrar la pestaña: la página promete "queda guardado en este navegador").
  * Funciones puras: la clave, (de)serializar, qué hacer con un borrador de la
- * clave vieja y la marca para reponerlo solo al recargar después de un deploy.
+ * clave vieja, el lugar aparte para uno de antes que nadie eligió y la marca
+ * para reponerlo solo al recargar después de un deploy.
  * La parte con React vive en contract-wizard.tsx.
  *
  * Por qué existe: hasta el 06/10/2026 la clave era una sola para todo el
@@ -14,7 +15,8 @@
  */
 
 import { draftStorageKey } from "../people/form-draft";
-import type { WizardState } from "./wizard-state";
+import { WIZARD_STEPS, type WizardState } from "./wizard-state";
+import type { KeptForReload } from "./wizard-step-props";
 
 const WIZARD_DRAFT_VERSION = 1;
 
@@ -130,6 +132,62 @@ export function planWizardDraft(
       : { ...keepOwn, removeLegacy: true };
   }
   return { ...keepOwn, removeLegacy: now.getTime() - savedTime(legacy.savedAt) > LEGACY_DRAFT_MAX_AGE_DAYS * DAY_MS };
+}
+
+/**
+ * Un borrador de antes que nadie recuperó ni descartó, mientras se carga otra cosa. Lo nuevo se
+ * guarda en la clave principal como siempre (la página promete que lo cargado queda guardado) y lo
+ * de antes pasa a esta clave: se sigue pudiendo recuperar o descartar, y si la pestaña se cierra o
+ * se recarga no se pierde ninguno de los dos.
+ *
+ * Se guarda uno solo aparte: si al volver se ignora otra vez el aviso (que ofrece lo último que se
+ * estaba cargando), ese pasa aparte en lugar del anterior, que ya había tenido su aviso.
+ */
+export function wizardAsideKey(storageKey: string): string {
+  return `${storageKey}.anterior`;
+}
+
+/**
+ * El borrador propio al abrir: el de la clave principal o, si no hay, el que había quedado aparte
+ * (p. ej. se descartó el último y quedó el de antes). Ese vuelve a la principal (`promoteAside`):
+ * mientras esta pantalla no escribió nada, lo que se ofrece está siempre ahí.
+ */
+export function ownWizardDraft(mainRaw: string | null, asideRaw: string | null): { raw: string | null; promoteAside: boolean } {
+  if (mainRaw !== null) return { raw: mainRaw, promoteAside: false };
+  return { raw: asideRaw, promoteAside: asideRaw !== null };
+}
+
+/**
+ * Qué queda guardado después de guardar el contrato. Lo de esta pantalla ya está en el sistema.
+ * - `untouchedOffer`: el borrador de antes, sin elegir y todavía en la clave principal (esta
+ *   pantalla no llegó a escribir). `asideRaw`: lo que había aparte.
+ * - En un alta se conservan: pueden ser de OTRO contrato que se dejó por la mitad, y se vuelven a
+ *   ofrecer la próxima vez que se abra "Nuevo contrato".
+ * - Al editar se tiran: lo recién guardado es más nuevo y «Recuperar» lo desharía sin que se note.
+ */
+export function wizardDraftAfterSave(
+  creating: boolean,
+  untouchedOffer: string | null,
+  asideRaw: string | null,
+): { main: string | null; aside: string | null } {
+  if (!creating) return { main: null, aside: null };
+  // El mismo dos veces (lo puso aparte un guardado que corrió mientras se guardaba el contrato): uno solo.
+  if (untouchedOffer !== null) return { main: untouchedOffer, aside: asideRaw === untouchedOffer ? null : asideRaw };
+  return { main: asideRaw, aside: null };
+}
+
+/**
+ * Qué decir al pedir que recarguen cuando falla guardar una persona nueva desde el asistente
+ * («Inquilino nuevo» / «Garante nuevo»). El asistente vuelve solo al paso donde estaba, pero el
+ * diálogo no se abre solo: hay que volver a tocar el botón, y ahí aparece lo que se había cargado.
+ * null: no se promete nada (no se pudo guardar lo del contrato).
+ */
+export function personDialogReloadNote(kept: KeptForReload, formKept: boolean, buttonLabel: string): string | null {
+  if (kept === "recuperar") return "Después, tocá «Recuperar» arriba de los pasos.";
+  if (kept !== "solo") return null;
+  if (!formKept) return "Lo del contrato vuelve a aparecer.";
+  const step = WIZARD_STEPS.find((s) => s.key === "partes")?.label ?? "Inquilino y garantes";
+  return `Al volver, en «${step}» tocá de nuevo «${buttonLabel}»: lo que cargaste vuelve a aparecer.`;
 }
 
 /**

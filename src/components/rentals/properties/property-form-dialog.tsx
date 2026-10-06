@@ -32,14 +32,35 @@ export interface PropertyFormDialogProps {
  * (en un guardado que después falló) queda en Propietarios: decir "se pierde
  * lo que escribiste" era falso, y así quedaron el 05/10 dos dueños sin propiedad.
  */
-function discardDescription(isEdit: boolean, created: string[]): string {
+function discardDescription(isEdit: boolean, created: string[], savedCode: string | null): string {
   const kept = created.length
     ? ` ${joinNamesEs(created)} ya ${created.length === 1 ? "quedó cargado en Propietarios y no se borra" : "quedaron cargados en Propietarios y no se borran"}.`
     : "";
   if (isEdit) return `Lo que cambiaste en esta propiedad todavía no se guardó.${kept}`;
+  // El alta ya había quedado guardada (se perdió la respuesta): lo que se pierde es lo cambiado después.
+  if (savedCode) return `La propiedad ya quedó guardada como ${savedCode}, pero sin lo que cambiaste después: si cerrás, eso se pierde.`;
   return created.length
     ? `La propiedad no se guardó: si la descartás, se pierde lo que escribiste de ella.${kept}`
     : "Todavía no se guardó: si la descartás, se pierde lo que escribiste.";
+}
+
+/**
+ * ¿El toque cayó sobre un aviso flotante (sonner)? Con el diálogo abierto, el
+ * aviso no recibe el toque (el diálogo modal apaga los clics del resto de la
+ * página) y Radix lo tomaba como "tocar afuera": se abría "¿Descartar…?" en
+ * vez de, por ejemplo, recargar. Se mira por posición porque el toque le
+ * llega al fondo, no al aviso.
+ */
+function landedOnToast(e: Event): boolean {
+  const original = (e as CustomEvent<{ originalEvent?: PointerEvent }>).detail?.originalEvent;
+  const target = original?.target;
+  if (target instanceof Element && target.closest("[data-sonner-toaster]")) return true;
+  if (!original || typeof original.clientX !== "number") return false;
+  const { clientX: x, clientY: y } = original;
+  return Array.from(document.querySelectorAll("[data-sonner-toast]")).some((el) => {
+    const r = el.getBoundingClientRect();
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+  });
 }
 
 /**
@@ -55,7 +76,12 @@ export function PropertyFormDialog({ property, owners, children, onSaved, open: 
   const isEdit = Boolean(property);
   const Icon = isEdit ? PencilLine : Building;
   const draftKey = useDraftKey(isEdit ? null : "propiedad");
-  const [status, setStatus] = useState<{ dirty: boolean; busy: boolean; created: string[] }>({ dirty: false, busy: false, created: [] });
+  const [status, setStatus] = useState<{ dirty: boolean; busy: boolean; created: string[]; savedCode: string | null }>({
+    dirty: false,
+    busy: false,
+    created: [],
+    savedCode: null,
+  });
   const [askDiscard, setAskDiscard] = useState(false);
 
   const setOpen = (v: boolean) => {
@@ -64,7 +90,7 @@ export function PropertyFormDialog({ property, owners, children, onSaved, open: 
   };
   function close() {
     setAskDiscard(false);
-    setStatus({ dirty: false, busy: false, created: [] });
+    setStatus({ dirty: false, busy: false, created: [], savedCode: null });
     setOpen(false);
   }
   // Todas las salidas pasan por acá: con algo tipeado se pregunta; mientras guarda, no se cierra.
@@ -78,7 +104,12 @@ export function PropertyFormDialog({ property, owners, children, onSaved, open: 
     <>
       <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : requestClose())}>
         {children && <DialogTrigger asChild>{children}</DialogTrigger>}
-        <FormDialogContent className="sm:max-w-3xl">
+        <FormDialogContent
+          className="sm:max-w-3xl"
+          onPointerDownOutside={(e) => {
+            if (landedOnToast(e)) e.preventDefault();
+          }}
+        >
           <FormDialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <span className="size-8 rounded-lg bg-teal-500/15 text-teal-700 dark:text-teal-300 flex items-center justify-center shrink-0">
@@ -97,8 +128,12 @@ export function PropertyFormDialog({ property, owners, children, onSaved, open: 
               property={property}
               owners={owners}
               draftKey={draftKey}
-              onStatusChange={(dirty, busy, created) =>
-                setStatus((s) => (s.dirty === dirty && s.busy === busy && s.created.join("\n") === created.join("\n") ? s : { dirty, busy, created }))
+              onStatusChange={(dirty, busy, created, savedCode) =>
+                setStatus((s) =>
+                  s.dirty === dirty && s.busy === busy && s.savedCode === savedCode && s.created.join("\n") === created.join("\n")
+                    ? s
+                    : { dirty, busy, created, savedCode },
+                )
               }
               onCancel={requestClose}
               onDone={(saved, savedOwners) => {
@@ -114,7 +149,7 @@ export function PropertyFormDialog({ property, owners, children, onSaved, open: 
       <DiscardChangesDialog
         open={askDiscard}
         title={isEdit ? "¿Descartar los cambios?" : "¿Descartar la propiedad que estabas cargando?"}
-        description={discardDescription(isEdit, status.created)}
+        description={discardDescription(isEdit, status.created, status.savedCode)}
         keepLabel={isEdit ? "Seguir editando" : "Seguir cargando"}
         onKeep={() => setAskDiscard(false)}
         onDiscard={() => {

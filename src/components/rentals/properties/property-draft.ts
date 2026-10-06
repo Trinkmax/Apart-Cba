@@ -4,6 +4,7 @@ import { isUuid, newClientId } from "@/lib/rentals/property-input";
 import { mergeDraft, oneOf } from "@/components/rentals/people/form-draft";
 import { newKey, type NewOwnerDraft, type OwnerRowState } from "./owner-rows";
 import type { PropertyFormState, ServiceRowState } from "./property-form";
+import type { CreatedOwnerRef } from "./property-types";
 
 /**
  * Del borrador guardado (sessionStorage) al estado del formulario de alta de
@@ -52,6 +53,17 @@ export function serviceRowsFromDraft(v: unknown): ServiceRowState[] | undefined 
     }));
 }
 
+/** Los propietarios que el formulario ya había creado: sólo ids válidos, sin repetir. */
+export function createdOwnersFromDraft(v: unknown): CreatedOwnerRef[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: CreatedOwnerRef[] = [];
+  for (const o of v) {
+    if (!isRecord(o) || !isUuid(o.id) || typeof o.full_name !== "string" || !o.full_name.trim()) continue;
+    if (!out.some((x) => x.id === o.id)) out.push({ id: o.id, full_name: o.full_name.trim() });
+  }
+  return out.slice(0, 20);
+}
+
 export function propertyStateFromDraft(blank: PropertyFormState, stored: Record<string, unknown>): PropertyFormState {
   return mergeDraft(blank, stored, {
     // El id de la propiedad también: si ya se había guardado, el reintento devuelve esa en vez de otra igual.
@@ -61,6 +73,7 @@ export function propertyStateFromDraft(blank: PropertyFormState, stored: Record<
     listing_currency: oneOf(["ARS", "USD"] as const),
     owners: ownerRowsFromDraft,
     services: serviceRowsFromDraft,
+    created_owners: createdOwnersFromDraft,
   });
 }
 

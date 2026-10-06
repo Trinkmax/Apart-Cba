@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { sameFormValues } from "@/components/rentals/people/form-draft";
 import { blankOwnerDraft, findOwnerByName, ownershipRowsOf, withProvisionalIds, type OwnerRowState } from "../owner-rows";
-import { dropUnknownOwners, ownerRowsFromDraft, propertyStateFromDraft, serviceRowsFromDraft } from "../property-draft";
+import { createdOwnersFromDraft, dropUnknownOwners, ownerRowsFromDraft, propertyStateFromDraft, serviceRowsFromDraft } from "../property-draft";
 import type { PropertyFormState } from "../property-form";
 import type { OwnerOption } from "../property-types";
 
@@ -43,6 +43,7 @@ function blank(): PropertyFormState {
     mandate_signed_at: "",
     notes: "",
     owners: [row({ key: "k0" })],
+    created_owners: [],
   };
 }
 
@@ -156,6 +157,16 @@ describe("borrador de la propiedad", () => {
     expect(rows?.map((r) => r.is_primary)).toEqual([true, false]);
     expect(ownerRowsFromDraft("x")).toBeUndefined();
     expect(serviceRowsFromDraft(null)).toBeUndefined();
+  });
+
+  it("recuerda a los propietarios que ya se crearon (siguen en Propietarios aunque se recargue)", () => {
+    const id = "0b9a8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d";
+    const stored = { ...blank(), street: "Colón", created_owners: [{ id, full_name: " Ana López " }, { id, full_name: "Ana López" }, { id: "x", full_name: "Roto" }, "basura"] };
+    const restored = propertyStateFromDraft(blank(), stored as unknown as Record<string, unknown>);
+    expect(restored.created_owners).toEqual([{ id, full_name: "Ana López" }]);
+    // Con propietarios ya creados, el borrador "tiene algo" aunque lo demás esté vacío: hay que avisar.
+    expect(sameFormValues({ ...blank(), created_owners: [{ id, full_name: "Ana López" }] }, blank())).toBe(false);
+    expect(createdOwnersFromDraft(null)).toBeUndefined();
   });
 
   it("suelta a un propietario que ya no está en la lista", () => {

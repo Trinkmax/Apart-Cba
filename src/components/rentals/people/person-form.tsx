@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createPerson, updatePerson } from "@/lib/actions/rentals-people";
-import { toastActionFailure } from "@/lib/action-failure";
+import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { parseAmountInput } from "@/lib/format";
 import { formatMoneyEditable } from "@/components/bookings/money-input";
 import { toWhatsappDigits } from "@/lib/marketplace/staff-helpers";
@@ -93,9 +93,15 @@ export interface PersonFormProps {
   draftKey?: string | null;
   /** Avisa si hay algo sin guardar y si se está guardando: el diálogo pregunta antes de cerrar. */
   onStatusChange?: (dirty: boolean, busy: boolean) => void;
+  /**
+   * Adentro de otra pantalla con cosas cargadas (el asistente de contratos): si hay que recargar
+   * por un deploy nuevo, esa pantalla guarda lo suyo y devuelve qué decir de lo que vuelve al
+   * recargar (null: no prometer nada). `formKept`: este formulario queda en su borrador.
+   */
+  onStaleDeploy?: (formKept: boolean) => string | null;
 }
 
-export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUseExisting, draftKey = null, onStatusChange }: PersonFormProps) {
+export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUseExisting, draftKey = null, onStatusChange, onStaleDeploy }: PersonFormProps) {
   const [init] = useState(() => {
     const blank = initialState(person, defaultName);
     const stored = person ? null : readDraft(draftKey);
@@ -176,8 +182,11 @@ export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUs
       try {
         res = person ? await updatePerson(person.id, input) : await createPerson(input);
       } catch (error) {
-        // No llegó respuesta (conexión o deploy nuevo). Un alta queda en el borrador de la pestaña; una edición, no.
-        toastActionFailure(error, "No se pudo guardar", { afterReload: !person && draftKey ? "Lo que cargaste vuelve a aparecer." : undefined });
+        // No llegó respuesta (conexión o deploy nuevo). Un alta queda en el borrador de la pestaña; una
+        // edición, no. Adentro de otra pantalla, esa pantalla guarda lo suyo y dice qué vuelve al recargar.
+        const formKept = !person && Boolean(draftKey);
+        const afterReload = onStaleDeploy && isStaleDeployError(error) ? onStaleDeploy(formKept) : formKept ? "Lo que cargaste vuelve a aparecer." : null;
+        toastActionFailure(error, "No se pudo guardar", { afterReload: afterReload ?? undefined });
         return;
       }
       if (!res.ok) {

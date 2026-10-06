@@ -4,6 +4,7 @@ import type {
   RentalServiceKind,
 } from "@/lib/types/database";
 import type { StatusMeta } from "@/lib/rentals/labels";
+import type { PropertyInput } from "./property-types";
 import { contractMonthsElapsed, diffDays } from "@/lib/rentals/ymd";
 
 /**
@@ -97,6 +98,55 @@ export function findCodeClash(
   const taken = codes.filter((c) => c.id !== selfId);
   const hit = taken.find((c) => c.code.toUpperCase() === typed);
   return hit ? { code: typed, label: hit.label, fix: firstFreeCode(typed, taken.map((c) => c.code)) } : null;
+}
+
+/** Lo guardado, tal como lo devuelve el servidor (los numéricos pueden venir como texto). */
+export interface SavedPropertySnapshot {
+  property: RentalProperty;
+  owners: readonly { owner_id: string; ownership_pct: number | string; is_primary: boolean }[];
+}
+
+/** Lo que manda el formulario (textos recortados, vacíos en null), o lo mismo ya validado por el esquema. */
+export type PropertyDiffInput = Omit<PropertyInput, "id">;
+
+/**
+ * Qué difiere entre la propiedad que ya había quedado guardada (se perdió la
+ * respuesta, o se recargó en medio del guardado) y lo que hay ahora en el
+ * formulario, dicho como se ve en pantalla ("la dirección", "los
+ * propietarios"…). Vacío = es lo mismo. Un código vacío no cuenta: al
+ * guardar se conserva el que ya tiene.
+ */
+export function savedPropertyDiffs(saved: SavedPropertySnapshot, now: PropertyDiffInput): string[] {
+  const p = saved.property;
+  const txt = (v: string | null | undefined) => (v ?? "").trim() || null;
+  const num = (v: number | string | null | undefined) => (v == null || v === "" ? null : Number(v));
+  const differs = (keys: readonly (keyof PropertyDiffInput & keyof RentalProperty)[], kind: "text" | "num" | "raw") =>
+    keys.some((k) => {
+      const a = (p as unknown as Record<string, unknown>)[k];
+      const b = (now as unknown as Record<string, unknown>)[k];
+      if (kind === "text") return txt(a as string | null) !== txt(b as string | null);
+      if (kind === "num") return num(a as number | null) !== num(b as number | null);
+      return typeof b === "boolean" ? Boolean(a) !== b : (a ?? null) !== (b ?? null);
+    });
+  const out: string[] = [];
+  if (differs(["street", "street_number", "floor", "apartment", "tower", "neighborhood", "city", "province", "postal_code"], "text")) out.push("la dirección");
+  const code = normalizePropertyCode(now.code);
+  if (code && code !== p.code) out.push("el código");
+  const ownerKey = (o: { owner_id: string; ownership_pct: number | string; is_primary: boolean }) => `${o.owner_id}|${round2(Number(o.ownership_pct))}|${o.is_primary}`;
+  const savedOwners = saved.owners.map(ownerKey).sort().join(",");
+  if (savedOwners !== now.owners.map(ownerKey).sort().join(",")) out.push("los propietarios");
+  if (differs(["property_type", "furnished", "has_garage"], "raw") || differs(["rooms", "bedrooms", "bathrooms", "covered_m2", "total_m2"], "num")) out.push("cómo es");
+  if (differs(["availability"], "raw")) out.push("la disponibilidad");
+  const rent = num(now.listing_rent);
+  const savedRent = num(p.listing_rent);
+  if (rent !== savedRent || (rent != null && (now.listing_currency ?? "ARS") !== (p.listing_currency ?? "ARS"))) out.push("el precio");
+  if (differs(["consortium_name", "consortium_phone", "consortium_email", "functional_unit", "cadastral_id"], "text")) out.push("el consorcio");
+  const service = (s: PropertyDiffInput["services"][number]) => [s.kind, txt(s.provider), txt(s.account_number), txt(s.holder), txt(s.notes)].join("|");
+  const savedServices = (Array.isArray(p.services) ? p.services : []).map(service).join("\n");
+  if (savedServices !== now.services.map(service).join("\n")) out.push("los servicios");
+  if (txt(p.mandate_signed_at) !== txt(now.mandate_signed_at)) out.push("el mandato");
+  if (txt(p.notes) !== txt(now.notes)) out.push("las notas");
+  return out;
 }
 
 // ─── Titulares ───────────────────────────────────────────────────────────────

@@ -1,16 +1,25 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Plus, Scale, Star, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { useState } from "react";
+import { AlertTriangle, CheckCircle2, Plus, RotateCw, Scale, Star, Trash2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { parsePercentInput } from "@/lib/format";
 import { joinNamesEs } from "@/lib/rentals/renewal";
 import { formatPctEs, round2 } from "./property-helpers";
-import type { OwnerOption } from "./property-types";
-import { blankOwnerDraft, draftHasData, evenRows, findOwnerByName, newKey, undoOwnerDiscard, type OwnerRowState } from "./owner-rows";
+import type { CreatedOwnerRef, OwnerOption } from "./property-types";
+import {
+  blankOwnerDraft,
+  draftHasData,
+  evenRows,
+  findOwnerByName,
+  newKey,
+  sameOwnerRows,
+  undoOwnerDiscard,
+  type OwnerDiscardSnapshot,
+  type OwnerRowState,
+} from "./owner-rows";
 import { OwnerPicker } from "./owner-picker";
 import { QuickOwnerPanel, type QuickOwnerError } from "./quick-owner-panel";
 
@@ -27,19 +36,25 @@ export function OwnersEditor({
   rows,
   onChange,
   options,
+  archived,
   error,
   loadError,
+  loadAction,
   draftError,
-  createdNames,
+  sessionCreated,
 }: {
   rows: OwnerRowState[];
   onChange: (rows: OwnerRowState[]) => void;
   options: OwnerOption[] | null;
+  /** Archivados: no se eligen, pero tampoco se puede crear otro con el mismo nombre. */
+  archived: OwnerOption[] | null;
   error: string | null;
   loadError: string | null;
+  /** Qué hacer si no se pudo cargar la lista: reintentar, o recargar si hubo un deploy. */
+  loadAction?: { label: string; onClick: () => void } | null;
   draftError: QuickOwnerError | null;
-  /** Propietarios que se crearon en un guardado que después falló: ya existen y quedaron elegidos. */
-  createdNames: string[];
+  /** Propietarios que este formulario ya creó (en un guardado que después falló): existen aunque la propiedad no. */
+  sessionCreated: CreatedOwnerRef[];
 }) {
   // Sólo el panel que se abre con un toque toma el foco (no uno que vuelve con un borrador).
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -47,27 +62,36 @@ export function OwnersEditor({
   const sum = round2(rows.reduce((s, r) => s + (parsePercentInput(r.pct) ?? 0), 0));
   const sumOk = Math.abs(sum - 100) < 0.005;
 
-  // Las filas de ahora (no las de cuando se tiró el propietario): "Deshacer" se toca después.
-  const latestRows = useRef(rows);
-  useEffect(() => {
-    latestRows.current = rows;
-  }, [rows]);
+  /**
+   * Lo último que se sacó de una fila, para "Deshacer": un propietario nuevo a
+   * medio cargar ("No crear", elegir otro en el buscador, quitar la fila) o uno
+   * que este formulario ya creó. Va acá adentro y no en un aviso flotante: con
+   * el diálogo abierto, el aviso flotante no se puede tocar (en el celu, el
+   * toque caía en «Guardar propiedad», que está debajo). Se ve mientras las
+   * filas sigan como quedaron; con el próximo cambio, deja de corresponder.
+   */
+  const [undo, setUndo] = useState<{ snap: OwnerDiscardSnapshot; message: string; warn: boolean } | null>(null);
+  const undoVisible = undo !== null && sameOwnerRows(rows, undo.snap.after);
 
   const update = (key: string, patch: Partial<OwnerRowState>) => onChange(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
-  /**
-   * Un propietario nuevo a medio cargar nunca se tira en silencio ("No crear",
-   * elegir otro en el buscador o quitar la fila): queda "Deshacer" unos segundos.
-   */
-  function commitDiscard(next: OwnerRowState[], row: OwnerRowState) {
+  /** Cambia una fila (o la saca) sin que nada se pierda en silencio. */
+  function commitRows(next: OwnerRowState[], row: OwnerRowState) {
     onChange(next);
-    if (row.owner_id || !draftHasData(row.draft)) return;
+    const after = next.find((r) => r.key === row.key);
     const snap = { before: rows, after: next, key: row.key };
-    const name = row.draft?.full_name.trim();
-    toast(name ? `No se va a crear «${name}»` : "No se va a crear el propietario nuevo", {
-      duration: 8000,
-      action: { label: "Deshacer", onClick: () => onChange(undoOwnerDiscard(latestRows.current, snap)) },
-    });
+    // Ya existe (lo creó un guardado que después falló): sacarlo de acá no lo borra de Propietarios.
+    const created = row.owner_id && !next.some((r) => r.owner_id === row.owner_id) ? sessionCreated.find((o) => o.id === row.owner_id) : undefined;
+    if (created) {
+      setUndo({ snap, warn: true, message: `${created.full_name} ya quedó cargado en Propietarios: si no va, eliminalo desde ahí.` });
+      return;
+    }
+    if (!row.owner_id && draftHasData(row.draft) && !after?.draft) {
+      const name = row.draft?.full_name.trim();
+      setUndo({ snap, warn: false, message: name ? `No se va a crear «${name}».` : "No se va a crear el propietario nuevo." });
+      return;
+    }
+    setUndo(null);
   }
 
   function addRow() {
@@ -82,24 +106,36 @@ export function OwnersEditor({
     if (!next.length) next = [{ key: newKey(), owner_id: "", pct: "100", is_primary: true, draft: null }];
     if (!next.some((r) => r.is_primary)) next = next.map((r, i) => ({ ...r, is_primary: i === 0 }));
     if (next.length === 1) next = [{ ...next[0], pct: "100", is_primary: true }];
-    commitDiscard(next, row);
+    commitRows(next, row);
   }
 
   function startNew(row: OwnerRowState, name: string) {
     const draft = row.draft ? { ...row.draft, full_name: name.trim() || row.draft.full_name } : blankOwnerDraft(name);
-    update(row.key, { owner_id: "", draft });
+    commitRows(rows.map((x) => (x.key === row.key ? { ...x, owner_id: "", draft } : x)), row);
     setFocusKey(row.key);
   }
 
   const selectedIds = rows.map((r) => r.owner_id).filter(Boolean);
+  // "Listo: X quedó creado…", mientras siga elegido en una fila (si se sacó, lo dice el aviso de arriba).
+  const createdNames = sessionCreated.filter((o) => rows.some((r) => r.owner_id === o.id)).map((o) => o.full_name);
 
   return (
     <div className="space-y-3" id="property-owners" tabIndex={-1}>
-      {loadError && <p className="text-xs text-rose-600 dark:text-rose-400">{loadError}</p>}
+      {loadError && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-rose-600 dark:text-rose-400" role="alert">
+          <span className="min-w-0 flex-1">{loadError}</span>
+          {loadAction && (
+            <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={loadAction.onClick}>
+              <RotateCw size={13} /> {loadAction.label}
+            </Button>
+          )}
+        </div>
+      )}
       <ul className="space-y-2">
         {rows.map((r, i) => {
           // Sin contar al que esta misma fila ya creó (si la respuesta se perdió, no es un homónimo).
           const sameName = r.draft ? findOwnerByName(options, r.draft.full_name, r.draft.id) : null;
+          const sameArchived = r.draft && !sameName ? findOwnerByName(archived, r.draft.full_name, r.draft.id) : null;
           return (
             <li key={r.key} className={cn("grid gap-2 items-center", single ? "grid-cols-1" : "grid-cols-[1fr_auto] sm:grid-cols-[1fr_7.5rem_auto_auto]")}>
               <div className={cn("min-w-0", !single && "col-span-2 sm:col-span-1")}>
@@ -108,8 +144,9 @@ export function OwnersEditor({
                   value={r.owner_id}
                   pendingName={r.draft ? r.draft.full_name : null}
                   options={options}
+                  archived={archived}
                   excludeIds={selectedIds.filter((id) => id !== r.owner_id)}
-                  onChange={(ownerId) => commitDiscard(rows.map((x) => (x.key === r.key ? { ...x, owner_id: ownerId, draft: null } : x)), r)}
+                  onChange={(ownerId) => commitRows(rows.map((x) => (x.key === r.key ? { ...x, owner_id: ownerId, draft: null } : x)), r)}
                   onCreate={(name) => startNew(r, name)}
                   invalid={Boolean(error) && !r.owner_id && !r.draft}
                 />
@@ -151,11 +188,12 @@ export function OwnersEditor({
                     rowKey={r.key}
                     draft={r.draft}
                     onChange={(draft) => update(r.key, { draft })}
-                    onDiscard={() => commitDiscard(rows.map((x) => (x.key === r.key ? { ...x, draft: null } : x)), r)}
+                    onDiscard={() => commitRows(rows.map((x) => (x.key === r.key ? { ...x, draft: null } : x)), r)}
                     error={draftError?.rowKey === r.key ? draftError : null}
                     sameName={sameName}
                     sameNameInOtherRow={Boolean(sameName && selectedIds.includes(sameName.id))}
-                    onUseExisting={(o) => update(r.key, { owner_id: o.id, draft: null })}
+                    sameArchived={sameArchived}
+                    onUseExisting={(o) => commitRows(rows.map((x) => (x.key === r.key ? { ...x, owner_id: o.id, draft: null } : x)), r)}
                     autoFocus={focusKey === r.key}
                   />
                 </div>
@@ -164,6 +202,31 @@ export function OwnersEditor({
           );
         })}
       </ul>
+
+      {undoVisible && undo && (
+        <div
+          className={cn(
+            "flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border px-3 py-2 text-xs",
+            undo.warn ? "border-amber-500/40 bg-amber-50 text-amber-900 dark:bg-amber-950/30 dark:text-amber-200" : "bg-muted/50 text-foreground",
+          )}
+          role="status"
+        >
+          {undo.warn && <AlertTriangle size={14} className="shrink-0 text-amber-700 dark:text-amber-300" />}
+          <span className="min-w-0 flex-1">{undo.message}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={() => {
+              onChange(undoOwnerDiscard(rows, undo.snap));
+              setUndo(null);
+            }}
+          >
+            <Undo2 size={13} /> Deshacer
+          </Button>
+        </div>
+      )}
 
       {createdNames.length > 0 && (
         <p className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.07] px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300" role="status">

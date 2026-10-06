@@ -1,5 +1,5 @@
 import { parsePercentInput } from "@/lib/format";
-import { newClientId } from "@/lib/rentals/property-input";
+import { newClientId, OTHER_PERSON_HINT } from "@/lib/rentals/property-input";
 import { foldText } from "@/components/rentals/people/person-helpers";
 import { splitEvenly } from "./property-helpers";
 import type { OwnerOption, PropertyOwnerInput } from "./property-types";
@@ -136,12 +136,17 @@ export interface OwnerDiscardSnapshot {
 const sameRow = (a: OwnerRowState, b: OwnerRowState) =>
   a.key === b.key && a.owner_id === b.owner_id && a.pct === b.pct && a.is_primary === b.is_primary && JSON.stringify(a.draft ?? null) === JSON.stringify(b.draft ?? null);
 
+/** ¿Las mismas filas, con los mismos datos? */
+export function sameOwnerRows(a: OwnerRowState[], b: OwnerRowState[]): boolean {
+  return a === b || (a.length === b.length && a.every((r, i) => sameRow(r, b[i])));
+}
+
 /**
  * "Deshacer": si nada cambió desde que se tiró, vuelve todo como estaba; si
  * entretanto se tocó otra cosa, sólo devuelve esa fila (en su lugar).
  */
 export function undoOwnerDiscard(current: OwnerRowState[], snap: OwnerDiscardSnapshot): OwnerRowState[] {
-  if (current.length === snap.after.length && current.every((r, i) => sameRow(r, snap.after[i]))) return snap.before;
+  if (sameOwnerRows(current, snap.after)) return snap.before;
   const index = snap.before.findIndex((r) => r.key === snap.key);
   const row = snap.before[index];
   if (!row) return current;
@@ -152,4 +157,47 @@ export function undoOwnerDiscard(current: OwnerRowState[], snap: OwnerDiscardSna
   if (row.is_primary) next = next.map((r) => ({ ...r, is_primary: r.key === row.key }));
   else if (!next.some((r) => r.is_primary)) next = next.map((r, i) => ({ ...r, is_primary: i === 0 }));
   return next;
+}
+
+/** El que tiene ese nombre está archivado: no aparece en la lista y no se puede crear otro igual. */
+export function archivedOwnerMessage(o: Pick<OwnerOption, "full_name">): string {
+  return `Ya hay un «${o.full_name}» archivado en Propietarios (por eso no aparece en la lista). ${OTHER_PERSON_HINT}`;
+}
+
+export interface OwnerNameProblem {
+  rowKey: string;
+  message: string;
+  /** El que ya está (para ofrecer «Usar ese propietario»); null si está archivado. */
+  existing: OwnerOption | null;
+}
+
+/**
+ * Un propietario nuevo con el nombre de uno que ya está (en la lista o
+ * archivado): el servidor lo rechazaría. Se mira para TODOS los nuevos antes
+ * de crear al primero; si no, el segundo fallaba con el primero ya creado
+ * (lo del 05/10: propietarios cargados y ninguna propiedad).
+ */
+export function newOwnerNameProblem(
+  rows: OwnershipRow[],
+  active: OwnerOption[] | null | undefined,
+  archived: OwnerOption[] | null | undefined,
+): OwnerNameProblem | null {
+  const chosen = new Set(rows.map((r) => r.owner_id).filter(Boolean));
+  for (const r of rows) {
+    if (!r.draft) continue;
+    // Sin contar al que esta misma fila ya creó (si la respuesta se perdió, no es un homónimo).
+    const existing = findOwnerByName(active, r.draft.full_name, r.draft.id);
+    if (existing) {
+      return {
+        rowKey: r.key,
+        existing,
+        message: chosen.has(existing.id)
+          ? `${existing.full_name} ya está en otra fila de esta propiedad: si es la misma persona, quitá esta fila. ${OTHER_PERSON_HINT}`
+          : `${existing.full_name} ya está en Propietarios: si es la misma persona, tocá «Usar ese propietario». ${OTHER_PERSON_HINT}`,
+      };
+    }
+    const gone = findOwnerByName(archived, r.draft.full_name, r.draft.id);
+    if (gone) return { rowKey: r.key, existing: null, message: archivedOwnerMessage(gone) };
+  }
+  return null;
 }

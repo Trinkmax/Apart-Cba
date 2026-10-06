@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   adoptCreatedOwners,
+  archivedOwnerMessage,
   blankOwnerDraft,
   draftHasData,
   findOwnerByName,
+  newOwnerNameProblem,
   ownerDetails,
+  sameOwnerRows,
   undoOwnerDiscard,
+  type OwnershipRow,
   type OwnerRowState,
 } from "../owner-rows";
 import type { OwnerOption } from "../property-types";
@@ -99,5 +103,44 @@ describe("undoOwnerDiscard", () => {
     const out = undoOwnerDiscard(current, { before: before2, after, key: "b" });
     expect(out.map((r) => r.key)).toEqual(["a", "b", "c"]);
     expect(out.filter((r) => r.is_primary).map((r) => r.key)).toEqual(["b"]);
+  });
+});
+
+describe("Deshacer en el bloque de propietarios", () => {
+  it("compara filas por lo que tienen, no por referencia", () => {
+    const a = [row("a", { owner_id: "o1", pct: "100", is_primary: true }), row("b", { draft: { ...blankOwnerDraft("Ana"), id: "d1" } })];
+    const b = a.map((r) => ({ ...r, draft: r.draft ? { ...r.draft } : null }));
+    expect(sameOwnerRows(a, b)).toBe(true);
+    expect(sameOwnerRows(a, [a[0]])).toBe(false);
+    expect(sameOwnerRows(a, [a[0], { ...a[1], pct: "40" }])).toBe(false);
+    expect(sameOwnerRows(a, [a[0], { ...a[1], draft: { ...a[1].draft!, cbu: "1" } }])).toBe(false);
+  });
+});
+
+describe("nombre repetido antes de crear a nadie", () => {
+  const ownership = (key: string, patch: Partial<OwnershipRow> = {}): OwnershipRow => ({ key, owner_id: "", ownership_pct: 50, is_primary: false, draft: null, ...patch });
+  const draft = (id: string, full_name: string) => ({ ...blankOwnerDraft(full_name), id });
+
+  it("mira a TODOS los nuevos: el segundo con nombre de un archivado frena antes de crear al primero", () => {
+    const rows = [ownership("a", { draft: draft("d1", "Ana López") }), ownership("b", { draft: draft("d2", "Ulises Rojas") })];
+    const res = newOwnerNameProblem(rows, [owner("o1", "Pedro Gómez")], [owner("x1", "ULISES ROJAS")]);
+    expect(res).toEqual({ rowKey: "b", existing: null, message: archivedOwnerMessage({ full_name: "ULISES ROJAS" }) });
+    expect(res?.message).toContain("archivado");
+    expect(res?.message).toContain("segundo apellido");
+  });
+
+  it("uno de la lista: ofrece usar ese, o quitar la fila si ya está elegido en otra", () => {
+    const juan = owner("o1", "Juan Pérez");
+    const free = newOwnerNameProblem([ownership("a", { draft: draft("d1", "juan perez") })], [juan], []);
+    expect(free).toMatchObject({ rowKey: "a", existing: juan });
+    expect(free?.message).toContain("«Usar ese propietario»");
+    const taken = newOwnerNameProblem([ownership("a", { owner_id: "o1" }), ownership("b", { draft: draft("d1", "Juan Pérez") })], [juan], []);
+    expect(taken?.message).toContain("quitá esta fila");
+  });
+
+  it("no cuenta al que la misma fila ya creó (respuesta perdida), ni sin listas", () => {
+    const rows = [ownership("a", { draft: draft("d1", "Ana López") })];
+    expect(newOwnerNameProblem(rows, [owner("d1", "Ana López")], [])).toBeNull();
+    expect(newOwnerNameProblem(rows, null, null)).toBeNull();
   });
 });
