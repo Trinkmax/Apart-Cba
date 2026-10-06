@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  findCodeClash,
   firstFreeCode,
   normalizePropertyCode,
   propertyDisplayState,
@@ -42,6 +43,23 @@ describe("normalizePropertyCode / firstFreeCode", () => {
   it("busca el primer libre sin distinguir mayúsculas", () => {
     expect(firstFreeCode("DF450", [])).toBe("DF450");
     expect(firstFreeCode("DF450", ["df450", "DF450-2"])).toBe("DF450-3");
+  });
+});
+
+describe("findCodeClash", () => {
+  const codes = [
+    { id: "p1", code: "DEANFUNES450-3B", label: "Dean Funes 450, 3° B" },
+    { id: "p2", code: "DEANFUNES450-3B-2", label: "Dean Funes 450, 3° B (otra)" },
+  ];
+  it("avisa el choque con lo tipeado normalizado y propone uno libre", () => {
+    expect(findCodeClash(codes, null, " deanfunes450-3b ")).toEqual({ code: "DEANFUNES450-3B", label: "Dean Funes 450, 3° B", fix: "DEANFUNES450-3B-3" });
+  });
+  it("vacío o libre no choca", () => {
+    expect(findCodeClash(codes, null, "")).toBeNull();
+    expect(findCodeClash(codes, null, "COLON100")).toBeNull();
+  });
+  it("la propia propiedad no choca consigo misma (edición o alta ya guardada)", () => {
+    expect(findCodeClash(codes, "p1", "DEANFUNES450-3B")).toBeNull();
   });
 });
 

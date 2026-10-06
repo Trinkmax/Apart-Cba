@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, CircleCheck, KeyRound, MessageCircleHeart } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { ApartLogo } from "@/components/marketplace/brand/apart-logo";
 import { BrandDot, Eyebrow } from "@/components/marketplace/brand/brand-shapes";
 import { HeroSearchCard } from "@/components/marketplace/search/hero-search-card";
@@ -20,35 +20,22 @@ const FADE_RISE = `${RISE} motion-safe:fade-in motion-safe:fill-mode-[both]`;
  *   │ titular  ├ encima     │ 3          │ titular      │   arco   │
  *   │ bajada   ┘ de la foto │ 4          │ bajada       │  + foto  │
  *   ├─╭─ buscador ──────╮───┤ 5 (borde)  │ buscador     │          │
- *   │ │                 │   │ 6          │ garantías    │          │
+ *   │ │                 │   │ 6          │ (aire)       │          │
  *   │ ╰─────────────────╯   │            │ (aire)       │          │
  *   │  (N departamentos →)  │ 7          └──────────────┴──────────┘
  *   └───────────────────────┘
  * En celular la foto (la misma, una sola: es el LCP) ocupa las filas 1-5 y el
- * buscador arranca en la 5, así se encima al borde de la foto. Las garantías
- * se esconden < lg: ya las dicen el pie del buscador y "Cómo se reserva".
- * El buscador queda a la vista sin scrollear en un teléfono.
+ * buscador arranca en la 5, así se encima al borde de la foto. El buscador
+ * queda a la vista sin scrollear en un teléfono.
  */
 export function HomeHero({
   responseHours,
-  senaLabel,
   statsLabel,
 }: {
   responseHours: number;
-  /** "1 noche", "30 %"; null = la organización no pide seña. */
-  senaLabel: string | null;
   /** "45 departamentos en 9 barrios"; null si el catálogo no cargó. */
   statsLabel: string | null;
 }) {
-  const guarantees = [
-    { icon: CircleCheck, text: "Pedís sin pagar nada" },
-    { icon: MessageCircleHeart, text: `Te confirmamos en menos de ${responseHours} h` },
-    {
-      icon: KeyRound,
-      text: senaLabel ? `Seña de ${senaLabel}, el resto al llegar` : "Sin seña: pagás al llegar",
-    },
-  ];
-
   return (
     <section aria-labelledby="home-hero-title" className="relative overflow-hidden bg-cream">
       <div
@@ -126,26 +113,14 @@ export function HomeHero({
           <HeroSearchCard responseHours={responseHours} />
         </div>
 
+        {/* Sólo < lg (en escritorio el dato va sobre la foto): pastilla chica bajo el buscador. */}
         <div
           className={cn(
-            "col-span-2 mt-5 lg:col-span-1 lg:col-start-1 lg:row-start-6 lg:mt-7",
-            "max-lg:col-span-1 max-lg:col-start-1 max-lg:row-start-7 max-lg:mt-4 max-lg:flex max-lg:justify-center",
+            "col-span-1 col-start-1 row-start-7 mt-4 flex justify-center lg:hidden",
             FADE_RISE,
             "motion-safe:delay-200",
           )}
         >
-          {/* < lg no van: lo dicen el pie del buscador y "Cómo se reserva". */}
-          <ul className="flex flex-col gap-2.5 max-lg:hidden sm:flex-row sm:flex-wrap sm:gap-x-6 sm:gap-y-2">
-            {guarantees.map((g) => (
-              <li key={g.text} className="flex items-center gap-2.5 text-[0.9375rem] font-semibold text-ink-700">
-                <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-leaf-200 text-forest-700">
-                  <g.icon className="size-[0.95rem]" aria-hidden />
-                </span>
-                {g.text}
-              </li>
-            ))}
-          </ul>
-          {/* Sólo < lg (en escritorio el dato va sobre la foto): pastilla chica bajo el buscador. */}
           {statsLabel ? (
             <Link
               href="/buscar"

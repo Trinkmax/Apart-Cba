@@ -3,24 +3,28 @@ import {
   ArrowRight,
   Banknote,
   CalendarClock,
-  CalendarHeart,
-  CalendarRange,
   CircleCheck,
   Hourglass,
-  KeyRound,
   Link2,
   Mail,
   MapPin,
   MessageCircle,
-  MessageCircleHeart,
   Send,
   ShieldCheck,
   Undo2,
-  WalletCards,
   Zap,
   type LucideIcon,
 } from "lucide-react";
 import { ApartButton } from "@/components/marketplace/brand/apart-button";
+import {
+  IconCancelar,
+  IconConfirma,
+  IconFechas,
+  IconLlegada,
+  IconPorMes,
+  IconSena,
+  type ApartIcon,
+} from "@/components/marketplace/brand/apart-icons";
 import { cancellationCopy } from "@/lib/marketplace/display";
 import { hoursLabel } from "@/lib/marketplace/web-settings";
 import { cn } from "@/lib/utils";
@@ -42,7 +46,8 @@ export function HowToSection({
   className,
 }: {
   id: string;
-  icon: LucideIcon;
+  /** Ícono propio de la marca (el de los pasos de la reserva). */
+  icon: ApartIcon;
   /** Número de paso en serif ("1"); sin número para secciones de consulta. */
   step?: number;
   title: string;
@@ -59,7 +64,7 @@ export function HowToSection({
     >
       <div className="flex items-center gap-3">
         <span className="flex size-12 shrink-0 items-center justify-center rounded-t-full rounded-b-lg bg-leaf-200 text-forest-700">
-          <Icon className="size-5" aria-hidden />
+          <Icon className="size-8" />
         </span>
         {step ? (
           <span aria-hidden className="font-apart-serif text-3xl italic text-coral-500">
@@ -116,7 +121,7 @@ export function PedidoSection() {
   return (
     <HowToSection
       id="pedido"
-      icon={CalendarHeart}
+      icon={IconFechas}
       step={1}
       title="Pedís tus fechas"
       lead="Elegís el departamento, las fechas y cuántos son. No hace falta crear una cuenta ni cargar una tarjeta: todavía no pagás nada."
@@ -159,7 +164,7 @@ export function ConfirmacionSection({ responseHours }: { responseHours: number }
   return (
     <HowToSection
       id="confirmacion"
-      icon={MessageCircleHeart}
+      icon={IconConfirma}
       step={2}
       title="Te confirmamos"
       lead={`Revisamos la disponibilidad y te respondemos en menos de ${hoursLabel(responseHours)}, por WhatsApp y mail.`}
@@ -197,7 +202,7 @@ export function PagosSection({ facts }: { facts: ProcessFacts }) {
     return (
       <HowToSection
         id="pagos"
-        icon={WalletCards}
+        icon={IconSena}
         step={3}
         title="Pagás al llegar"
         lead="No pedimos seña: una vez confirmada tu reserva, pagás la estadía el día que llegás, en efectivo o por transferencia."
@@ -211,7 +216,7 @@ export function PagosSection({ facts }: { facts: ProcessFacts }) {
   return (
     <HowToSection
       id="pagos"
-      icon={WalletCards}
+      icon={IconSena}
       step={3}
       title="La seña y el resto"
       lead={`Cuando te confirmamos, señás ${facts.senaDetail} para asegurar tus fechas. El resto lo pagás al llegar.`}
@@ -265,7 +270,7 @@ export function PorMesSection({
   return (
     <HowToSection
       id="por-mes"
-      icon={CalendarRange}
+      icon={IconPorMes}
       title="Estadías por mes"
       lead="Para 28 noches o más, la reserva no se pide por la web: se consulta. Escribinos con las fechas y cuántos son, y te pasamos el precio por mes y las condiciones."
     >
@@ -306,7 +311,7 @@ export function LlegadaSection() {
   return (
     <HowToSection
       id="llegada"
-      icon={KeyRound}
+      icon={IconLlegada}
       step={4}
       title="La llegada"
       lead="Llegar debe sentirse simple. Por eso lo coordinamos antes, con tiempo."
@@ -362,7 +367,7 @@ export function CancelacionesSection({ customText }: { customText: string | null
   return (
     <HowToSection
       id="cancelaciones"
-      icon={Undo2}
+      icon={IconCancelar}
       title="Cancelaciones"
       lead="Mientras tu pedido está pendiente, podés cancelarlo sin costo desde el link de tu reserva. Una vez confirmada, rige la política de cancelación."
     >

@@ -81,6 +81,24 @@ export function firstFreeCode(base: string, taken: Iterable<string>): string {
   return base;
 }
 
+/**
+ * Código tipeado que ya es de otra propiedad (la misma regla con la que el
+ * servidor lo rechaza), con un código libre para proponer. `selfId`: la
+ * propiedad que se edita, o el id con el que se va a crear el alta (si ya
+ * se guardó y la respuesta se perdió, su código no choca consigo mismo).
+ */
+export function findCodeClash(
+  codes: readonly { id: string; code: string; label: string }[],
+  selfId: string | null,
+  raw: string,
+): { code: string; label: string; fix: string } | null {
+  const typed = normalizePropertyCode(raw);
+  if (!typed) return null;
+  const taken = codes.filter((c) => c.id !== selfId);
+  const hit = taken.find((c) => c.code.toUpperCase() === typed);
+  return hit ? { code: typed, label: hit.label, fix: firstFreeCode(typed, taken.map((c) => c.code)) } : null;
+}
+
 // ─── Titulares ───────────────────────────────────────────────────────────────
 
 export interface OwnershipRow {

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { SERVICE_KIND_META } from "@/lib/rentals/labels";
+import { PROPERTY_TEXT_MAX } from "@/lib/rentals/property-input";
 import type { RentalServiceKind } from "@/lib/types/database";
 import { SERVICE_PROVIDER_HINT } from "./property-helpers";
 import { newKey } from "./owner-rows";
@@ -60,6 +61,7 @@ export function ServicesEditor({ rows, onChange }: { rows: ServiceRowState[]; on
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <Input
                 value={r.provider ?? ""}
+                maxLength={PROPERTY_TEXT_MAX.service_provider}
                 onChange={(e) => update(r.key, { provider: e.target.value })}
                 placeholder={r.kind === "expensas" ? "Administración" : "Empresa"}
                 aria-label="Empresa"
@@ -68,6 +70,7 @@ export function ServicesEditor({ rows, onChange }: { rows: ServiceRowState[]; on
               <Input
                 data-service-account
                 value={r.account_number ?? ""}
+                maxLength={PROPERTY_TEXT_MAX.service_account_number}
                 onChange={(e) => update(r.key, { account_number: e.target.value })}
                 placeholder={r.kind === "inmobiliario" || r.kind === "municipal" ? "N° de cuenta / cuenta de Rentas" : "N° de cuenta o cliente"}
                 aria-label="Número de cuenta"
@@ -75,6 +78,7 @@ export function ServicesEditor({ rows, onChange }: { rows: ServiceRowState[]; on
               />
               <Input
                 value={r.holder ?? ""}
+                maxLength={PROPERTY_TEXT_MAX.service_holder}
                 onChange={(e) => update(r.key, { holder: e.target.value })}
                 placeholder="Titular de la factura"
                 aria-label="Titular"

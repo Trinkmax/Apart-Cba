@@ -1,14 +1,16 @@
 import Link from "next/link";
-import { ArrowRight, Briefcase, GraduationCap, Mail, MessageCircle, Stethoscope } from "lucide-react";
+import { ArrowRight, Mail } from "lucide-react";
+import { IconEstudio, IconSalud, IconTrabajo } from "@/components/marketplace/brand/apart-icons";
 import { ApartButton } from "@/components/marketplace/brand/apart-button";
 import { ArcBand, Eyebrow } from "@/components/marketplace/brand/brand-shapes";
+import { WhatsAppIcon } from "@/components/marketplace/shell/whatsapp-icon";
 import { Reveal } from "@/components/marketplace/reveal";
 import { cn } from "@/lib/utils";
 
 const REASONS = [
-  { icon: Briefcase, title: "Trabajo", body: "Proyectos, rotaciones y traslados." },
-  { icon: GraduationCap, title: "Estudio", body: "Cursadas, residencias y posgrados." },
-  { icon: Stethoscope, title: "Salud", body: "Tratamientos y acompañamientos." },
+  { icon: IconTrabajo, title: "Trabajo", body: "Proyectos, rotaciones y traslados." },
+  { icon: IconEstudio, title: "Estudio", body: "Cursadas, residencias y posgrados." },
+  { icon: IconSalud, title: "Salud", body: "Tratamientos y acompañamientos." },
 ];
 
 /**
@@ -70,8 +72,8 @@ export function HomeMonthly({
                   key={r.title}
                   className="inline-flex items-center gap-1.5 rounded-full bg-forest-800/70 py-1.5 pl-1.5 pr-3 text-[0.8125rem] font-bold text-cream ring-1 ring-inset ring-cream/10"
                 >
-                  <span className="flex size-6 items-center justify-center rounded-t-full rounded-b-md bg-leaf-300 text-forest-700">
-                    <r.icon className="size-3.5" strokeWidth={2} aria-hidden />
+                  <span className="flex size-7 items-center justify-center rounded-t-full rounded-b-md bg-leaf-300 text-forest-700">
+                    <r.icon className="size-5" />
                   </span>
                   {r.title}
                 </li>
@@ -88,7 +90,7 @@ export function HomeMonthly({
               {whatsappUrl ? (
                 <ApartButton asChild variant="ghost" size="lg" className={consultClass}>
                   <a href={whatsappUrl} target="_blank" rel="noopener noreferrer">
-                    <MessageCircle aria-hidden />
+                    <WhatsAppIcon />
                     Consultar por WhatsApp
                   </a>
                 </ApartButton>
@@ -109,7 +111,7 @@ export function HomeMonthly({
               <Reveal as="li" key={r.title} delay={120 + i * 90} y={16}>
                 <div className="flex items-center gap-4 rounded-3xl bg-forest-800/70 p-4 ring-1 ring-inset ring-cream/10 sm:flex-col sm:items-start lg:flex-row lg:items-center lg:p-5">
                   <span className="flex size-12 shrink-0 items-center justify-center rounded-t-full rounded-b-lg bg-leaf-300 text-forest-700">
-                    <r.icon className="size-5" strokeWidth={1.9} aria-hidden />
+                    <r.icon className="size-8" />
                   </span>
                   <span>
                     <span className="block text-base font-extrabold text-cream">{r.title}</span>

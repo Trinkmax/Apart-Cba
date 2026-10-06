@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
-import { ArrowRight, CalendarHeart, KeyRound, MessageCircleHeart, WalletCards } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import { IconConfirma, IconFechas, IconLlegada, IconSena } from "@/components/marketplace/brand/apart-icons";
 import { ArcBand, SectionHeading } from "@/components/marketplace/brand/brand-shapes";
 import { ProcessSteps } from "@/components/marketplace/brand/process-steps";
 import { Reveal } from "@/components/marketplace/reveal";
@@ -94,12 +95,12 @@ const DECK_TONES = [
 function ProcessDeck({ responseHours, senaLabel }: { responseHours: number; senaLabel: string | null }) {
   const hours = responseHours === 1 ? "1 hora" : `${responseHours} horas`;
   const steps = [
-    { icon: CalendarHeart, title: "Pedís tus fechas", body: "Todavía no pagás nada." },
-    { icon: MessageCircleHeart, title: "Te confirmamos", body: `Te respondemos en menos de ${hours}, por WhatsApp y mail.` },
+    { icon: IconFechas, title: "Pedís tus fechas", body: "Todavía no pagás nada." },
+    { icon: IconConfirma, title: "Te confirmamos", body: `Te respondemos en menos de ${hours}, por WhatsApp y mail.` },
     senaLabel
-      ? { icon: WalletCards, title: `Señás ${senaLabel}`, body: "Transferís la seña para asegurar tus fechas." }
-      : { icon: WalletCards, title: "Sin seña", body: "No hace falta adelantar nada para asegurar tus fechas." },
-    { icon: KeyRound, title: "El resto, al llegar", body: "Pagás el saldo el día que te entregamos las llaves." },
+      ? { icon: IconSena, title: `Señás ${senaLabel}`, body: "Transferís la seña para asegurar tus fechas." }
+      : { icon: IconSena, title: "Sin seña", body: "No hace falta adelantar nada para asegurar tus fechas." },
+    { icon: IconLlegada, title: "El resto, al llegar", body: "Pagás el saldo el día que te entregamos las llaves." },
   ];
 
   return (
@@ -124,7 +125,7 @@ function ProcessDeck({ responseHours, senaLabel }: { responseHours: number; sena
                 {s.title}
               </p>
               <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-t-full rounded-b-lg", tone.icon)}>
-                <s.icon className="size-[1.125rem]" aria-hidden />
+                <s.icon className="size-7" />
               </span>
             </div>
             <p className={cn("mt-2 text-[0.9375rem] leading-relaxed", tone.body)}>{s.body}</p>

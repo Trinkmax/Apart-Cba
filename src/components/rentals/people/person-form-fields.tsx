@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { AlertTriangle, BriefcaseBusiness, Check, ChevronDown, Loader2 } from "lucide-react";
+import { AlertTriangle, BriefcaseBusiness, Check, ChevronDown, ExternalLink, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -62,9 +62,23 @@ export function PersonFormFields({
     Boolean(form.address || form.city || form.province || form.birth_date || form.nationality || form.phone_alt || form.notes),
   );
   const submitLabel = isEdit ? "Guardar cambios" : intent === "garante" ? "Cargar garante" : intent === "inquilino" ? "Cargar inquilino" : "Guardar";
+  // Con el documento de alguien ya cargado, guardar vuelve a chocar igual: la única salida
+  // principal es la del aviso. El pie lo dice y lleva al aviso aunque haya quedado fuera de la vista.
+  function showExisting() {
+    const box = document.getElementById("person-existing");
+    box?.scrollIntoView({ block: "center", behavior: "smooth" });
+    box?.querySelector<HTMLElement>("button, a")?.focus({ preventScroll: true });
+  }
   // El pie dice qué falta o por qué no se guardó, aunque el campo haya quedado fuera de la vista.
   const status = pending ? (
     "Guardando…"
+  ) : existing ? (
+    <span className="text-amber-800 dark:text-amber-200">
+      Ese documento ya es de {existing.full_name}: {onUseExisting ? "tocá «Usar esta persona»" : "abrí su ficha"} o corregí el documento.{" "}
+      <button type="button" onClick={showExisting} className="font-medium underline underline-offset-2 hover:no-underline">
+        Ver el aviso
+      </button>
+    </span>
   ) : fieldError ? (
     <span className="line-clamp-2 text-rose-600 dark:text-rose-400">{fieldError.message}</span>
   ) : form.full_name.trim().length < 2 ? (
@@ -157,7 +171,7 @@ export function PersonFormFields({
           </div>
 
           {existing && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 px-3 py-3 space-y-2" role="alert">
+            <div id="person-existing" className="rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 px-3 py-3 space-y-2 scroll-mt-4" role="alert">
               <p className="flex items-start gap-2 text-sm text-amber-900 dark:text-amber-200">
                 <AlertTriangle size={16} className="mt-0.5 shrink-0" />
                 <span>
@@ -172,8 +186,12 @@ export function PersonFormFields({
                     <Check size={14} /> Usar esta persona
                   </Button>
                 )}
-                <Button type="button" size="sm" variant="outline" asChild>
-                  <Link href={`/dashboard/alquileres/personas/${existing.id}`}>Ver su ficha</Link>
+                {/* En otra pestaña: irse de acá cerraría el formulario y se perdería lo cargado (al editar no hay borrador). */}
+                <Button type="button" size="sm" variant="outline" className="gap-1.5" asChild>
+                  <Link href={`/dashboard/alquileres/personas/${existing.id}`} target="_blank" rel="noreferrer">
+                    Ver su ficha <ExternalLink size={13} aria-hidden="true" />
+                    <span className="sr-only">(se abre en otra pestaña)</span>
+                  </Link>
                 </Button>
               </div>
             </div>
@@ -328,7 +346,8 @@ export function PersonFormFields({
         <Button type="button" variant="outline" onClick={onCancel} disabled={pending}>
           Cancelar
         </Button>
-        <Button type="submit" disabled={pending} className="flex-1 gap-2 sm:flex-none">
+        {/* Mientras el documento choca con alguien, "Usar esta persona" es la única acción principal: guardar volvería a fallar igual. */}
+        <Button type="submit" variant={existing ? "outline" : "default"} disabled={pending || Boolean(existing)} className="flex-1 gap-2 sm:flex-none">
           {pending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           {submitLabel}
         </Button>

@@ -1,5 +1,6 @@
 import { AVAILABILITY_META, PROPERTY_TYPE_LABEL, SERVICE_KIND_META } from "@/lib/rentals/labels";
 import type { RentalPropertyAvailability, RentalPropertyType, RentalServiceKind } from "@/lib/types/database";
+import { isUuid, newClientId } from "@/lib/rentals/property-input";
 import { mergeDraft, oneOf } from "@/components/rentals/people/form-draft";
 import { newKey, type NewOwnerDraft, type OwnerRowState } from "./owner-rows";
 import type { PropertyFormState, ServiceRowState } from "./property-form";
@@ -16,7 +17,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typ
 
 function ownerDraftOf(v: unknown): NewOwnerDraft | null {
   if (!isRecord(v)) return null;
-  return { full_name: str(v.full_name), phone: str(v.phone), email: str(v.email), cbu: str(v.cbu), alias_cbu: str(v.alias_cbu) };
+  // El id viaja con el borrador: si ese propietario ya se había creado, reintentar no lo duplica.
+  const id = isUuid(v.id) ? v.id : newClientId();
+  return { id, full_name: str(v.full_name), phone: str(v.phone), email: str(v.email), cbu: str(v.cbu), alias_cbu: str(v.alias_cbu) };
 }
 
 export function ownerRowsFromDraft(v: unknown): OwnerRowState[] | undefined {
@@ -51,6 +54,8 @@ export function serviceRowsFromDraft(v: unknown): ServiceRowState[] | undefined 
 
 export function propertyStateFromDraft(blank: PropertyFormState, stored: Record<string, unknown>): PropertyFormState {
   return mergeDraft(blank, stored, {
+    // El id de la propiedad también: si ya se había guardado, el reintento devuelve esa en vez de otra igual.
+    client_id: (v) => (isUuid(v) ? v : undefined),
     property_type: oneOf(Object.keys(PROPERTY_TYPE_LABEL) as RentalPropertyType[]),
     availability: oneOf(Object.keys(AVAILABILITY_META) as RentalPropertyAvailability[]),
     listing_currency: oneOf(["ARS", "USD"] as const),

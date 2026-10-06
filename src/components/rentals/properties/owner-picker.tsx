@@ -6,13 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { OTHER_PERSON_HINT } from "@/lib/rentals/property-input";
 import { foldText } from "@/components/rentals/people/person-helpers";
 import type { OwnerOption } from "./property-types";
-import { findOwnerByName } from "./owner-rows";
+import { findOwnerByName, ownerDetails } from "./owner-rows";
 
 /**
  * Buscador de propietarios (tabla `owners` de la org) con "Crear «…»" al pie:
  * si no está, la fila pasa a "propietario nuevo" (se crea al guardar la propiedad).
+ * Si el nombre buscado ya está cargado, no se ofrece crearlo: no se puede
+ * cargar dos veces el mismo nombre. Se dice cómo distinguir a otra persona.
  */
 export function OwnerPicker({
   id,
@@ -39,8 +42,10 @@ export function OwnerPicker({
   const selected = options?.find((o) => o.id === value) ?? null;
   const visible = (options ?? []).filter((o) => o.id === value || !excludeIds.includes(o.id));
   const pending = pendingName != null;
-  // Si lo buscado ya está en la lista, "Crear" pasa a "Crear otro": que se vea que ya existe.
-  const exists = Boolean(search.trim() && findOwnerByName(options, search));
+  // Lo buscado ya está cargado con ese mismo nombre: crearlo de nuevo sólo podía fallar al guardar.
+  const match = search.trim() ? findOwnerByName(options, search) : null;
+  const matchElsewhere = Boolean(match && match.id !== value && excludeIds.includes(match.id));
+  const matchDetails = match ? ownerDetails(match) : "";
 
   return (
     <Popover
@@ -85,9 +90,11 @@ export function OwnerPicker({
         <Command filter={(itemValue, term) => (foldText(itemValue).includes(foldText(term).trim()) ? 1 : 0)}>
           <CommandInput placeholder="Nombre, DNI o teléfono…" value={search} onValueChange={setSearch} aria-label="Buscar propietario" />
           <CommandList className="max-h-72">
-            <CommandEmpty className="py-3 text-center text-sm text-muted-foreground">
-              {search.trim() ? "No hay propietarios con ese nombre." : "Todavía no hay propietarios cargados."}
-            </CommandEmpty>
+            {!match && (
+              <CommandEmpty className="py-3 text-center text-sm text-muted-foreground">
+                {search.trim() ? "No hay propietarios con ese nombre." : "Todavía no hay propietarios cargados."}
+              </CommandEmpty>
+            )}
             {visible.length > 0 && (
               <CommandGroup heading="Propietarios">
                 {visible.map((o) => (
@@ -103,31 +110,40 @@ export function OwnerPicker({
                     <Check size={14} className={cn("mr-1", value === o.id ? "opacity-100" : "opacity-0")} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">{o.full_name}</span>
-                      {(o.phone || o.email) && <span className="block truncate text-[11px] text-muted-foreground">{o.phone || o.email}</span>}
+                      {/* Teléfono, mail y DNI: con dos nombres parecidos, así se sabe cuál es. */}
+                      {ownerDetails(o) && <span className="block truncate text-[11px] text-muted-foreground">{ownerDetails(o)}</span>}
                     </span>
                   </CommandItem>
                 ))}
               </CommandGroup>
             )}
             <CommandGroup forceMount>
-              <CommandItem
-                forceMount
-                value="__crear_propietario__"
-                onSelect={() => {
-                  onCreate(search.trim());
-                  setOpen(false);
-                }}
-                className="min-h-10 text-teal-700 dark:text-teal-300"
-              >
-                <UserPlus size={14} className="mr-1" />
-                {search.trim() ? (
-                  <span className="truncate">
-                    {exists ? "Crear otro propietario" : "Crear propietario"} «<strong className="font-semibold">{search.trim()}</strong>»
-                  </span>
-                ) : (
-                  "Crear un propietario nuevo"
-                )}
-              </CommandItem>
+              {match ? (
+                <p className="px-2 py-2 text-xs leading-snug text-muted-foreground" role="note">
+                  <strong className="font-semibold text-foreground">{match.full_name}</strong>
+                  {matchElsewhere && matchDetails ? ` (${matchDetails})` : ""}{" "}
+                  {matchElsewhere ? "ya está en otra fila de esta propiedad." : "ya está cargado: elegilo de la lista."} {OTHER_PERSON_HINT}
+                </p>
+              ) : (
+                <CommandItem
+                  forceMount
+                  value="__crear_propietario__"
+                  onSelect={() => {
+                    onCreate(search.trim());
+                    setOpen(false);
+                  }}
+                  className="min-h-10 text-teal-700 dark:text-teal-300"
+                >
+                  <UserPlus size={14} className="mr-1" />
+                  {search.trim() ? (
+                    <span className="truncate">
+                      Crear propietario «<strong className="font-semibold">{search.trim()}</strong>»
+                    </span>
+                  ) : (
+                    "Crear un propietario nuevo"
+                  )}
+                </CommandItem>
+              )}
             </CommandGroup>
           </CommandList>
         </Command>

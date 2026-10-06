@@ -1,4 +1,5 @@
-import { CalendarHeart, KeyRound, MessageCircleHeart, WalletCards, Check, X, Minus } from "lucide-react";
+import { Check, X, Minus } from "lucide-react";
+import { IconConfirma, IconFechas, IconLlegada, IconSena } from "./apart-icons";
 import { cn } from "@/lib/utils";
 import type { TimelineStep } from "@/lib/marketplace/guest-stage";
 
@@ -23,14 +24,14 @@ export function ProcessSteps({ responseHours, senaLabel, instant = false, layout
   const hours = responseHours === 1 ? "1 hora" : `${responseHours} horas`;
   const steps = [
     {
-      icon: CalendarHeart,
+      icon: IconFechas,
       title: instant ? "Reservás tus fechas" : "Pedís tus fechas",
       body: instant
         ? "Elegís el depto y reservás al instante. Todavía no pagás nada."
         : "Elegís el depto y nos mandás el pedido. Todavía no pagás nada.",
     },
     {
-      icon: MessageCircleHeart,
+      icon: IconConfirma,
       title: instant ? "Te escribimos" : "Te confirmamos",
       body: instant
         ? "Te escribimos por WhatsApp y mail con los datos de tu reserva."
@@ -38,19 +39,19 @@ export function ProcessSteps({ responseHours, senaLabel, instant = false, layout
     },
     senaLabel
       ? {
-          icon: WalletCards,
+          icon: IconSena,
           title: `Señás ${senaLabel}`,
           body: instant
             ? "Transferís la seña para asegurar tus fechas. Los datos te aparecen en el link de tu reserva apenas reservás."
             : "Transferís la seña para asegurar tus fechas. Te pasamos los datos al confirmar.",
         }
       : {
-          icon: WalletCards,
+          icon: IconSena,
           title: "Sin seña",
           body: "No hace falta adelantar nada para asegurar tus fechas.",
         },
     {
-      icon: KeyRound,
+      icon: IconLlegada,
       title: "El resto, al llegar",
       body: "Pagás el saldo el día que te entregamos las llaves, en efectivo o por transferencia.",
     },
@@ -65,7 +66,7 @@ export function ProcessSteps({ responseHours, senaLabel, instant = false, layout
               <span aria-hidden className="absolute left-[15px] top-8 h-[calc(100%-12px)] w-px bg-forest-700/15" />
             ) : null}
             <span className="relative z-10 flex size-8 shrink-0 items-center justify-center rounded-t-full rounded-b-md bg-leaf-200 text-forest-700">
-              <s.icon className="size-4" aria-hidden />
+              <s.icon className="size-5" />
             </span>
             <div className="min-w-0 pt-0.5">
               <p className="text-sm font-bold text-forest-700">{s.title}</p>
@@ -83,7 +84,7 @@ export function ProcessSteps({ responseHours, senaLabel, instant = false, layout
         <li key={s.title} className="relative">
           <div className="flex items-center gap-3">
             <span className="flex size-12 items-center justify-center rounded-t-full rounded-b-lg bg-leaf-200 text-forest-700">
-              <s.icon className="size-5" aria-hidden />
+              <s.icon className="size-8" />
             </span>
             <span className="font-apart-serif text-3xl italic text-coral-500" aria-hidden>
               {i + 1}

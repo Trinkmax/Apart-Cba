@@ -1672,6 +1672,7 @@ async function reconcileAfterEdit(opts: {
         .from("owner_settlements")
         .update({ last_edited_by: userId, last_edited_at: new Date().toISOString() })
         .eq("id", before.id)
+        .eq("organization_id", before.organization_id)
         .eq("paid_movement_id", before.paid_movement_id)
         .select("id");
       if (!stillPaidErr && (!stillPaid || stillPaid.length === 0)) {

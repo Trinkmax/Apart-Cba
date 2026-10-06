@@ -7,6 +7,7 @@ import {
   guarantorsMissingConsent,
   overridesForSave,
   parseWizard,
+  partyField,
   previewInputOf,
   stepOfField,
   suggestedStartDate,
@@ -135,6 +136,23 @@ describe("wizard-state", () => {
         { key: "g", person_id: "g1", role: "garante", is_primary: false, guarantee_type: "fianza", guarantee_detail: "", guarantor_consent_at: "31/12/2026" },
       ],
     };
-    expect(parseWizard(s).issues).toEqual([{ step: "partes", field: "parties", message: "Revisá la fecha en que firmó el garante." }]);
+    // Apunta a la fecha de ESE garante, no al buscador de inquilinos.
+    expect(parseWizard(s).issues).toEqual([{ step: "partes", field: partyField.consent("g"), message: "Revisá la fecha en que firmó el garante." }]);
+  });
+
+  it("cada aviso de las partes apunta a su control", () => {
+    const row = (key: string, person_id: string, role: "inquilino" | "garante", is_primary = false) =>
+      ({ key, person_id, role, is_primary, guarantee_type: role === "garante" ? "fianza" : null, guarantee_detail: "", guarantor_consent_at: "" }) as const;
+    // Sin inquilino: su propio campo (el buscador), y el paso queda en "partes".
+    const noTenant = parseWizard({ ...filled(), parties: [row("g", "g1", "garante")] }).issues;
+    expect(noTenant).toEqual([{ step: "partes", field: "tenant", message: "Falta el inquilino: buscalo o cargalo." }]);
+    expect(stepOfField("tenant")).toBe("partes");
+    // Fila vacía, dos titulares y persona repetida: la fila que hay que tocar.
+    const messy = parseWizard({
+      ...filled(),
+      parties: [row("a", "t1", "inquilino", true), row("b", "t2", "inquilino", true), row("c", "", "garante"), row("d", "t1", "inquilino")],
+    }).issues;
+    expect(messy.map((i) => i.field)).toEqual([partyField.row("c"), partyField.primary("a"), partyField.row("d")]);
+    expect(new Set(messy.map((i) => i.step))).toEqual(new Set(["partes"]));
   });
 });

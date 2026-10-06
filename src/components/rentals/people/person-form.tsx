@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createPerson, updatePerson } from "@/lib/actions/rentals-people";
+import { toastActionFailure } from "@/lib/action-failure";
 import { parseAmountInput } from "@/lib/format";
 import { formatMoneyEditable } from "@/components/bookings/money-input";
 import { toWhatsappDigits } from "@/lib/marketplace/staff-helpers";
@@ -127,7 +128,8 @@ export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUs
   const set: SetPersonField = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }));
     if (fieldError?.field === key) setFieldError(null);
-    if (key === "doc_number" || key === "tax_id") setExisting(null);
+    // Otro documento (o leído como otro tipo) puede no chocar: se vuelve a poder guardar y el servidor decide.
+    if (key === "doc_number" || key === "tax_id" || key === "doc_type" || key === "person_type") setExisting(null);
   };
 
   function fail(field: string | undefined, message: string) {
@@ -170,7 +172,14 @@ export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUs
       notes: form.notes || null,
     };
     startTransition(async () => {
-      const res = person ? await updatePerson(person.id, input) : await createPerson(input);
+      let res: Awaited<ReturnType<typeof createPerson>>;
+      try {
+        res = person ? await updatePerson(person.id, input) : await createPerson(input);
+      } catch (error) {
+        // No llegó respuesta (conexión o deploy nuevo). Un alta queda en el borrador de la pestaña; una edición, no.
+        toastActionFailure(error, "No se pudo guardar", { afterReload: !person && draftKey ? "Lo que cargaste vuelve a aparecer." : undefined });
+        return;
+      }
       if (!res.ok) {
         fail(res.field, res.error);
         if (res.existing) setExisting(res.existing);

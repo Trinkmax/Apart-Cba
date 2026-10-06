@@ -156,6 +156,69 @@ export function paymentUndoBalanceText(summary: PaymentUndoSummary): string | nu
   return `${lead}: ${parts.join(" · ")}.`;
 }
 
+/** Lo que Caja tiene como pagado contra lo que la liquidación da hoy. */
+export interface PaymentUndoNetGap {
+  /** Lo que salió según Caja: egresos − ingresos de los movimientos que se borran. */
+  paidNet: number;
+  /** El neto de la liquidación hoy: lo que va a pedir «Registrar pago». */
+  net: number;
+  /** net − paidNet. Positivo: hoy pide más de lo que salió; negativo, menos. */
+  gap: number;
+}
+
+/**
+ * Una edición «Solo visual» después de pagar cambia el neto sin tocar Caja (a
+ * propósito: el egreso queda intacto). Al anular y volver a pagar, «Registrar
+ * pago» exige el neto de HOY, no lo que salió del banco: quien anula sólo para
+ * corregir la cuenta o la fecha terminaría registrando en Caja plata que no
+ * salió (o menos de la que salió) sin enterarse.
+ *
+ * `null` cuando no hay con qué comparar: sin movimientos en Caja (no hay un
+ * pago registrado que se pierda) o con otra moneda (no se restan pesos y
+ * dólares).
+ */
+export function paymentUndoNetGap(
+  preview: Pick<PaymentUndoPreview, "net_payable" | "currency" | "movements">,
+): PaymentUndoNetGap | null {
+  const { movements } = preview;
+  if (movements.length === 0) return null;
+  if (movements.some((m) => m.currency !== preview.currency)) return null;
+  const paidNet = summarizePaymentUndo(movements).net;
+  const net = round2(Number(preview.net_payable) || 0);
+  return { paidNet, net, gap: round2(net - paidNet) };
+}
+
+/** Diferencia que vale la pena avisar: un centavo o más. */
+export function hasPaymentUndoNetGap(
+  gap: PaymentUndoNetGap | null,
+): gap is PaymentUndoNetGap {
+  return gap !== null && Math.abs(gap.gap) >= 0.01;
+}
+
+export const PAYMENT_UNDO_GAP_TITLE = "Caja y la liquidación no dan lo mismo";
+
+/**
+ * El aviso de la confirmación cuando hay diferencia: cuánto salió según Caja,
+ * cuánto da hoy la liquidación y qué se registraría al pagarla de nuevo.
+ */
+export function paymentUndoNetGapText(
+  gap: PaymentUndoNetGap,
+  currency: string,
+): string {
+  const paid = formatMoney(gap.paidNet, currency);
+  const net = formatMoney(gap.net, currency);
+  const head = `En Caja el pago suma ${paid}, pero la liquidación hoy da ${net} (pasa cuando se la edita después de pagada con «Solo visual», que no toca Caja).`;
+  if (!(gap.net > 0)) {
+    return `${head} Así no se puede volver a pagar: «Registrar pago» necesita un neto mayor a cero. Corregí la liquidación antes de pagarla de nuevo.`;
+  }
+  const diff = formatMoney(Math.abs(gap.gap), currency);
+  const effect =
+    gap.gap > 0
+      ? `Caja registraría ${diff} que no salieron`
+      : `Caja registraría ${diff} menos de lo que salió`;
+  return `${head} Si la volvés a pagar, «Registrar pago» te va a pedir ${net}. Si el pago sí salió por ${paid} y anulás sólo para corregir la cuenta o la fecha, ${effect}: primero corregí la liquidación para que dé lo que salió.`;
+}
+
 /** El aviso de éxito: qué se borró y en qué quedó la liquidación. */
 export function paymentUndoSuccessText(result: PaymentUndoResult): string {
   const tail = "La liquidación volvió a Revisada.";
@@ -250,9 +313,11 @@ export function paymentUndoErrorMessage(raw: string): string {
  */
 export function settlementLockHint(status: string | null | undefined): string {
   if (status === "pagada") {
-    // Sirve para borrar y para editar: con la cuenta, la fecha o el importe
-    // mal, lo correcto es anular el pago y volver a registrarlo bien.
-    return "Es parte del pago de esa liquidación. Para borrarlo o corregirlo, usá «Anular el pago» en la liquidación: vuelve a Revisada, el movimiento se borra de Caja y después podés registrar el pago bien.";
+    // Sirve para borrar y para editar: con la cuenta o la fecha mal, lo
+    // correcto es anular el pago y volver a registrarlo. No se promete "el
+    // mismo pago": «Registrar pago» pide el neto de ese momento, que puede no
+    // ser lo que salió si la liquidación se editó con «Solo visual».
+    return "Es parte del pago de esa liquidación. Para borrarlo o corregirlo, usá «Anular el pago» en la liquidación: vuelve a Revisada y el movimiento se borra de Caja. Al volver a pagarla, se registra por el neto que dé en ese momento.";
   }
   if (status === "revisada" || status === "enviada") {
     return "La liquidación está cerrada: pasala a Borrador desde su estado para poder editarlo.";

@@ -109,13 +109,30 @@ export interface PropertyCodeRef {
 
 export interface PropertyFormOptions {
   owners: OwnerOption[];
+  /**
+   * Archivados: no se ofrecen en el buscador, pero el sistema no deja crear
+   * otro con el mismo nombre. El formulario lo mira ANTES de crear a un
+   * propietario nuevo (si no, el segundo fallaba con el primero ya creado).
+   */
+  archived_owners: OwnerOption[];
   codes: PropertyCodeRef[];
   /** Titulares actuales de la propiedad que se edita (null si es alta). */
   current_owners: PropertyOwnerInput[] | null;
+  /**
+   * Alta: la propiedad con el id del formulario, si ya quedó guardada (se
+   * perdió la respuesta o se recargó en medio del guardado), con sus titulares.
+   */
+  saved: { property: RentalProperty; owners: SavedPropertyOwner[] } | null;
 }
 
 /** Lo que manda el formulario. `code` vacío = lo genera el servidor desde la dirección. */
 export interface PropertyInput {
+  /**
+   * Alta: id que generó el formulario (queda en el borrador). Si el guardado
+   * llegó pero la respuesta se perdió, reintentar devuelve la misma propiedad
+   * en vez de cargarla dos veces. Se ignora al editar.
+   */
+  id?: string | null;
   code: string;
   property_type: RentalPropertyType;
   street: string;
@@ -149,13 +166,25 @@ export interface PropertyInput {
 }
 
 export type PropertySaveResult =
-  | { ok: true; property: RentalProperty }
+  /**
+   * `already_saved`: era un reintento y la propiedad ya estaba guardada; se
+   * devuelve tal cual quedó, con sus titulares (`owners`) si se pudieron leer.
+   */
+  | { ok: true; property: RentalProperty; already_saved?: boolean; owners?: SavedPropertyOwner[] }
   | { ok: false; error: string; field?: string; suggestion?: string };
 
 export interface QuickOwnerInput {
+  /** Id que generó el formulario para este propietario nuevo (mismo uso que `PropertyInput.id`). */
+  id?: string | null;
   full_name: string;
   phone: string | null;
   email: string | null;
   cbu: string | null;
   alias_cbu: string | null;
 }
+
+export type QuickOwnerResult =
+  /** `already_saved`: era un reintento y el propietario ya estaba creado. */
+  | { ok: true; owner: OwnerOption; already_saved?: boolean }
+  /** `existing`: ya hay un propietario activo con ese nombre (para ofrecer "Usar ese propietario" aunque la lista del formulario sea vieja). */
+  | { ok: false; error: string; field?: string; existing?: OwnerOption };

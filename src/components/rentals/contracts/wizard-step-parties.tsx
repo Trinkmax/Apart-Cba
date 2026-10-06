@@ -17,7 +17,7 @@ import { isValidConsent } from "@/lib/rentals/renewal";
 import type { RentalGuaranteeType, RentalPerson } from "@/lib/types/database";
 import type { PersonOption } from "./types";
 import { StepIntro } from "./wizard-fields";
-import { newPartyKey, type WizardParty } from "./wizard-state";
+import { newPartyKey, partyField, type WizardParty } from "./wizard-state";
 import type { StepProps } from "./wizard-step-props";
 
 /** Paso 2: inquilino(s) —uno es el titular de los recibos— y garantes con su garantía. */
@@ -186,39 +186,66 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
     <div className="space-y-6">
       <StepIntro title="¿Quién alquila?">El titular es a nombre de quien salen los recibos. Si son varios (pareja, amigos), agregalos a todos.</StepIntro>
 
+      {/* Aviso del servidor sobre las partes en general (p. ej. firmas de una renovación vigente). */}
+      {errors.parties && (
+        <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.06] px-3 py-2 text-[12px] text-rose-700 dark:text-rose-300" role="alert">
+          {errors.parties}
+        </p>
+      )}
+
       <section className="space-y-2.5">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
           <UserRound size={13} /> Inquilinos
         </h3>
         {tenants.map((p) => {
           const person = byId.get(p.person_id);
+          const rowError = errors[partyField.row(p.key)] ?? errors[partyField.primary(p.key)];
           return (
-            <div key={p.key} className="flex items-center gap-3 rounded-xl border px-3 py-2.5" style={p.is_primary ? { borderColor: `${RENTALS_ACCENT}66` } : undefined}>
-              <span className="size-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0" style={{ backgroundColor: `${RENTALS_ACCENT}18`, color: RENTALS_ACCENT }}>
-                {getInitials(person?.fullName ?? "?")}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium truncate">{person?.fullName ?? "Persona"}</p>
-                <p className="text-[11px] text-muted-foreground truncate">{[person?.docLabel, person?.phone].filter(Boolean).join(" · ") || "Sin documento cargado"}</p>
-              </div>
-              {tenants.length > 1 ? (
-                <button
-                  type="button"
-                  onClick={() => makePrimary(p.key)}
-                  aria-pressed={p.is_primary}
-                  className={cn("h-8 rounded-full border px-2.5 text-[11px] font-medium shrink-0 transition-colors", p.is_primary ? "text-white" : "text-muted-foreground hover:text-foreground")}
-                  style={p.is_primary ? { backgroundColor: RENTALS_ACCENT, borderColor: RENTALS_ACCENT } : undefined}
-                >
-                  {p.is_primary ? "Titular" : "Hacer titular"}
-                </button>
-              ) : (
-                <span className="text-[11px] font-medium shrink-0" style={{ color: RENTALS_ACCENT }}>
-                  Titular
+            <div key={p.key} className="space-y-1">
+              <div
+                className={cn("flex items-center gap-3 rounded-xl border px-3 py-2.5", rowError && "border-rose-500/60")}
+                style={p.is_primary && !rowError ? { borderColor: `${RENTALS_ACCENT}66` } : undefined}
+              >
+                <span className="size-9 rounded-full flex items-center justify-center text-xs font-semibold shrink-0" style={{ backgroundColor: `${RENTALS_ACCENT}18`, color: RENTALS_ACCENT }}>
+                  {getInitials(person?.fullName ?? "?")}
                 </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium truncate">{person?.fullName ?? "Persona"}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{[person?.docLabel, person?.phone].filter(Boolean).join(" · ") || "Sin documento cargado"}</p>
+                </div>
+                {tenants.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => makePrimary(p.key)}
+                    aria-pressed={p.is_primary}
+                    data-wizard-field={partyField.primary(p.key)}
+                    className={cn("h-8 rounded-full border px-2.5 text-[11px] font-medium shrink-0 transition-colors", p.is_primary ? "text-white" : "text-muted-foreground hover:text-foreground")}
+                    style={p.is_primary ? { backgroundColor: RENTALS_ACCENT, borderColor: RENTALS_ACCENT } : undefined}
+                  >
+                    {p.is_primary ? "Titular" : "Hacer titular"}
+                  </button>
+                ) : (
+                  <span className="text-[11px] font-medium shrink-0" style={{ color: RENTALS_ACCENT }}>
+                    Titular
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 text-muted-foreground hover:text-rose-600"
+                  onClick={() => remove(p.key)}
+                  aria-label="Sacar"
+                  data-wizard-field={partyField.row(p.key)}
+                >
+                  <Trash2 size={14} />
+                </Button>
+              </div>
+              {rowError && (
+                <p className="px-1 text-[12px] text-rose-600 dark:text-rose-400" role="alert">
+                  {rowError}
+                </p>
               )}
-              <Button type="button" variant="ghost" size="icon" className="size-9 text-muted-foreground hover:text-rose-600" onClick={() => remove(p.key)} aria-label="Sacar">
-                <Trash2 size={14} />
-              </Button>
             </div>
           );
         })}
@@ -228,12 +255,12 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
           intent="inquilino"
           onPick={(id) => add("inquilino", id)}
           onCreated={addPerson}
-          anchor="parties"
-          invalid={Boolean(errors.parties) && tenants.length === 0}
+          anchor="tenant"
+          invalid={Boolean(errors.tenant)}
         />
-        {errors.parties && (
+        {errors.tenant && (
           <p className="text-[12px] text-rose-600 dark:text-rose-400" role="alert">
-            {errors.parties}
+            {errors.tenant}
           </p>
         )}
       </section>
@@ -255,8 +282,10 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
           const person = byId.get(p.person_id);
           const type = p.guarantee_type ?? "otra";
           const consentMissing = state.is_renewal && !isValidConsent(p.guarantor_consent_at, today);
+          const consentError = errors[partyField.consent(p.key)];
+          const rowError = errors[partyField.row(p.key)] ?? consentError;
           return (
-            <div key={p.key} className={cn("rounded-xl border px-3 py-3 space-y-2.5", consentMissing && "border-amber-500/50")}>
+            <div key={p.key} className={cn("rounded-xl border px-3 py-3 space-y-2.5", rowError ? "border-rose-500/60" : consentMissing && "border-amber-500/50")}>
               <div className="flex items-center gap-3">
                 <span className="size-9 rounded-full bg-muted flex items-center justify-center shrink-0">
                   <ShieldCheck size={15} className="text-muted-foreground" />
@@ -267,7 +296,15 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
                     {[person?.docLabel, person?.employer, person?.monthlyIncome ? `ingresos ${formatMoney(person.monthlyIncome, "ARS")}` : null].filter(Boolean).join(" · ") || "Sin datos laborales"}
                   </p>
                 </div>
-                <Button type="button" variant="ghost" size="icon" className="size-9 text-muted-foreground hover:text-rose-600" onClick={() => remove(p.key)} aria-label="Sacar garante">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 text-muted-foreground hover:text-rose-600"
+                  onClick={() => remove(p.key)}
+                  aria-label="Sacar garante"
+                  data-wizard-field={partyField.row(p.key)}
+                >
                   <Trash2 size={14} />
                 </Button>
               </div>
@@ -297,9 +334,16 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
                     max={today}
                     value={p.guarantor_consent_at}
                     onChange={(e) => update(p.key, { guarantor_consent_at: e.target.value })}
-                    className={cn("h-9", consentMissing && "border-amber-500/60")}
+                    aria-invalid={Boolean(consentError) || undefined}
+                    data-wizard-field={partyField.consent(p.key)}
+                    className={cn("h-9", consentError ? "border-rose-500/60" : consentMissing && "border-amber-500/60")}
                   />
                 </div>
+              )}
+              {rowError && (
+                <p className="text-[12px] text-rose-600 dark:text-rose-400" role="alert">
+                  {rowError}
+                </p>
               )}
             </div>
           );

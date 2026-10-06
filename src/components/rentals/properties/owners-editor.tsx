@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Plus, Scale, Star, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -9,7 +10,7 @@ import { parsePercentInput } from "@/lib/format";
 import { joinNamesEs } from "@/lib/rentals/renewal";
 import { formatPctEs, round2 } from "./property-helpers";
 import type { OwnerOption } from "./property-types";
-import { blankOwnerDraft, evenRows, findOwnerByName, newKey, type OwnerRowState } from "./owner-rows";
+import { blankOwnerDraft, draftHasData, evenRows, findOwnerByName, newKey, undoOwnerDiscard, type OwnerRowState } from "./owner-rows";
 import { OwnerPicker } from "./owner-picker";
 import { QuickOwnerPanel, type QuickOwnerError } from "./quick-owner-panel";
 
@@ -46,7 +47,28 @@ export function OwnersEditor({
   const sum = round2(rows.reduce((s, r) => s + (parsePercentInput(r.pct) ?? 0), 0));
   const sumOk = Math.abs(sum - 100) < 0.005;
 
+  // Las filas de ahora (no las de cuando se tiró el propietario): "Deshacer" se toca después.
+  const latestRows = useRef(rows);
+  useEffect(() => {
+    latestRows.current = rows;
+  }, [rows]);
+
   const update = (key: string, patch: Partial<OwnerRowState>) => onChange(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+
+  /**
+   * Un propietario nuevo a medio cargar nunca se tira en silencio ("No crear",
+   * elegir otro en el buscador o quitar la fila): queda "Deshacer" unos segundos.
+   */
+  function commitDiscard(next: OwnerRowState[], row: OwnerRowState) {
+    onChange(next);
+    if (row.owner_id || !draftHasData(row.draft)) return;
+    const snap = { before: rows, after: next, key: row.key };
+    const name = row.draft?.full_name.trim();
+    toast(name ? `No se va a crear «${name}»` : "No se va a crear el propietario nuevo", {
+      duration: 8000,
+      action: { label: "Deshacer", onClick: () => onChange(undoOwnerDiscard(latestRows.current, snap)) },
+    });
+  }
 
   function addRow() {
     const next = [...rows, { key: newKey(), owner_id: "", pct: "", is_primary: false, draft: null }];
@@ -55,12 +77,12 @@ export function OwnersEditor({
     onChange(wasEven ? evenRows(next) : next.map((r, i) => (i === next.length - 1 ? { ...r, pct: sum < 100 ? formatPctEs(round2(100 - sum)) : "" } : r)));
   }
 
-  function removeRow(key: string) {
-    let next = rows.filter((r) => r.key !== key);
+  function removeRow(row: OwnerRowState) {
+    let next = rows.filter((r) => r.key !== row.key);
     if (!next.length) next = [{ key: newKey(), owner_id: "", pct: "100", is_primary: true, draft: null }];
     if (!next.some((r) => r.is_primary)) next = next.map((r, i) => ({ ...r, is_primary: i === 0 }));
     if (next.length === 1) next = [{ ...next[0], pct: "100", is_primary: true }];
-    onChange(next);
+    commitDiscard(next, row);
   }
 
   function startNew(row: OwnerRowState, name: string) {
@@ -76,7 +98,8 @@ export function OwnersEditor({
       {loadError && <p className="text-xs text-rose-600 dark:text-rose-400">{loadError}</p>}
       <ul className="space-y-2">
         {rows.map((r, i) => {
-          const sameName = r.draft ? findOwnerByName(options, r.draft.full_name) : null;
+          // Sin contar al que esta misma fila ya creó (si la respuesta se perdió, no es un homónimo).
+          const sameName = r.draft ? findOwnerByName(options, r.draft.full_name, r.draft.id) : null;
           return (
             <li key={r.key} className={cn("grid gap-2 items-center", single ? "grid-cols-1" : "grid-cols-[1fr_auto] sm:grid-cols-[1fr_7.5rem_auto_auto]")}>
               <div className={cn("min-w-0", !single && "col-span-2 sm:col-span-1")}>
@@ -86,7 +109,7 @@ export function OwnersEditor({
                   pendingName={r.draft ? r.draft.full_name : null}
                   options={options}
                   excludeIds={selectedIds.filter((id) => id !== r.owner_id)}
-                  onChange={(ownerId) => update(r.key, { owner_id: ownerId, draft: null })}
+                  onChange={(ownerId) => commitDiscard(rows.map((x) => (x.key === r.key ? { ...x, owner_id: ownerId, draft: null } : x)), r)}
                   onCreate={(name) => startNew(r, name)}
                   invalid={Boolean(error) && !r.owner_id && !r.draft}
                 />
@@ -116,7 +139,7 @@ export function OwnersEditor({
                       <Star size={15} className={cn(r.is_primary && "fill-current")} />
                       <span className="text-xs">{r.is_primary ? "Principal" : "Hacer principal"}</span>
                     </Button>
-                    <Button type="button" variant="ghost" size="icon" className="size-10 text-muted-foreground hover:text-rose-600" onClick={() => removeRow(r.key)} aria-label="Quitar propietario">
+                    <Button type="button" variant="ghost" size="icon" className="size-10 text-muted-foreground hover:text-rose-600" onClick={() => removeRow(r)} aria-label="Quitar propietario">
                       <Trash2 size={15} />
                     </Button>
                   </div>
@@ -128,7 +151,7 @@ export function OwnersEditor({
                     rowKey={r.key}
                     draft={r.draft}
                     onChange={(draft) => update(r.key, { draft })}
-                    onDiscard={() => update(r.key, { draft: null })}
+                    onDiscard={() => commitDiscard(rows.map((x) => (x.key === r.key ? { ...x, draft: null } : x)), r)}
                     error={draftError?.rowKey === r.key ? draftError : null}
                     sameName={sameName}
                     sameNameInOtherRow={Boolean(sameName && selectedIds.includes(sameName.id))}

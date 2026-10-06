@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { AlertTriangle, Loader2, Undo2 } from "lucide-react";
+import { AlertTriangle, Loader2, Scale, Undo2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -18,13 +18,18 @@ import {
   getSettlementPaymentUndoPreview,
   undoSettlementPayment,
 } from "@/lib/actions/settlements";
+import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { formatDate, formatMoney } from "@/lib/format";
 import {
+  PAYMENT_UNDO_GAP_TITLE,
   PAYMENT_UNDO_REASON_MAX,
   PAYMENT_UNDO_REASON_MIN,
   PAYMENT_UNDO_WARNING,
+  hasPaymentUndoNetGap,
   paymentUndoBalanceText,
   paymentUndoMovementLabel,
+  paymentUndoNetGap,
+  paymentUndoNetGapText,
   paymentUndoSuccessText,
   summarizePaymentUndo,
   type PaymentUndoPreview,
@@ -36,9 +41,12 @@ import { cn } from "@/lib/utils";
  *
  * Antes de hacer nada muestra QUÉ se borra de Caja — cuenta, fecha e importe
  * de cada movimiento — y pide el motivo, que queda en el historial de la
- * liquidación y en el de Caja. La lista que se ve es la que se manda: si
- * cambió en el medio (alguien editó la liquidación pagada y entró un ajuste),
- * el RPC no borra nada y acá se vuelve a cargar.
+ * liquidación (en Caja el movimiento borrado no se ve más). La lista que se ve
+ * es la que se manda: si cambió en el medio (alguien editó la liquidación
+ * pagada y entró un ajuste), el RPC no borra nada y acá se vuelve a cargar.
+ * Si lo que registró Caja no da lo mismo que el neto de hoy (ediciones «Solo
+ * visual» después de pagar), lo avisa antes: volver a pagarla pide el neto de
+ * hoy, no lo que salió.
  */
 export function UndoPaymentDialog({
   open,
@@ -67,6 +75,14 @@ type Loaded =
   | { ok: true; preview: PaymentUndoPreview }
   | { ok: false; error: string };
 
+/** La acción vieja no existe más en el servidor: reintentar no sirve. */
+const STALE_DEPLOY_TEXT =
+  "Se actualizó el sistema mientras tenías esto abierto: recargá la página para seguir.";
+
+/** Se cortó antes de la respuesta: la anulación pudo haber entrado igual. */
+const UNKNOWN_OUTCOME_TEXT =
+  "Se cortó antes de la respuesta. Recargá la página para ver si se llegó a anular.";
+
 function UndoPaymentBody({
   settlementId,
   onClose,
@@ -88,15 +104,14 @@ function UndoPaymentBody({
         if (!cancelled) setLoaded(res);
       })
       .catch((e: unknown) => {
-        if (!cancelled) {
-          setLoaded({
-            ok: false,
-            error:
-              e instanceof Error
-                ? e.message
-                : "No se pudieron leer los movimientos del pago",
-          });
-        }
+        if (cancelled) return;
+        toastActionFailure(e, "No se pudieron leer los movimientos del pago");
+        setLoaded({
+          ok: false,
+          error: isStaleDeployError(e)
+            ? STALE_DEPLOY_TEXT
+            : "No se pudieron leer los movimientos del pago. Revisá la conexión, cerrá y volvé a abrir.",
+        });
       });
     return () => {
       cancelled = true;
@@ -132,9 +147,12 @@ function UndoPaymentBody({
         onClose();
         router.refresh();
       } catch (e) {
-        const msg = (e as Error).message;
-        setError(msg);
-        toast.error("No se pudo anular el pago", { description: msg });
+        // Reintentar a ciegas no rompe nada (el RPC exige que siga pagada),
+        // pero lo primero es ver en qué quedó.
+        toastActionFailure(e, "No se pudo anular el pago", {
+          retry: UNKNOWN_OUTCOME_TEXT,
+        });
+        setError(isStaleDeployError(e) ? STALE_DEPLOY_TEXT : UNKNOWN_OUTCOME_TEXT);
       }
     });
   }
@@ -152,8 +170,8 @@ function UndoPaymentBody({
           {preview
             ? `${preview.owner_name ?? "Propietario"} · ${preview.period_label}. `
             : ""}
-          La liquidación vuelve a Revisada y queda lista para registrar el pago
-          de nuevo.
+          La liquidación vuelve a Revisada. Si después la volvés a pagar,
+          «Registrar pago» pide el neto que tenga en ese momento.
         </DialogDescription>
       </DialogHeader>
 
@@ -174,6 +192,8 @@ function UndoPaymentBody({
       ) : (
         <PaymentMovementsList preview={loaded.preview} />
       )}
+
+      {preview && <NetGapNotice preview={preview} />}
 
       {preview && (
         <div className="space-y-1.5">
@@ -196,7 +216,7 @@ function UndoPaymentBody({
             disabled={pending}
           />
           <p className="text-[11px] leading-snug text-muted-foreground">
-            Queda en el historial de la liquidación y en el de Caja.
+            Queda en el historial de la liquidación.
           </p>
         </div>
       )}
@@ -224,6 +244,30 @@ function UndoPaymentBody({
         </Button>
       </DialogFooter>
     </>
+  );
+}
+
+/**
+ * Caja registró un pago distinto del neto de hoy (ediciones «Solo visual»
+ * después de pagar). Va antes del motivo: es lo que hay que saber para decidir
+ * si anular, sobre todo si es sólo para corregir la cuenta o la fecha.
+ */
+function NetGapNotice({ preview }: { preview: PaymentUndoPreview }) {
+  const gap = paymentUndoNetGap(preview);
+  if (!hasPaymentUndoNetGap(gap)) return null;
+  return (
+    <div
+      role="note"
+      className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-900 dark:text-amber-200"
+    >
+      <Scale size={15} className="mt-0.5 shrink-0" />
+      <div className="min-w-0 space-y-0.5">
+        <p className="font-medium">{PAYMENT_UNDO_GAP_TITLE}</p>
+        <p className="text-[13px] leading-snug">
+          {paymentUndoNetGapText(gap, preview.currency)}
+        </p>
+      </div>
+    </div>
   );
 }
 

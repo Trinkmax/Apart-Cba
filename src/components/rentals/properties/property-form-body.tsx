@@ -12,7 +12,8 @@ import { joinNamesEs } from "@/lib/rentals/renewal";
 import type { RentalPropertyAvailability, RentalPropertyType } from "@/lib/types/database";
 import { Field, FormSection } from "@/components/rentals/people/form-bits";
 import { DraftRestoredNotice, FormDialogBody, FormDialogFooter, formDialogFormClass } from "@/components/rentals/people/form-dialog-shell";
-import { firstFreeCode, normalizePropertyCode, suggestPropertyCode } from "./property-helpers";
+import { PROPERTY_TEXT_MAX as MAX } from "@/lib/rentals/property-input";
+import { findCodeClash, firstFreeCode, normalizePropertyCode, suggestPropertyCode } from "./property-helpers";
 import type { OwnerOption, PropertyCodeRef } from "./property-types";
 import type { PropertyFieldError, PropertyFormState, SetPropertyField } from "./property-form";
 import type { QuickOwnerError } from "./quick-owner-panel";
@@ -86,13 +87,15 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
   const err = (f: string) => (fieldError?.field === f ? fieldError.message : null);
 
   // Código: sugerido desde la dirección y verificado contra los ya usados (el servidor vuelve a mirar).
-  const taken = codes.filter((c) => c.id !== propertyId);
-  const takenCodes = taken.map((c) => c.code);
+  // En un alta, la propiedad ya tiene el id con el que se va a crear: si ya se guardó (respuesta perdida), su código no choca consigo mismo.
+  const selfId = propertyId ?? form.client_id;
+  const takenCodes = codes.filter((c) => c.id !== selfId).map((c) => c.code);
   const suggested = suggestPropertyCode(form);
   const typed = normalizePropertyCode(form.code);
   const autoCode = suggested ? firstFreeCode(suggested, takenCodes) : "";
-  const clash = typed ? taken.find((c) => c.code.toUpperCase() === typed) : undefined;
-  const clashFix = clash ? firstFreeCode(typed, takenCodes) : null;
+  // La misma cuenta que hace el formulario al guardar (bloquea antes de crear a un propietario nuevo).
+  const clash = findCodeClash(codes, selfId, form.code);
+  const clashFix = clash?.fix ?? null;
   const serverFix = fieldError?.field === "code" ? fieldError.suggestion : undefined;
   const codeError = err("code") ?? (clash ? `Ya es el código de ${clash.label}.` : null);
   const codeFix = serverFix ?? clashFix;
@@ -127,6 +130,7 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
               <Field id="property-street" label="Calle" required error={err("street")}>
                 <Input
                   id="property-street"
+                  maxLength={MAX.street}
                   value={form.street}
                   onChange={(e) => set("street", e.target.value)}
                   placeholder="Dean Funes"
@@ -137,21 +141,21 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
                 />
               </Field>
               <Field id="property-street_number" label="Número" error={err("street_number")}>
-                <Input id="property-street_number" value={form.street_number} onChange={(e) => set("street_number", e.target.value)} placeholder="450" className="h-10" />
+                <Input id="property-street_number" maxLength={MAX.street_number} value={form.street_number} onChange={(e) => set("street_number", e.target.value)} placeholder="450" className="h-10" />
               </Field>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-[1fr_1fr_1fr_2fr] gap-3">
               <Field id="property-floor" label="Piso" error={err("floor")}>
-                <Input id="property-floor" value={form.floor} onChange={(e) => set("floor", e.target.value)} placeholder="3 o PB" className="h-10" />
+                <Input id="property-floor" maxLength={MAX.floor} value={form.floor} onChange={(e) => set("floor", e.target.value)} placeholder="3 o PB" className="h-10" />
               </Field>
               <Field id="property-apartment" label="Depto." error={err("apartment")}>
-                <Input id="property-apartment" value={form.apartment} onChange={(e) => set("apartment", e.target.value)} placeholder="B" className="h-10" />
+                <Input id="property-apartment" maxLength={MAX.apartment} value={form.apartment} onChange={(e) => set("apartment", e.target.value)} placeholder="B" className="h-10" />
               </Field>
               <Field id="property-tower" label="Torre" error={err("tower")}>
-                <Input id="property-tower" value={form.tower} onChange={(e) => set("tower", e.target.value)} className="h-10" />
+                <Input id="property-tower" maxLength={MAX.tower} value={form.tower} onChange={(e) => set("tower", e.target.value)} className="h-10" />
               </Field>
               <Field id="property-neighborhood" label="Barrio" error={err("neighborhood")} className="col-span-3 sm:col-span-1">
-                <Input id="property-neighborhood" value={form.neighborhood} onChange={(e) => set("neighborhood", e.target.value)} placeholder="Nueva Córdoba" className="h-10" />
+                <Input id="property-neighborhood" maxLength={MAX.neighborhood} value={form.neighborhood} onChange={(e) => set("neighborhood", e.target.value)} placeholder="Nueva Córdoba" className="h-10" />
               </Field>
             </div>
           </FormSection>
@@ -178,13 +182,13 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
           <FormSection title="Ciudad y código" icon={<Hash size={14} />} className="border-t pt-5">
             <div className="grid grid-cols-2 sm:grid-cols-[2fr_2fr_1fr] gap-3">
               <Field id="property-city" label="Ciudad" error={err("city")}>
-                <Input id="property-city" value={form.city} onChange={(e) => set("city", e.target.value)} className="h-10" />
+                <Input id="property-city" maxLength={MAX.city} value={form.city} onChange={(e) => set("city", e.target.value)} className="h-10" />
               </Field>
               <Field id="property-province" label="Provincia" error={err("province")}>
-                <Input id="property-province" value={form.province} onChange={(e) => set("province", e.target.value)} className="h-10" />
+                <Input id="property-province" maxLength={MAX.province} value={form.province} onChange={(e) => set("province", e.target.value)} className="h-10" />
               </Field>
               <Field id="property-postal_code" label="Cód. postal" error={err("postal_code")} className="col-span-2 sm:col-span-1">
-                <Input id="property-postal_code" value={form.postal_code} onChange={(e) => set("postal_code", e.target.value)} placeholder="5000" className="h-10" />
+                <Input id="property-postal_code" maxLength={MAX.postal_code} value={form.postal_code} onChange={(e) => set("postal_code", e.target.value)} placeholder="5000" className="h-10" />
               </Field>
             </div>
             <Field id="property-code" label="Código interno" error={codeError} hint={codeHint}>
@@ -308,19 +312,19 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field id="property-consortium_name" label="Consorcio o administración" error={err("consortium_name")}>
-                  <Input id="property-consortium_name" value={form.consortium_name} onChange={(e) => set("consortium_name", e.target.value)} placeholder="Administración Gómez" className="h-10" />
+                  <Input id="property-consortium_name" maxLength={MAX.consortium_name} value={form.consortium_name} onChange={(e) => set("consortium_name", e.target.value)} placeholder="Administración Gómez" className="h-10" />
                 </Field>
                 <Field id="property-functional_unit" label="Unidad funcional" error={err("functional_unit")} hint="Figura en la liquidación de expensas.">
-                  <Input id="property-functional_unit" value={form.functional_unit} onChange={(e) => set("functional_unit", e.target.value)} placeholder="UF 12" className="h-10" />
+                  <Input id="property-functional_unit" maxLength={MAX.functional_unit} value={form.functional_unit} onChange={(e) => set("functional_unit", e.target.value)} placeholder="UF 12" className="h-10" />
                 </Field>
                 <Field id="property-consortium_phone" label="Teléfono del consorcio" error={err("consortium_phone")}>
-                  <Input id="property-consortium_phone" inputMode="tel" value={form.consortium_phone} onChange={(e) => set("consortium_phone", e.target.value)} className="h-10" />
+                  <Input id="property-consortium_phone" maxLength={MAX.consortium_phone} inputMode="tel" value={form.consortium_phone} onChange={(e) => set("consortium_phone", e.target.value)} className="h-10" />
                 </Field>
                 <Field id="property-consortium_email" label="Mail del consorcio" error={err("consortium_email")}>
                   <Input id="property-consortium_email" type="email" inputMode="email" value={form.consortium_email} onChange={(e) => set("consortium_email", e.target.value)} className="h-10" />
                 </Field>
                 <Field id="property-cadastral_id" label="Catastro / cuenta de Rentas" error={err("cadastral_id")} className="sm:col-span-2">
-                  <Input id="property-cadastral_id" value={form.cadastral_id} onChange={(e) => set("cadastral_id", e.target.value)} placeholder="11-01-…" className="h-10 font-mono" />
+                  <Input id="property-cadastral_id" maxLength={MAX.cadastral_id} value={form.cadastral_id} onChange={(e) => set("cadastral_id", e.target.value)} placeholder="11-01-…" className="h-10 font-mono" />
                 </Field>
               </div>
             </Fold>
@@ -339,7 +343,7 @@ export function PropertyFormBody(props: PropertyFormBodyProps) {
                 <Input id="property-mandate_signed_at" type="date" value={form.mandate_signed_at} onChange={(e) => set("mandate_signed_at", e.target.value)} className="h-10 w-full sm:w-56" />
               </Field>
               <Field id="property-notes" label="Notas internas" error={err("notes")} hint="Sólo las ve el equipo.">
-                <Textarea id="property-notes" value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={3} placeholder="Llaves en la oficina, horario para mostrar…" />
+                <Textarea id="property-notes" maxLength={MAX.notes} value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={3} placeholder="Llaves en la oficina, horario para mostrar…" />
               </Field>
             </Fold>
           </div>

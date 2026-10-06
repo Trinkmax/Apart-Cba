@@ -349,9 +349,24 @@ export function applyRegime(s: WizardState, regime: RentalLegalRegime): WizardSt
 
 export interface StepIssue {
   step: WizardStepKey;
+  /** Dónde se muestra el aviso y, si hay un control con ese `data-wizard-field`, adónde salta el foco. */
   field: string;
   message: string;
 }
+
+/**
+ * `field` de los avisos de una fila de Inquilino y garantes: cada uno apunta
+ * al control que hay que tocar (antes todos llevaban al buscador de inquilinos,
+ * aunque el problema fuera la fecha de un garante). Falta el inquilino → "tenant".
+ */
+export const partyField = {
+  /** Botón «Sacar» de la fila: fila sin persona o persona repetida. */
+  row: (key: string) => `party:${key}`,
+  /** Botón de titular de los recibos (hay más de un inquilino). */
+  primary: (key: string) => `party-primary:${key}`,
+  /** Fecha en que el garante firmó la renovación. */
+  consent: (key: string) => `party-consent:${key}`,
+};
 
 const intOf = (s: string): number | null => (/^\s*\d{1,4}\s*$/.test(s) ? Number(s.trim()) : null);
 const textOrNull = (s: string): string | null => (s.trim() ? s.trim() : null);
@@ -377,14 +392,21 @@ export function parseWizard(s: WizardState): { input: ContractInput | null; issu
   if (!s.property_id) add("propiedad", "property_id", "Elegí la propiedad o cargá una nueva.");
 
   const filled = s.parties.filter((p) => p.person_id);
-  if (s.parties.some((p) => !p.person_id)) add("partes", "parties", "Hay una fila sin persona: elegila o sacala.");
-  if (!filled.some((p) => p.role === "inquilino")) add("partes", "parties", "Falta el inquilino: buscalo o cargalo.");
-  if (filled.filter((p) => p.role === "inquilino" && p.is_primary).length > 1) add("partes", "parties", "Marcá un solo titular de los recibos.");
-  const ids = filled.map((p) => `${p.person_id}:${p.role}`);
-  if (new Set(ids).size !== ids.length) add("partes", "parties", "Hay una persona repetida con el mismo rol.");
-  if (filled.some((p) => p.role === "garante" && p.guarantor_consent_at && !isYmd(p.guarantor_consent_at))) {
-    add("partes", "parties", "Revisá la fecha en que firmó el garante.");
-  }
+  const emptyRow = s.parties.find((p) => !p.person_id);
+  if (emptyRow) add("partes", partyField.row(emptyRow.key), "Hay una fila sin persona: sacala.");
+  if (!filled.some((p) => p.role === "inquilino")) add("partes", "tenant", "Falta el inquilino: buscalo o cargalo.");
+  const primaries = filled.filter((p) => p.role === "inquilino" && p.is_primary);
+  if (primaries.length > 1) add("partes", partyField.primary(primaries[0].key), "Marcá un solo titular de los recibos.");
+  const seen = new Set<string>();
+  const repeated = filled.find((p) => {
+    const id = `${p.person_id}:${p.role}`;
+    if (seen.has(id)) return true;
+    seen.add(id);
+    return false;
+  });
+  if (repeated) add("partes", partyField.row(repeated.key), "Hay una persona repetida con el mismo rol.");
+  const badConsent = filled.find((p) => p.role === "garante" && p.guarantor_consent_at && !isYmd(p.guarantor_consent_at));
+  if (badConsent) add("partes", partyField.consent(badConsent.key), "Revisá la fecha en que firmó el garante.");
 
   if (!isYmd(s.start_date)) add("plazo", "start_date", "Poné la fecha de inicio.");
   const duration = intOf(s.duration_months);
@@ -510,6 +532,7 @@ export function stepIssue(step: WizardStepKey, s: WizardState): StepIssue | null
 const FIELD_STEP: Record<string, WizardStepKey> = {
   property_id: "propiedad",
   parties: "partes",
+  tenant: "partes",
   usage: "plazo",
   legal_regime: "plazo",
   start_date: "plazo",

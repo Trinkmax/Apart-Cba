@@ -7,7 +7,9 @@ import { ArrowLeft, ArrowRight, History, Loader2, RefreshCcw, Rocket, Save } fro
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { formatTimeAgo } from "@/lib/format";
+import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { previewContractPlan, saveRentalContract } from "@/lib/actions/rentals-contracts";
+import { useLiveContext } from "@/lib/realtime/live-context";
 import { joinNamesEs } from "@/lib/rentals/renewal";
 import type { RentalContractStatus } from "@/lib/types/database";
 import type { ContractFormOptions, PersonOption, PlanPreview, PropertyOption } from "./types";
@@ -16,11 +18,23 @@ import {
   guarantorsMissingConsent,
   overridesForSave,
   parseWizard,
+  partyField,
   previewInputOf,
   stepOfField,
   type WizardState,
   type WizardStepKey,
 } from "./wizard-state";
+import {
+  autoRestoreMarkValid,
+  decodeWizardDraft,
+  encodeAutoRestoreMark,
+  encodeWizardDraft,
+  legacyWizardDraftKey,
+  planWizardDraft,
+  wizardAutoRestoreKey,
+  wizardDraftKey,
+  type StoredWizardDraft,
+} from "./wizard-draft";
 import { entryOf } from "./wizard-derived";
 import type { StepProps } from "./wizard-step-props";
 import { WizardStepsBar } from "./wizard-steps-bar";
@@ -37,21 +51,61 @@ import { StepReview } from "./wizard-step-review";
 /**
  * Asistente de alta / edición de contratos: pasos con barra de progreso,
  * navegación libre entre pasos visitados, resumen en vivo (con los índices
- * reales, calculado en el servidor) y borrador local para no perder lo tipeado.
+ * reales, calculado en el servidor) y borrador local para no perder lo tipeado
+ * (por organización y usuario: ver wizard-draft.ts).
  */
-
-const STORAGE_PREFIX = "rentos.alquileres.wizard.";
-
-interface StoredDraft {
-  v: 1;
-  savedAt: string;
-  step: number;
-  state: WizardState;
-}
 
 function subscribeStorage(cb: () => void) {
   window.addEventListener("storage", cb);
   return () => window.removeEventListener("storage", cb);
+}
+
+/** Guarda el borrador; false si no hay storage (modo privado, bloqueado o lleno). */
+function writeDraft(key: string, step: number, state: WizardState): boolean {
+  try {
+    window.localStorage.setItem(key, encodeWizardDraft(step, state));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeDraft(key: string | null) {
+  if (!key) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* sin storage: no hay nada que borrar */
+  }
+}
+
+/** Marca de esta pestaña: "al recargar, reponé lo cargado". false si no se pudo dejar. */
+function markAutoRestore(storageKey: string): boolean {
+  try {
+    window.sessionStorage.setItem(wizardAutoRestoreKey(storageKey), encodeAutoRestoreMark());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Al abrir: hay marca vigente y el borrador al que se refiere sigue guardado. */
+function shouldAutoRestore(storageKey: string | null): boolean {
+  if (!storageKey || typeof window === "undefined") return false;
+  try {
+    return autoRestoreMarkValid(window.sessionStorage.getItem(wizardAutoRestoreKey(storageKey))) && window.localStorage.getItem(storageKey) !== null;
+  } catch {
+    return false;
+  }
+}
+
+function clearAutoRestoreMark(storageKey: string | null) {
+  if (!storageKey) return;
+  try {
+    window.sessionStorage.removeItem(wizardAutoRestoreKey(storageKey));
+  } catch {
+    /* sin storage: no hay marca */
+  }
 }
 
 export interface ContractWizardProps {
@@ -66,9 +120,32 @@ export interface ContractWizardProps {
   initialStep?: number;
 }
 
-export function ContractWizard({ mode, contractId = null, contractStatus = null, contractLabel = null, initial, options, hasPayments = false, initialStep = 0 }: ContractWizardProps) {
+/**
+ * El borrador es de una organización y un usuario. Si cambian con la pantalla abierta (el selector
+ * de organización no navega: refresca la página), el asistente vuelve a arrancar con las opciones
+ * de la nueva. Lo cargado era de la otra: no puede guardarse —ni ofrecerse— en esta. Queda en su
+ * clave para cuando se vuelva a esa organización.
+ */
+export function ContractWizard(props: ContractWizardProps) {
+  const live = useLiveContext();
+  // Sin organización o usuario (fuera del panel) no hay borrador: nunca una clave compartida por todo el navegador.
+  const storageKey = live?.organizationId && live.userId ? wizardDraftKey(props.contractId ?? null, live.organizationId, live.userId) : null;
+  return <ContractWizardBody key={storageKey ?? "sin-borrador"} {...props} storageKey={storageKey} />;
+}
+
+function ContractWizardBody({
+  mode,
+  contractId = null,
+  contractStatus = null,
+  contractLabel = null,
+  initial,
+  options,
+  hasPayments = false,
+  initialStep = 0,
+  storageKey,
+}: ContractWizardProps & { storageKey: string | null }) {
   const router = useRouter();
-  const storageKey = STORAGE_PREFIX + (contractId ?? "nuevo");
+  const legacyKey = legacyWizardDraftKey(contractId);
   const last = WIZARD_STEPS.length - 1;
   const isDraft = mode === "create" || contractStatus === "borrador";
   const topRef = useRef<HTMLDivElement>(null);
@@ -79,7 +156,11 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   const [attempted, setAttempted] = useState<Set<WizardStepKey>>(() => new Set());
   const [serverError, setServerError] = useState<{ field: string; message: string } | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [dismissedStored, setDismissedStored] = useState(false);
+  // Qué se hizo con el borrador que estaba guardado al abrir: hasta que se elige, no se pisa.
+  const [draftChoice, setDraftChoice] = useState<"pendiente" | "recuperado" | "descartado">("pendiente");
+  // Esta pantalla ya escribió su propio borrador: lo guardado es lo de acá, no algo para recuperar.
+  const [wroteDraft, setWroteDraft] = useState(false);
+  const [autoRestored, setAutoRestored] = useState(false);
   const [extraProperties, setExtraProperties] = useState<PropertyOption[]>([]);
   const [extraPeople, setExtraPeople] = useState<PersonOption[]>([]);
   const [preview, setPreview] = useState<PlanPreview | null>(null);
@@ -89,40 +170,88 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   // Campo al que saltar cuando algo falta (p. ej. la propiedad o el inquilino): no alcanza con abrir el paso.
   const [focusRequest, setFocusRequest] = useState<{ field: string } | null>(null);
 
-  // Borrador local: se lee sin efecto (servidor = null) y se ofrece recuperarlo.
+  const clampStep = (n: number) => Math.min(Math.max(0, n), last);
+  // Si es renovación lo dice el contrato, no lo guardado en el navegador (que puede ser de antes).
+  // Un campo que el borrador no trae (es de antes de que existiera) queda con el valor de arranque.
+  const restoredState = (draft: StoredWizardDraft): WizardState => ({ ...initial, ...draft.state, is_renewal: initial.is_renewal });
+
+  // Ids de esta organización: lo que ofrece el asistente y lo que ya trae el contrato (puede estar archivado).
+  const knownIds = useMemo(
+    () =>
+      new Set(
+        [...options.properties.map((p) => p.id), ...options.people.map((p) => p.id), initial.property_id, ...initial.parties.map((p) => p.person_id)].filter(Boolean),
+      ),
+    [options.properties, options.people, initial],
+  );
+
+  // Borrador local: se lee sin efecto (servidor = null) y se ofrece recuperarlo. El de la clave
+  // vieja cuenta sólo si demuestra ser de esta organización (planWizardDraft).
   const storedRaw = useSyncExternalStore(
     subscribeStorage,
     () => {
+      if (!storageKey) return null;
       try {
-        return window.localStorage.getItem(storageKey);
+        return planWizardDraft(window.localStorage.getItem(storageKey), window.localStorage.getItem(legacyKey), knownIds).offer;
       } catch {
         return null;
       }
     },
     () => null,
   );
-  const stored = useMemo<StoredDraft | null>(() => {
-    if (!storedRaw) return null;
-    try {
-      const d = JSON.parse(storedRaw) as StoredDraft;
-      return d?.v === 1 && d.state ? d : null;
-    } catch {
-      return null;
-    }
-  }, [storedRaw]);
-  const showRestore = Boolean(stored) && !dirty && !dismissedStored;
+  const stored = useMemo(() => decodeWizardDraft(storedRaw), [storedRaw]);
+  // Un borrador de antes que todavía nadie recuperó ni descartó. Mientras exista, el aviso queda
+  // arriba (aunque ya se haya tocado algo) y lo que se cargue ahora no lo pisa: si no, empezar a
+  // tipear sin ver el aviso borraba un contrato entero medio segundo después.
+  const pendingStored = stored && draftChoice === "pendiente" && !wroteDraft ? stored : null;
 
+  // La clave vieja era una sola para todo el navegador: se muda a la de esta persona sólo si es de
+  // esta organización (si no, traería montos, garantías y notas de otra). La que no se puede
+  // comprobar se deja para su dueño: a nadie más se le ofrece.
   useEffect(() => {
-    if (!dirty) return;
+    if (!storageKey) return;
+    try {
+      const plan = planWizardDraft(window.localStorage.getItem(storageKey), window.localStorage.getItem(legacyKey), knownIds);
+      if (plan.adopt && plan.offer !== null) window.localStorage.setItem(storageKey, plan.offer);
+      if (plan.removeLegacy) window.localStorage.removeItem(legacyKey);
+    } catch {
+      /* sin storage: no hay nada que mudar */
+    }
+  }, [storageKey, legacyKey, knownIds]);
+
+  // Volver de «Recargar» después de que guardar falló por un deploy: el aviso prometió que lo
+  // cargado vuelve a aparecer, así que se repone solo. La marca es de esta pestaña, se lee una sola
+  // vez al abrir (la que deja esta misma pantalla al fallar es para después de recargar) y se borra.
+  // No se muestra: en el servidor da false sin romper la hidratación. El borrador recién se puede
+  // leer después de hidratar, así que se repone con un ajuste de state durante render (como pms-board).
+  const [restoreOnOpen] = useState(() => shouldAutoRestore(storageKey));
+  if (restoreOnOpen && pendingStored && !dirty && !autoRestored) {
+    setAutoRestored(true);
+    setState(restoredState(pendingStored));
+    setStep(clampStep(pendingStored.step));
+    setVisited(last);
+    setDirty(true);
+    setDraftChoice("recuperado");
+  }
+  useEffect(() => {
+    // Sólo al abrir (la clave no cambia sin volver a montar): una marca que deje esta pantalla después queda para la próxima.
+    clearAutoRestoreMark(storageKey);
+  }, [storageKey]);
+  useEffect(() => {
+    if (autoRestored) toast.success("Recuperamos lo que estabas cargando", { id: "contrato-recuperado" });
+  }, [autoRestored]);
+
+  // El borrador se escribe medio segundo después de cada cambio, salvo que haya uno de antes sin
+  // decidir. Con el contrato ya guardado, una escritura que había quedado pendiente no lo vuelve a
+  // dejar (si no, reaparecería "sin guardar").
+  const savedRef = useRef(false);
+  const holdForStored = pendingStored !== null;
+  useEffect(() => {
+    if (!dirty || !storageKey || holdForStored) return;
     const t = setTimeout(() => {
-      try {
-        window.localStorage.setItem(storageKey, JSON.stringify({ v: 1, savedAt: new Date().toISOString(), step, state } satisfies StoredDraft));
-      } catch {
-        /* sin storage: seguimos sin borrador local */
-      }
+      if (!savedRef.current && writeDraft(storageKey, step, state)) setWroteDraft(true);
     }, 500);
     return () => clearTimeout(t);
-  }, [dirty, state, step, storageKey]);
+  }, [dirty, state, step, storageKey, holdForStored]);
 
   // Vista previa con los índices reales (debounced; descarta respuestas viejas).
   const previewInput = previewInputOf(state);
@@ -133,10 +262,18 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
     const id = ++seq.current;
     const t = setTimeout(async () => {
       setPreviewLoading(true);
-      const res = await previewContractPlan(JSON.parse(previewKey));
-      if (id !== seq.current) return;
-      setPreviewLoading(false);
-      if (res.ok) setPreview(res.preview);
+      try {
+        const res = await previewContractPlan(JSON.parse(previewKey));
+        if (id !== seq.current) return;
+        // Si no se pudo calcular, el resumen vuelve a "—": las cifras de antes serían de otros datos.
+        setPreview(res.ok ? res.preview : null);
+      } catch {
+        // Sin respuesta (conexión o deploy nuevo): el resumen es una ayuda, no frena la carga, pero
+        // tampoco muestra cifras de antes del cambio. Si fue un deploy, guardar lo avisa con «Recargar».
+        if (id === seq.current) setPreview(null);
+      } finally {
+        if (id === seq.current) setPreviewLoading(false);
+      }
     }, 450);
     return () => clearTimeout(t);
   }, [previewKey]);
@@ -146,7 +283,8 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   useEffect(() => {
     if (!focusRequest) return;
     const frame = requestAnimationFrame(() => {
-      const el = document.querySelector<HTMLElement>(`[data-wizard-field="${focusRequest.field}"]`);
+      // Sin un control con ese ancla (un aviso general del paso) no se salta: el paso ya muestra el aviso.
+      const el = document.querySelector<HTMLElement>(`[data-wizard-field="${CSS.escape(focusRequest.field)}"]`);
       if (!el) return;
       el.scrollIntoView({ block: "center", behavior: "smooth" });
       el.focus({ preventScroll: true });
@@ -169,6 +307,7 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   function set(patch: Partial<WizardState> | ((s: WizardState) => Partial<WizardState>)) {
     setState((s) => ({ ...s, ...(typeof patch === "function" ? patch(s) : patch) }));
     setDirty(true);
+    savedRef.current = false;
     setServerError(null);
   }
 
@@ -194,21 +333,19 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   }
 
   function restore() {
-    if (!stored) return;
-    // Si es renovación lo dice el contrato, no lo guardado en el navegador (que puede ser de antes).
-    setState({ ...stored.state, is_renewal: initial.is_renewal });
-    setStep(Math.min(Math.max(0, stored.step), last));
+    if (!pendingStored) return;
+    setState(restoredState(pendingStored));
+    setStep(clampStep(pendingStored.step));
     setVisited(last);
     setDirty(true);
+    setDraftChoice("recuperado");
     toast.success("Recuperamos lo que estabas cargando");
   }
   function discardStored() {
-    try {
-      window.localStorage.removeItem(storageKey);
-    } catch {
-      /* nada */
-    }
-    setDismissedStored(true);
+    // Sólo el borrador de esta persona: uno de la clave vieja que no se pudo adoptar no es lo que se ofreció.
+    removeDraft(storageKey);
+    clearAutoRestoreMark(storageKey);
+    setDraftChoice("descartado");
   }
 
   function save(activate: boolean) {
@@ -236,17 +373,33 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
           : `Es una renovación: cargá la fecha en que firmó ${names} (art. 1225 CCyC), o sacalo del contrato si no firma.`,
       });
       goTo("partes");
+      setFocusRequest({ field: partyField.consent(unsigned[0].key) });
       return;
     }
     const entry = activate && state.generate_entry_charge ? entryOf(state, options.settings) : null;
     setSavingKind(activate ? "activate" : "draft");
     startSaving(async () => {
-      const res = await saveRentalContract({
-        id: contractId,
-        input: parsed.input,
-        overrides: isDraft ? overridesForSave(state) : undefined,
-        activate: activate ? { entryItems: entry?.chargeItems ?? [], entryDueDate: state.start_date > options.today ? state.start_date : options.today } : null,
-      });
+      let res: Awaited<ReturnType<typeof saveRentalContract>>;
+      try {
+        res = await saveRentalContract({
+          id: contractId,
+          input: parsed.input,
+          overrides: isDraft ? overridesForSave(state) : undefined,
+          activate: activate ? { entryItems: entry?.chargeItems ?? [], entryDueDate: state.start_date > options.today ? state.start_date : options.today } : null,
+        });
+      } catch (error) {
+        // No llegó respuesta (conexión o deploy nuevo): lo cargado queda ya mismo en el borrador de
+        // este navegador (es lo que se quiso guardar, así que pisa uno de antes que no se había elegido).
+        const kept = dirty && storageKey ? writeDraft(storageKey, step, state) : false;
+        if (kept) setWroteDraft(true);
+        // Con un deploy nuevo hay que recargar: al volver, lo cargado se repone solo. Si la marca no
+        // se pudo dejar, queda el aviso de arriba para recuperarlo.
+        const autoRestores = Boolean(kept && storageKey && isStaleDeployError(error) && markAutoRestore(storageKey));
+        toastActionFailure(error, activate ? "No se pudo activar el contrato" : "No se pudo guardar", {
+          afterReload: kept ? (autoRestores ? "Lo que cargaste vuelve a aparecer." : "Después, tocá «Recuperar» arriba de los pasos.") : undefined,
+        });
+        return;
+      }
       if (!res.ok) {
         if (res.field) setServerError({ field: res.field, message: res.error });
         toast.error(activate ? "No se pudo activar el contrato" : "No se pudo guardar", { description: res.error });
@@ -255,11 +408,9 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
         if (res.field) setFocusRequest({ field: res.field });
         return;
       }
-      try {
-        window.localStorage.removeItem(storageKey);
-      } catch {
-        /* nada */
-      }
+      savedRef.current = true;
+      removeDraft(storageKey);
+      clearAutoRestoreMark(storageKey);
       setDirty(false);
       if (activate && res.activated) toast.success("Contrato activado", { description: "Ya rige: se armó el cronograma de ajustes y los cargos que tocan." });
       else if (activate) toast.warning("Se guardó, pero no se pudo activar", { description: res.activationError ?? undefined });
@@ -298,12 +449,19 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   return (
     <div ref={topRef} className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_21rem] lg:items-start scroll-mt-4">
       <div className="min-w-0 space-y-4">
-        {showRestore && stored && (
+        {pendingStored && (
           <div className="rounded-xl border border-sky-500/30 bg-sky-500/[0.07] px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
             <History size={18} className="text-sky-600 shrink-0 hidden sm:block" />
-            <p className="text-sm flex-1">
-              Tenés datos sin guardar de este contrato <span className="text-muted-foreground">({formatTimeAgo(stored.savedAt)})</span>.
-            </p>
+            <div className="flex-1 min-w-0 space-y-0.5">
+              <p className="text-sm">
+                Tenés datos sin guardar de este contrato <span className="text-muted-foreground">({formatTimeAgo(pendingStored.savedAt)})</span>.
+              </p>
+              {dirty && (
+                <p className="text-xs text-muted-foreground leading-snug">
+                  Hasta que elijas, lo nuevo no se guarda en este navegador. «Recuperar» lo reemplaza por lo anterior.
+                </p>
+              )}
+            </div>
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={discardStored}>
                 Descartar

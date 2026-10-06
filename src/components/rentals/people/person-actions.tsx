@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { archivePerson, restorePerson } from "@/lib/actions/rentals-people";
+import { toastActionFailure } from "@/lib/action-failure";
 import type { RentalPerson } from "@/lib/types/database";
 import { PersonFormDialog } from "./person-form-dialog";
 
@@ -29,7 +30,14 @@ export function PersonActions({ person, intent }: { person: RentalPerson; intent
 
   function toggleArchive() {
     startTransition(async () => {
-      const res = person.active ? await archivePerson(person.id) : await restorePerson(person.id);
+      let res: Awaited<ReturnType<typeof archivePerson>>;
+      try {
+        res = person.active ? await archivePerson(person.id) : await restorePerson(person.id);
+      } catch (error) {
+        // No llegó respuesta (conexión o deploy nuevo): el aviso dice cuál de las dos y qué hacer.
+        toastActionFailure(error, person.active ? "No se pudo archivar" : "No se pudo reactivar");
+        return;
+      }
       if (!res.ok) {
         toast.error(person.active ? "No se pudo archivar" : "No se pudo reactivar", { description: res.error });
         return;

@@ -5,7 +5,6 @@ import { HomeHero } from "@/components/marketplace/home/home-hero";
 import { HomeHoods } from "@/components/marketplace/home/home-hoods";
 import { HomeMonthly } from "@/components/marketplace/home/home-monthly";
 import { HomeOwnersBand } from "@/components/marketplace/home/home-owners-band";
-import { HomePillars } from "@/components/marketplace/home/home-pillars";
 import { HomeProcess } from "@/components/marketplace/home/home-process";
 import { HomeStory } from "@/components/marketplace/home/home-story";
 import { homeFaqItems, processFacts } from "@/components/marketplace/home/faq-content";
@@ -59,11 +58,9 @@ export default async function MarketplaceHome() {
       <HomeJsonLd instagram={contact.instagramHandle} />
       <HomeHero
         responseHours={facts.responseHours}
-        senaLabel={facts.senaLabel}
         // Lleva a /buscar ("Por noche"): cuenta lo mismo que muestra ese destino.
         statsLabel={unitsInHoodsLabel(stats.shortStays, stats.shortHoods)}
       />
-      <HomePillars />
       <HomeFeatured listings={pickFeaturedListings(catalog.listings)} total={stats.shortStays} />
       {/* En celular y tablet los barrios van antes del proceso (lo visual antes que el
           texto). El contenedor es flex SÓLO por debajo de lg: en escritorio es un div

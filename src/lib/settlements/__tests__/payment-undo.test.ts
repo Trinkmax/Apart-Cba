@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
+  hasPaymentUndoNetGap,
   parsePaymentUndoRpcMovements,
   paymentMovementKind,
   paymentUndoBalanceText,
   paymentUndoErrorMessage,
   paymentUndoMovementLabel,
+  paymentUndoNetGap,
+  paymentUndoNetGapText,
   paymentUndoSuccessText,
   samePaymentMovementSet,
   settlementLockedMessage,
@@ -237,6 +240,9 @@ describe("settlementLockHint / settlementLockedMessage", () => {
     const hint = settlementLockHint("pagada");
     expect(hint).toMatch(/Anular el pago/);
     expect(hint).not.toMatch(/Anulá la liquidación/);
+    // No promete volver a registrar "lo mismo": se paga por el neto de ese momento.
+    expect(hint).toMatch(/neto que dé en ese momento/);
+    expect(hint).not.toMatch(/registrar el pago bien/);
   });
 
   it("revisada / enviada sin pago se destraban volviendo a Borrador", () => {
@@ -256,5 +262,73 @@ describe("settlementLockHint / settlementLockedMessage", () => {
     const msg = settlementLockedMessage("SETTLEMENT_LOCKED");
     expect(msg).toMatch(/Anular el pago/);
     expect(msg).toMatch(/Borrador/);
+  });
+});
+
+describe("paymentUndoNetGap: lo que salió según Caja contra el neto de hoy", () => {
+  const flat = (s: string) => s.replace(/\s/g, " ");
+  const preview = (net_payable: number, movements: PaymentUndoMovement[], currency = "ARS") => ({
+    net_payable,
+    currency,
+    movements,
+  });
+
+  it("detecta un neto editado con «Solo visual» después de pagar (caso real 16/09)", () => {
+    const g = paymentUndoNetGap(preview(764400, [mov({ amount: 640000 })]));
+    expect(g).toEqual({ paidNet: 640000, net: 764400, gap: 124400 });
+    expect(hasPaymentUndoNetGap(g)).toBe(true);
+  });
+
+  it("pago dividido + ajustes que impactaron en Caja: no hay diferencia", () => {
+    const g = paymentUndoNetGap(
+      preview(152000, [
+        mov({ id: "1", account_id: "e", amount: 40000 }),
+        mov({ id: "2", account_id: "b", amount: 110000 }),
+        mov({ id: "3", account_id: "b", kind: "ajuste", amount: 5000 }),
+        mov({ id: "4", account_id: "b", kind: "ajuste", direction: "in", amount: 3000 }),
+      ]),
+    );
+    expect(g).toEqual({ paidNet: 152000, net: 152000, gap: 0 });
+    expect(hasPaymentUndoNetGap(g)).toBe(false);
+  });
+
+  it("si hoy da menos de lo que salió, la diferencia es negativa", () => {
+    const g = paymentUndoNetGap(preview(600000, [mov({ amount: 640000 })]));
+    expect(g?.gap).toBe(-40000);
+    expect(hasPaymentUndoNetGap(g)).toBe(true);
+  });
+
+  it("un centavo ya es diferencia; el error de coma flotante no", () => {
+    expect(hasPaymentUndoNetGap(paymentUndoNetGap(preview(100.01, [mov({ amount: 100 })])))).toBe(true);
+    const g = paymentUndoNetGap(
+      preview(0.3, [mov({ id: "1", amount: 0.1 }), mov({ id: "2", amount: 0.2 })]),
+    );
+    expect(g?.gap).toBe(0);
+    expect(hasPaymentUndoNetGap(g)).toBe(false);
+  });
+
+  it("sin movimientos en Caja u otra moneda no hay con qué comparar", () => {
+    expect(paymentUndoNetGap(preview(764400, []))).toBeNull();
+    expect(paymentUndoNetGap(preview(1000, [mov({ amount: 1000, currency: "USD" })]))).toBeNull();
+    expect(hasPaymentUndoNetGap(null)).toBe(false);
+  });
+
+  it("el aviso dice cuánto salió, cuánto da hoy y qué se registraría al pagar de nuevo", () => {
+    const text = flat(paymentUndoNetGapText({ paidNet: 640000, net: 764400, gap: 124400 }, "ARS"));
+    expect(text).toContain("En Caja el pago suma $ 640.000,00, pero la liquidación hoy da $ 764.400,00");
+    expect(text).toContain("«Registrar pago» te va a pedir $ 764.400,00");
+    expect(text).toContain("Caja registraría $ 124.400,00 que no salieron");
+    expect(text).toContain("«Solo visual»");
+  });
+
+  it("si hoy da menos, avisa que Caja registraría menos de lo que salió", () => {
+    const text = flat(paymentUndoNetGapText({ paidNet: 640000, net: 600000, gap: -40000 }, "ARS"));
+    expect(text).toContain("Caja registraría $ 40.000,00 menos de lo que salió");
+  });
+
+  it("con neto cero o negativo avisa que no se va a poder volver a pagar", () => {
+    const text = paymentUndoNetGapText({ paidNet: 640000, net: 0, gap: -640000 }, "ARS");
+    expect(text).toMatch(/no se puede volver a pagar/);
+    expect(text).not.toMatch(/te va a pedir/);
   });
 });

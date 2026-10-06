@@ -8,8 +8,11 @@ import type { OwnerOption } from "../property-types";
 const owner = (id: string, full_name: string): OwnerOption => ({ id, full_name, phone: null, email: null, document_number: null });
 const row = (patch: Partial<OwnerRowState>): OwnerRowState => ({ key: "k", owner_id: "", pct: "100", is_primary: true, draft: null, ...patch });
 
+const CLIENT_ID = "6f1c2a4e-8b3d-4c5e-9f60-7a8b9c0d1e2f";
+
 function blank(): PropertyFormState {
   return {
+    client_id: CLIENT_ID,
     code: "",
     property_type: "departamento",
     street: "",
@@ -84,11 +87,12 @@ describe("ownershipRowsOf", () => {
     expect(ownershipRowsOf([row({ owner_id: "o1", draft: blankOwnerDraft("Otro") })])[0].draft).toBeNull();
   });
 
-  it("los nuevos validan con un id provisorio único por fila", () => {
-    const rows = withProvisionalIds(
-      ownershipRowsOf([row({ key: "a", pct: "50", draft: blankOwnerDraft("A") }), row({ key: "b", pct: "50", is_primary: false, draft: blankOwnerDraft("B") })]),
-    );
-    expect(rows.map((r) => r.owner_id)).toEqual(["nuevo:a", "nuevo:b"]);
+  it("los nuevos validan con el id con el que se van a crear (uno por fila)", () => {
+    const a = blankOwnerDraft("A");
+    const b = blankOwnerDraft("B");
+    const rows = withProvisionalIds(ownershipRowsOf([row({ key: "a", pct: "50", draft: a }), row({ key: "b", pct: "50", is_primary: false, draft: b })]));
+    expect(rows.map((r) => r.owner_id)).toEqual([a.id, b.id]);
+    expect(a.id).not.toBe(b.id);
   });
 });
 
@@ -110,6 +114,26 @@ describe("borrador de la propiedad", () => {
     expect(state.owners[0].key).toBeTruthy();
     expect(state.services[0]).toMatchObject({ kind: "luz", provider: "EPEC", account_number: "123" });
     expect(sameFormValues(state, blank())).toBe(false);
+  });
+
+  it("conserva los ids del alta y del propietario nuevo (reintentar no duplica)", () => {
+    const ownerId = "0b8e6a52-3c1d-4f7a-9e2b-5d4c3b2a1f00";
+    const stored = {
+      client_id: "11111111-2222-4333-8444-555555555555",
+      owners: [{ owner_id: "", pct: "100", is_primary: true, draft: { id: ownerId, full_name: "Ulises Rojas", phone: "", email: "", cbu: "", alias_cbu: "" } }],
+    };
+    const state = propertyStateFromDraft(blank(), stored);
+    expect(state.client_id).toBe("11111111-2222-4333-8444-555555555555");
+    expect(state.owners[0].draft?.id).toBe(ownerId);
+  });
+
+  it("un id roto se reemplaza: el del alta vacía, o uno nuevo para el propietario", () => {
+    const state = propertyStateFromDraft(blank(), {
+      client_id: "no-es-un-id",
+      owners: [{ owner_id: "", pct: "100", is_primary: true, draft: { id: 7, full_name: "Ulises Rojas" } }],
+    });
+    expect(state.client_id).toBe(CLIENT_ID);
+    expect(state.owners[0].draft?.id).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("lo que no encaja queda como en un alta vacía", () => {
