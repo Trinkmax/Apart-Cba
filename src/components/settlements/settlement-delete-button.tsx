@@ -21,7 +21,7 @@ import { deleteSettlement } from "@/lib/actions/settlements";
 /**
  * Botón de borrado definitivo de una liquidación, para la lista. Una
  * liquidación pagada no se puede borrar (dejaría huérfano el egreso en Caja):
- * el botón queda deshabilitado con la explicación.
+ * el botón queda deshabilitado y el título apunta a «Anular el pago».
  */
 export function SettlementDeleteButton({
   id,
@@ -40,7 +40,11 @@ export function SettlementDeleteButton({
   function onDelete() {
     start(async () => {
       try {
-        await deleteSettlement(id);
+        const res = await deleteSettlement(id);
+        if (!res.ok) {
+          toast.error("No se pudo eliminar", { description: res.error });
+          return;
+        }
         toast.success("Liquidación eliminada");
         router.refresh();
       } catch (e) {
@@ -52,17 +56,17 @@ export function SettlementDeleteButton({
   }
 
   if (paid) {
+    // El título dice la salida: antes sólo decía que no se podía.
+    const why =
+      "Está pagada: para eliminarla, abrila y anulá el pago desde su estado";
     return (
-      <span
-        title="No se puede eliminar una liquidación pagada"
-        className="inline-flex"
-      >
+      <span title={why} className="inline-flex">
         <Button
           variant="ghost"
           size="icon"
           disabled
           className="size-8 text-muted-foreground/30"
-          aria-label="No se puede eliminar una liquidación pagada"
+          aria-label={why}
         >
           <Trash2 size={15} />
         </Button>

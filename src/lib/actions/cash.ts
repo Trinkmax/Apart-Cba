@@ -7,6 +7,7 @@ import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
 import { can } from "@/lib/permissions";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
+import { settlementLockedMessage } from "@/lib/settlements/payment-undo";
 import type { CashAccount, CashMovement } from "@/lib/types/database";
 import { getOwnerScope } from "@/lib/auth/owner-scope";
 
@@ -1813,8 +1814,9 @@ export async function getPaymentReceiptData(
 function mapRpcErrorToSpanish(raw: string): string {
   if (raw.includes("TRANSFER_REQUIRES_CONFIRM"))
     return "Esta es una transferencia: confirmá que querés eliminar ambos movimientos.";
-  if (raw.includes("SETTLEMENT_LOCKED"))
-    return "El movimiento está vinculado a una liquidación cerrada. Anulá la liquidación primero.";
+  // Antes decía "Anulá la liquidación primero", y una pagada no se puede
+  // anular: la salida es «Anular el pago» desde la liquidación (migración 069).
+  if (raw.includes("SETTLEMENT_LOCKED")) return settlementLockedMessage(raw);
   if (raw.includes("Currency mismatch"))
     return "La cuenta destino tiene otra moneda: no se puede reasignar.";
   if (raw.includes("La cuenta destino está inactiva"))

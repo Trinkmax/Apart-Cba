@@ -8,14 +8,16 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { foldText } from "@/components/rentals/people/person-helpers";
 import type { OwnerOption } from "./property-types";
+import { findOwnerByName } from "./owner-rows";
 
 /**
  * Buscador de propietarios (tabla `owners` de la org) con "Crear «…»" al pie:
- * si no está, se crea sin salir del formulario.
+ * si no está, la fila pasa a "propietario nuevo" (se crea al guardar la propiedad).
  */
 export function OwnerPicker({
   id,
   value,
+  pendingName,
   options,
   excludeIds,
   onChange,
@@ -24,6 +26,8 @@ export function OwnerPicker({
 }: {
   id?: string;
   value: string;
+  /** La fila es un propietario nuevo a crear: el botón muestra su nombre. */
+  pendingName?: string | null;
   options: OwnerOption[] | null;
   excludeIds: string[];
   onChange: (ownerId: string) => void;
@@ -34,6 +38,9 @@ export function OwnerPicker({
   const [search, setSearch] = useState("");
   const selected = options?.find((o) => o.id === value) ?? null;
   const visible = (options ?? []).filter((o) => o.id === value || !excludeIds.includes(o.id));
+  const pending = pendingName != null;
+  // Si lo buscado ya está en la lista, "Crear" pasa a "Crear otro": que se vea que ya existe.
+  const exists = Boolean(search.trim() && findOwnerByName(options, search));
 
   return (
     <Popover
@@ -53,9 +60,24 @@ export function OwnerPicker({
           aria-label="Propietario"
           aria-invalid={invalid || undefined}
           disabled={options === null}
-          className={cn("w-full justify-between font-normal h-10 px-3 min-w-0", !selected && "text-muted-foreground", invalid && "border-rose-500/60")}
+          className={cn(
+            "w-full justify-between font-normal h-10 px-3 min-w-0",
+            !selected && !pending && "text-muted-foreground",
+            pending && !selected && "border-teal-600/40 text-teal-800 dark:text-teal-200",
+            invalid && "border-rose-500/60",
+          )}
         >
-          <span className="truncate">{options === null ? "Cargando propietarios…" : selected ? selected.full_name : "Buscá o creá el propietario"}</span>
+          <span className="truncate">
+            {options === null
+              ? "Cargando propietarios…"
+              : selected
+                ? selected.full_name
+                : pending
+                  ? pendingName.trim()
+                    ? `Nuevo: ${pendingName.trim()}`
+                    : "Propietario nuevo"
+                  : "Buscá o creá el propietario"}
+          </span>
           <ChevronsUpDown size={14} className="opacity-50 shrink-0 ml-2" />
         </Button>
       </PopoverTrigger>
@@ -100,7 +122,7 @@ export function OwnerPicker({
                 <UserPlus size={14} className="mr-1" />
                 {search.trim() ? (
                   <span className="truncate">
-                    Crear propietario «<strong className="font-semibold">{search.trim()}</strong>»
+                    {exists ? "Crear otro propietario" : "Crear propietario"} «<strong className="font-semibold">{search.trim()}</strong>»
                   </span>
                 ) : (
                   "Crear un propietario nuevo"

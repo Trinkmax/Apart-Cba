@@ -23,6 +23,18 @@ import {
 import { zonedTimeToUtc, addDaysYmd } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import {
+  PAYMENT_UNDO_REASON_MAX,
+  PAYMENT_UNDO_REASON_MIN,
+  parsePaymentUndoRpcMovements,
+  paymentMovementKind,
+  paymentUndoErrorMessage,
+  sortPaymentUndoMovements,
+  summarizePaymentUndo,
+  type PaymentUndoMovement,
+  type PaymentUndoPreview,
+  type PaymentUndoResult,
+} from "@/lib/settlements/payment-undo";
+import {
   computeBookingEconomics,
   channelCommissionPctFor,
   resolveCommissionPct,
@@ -685,8 +697,10 @@ async function persistSettlement(opts: {
   }
   for (const sib of siblings) {
     if (sib.status === "pagada" || sib.paid_movement_id) {
+      // Una pagada no se puede anular a mano: la salida es anular el PAGO
+      // (migración 069), que la deja revisada y sí se puede unificar.
       throw new Error(
-        `La liquidación de ${sib.currency} ${year}-${String(month).padStart(2, "0")} ya está pagada. Anulala desde su detalle antes de regenerar para unificar.`,
+        `La liquidación de ${sib.currency} ${year}-${String(month).padStart(2, "0")} ya está pagada y no se puede unificar. Si ese pago no se hizo, abrila y usá «Anular el pago» en su estado; después volvé a regenerar.`,
       );
     }
   }
@@ -1648,11 +1662,34 @@ async function reconcileAfterEdit(opts: {
           `No se pudo registrar el ajuste en Caja: ${adjErr.message}`,
         );
       }
-      adjustmentId = adj.id as string;
-      adjustmentAccountId = payMov.account_id as string;
-      sideEffects.push(
-        `${direction === "out" ? "Egreso" : "Ingreso"} de ajuste en Caja ${formatMoney(amount, before.currency)}`,
-      );
+      // Carrera con «Anular el pago» (migración 069): si el pago se anuló
+      // mientras se editaba, este ajuste quedaría colgado de una liquidación
+      // revisada, protegido por el candado de Caja y sin forma de borrarlo.
+      // El UPDATE espera el candado de fila del RPC y, si el pago ya no es el
+      // mismo, no matchea: se borra el ajuste recién creado. Si la consulta
+      // falla, el ajuste queda (es lo que pasaba siempre).
+      const { data: stillPaid, error: stillPaidErr } = await admin
+        .from("owner_settlements")
+        .update({ last_edited_by: userId, last_edited_at: new Date().toISOString() })
+        .eq("id", before.id)
+        .eq("paid_movement_id", before.paid_movement_id)
+        .select("id");
+      if (!stillPaidErr && (!stillPaid || stillPaid.length === 0)) {
+        await admin
+          .from("cash_movements")
+          .delete()
+          .eq("id", adj.id)
+          .eq("organization_id", before.organization_id);
+        sideEffects.push(
+          "Sin impacto en Caja: el pago se anuló mientras se editaba",
+        );
+      } else {
+        adjustmentId = adj.id as string;
+        adjustmentAccountId = payMov.account_id as string;
+        sideEffects.push(
+          `${direction === "out" ? "Egreso" : "Ingreso"} de ajuste en Caja ${formatMoney(amount, before.currency)}`,
+        );
+      }
     }
   } else if (
     before.paid_movement_id &&
@@ -4081,7 +4118,8 @@ export async function listOwnersForPeriod(year: number, month: number) {
 
 // ════════════════════════════════════════════════════════════════════════════
 // Transiciones de estado (revisada / enviada / anulada / disputada).
-// El pago (→ pagada) va por registerSettlementPayment (impacta Caja).
+// El pago (→ pagada) va por registerSettlementPayment (impacta Caja) y se
+// deshace sólo con undoSettlementPayment (pagada → revisada, borra en Caja).
 // ════════════════════════════════════════════════════════════════════════════
 /**
  * Cambia el estado a mano, en cualquier dirección entre los de
@@ -4115,7 +4153,8 @@ export async function changeSettlementStatus(
   if (prev.status === "pagada" || prev.paid_movement_id) {
     return {
       ok: false,
-      error: "Esta liquidación ya tiene el pago registrado en Caja: su estado no se cambia a mano.",
+      error:
+        "Esta liquidación ya tiene el pago registrado en Caja: su estado no se cambia a mano. Si el pago no se hizo, usá «Anular el pago» desde su estado.",
     };
   }
   if (prev.status === "anulada") {
@@ -4176,14 +4215,20 @@ export async function changeSettlementStatus(
  * settlement_lines y settlement_audit. Bloqueada si está pagada: dejaría
  * huérfano el egreso (y los ajustes) en Caja. Libera los tickets de
  * mantenimiento cobrados para que puedan volver a liquidarse.
+ * Devuelve el error en vez de lanzarlo: en producción Next.js pisa el mensaje
+ * de cualquier throw y la persona no sabría qué hacer.
  */
-export async function deleteSettlement(settlementId: string) {
+export async function deleteSettlement(
+  settlementId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "delete")) {
-    throw new Error("No tenés permisos para eliminar liquidaciones");
+    return { ok: false, error: "No tenés permisos para eliminar liquidaciones" };
   }
-  const id = z.string().uuid().parse(settlementId);
+  const parsed = z.string().uuid().safeParse(settlementId);
+  if (!parsed.success) return { ok: false, error: "Liquidación inválida" };
+  const id = parsed.data;
   const admin = createAdminClient();
 
   const { data: s } = await admin
@@ -4192,11 +4237,15 @@ export async function deleteSettlement(settlementId: string) {
     .eq("id", id)
     .eq("organization_id", organization.id)
     .maybeSingle();
-  if (!s) throw new Error("Liquidación no encontrada");
+  if (!s) return { ok: false, error: "Liquidación no encontrada" };
   if (s.status === "pagada" || s.paid_movement_id) {
-    throw new Error(
-      "No se puede eliminar una liquidación pagada. Anulá primero el pago en Caja.",
-    );
+    // Antes decía "Anulá primero el pago en Caja", y Caja respondía "Anulá la
+    // liquidación primero": no había salida. El pago se anula desde acá.
+    return {
+      ok: false,
+      error:
+        "Está pagada. Si el pago no se hizo, abrila y usá «Anular el pago» en su estado: vuelve a Revisada, se borra el egreso de Caja y después se puede eliminar.",
+    };
   }
 
   // Liberar los tickets de mantenimiento cobrados a esta liquidación: sin esto
@@ -4211,10 +4260,10 @@ export async function deleteSettlement(settlementId: string) {
     .delete()
     .eq("id", id)
     .eq("organization_id", organization.id);
-  if (error) throw new Error(error.message);
+  if (error) return { ok: false, error: error.message };
 
   revalidateSettlement();
-  return { ok: true as const };
+  return { ok: true };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -4449,6 +4498,272 @@ export async function registerSettlementPayment(
     movement_id: primaryId,
     movement_ids: movements.map((m) => m.id as string),
   };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Anular el pago (migración 069). Una liquidación que quedó "pagada" sin que
+// la transferencia saliera no tenía vuelta: Caja pedía anular la liquidación y
+// la liquidación pedía anular el pago en Caja. El RPC
+// `settlement_undo_payment` borra en una transacción los movimientos del pago
+// (el egreso de cada cuenta + los ajustes posteriores), la deja revisada y
+// deja constancia en los dos historiales.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Anular un pago borra plata registrada en Caja: pide lo mismo que borrar
+ * desde Caja un egreso de liquidación (cash.delete + settlements.delete, ver
+ * assertCanMutateMovement en cash.ts).
+ */
+function canUndoSettlementPayment(role: Parameters<typeof can>[0]): boolean {
+  return can(role, "cash", "delete") && can(role, "settlements", "delete");
+}
+
+const NO_UNDO_PAYMENT_PERMISSION =
+  "No tenés permisos para anular pagos: implica borrar movimientos de Caja.";
+
+/** El RPC todavía no existe en la base (migración 069 sin aplicar). */
+function isMissingRpc(e: { code?: string } | null | undefined): boolean {
+  return e?.code === "PGRST202" || e?.code === "42883";
+}
+
+const PAYMENT_MOVEMENT_SELECT =
+  "id, account_id, direction, amount, currency, category, ref_type, description, occurred_at, account:cash_accounts(name)";
+
+type PaymentMovementRow = {
+  id: string;
+  account_id: string;
+  direction: string;
+  amount: number | string;
+  currency: string;
+  category: string;
+  ref_type: string | null;
+  description: string | null;
+  occurred_at: string;
+  account: { name: string | null } | { name: string | null }[] | null;
+};
+
+/**
+ * Los movimientos que va a borrar el RPC, con su mismo filtro: los etiquetados
+ * con la liquidación (pago y ajustes) más el de paid_movement_id. La
+ * confirmación muestra esta lista y el RPC exige que siga siendo la misma.
+ */
+async function loadSettlementPaymentMovements(
+  admin: Admin,
+  organizationId: string,
+  settlementId: string,
+  paidMovementId: string | null,
+): Promise<
+  { ok: true; movements: PaymentUndoMovement[] } | { ok: false; error: string }
+> {
+  const [byRef, byPaid] = await Promise.all([
+    admin
+      .from("cash_movements")
+      .select(PAYMENT_MOVEMENT_SELECT)
+      .eq("organization_id", organizationId)
+      .eq("ref_id", settlementId)
+      .in("ref_type", ["settlement_payment", "settlement_adjustment"]),
+    paidMovementId
+      ? admin
+          .from("cash_movements")
+          .select(PAYMENT_MOVEMENT_SELECT)
+          .eq("organization_id", organizationId)
+          .eq("id", paidMovementId)
+      : null,
+  ]);
+  const readError = byRef.error ?? byPaid?.error ?? null;
+  if (readError) {
+    return {
+      ok: false,
+      error: `No se pudieron leer los movimientos del pago: ${readError.message}`,
+    };
+  }
+  const rows = new Map<string, PaymentMovementRow>();
+  for (const r of [
+    ...(byRef.data ?? []),
+    ...(byPaid?.data ?? []),
+  ] as PaymentMovementRow[]) {
+    rows.set(r.id, r);
+  }
+  // Mismo freno que el RPC (MOVIMIENTO_INESPERADO): mejor avisarlo acá que
+  // después de que la persona escribió el motivo.
+  if ([...rows.values()].some((r) => r.category !== "owner_settlement")) {
+    return { ok: false, error: paymentUndoErrorMessage("MOVIMIENTO_INESPERADO") };
+  }
+  const movements = [...rows.values()].map((r): PaymentUndoMovement => {
+    const acc = Array.isArray(r.account) ? r.account[0] : r.account;
+    return {
+      id: r.id,
+      kind: paymentMovementKind(r, paidMovementId),
+      account_id: r.account_id,
+      account_name: acc?.name?.trim() || "Cuenta sin nombre",
+      direction: r.direction === "in" ? "in" : "out",
+      amount: Number(r.amount),
+      currency: r.currency,
+      occurred_at: r.occurred_at,
+      description: r.description,
+    };
+  });
+  return { ok: true, movements: sortPaymentUndoMovements(movements) };
+}
+
+/**
+ * Lo que la confirmación de «Anular el pago» muestra antes de hacer nada: qué
+ * movimientos de Caja se borran (cuenta, fecha, importe). Sólo lee.
+ */
+export async function getSettlementPaymentUndoPreview(
+  settlementId: string,
+): Promise<
+  { ok: true; preview: PaymentUndoPreview } | { ok: false; error: string }
+> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!canUndoSettlementPayment(role)) {
+    return { ok: false, error: NO_UNDO_PAYMENT_PERMISSION };
+  }
+  const parsed = z.string().uuid().safeParse(settlementId);
+  if (!parsed.success) return { ok: false, error: "Liquidación inválida" };
+  const admin = createAdminClient();
+
+  const { data: s } = await admin
+    .from("owner_settlements")
+    .select(
+      "id, status, paid_at, paid_movement_id, net_payable, currency, period_year, period_month, period_index, period_cycle, owner:owners(full_name)",
+    )
+    .eq("id", parsed.data)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!s) return { ok: false, error: "Liquidación no encontrada" };
+  if (s.status !== "pagada") {
+    return { ok: false, error: paymentUndoErrorMessage("NO_PAGADA") };
+  }
+
+  const loaded = await loadSettlementPaymentMovements(
+    admin,
+    organization.id,
+    s.id as string,
+    (s.paid_movement_id as string | null) ?? null,
+  );
+  if (!loaded.ok) return loaded;
+
+  const owner = (Array.isArray(s.owner) ? s.owner[0] : s.owner) as {
+    full_name: string | null;
+  } | null;
+  return {
+    ok: true,
+    preview: {
+      settlement_id: s.id as string,
+      period_label: formatPeriodFull(
+        s.period_year,
+        s.period_month,
+        s.period_index,
+        s.period_cycle,
+      ),
+      owner_name: owner?.full_name ?? null,
+      currency: s.currency as string,
+      net_payable: Number(s.net_payable),
+      paid_at: (s.paid_at as string | null) ?? null,
+      movements: loaded.movements,
+    },
+  };
+}
+
+const undoPaymentSchema = z.object({
+  settlement_id: z.string().uuid(),
+  reason: z
+    .string()
+    .trim()
+    .min(
+      PAYMENT_UNDO_REASON_MIN,
+      "Contá en pocas palabras por qué anulás el pago",
+    )
+    .max(
+      PAYMENT_UNDO_REASON_MAX,
+      `El motivo no puede pasar de ${PAYMENT_UNDO_REASON_MAX} caracteres`,
+    ),
+  // Lo que se le mostró a la persona: el RPC no borra nada si cambió.
+  expected_movement_ids: z.array(z.string().uuid()).max(200),
+});
+
+/**
+ * Anula el pago registrado de una liquidación: borra de Caja sus movimientos
+ * (el egreso de cada cuenta + los ajustes por ediciones posteriores) y la deja
+ * en "revisada", lista para volver a pagarse. Todo pasa en el RPC, atómico.
+ */
+export async function undoSettlementPayment(
+  settlementId: string,
+  input: { reason: string; expectedMovementIds: string[] },
+): Promise<
+  { ok: true; summary: PaymentUndoResult } | { ok: false; error: string }
+> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!canUndoSettlementPayment(role)) {
+    return { ok: false, error: NO_UNDO_PAYMENT_PERMISSION };
+  }
+  const parsed = undoPaymentSchema.safeParse({
+    settlement_id: settlementId,
+    reason: input?.reason ?? "",
+    expected_movement_ids: input?.expectedMovementIds ?? [],
+  });
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? "Datos inválidos",
+    };
+  }
+  const v = parsed.data;
+  const admin = createAdminClient();
+
+  // Sólo para revalidar después la ficha del propietario y el link público.
+  const { data: s } = await admin
+    .from("owner_settlements")
+    .select("id, owner_id, public_token")
+    .eq("id", v.settlement_id)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!s) return { ok: false, error: "Liquidación no encontrada" };
+
+  const { data, error } = await admin.rpc("settlement_undo_payment", {
+    p_organization_id: organization.id,
+    p_settlement_id: v.settlement_id,
+    p_actor: session.userId,
+    p_actor_name: actorNameOf(session),
+    p_reason: v.reason,
+    p_expected_movement_ids: v.expected_movement_ids,
+  });
+  if (error) {
+    if (isMissingRpc(error)) {
+      return {
+        ok: false,
+        error:
+          "Anular pagos todavía no está habilitado en la base (falta la migración 069). No se tocó nada.",
+      };
+    }
+    return { ok: false, error: paymentUndoErrorMessage(error.message) };
+  }
+
+  const movements = parsePaymentUndoRpcMovements(
+    (data as { movements?: unknown } | null)?.movements,
+  );
+  const summary: PaymentUndoResult = {
+    ...summarizePaymentUndo(movements),
+    movements,
+  };
+
+  revalidateSettlement(v.settlement_id);
+  for (const p of new Set([
+    "/dashboard/caja",
+    ...movements
+      .filter((m) => m.account_id)
+      .map((m) => `/dashboard/caja/${m.account_id}`),
+    "/dashboard/alertas",
+    "/dashboard",
+    `/dashboard/propietarios/${s.owner_id}`,
+    ...(s.public_token ? [`/liquidacion/${s.public_token}`] : []),
+  ])) {
+    revalidatePath(p);
+  }
+  return { ok: true, summary };
 }
 
 // ════════════════════════════════════════════════════════════════════════════

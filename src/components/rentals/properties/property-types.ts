@@ -27,6 +27,14 @@ export interface OwnerOption {
   document_number: string | null;
 }
 
+/** Titular como quedó al guardar desde el formulario: lo recibe quien abrió el diálogo (p. ej. el asistente de contratos). */
+export interface SavedPropertyOwner {
+  owner_id: string;
+  full_name: string;
+  ownership_pct: number;
+  is_primary: boolean;
+}
+
 export interface PropertyOwnerView {
   owner_id: string;
   full_name: string;

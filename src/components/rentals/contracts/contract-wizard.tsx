@@ -86,6 +86,8 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   const [previewLoading, setPreviewLoading] = useState(false);
   const [saving, startSaving] = useTransition();
   const [savingKind, setSavingKind] = useState<"draft" | "activate" | null>(null);
+  // Campo al que saltar cuando algo falta (p. ej. la propiedad o el inquilino): no alcanza con abrir el paso.
+  const [focusRequest, setFocusRequest] = useState<{ field: string } | null>(null);
 
   // Borrador local: se lee sin efecto (servidor = null) y se ofrece recuperarlo.
   const storedRaw = useSyncExternalStore(
@@ -140,6 +142,18 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
   }, [previewKey]);
   const shownPreview = previewKey ? preview : null;
 
+  // Corre después de montar el paso (si hubo que cambiar de paso): busca el campo marcado, lo centra y lo enfoca.
+  useEffect(() => {
+    if (!focusRequest) return;
+    const frame = requestAnimationFrame(() => {
+      const el = document.querySelector<HTMLElement>(`[data-wizard-field="${focusRequest.field}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      el.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest]);
+
   const properties = useMemo(
     () => [...options.properties, ...extraProperties.filter((p) => !options.properties.some((o) => o.id === p.id))],
     [options.properties, extraProperties],
@@ -171,7 +185,9 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
     const issue = issues.find((x) => x.step === key);
     if (issue) {
       setAttempted((a) => new Set(a).add(key));
-      toast.error("Revisá este paso", { description: issue.message });
+      // El aviso nombra lo que falta ("Falta el inquilino…") y el foco va a ese campo.
+      toast.error(issue.message);
+      setFocusRequest({ field: issue.field });
       return;
     }
     goToIndex(step + 1);
@@ -200,8 +216,12 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
     if (!parsed.input) {
       setAttempted(new Set(WIZARD_STEPS.map((s) => s.key)));
       const first = parsed.issues[0];
-      toast.error("Faltan datos", { description: first?.message });
-      if (first) goTo(first.step);
+      const where = first ? WIZARD_STEPS.find((s) => s.key === first.step)?.label : undefined;
+      toast.error(first?.message ?? "Faltan datos", { description: where ? `Está en el paso «${where}».` : undefined });
+      if (first) {
+        goTo(first.step);
+        setFocusRequest({ field: first.field });
+      }
       return;
     }
     // Renovación (art. 1225 CCyC): el borrador se guarda sin las firmas de los
@@ -232,6 +252,7 @@ export function ContractWizard({ mode, contractId = null, contractStatus = null,
         toast.error(activate ? "No se pudo activar el contrato" : "No se pudo guardar", { description: res.error });
         const key = stepOfField(res.field);
         if (key) goTo(key);
+        if (res.field) setFocusRequest({ field: res.field });
         return;
       }
       try {

@@ -57,12 +57,17 @@ function PersonPicker({
   intent,
   onPick,
   onCreated,
+  anchor,
+  invalid,
 }: {
   people: PersonOption[];
   exclude: Set<string>;
   intent: "inquilino" | "garante";
   onPick: (id: string) => void;
   onCreated: (p: PersonOption) => void;
+  /** Campo del asistente al que se salta si falta (el buscador, o "nuevo" si todavía no hay nadie cargado). */
+  anchor?: string;
+  invalid?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -78,7 +83,15 @@ function PersonPicker({
     <div className="flex flex-col sm:flex-row gap-2">
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
-          <Button type="button" variant="outline" role="combobox" aria-expanded={open} className="h-10 flex-1 justify-start gap-2 font-normal text-muted-foreground">
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            aria-invalid={invalid || undefined}
+            data-wizard-field={people.length > 0 ? anchor : undefined}
+            className={cn("h-10 flex-1 justify-start gap-2 font-normal text-muted-foreground", invalid && "border-rose-500/60")}
+          >
             <Search size={15} /> {intent === "garante" ? "Buscar garante por nombre o DNI" : "Buscar inquilino por nombre o DNI"}
           </Button>
         </PopoverTrigger>
@@ -117,7 +130,12 @@ function PersonPicker({
           setSearch("");
         }}
       >
-        <Button type="button" variant="outline" className="h-10 gap-2">
+        <Button
+          type="button"
+          variant={people.length === 0 && intent === "inquilino" ? "default" : "outline"}
+          className="h-10 gap-2"
+          data-wizard-field={people.length === 0 ? anchor : undefined}
+        >
           <UserPlus size={15} /> {intent === "garante" ? "Garante nuevo" : "Inquilino nuevo"}
         </Button>
       </PersonFormDialog>
@@ -204,7 +222,15 @@ export function StepParties({ state, set, errors, people, addPerson, today }: St
             </div>
           );
         })}
-        <PersonPicker people={people} exclude={usedBy("inquilino")} intent="inquilino" onPick={(id) => add("inquilino", id)} onCreated={addPerson} />
+        <PersonPicker
+          people={people}
+          exclude={usedBy("inquilino")}
+          intent="inquilino"
+          onPick={(id) => add("inquilino", id)}
+          onCreated={addPerson}
+          anchor="parties"
+          invalid={Boolean(errors.parties) && tenants.length === 0}
+        />
         {errors.parties && (
           <p className="text-[12px] text-rose-600 dark:text-rose-400" role="alert">
             {errors.parties}

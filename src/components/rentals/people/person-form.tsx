@@ -1,20 +1,24 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { createPerson, updatePerson } from "@/lib/actions/rentals-people";
 import { parseAmountInput } from "@/lib/format";
 import { formatMoneyEditable } from "@/components/bookings/money-input";
 import { toWhatsappDigits } from "@/lib/marketplace/staff-helpers";
 import type { RentalDocType, RentalPerson, RentalPersonType } from "@/lib/types/database";
+import { sameFormValues } from "./form-draft";
+import { clearDraft, readDraft, usePersistDraft } from "./use-form-draft";
 import { cuitWarning, formatDocNumber } from "./person-helpers";
+import { personStateFromDraft } from "./person-draft";
 import type { PersonInput } from "./person-types";
 import { PersonFormFields } from "./person-form-fields";
 
 /**
  * Formulario de inquilino / garante (vive adentro de PersonFormDialog y se
- * monta cada vez que se abre, así arranca limpio). Estado controlado +
- * useTransition + server action, el patrón del panel.
+ * monta cada vez que se abre). Estado controlado + useTransition + server
+ * action, el patrón del panel. Un alta arranca de lo que quedó sin guardar en
+ * la pestaña (borrador), si hay; si no, limpia.
  */
 
 export interface PersonFormState {
@@ -84,13 +88,41 @@ export interface PersonFormProps {
   onCancel: () => void;
   /** Alta que choca con alguien ya cargado: "Usar esta persona". */
   onUseExisting?: (person: RentalPerson) => void;
+  /** Borrador del alta en sessionStorage (null = sin borrador, p. ej. al editar). */
+  draftKey?: string | null;
+  /** Avisa si hay algo sin guardar y si se está guardando: el diálogo pregunta antes de cerrar. */
+  onStatusChange?: (dirty: boolean, busy: boolean) => void;
 }
 
-export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUseExisting }: PersonFormProps) {
-  const [form, setForm] = useState<PersonFormState>(() => initialState(person, defaultName));
+export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUseExisting, draftKey = null, onStatusChange }: PersonFormProps) {
+  const [init] = useState(() => {
+    const blank = initialState(person, defaultName);
+    const stored = person ? null : readDraft(draftKey);
+    const restored = stored ? personStateFromDraft(blank, stored.form) : null;
+    return restored && !sameFormValues(restored, blank)
+      ? { blank, form: restored, restoredAt: stored?.savedAt ?? null }
+      : { blank, form: blank, restoredAt: null };
+  });
+  const blank = init.blank;
+  const [form, setForm] = useState<PersonFormState>(init.form);
+  const [restoredAt, setRestoredAt] = useState<string | null>(init.restoredAt);
   const [pending, startTransition] = useTransition();
   const [fieldError, setFieldError] = useState<{ field?: string; message: string } | null>(null);
   const [existing, setExisting] = useState<RentalPerson | null>(null);
+
+  const dirty = !sameFormValues(form, blank);
+  usePersistDraft(person ? null : draftKey, form, blank);
+  useEffect(() => {
+    onStatusChange?.(dirty, pending);
+  }, [dirty, pending, onStatusChange]);
+
+  function startOver() {
+    clearDraft(draftKey);
+    setForm(blank);
+    setRestoredAt(null);
+    setFieldError(null);
+    setExisting(null);
+  }
 
   const set: SetPersonField = (key, value) => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -162,6 +194,8 @@ export function PersonForm({ person, intent, defaultName, onDone, onCancel, onUs
       cuitHint={form.person_type === "fisica" ? cuitWarning(form.tax_id) : form.doc_number ? cuitWarning(form.doc_number) : null}
       existing={existing}
       onUseExisting={!person && onUseExisting ? onUseExisting : undefined}
+      restoredAt={restoredAt}
+      onStartOver={startOver}
       onSubmit={handleSubmit}
       onCancel={onCancel}
     />

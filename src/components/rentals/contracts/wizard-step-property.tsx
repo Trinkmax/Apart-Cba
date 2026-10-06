@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Building2, Check, Plus, Search, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,14 +22,20 @@ const norm = (s: string) =>
 
 export function StepProperty({ state, set, errors, properties, addProperty, contractId }: StepProps) {
   const [q, setQ] = useState("");
+  // La que se acaba de cargar va primera: si no, queda al final de la lista, fuera de la vista.
+  const [justCreated, setJustCreated] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const selected = properties.find((p) => p.id === state.property_id) ?? null;
   const list = useMemo(() => {
     const needle = norm(q.trim());
     const all = needle
       ? properties.filter((p) => norm([p.address, p.code, p.city, ...p.owners.map((o) => o.name)].join(" ")).includes(needle))
       : properties;
-    return all.slice(0, 60);
-  }, [q, properties]);
+    const first = justCreated ? all.find((p) => p.id === justCreated) : undefined;
+    const shown = first ? [first, ...all.filter((p) => p.id !== first.id)].slice(0, 60) : all.slice(0, 60);
+    // La elegida siempre se ve, aunque quede fuera de las 60 o de lo buscado.
+    return selected && !shown.some((p) => p.id === selected.id) ? [selected, ...shown.slice(0, 59)] : shown;
+  }, [q, properties, justCreated, selected]);
 
   return (
     <div className="space-y-5">
@@ -38,25 +44,43 @@ export function StepProperty({ state, set, errors, properties, addProperty, cont
       <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex-1">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Dean Funes 450, CBA-012, García…" className="pl-9 h-10" aria-label="Buscar propiedad" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Dean Funes 450, CBA-012, García…"
+            className="pl-9 h-10"
+            aria-label="Buscar propiedad"
+            aria-invalid={Boolean(errors.property_id) || undefined}
+            data-wizard-field={properties.length > 0 ? "property_id" : undefined}
+          />
         </div>
         <PropertyFormDialog
-          onSaved={(p) => {
+          onSaved={(p, owners) => {
             addProperty({
               id: p.id,
               code: p.code,
               address: propertyAddress(p),
               city: p.city,
               propertyType: p.property_type,
-              owners: [],
+              // Los dueños con los que se guardó: sin esto el aviso decía "no tiene propietario cargado".
+              owners: owners.map((o) => ({ ownerId: o.owner_id, name: o.full_name, pct: o.ownership_pct, isPrimary: o.is_primary })),
               busyWith: null,
               listingRent: p.listing_rent != null ? Number(p.listing_rent) : null,
               listingCurrency: p.listing_currency,
             });
             set({ property_id: p.id });
+            setQ("");
+            setJustCreated(p.id);
+            requestAnimationFrame(() => listRef.current?.scrollTo({ top: 0 }));
           }}
         >
-          <Button type="button" variant="outline" className="gap-2 h-10">
+          {/* Sin propiedades cargadas es el único camino: va como acción principal. */}
+          <Button
+            type="button"
+            variant={properties.length === 0 ? "default" : "outline"}
+            className="gap-2 h-10"
+            data-wizard-field={properties.length === 0 ? "property_id" : undefined}
+          >
             <Plus size={15} /> Nueva propiedad
           </Button>
         </PropertyFormDialog>
@@ -74,7 +98,7 @@ export function StepProperty({ state, set, errors, properties, addProperty, cont
           <p className="text-xs text-muted-foreground mt-1">Tocá «Nueva propiedad»: con la dirección y el dueño alcanza.</p>
         </div>
       ) : (
-        <div role="radiogroup" aria-label="Propiedades" className="grid gap-2 max-h-[26rem] overflow-y-auto pr-1 -mr-1">
+        <div ref={listRef} role="radiogroup" aria-label="Propiedades" className="grid gap-2 max-h-[26rem] overflow-y-auto pr-1 -mr-1">
           {list.map((p) => {
             const active = p.id === state.property_id;
             const busy = p.busyWith && p.busyWith.contractId !== contractId ? p.busyWith : null;

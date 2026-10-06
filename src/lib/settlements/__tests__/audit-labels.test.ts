@@ -29,6 +29,18 @@ describe("describeAuditChange", () => {
     );
   });
 
+  it("nombra la anulación del pago (migración 069)", () => {
+    // La escribe el RPC settlement_undo_payment con changes { status, motivo,
+    // movimientos }: sin kind, manda el action.
+    expect(
+      describeAuditChange("payment_undo", {
+        status: { from: "pagada", to: "revisada" },
+        motivo: "La transferencia rebotó",
+        movimientos: 1,
+      }),
+    ).toBe("Pago anulado");
+  });
+
   it("nombra deshacer y rehacer", () => {
     expect(describeAuditChange("undo", { kind: "undo" })).toBe(
       "Cambio deshecho",

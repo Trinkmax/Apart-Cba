@@ -607,13 +607,21 @@ export async function quickCreateOwner(input: QuickOwnerInput): Promise<ActionRe
 
   const { data: same } = await ctx.admin
     .from("owners")
-    .select("id, full_name")
+    .select("id, full_name, active")
     .eq("organization_id", orgId)
     .ilike("full_name", escapeLike(data.full_name))
     .limit(5);
-  const dup = ((same ?? []) as { id: string; full_name: string }[]).find((o) => foldName(o.full_name) === foldName(data.full_name));
+  const dup = ((same ?? []) as { id: string; full_name: string; active: boolean | null }[]).find((o) => foldName(o.full_name) === foldName(data.full_name));
   if (dup) {
-    return { ok: false, field: "full_name", error: `Ya existe «${dup.full_name}» en Propietarios: elegilo en la lista.` };
+    // Un archivado no aparece en el buscador: "elegilo en la lista" mandaba a buscar algo que no está.
+    return {
+      ok: false,
+      field: "full_name",
+      error:
+        dup.active === false
+          ? `Ya hay un «${dup.full_name}» archivado en Propietarios. Si es otra persona, sumale algo al nombre (el segundo apellido, por ejemplo).`
+          : `Ya existe «${dup.full_name}» en Propietarios: elegilo en el buscador en vez de crearlo de nuevo.`,
+    };
   }
 
   const { data: row, error } = await ctx.admin

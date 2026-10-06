@@ -116,6 +116,8 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   row_update: "Reserva editada",
   status_change: "Cambio de estado",
   payment: "Pago registrado",
+  // Migración 069: el pago se anuló y la liquidación volvió a Revisada.
+  payment_undo: "Pago anulado",
   regenerate: "Regenerada",
   undo: "Cambio deshecho",
   redo: "Cambio rehecho",
@@ -185,6 +187,8 @@ export const REGENERABLE_STATUSES: SettlementStatus[] = ["borrador"];
  *     owner+mes+moneda bloquea generar otra. Una generada por error se elimina.
  * Una liquidación pagada tampoco SALE de "pagada" por acá: su egreso queda
  * protegido en Caja mientras esté revisada/enviada/pagada (cash_movement_settlement_lock).
+ * Para eso está «Anular el pago» (migración 069): borra los movimientos del
+ * pago en la misma transacción y la deja revisada.
  */
 export const MANUAL_SETTLEMENT_STATUSES = [
   "borrador",

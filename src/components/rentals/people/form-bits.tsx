@@ -85,14 +85,38 @@ export function Segmented<T extends string>({
   );
 }
 
-/** Subtítulo de bloque dentro de un formulario largo. */
-export function FormSection({ title, hint, icon, className, children }: { title: string; hint?: ReactNode; icon?: ReactNode; className?: string; children: ReactNode }) {
+/** Subtítulo de bloque dentro de un formulario largo. `required` marca un bloque obligatorio (p. ej. el propietario). */
+export function FormSection({
+  title,
+  hint,
+  icon,
+  required,
+  className,
+  children,
+}: {
+  title: string;
+  hint?: ReactNode;
+  icon?: ReactNode;
+  required?: boolean;
+  className?: string;
+  children: ReactNode;
+}) {
   return (
     <section className={cn("space-y-3", className)}>
       <div className="flex items-start gap-2">
         {icon && <span className="mt-0.5 text-muted-foreground shrink-0">{icon}</span>}
         <div className="min-w-0">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {title}
+            {required && (
+              <>
+                <span className="text-rose-500" aria-hidden>
+                  {" "}*
+                </span>
+                <span className="sr-only"> (obligatorio)</span>
+              </>
+            )}
+          </h3>
           {hint && <p className="text-xs text-muted-foreground mt-0.5 leading-snug">{hint}</p>}
         </div>
       </div>

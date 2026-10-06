@@ -58,6 +58,7 @@ import {
   type PreviewResult,
 } from "@/lib/actions/cash";
 import { formatDateTime, formatMoney } from "@/lib/format";
+import { settlementLockHint } from "@/lib/settlements/payment-undo";
 import { cn } from "@/lib/utils";
 import type { CashAccount, MovementCategory, Unit } from "@/lib/types/database";
 import { MovementDeleteAlert } from "./movement-delete-alert";
@@ -528,7 +529,10 @@ function DetailPane({ detail, audit }: { detail: MovementDetail; audit: CashMove
                 )}
                 {detail.linked_settlement.is_locked && (
                   <div className="mt-2 text-[11px] text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
-                    <Lock size={11} /> Bloqueado: editá desde la liquidación.
+                    <Lock size={11} />
+                    {detail.linked_settlement.status === "pagada"
+                      ? "Bloqueado: se corrige con «Anular el pago» en la liquidación."
+                      : "Bloqueado: editá desde la liquidación."}
                   </div>
                 )}
               </div>
@@ -635,7 +639,7 @@ function LockedNotice({ detail }: { detail: MovementDetail }) {
         <div className="font-semibold">Movimiento bloqueado</div>
         <p className="mt-1">
           Está vinculado a la liquidación {String(s.period_month).padStart(2, "0")}/{s.period_year} en estado{" "}
-          <span className="font-medium">{s.status}</span>. Anulá la liquidación primero para poder editarlo.
+          <span className="font-medium">{s.status}</span>. {settlementLockHint(s.status)}
         </p>
         <Button asChild variant="outline" size="sm" className="mt-3">
           <Link href={`/dashboard/liquidaciones/${s.id}`}>Abrir liquidación</Link>
