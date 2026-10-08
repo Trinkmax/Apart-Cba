@@ -10,14 +10,19 @@ import { AccountFormDialog } from "@/components/cash/account-form-dialog";
 import { AccountsGrid } from "@/components/cash/accounts-grid";
 import { MovementFormDialog } from "@/components/cash/movement-form-dialog";
 import { TransferFormDialog } from "@/components/cash/transfer-form-dialog";
-import { RecentMovementsPanel } from "@/components/cash/recent-movements-panel";
+import { CajaMovementsPanel } from "@/components/cash/caja-movements-panel";
 import { ExportMovementsDialog } from "@/components/cash/export-movements-dialog";
 import { formatMoney } from "@/lib/format";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
 
-export default async function CajaPage() {
+export default async function CajaPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
   const { role } = await getCurrentOrg();
   if (!can(role, "cash", "view")) redirect("/dashboard");
+  const { q } = await searchParams;
   const [accounts, movements, units, balancesMap] = await Promise.all([
     listAccounts(),
     listMovements({ limit: 100 }),
@@ -106,17 +111,13 @@ export default async function CajaPage() {
         )}
       </div>
 
-      {/* Movimientos */}
-      <div>
-        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-          Movimientos recientes
-        </h2>
-        <RecentMovementsPanel
-          movements={movements as never}
-          accounts={accounts}
-          units={unitsForMovement}
-        />
-      </div>
+      {/* Movimientos (recientes + la lupa: busca en todo el historial) */}
+      <CajaMovementsPanel
+        recent={movements}
+        accounts={accounts}
+        units={unitsForMovement}
+        initialQuery={typeof q === "string" ? q.slice(0, 120) : ""}
+      />
     </div>
   );
 }

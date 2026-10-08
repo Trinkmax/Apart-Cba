@@ -1,11 +1,12 @@
 "use client";
 
-import { useTransition, useCallback } from "react";
+import { useTransition, useCallback, useRef, useState, useEffect } from "react";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import { Search, X } from "lucide-react";
+import { X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { CashSearchInput } from "./cash-search-input";
 
 const CATEGORY_LABELS: Record<string, string> = {
   all: "Todas",
@@ -42,7 +43,14 @@ export function AccountMovementsFilterBar({ category, direction, search, fromDat
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const [, startTransition] = useTransition();
+  const [isPending, startTransition] = useTransition();
+  // El texto vive acá y viaja a la URL con un respiro: antes cada tecla era un
+  // render completo de la página en el server.
+  const [text, setText] = useState(search);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
 
   const update = useCallback(
     (patch: Record<string, string | undefined>) => {
@@ -64,20 +72,19 @@ export function AccountMovementsFilterBar({ category, direction, search, fromDat
   const hasFilters = category !== "all" || direction !== "all" || billable !== "all" || search || fromDate || toDate;
 
   return (
-    <div className="flex flex-wrap items-end gap-2">
-      <div className="relative min-w-0 flex-1 sm:max-w-xs">
-        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          placeholder="Buscar por descripción…"
-          defaultValue={search}
-          onChange={(e) => {
-            const v = e.target.value;
-            // debounce mínimo: dejamos que onBlur o Enter dispare; aquí update inmediato
-            update({ q: v });
-          }}
-          className="pl-8 h-9"
-        />
-      </div>
+    <div className="flex flex-wrap items-center gap-2">
+      <CashSearchInput
+        value={text}
+        onChange={(v) => {
+          setText(v);
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = setTimeout(() => update({ q: v.trim() || undefined }), v ? 300 : 0);
+        }}
+        loading={isPending}
+        placeholder="Buscar depto, persona, concepto o importe…"
+        size="compact"
+        className="min-w-0 flex-1 basis-full sm:basis-auto sm:max-w-xs"
+      />
 
       <Select value={direction} onValueChange={(v) => update({ dir: v })}>
         <SelectTrigger className="h-9 w-[120px]"><SelectValue /></SelectTrigger>
@@ -127,9 +134,11 @@ export function AccountMovementsFilterBar({ category, direction, search, fromDat
           variant="ghost"
           size="sm"
           className="gap-1.5 h-9"
-          onClick={() =>
-            update({ q: undefined, cat: undefined, dir: undefined, from: undefined, to: undefined, bill: undefined })
-          }
+          onClick={() => {
+            if (timer.current) clearTimeout(timer.current);
+            setText("");
+            update({ q: undefined, cat: undefined, dir: undefined, from: undefined, to: undefined, bill: undefined });
+          }}
         >
           <X size={14} /> Limpiar
         </Button>

@@ -10,6 +10,7 @@ import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-ow
 import { settlementLockedMessage } from "@/lib/settlements/payment-undo";
 import type { CashAccount, CashMovement } from "@/lib/types/database";
 import { getOwnerScope } from "@/lib/auth/owner-scope";
+import { cashSearchTokenFilter, parseCashSearch, type CashSearchToken } from "@/lib/cash/search";
 
 // ════════════════════════════════════════════════════════════════════════════
 // Tipos públicos del módulo de caja
@@ -25,6 +26,29 @@ export type EnrichedMovement = CashMovement & {
 };
 
 export type EnrichedMovementRow = EnrichedMovement & { running_balance: number };
+
+/** Quién está del otro lado del movimiento (v_cash_movements_search, 071). */
+export type MovementPartyKind = "huesped" | "propietario" | "inquilino";
+
+/**
+ * Fila de las listas de Caja: el movimiento + quién (huésped de la reserva,
+ * propietario, inquilino) y dónde (depto, deptos de la liquidación o la
+ * propiedad en alquiler), que la descripción casi nunca dice.
+ */
+export type CashMovementListRow = EnrichedMovementRow & {
+  party_name: string | null;
+  party_kind: MovementPartyKind | null;
+  place_label: string | null;
+};
+
+/** Entradas y salidas por moneda de un conjunto de movimientos. */
+export type CashTotals = Array<{
+  currency: string;
+  in: number;
+  out: number;
+  count_in: number;
+  count_out: number;
+}>;
 
 export type LinkedBookingPreview = {
   id: string;
@@ -235,88 +259,240 @@ export async function listMovements(filters?: {
   toDate?: string;
   category?: string;
   limit?: number;
-}) {
+}): Promise<CashMovementListRow[]> {
   const { organization } = await getCurrentOrg();
   const admin = createAdminClient();
-  let q = admin
-    .from("cash_movements")
-    .select(`*, account:cash_accounts(id, name, currency, type, color), unit:units(id, code, name), owner:owners(id, full_name)`)
-    .eq("organization_id", organization.id);
-  if (filters?.accountId) q = q.eq("account_id", filters.accountId);
-  if (filters?.fromDate) q = q.gte("occurred_at", filters.fromDate);
-  if (filters?.toDate) q = q.lte("occurred_at", filters.toDate);
-  if (filters?.category) q = q.eq("category", filters.category);
-  const { data, error } = await q.order("occurred_at", { ascending: false }).limit(filters?.limit ?? 200);
+  // La vista ya trae cuenta, depto y quién (huésped / propietario / inquilino)
+  // resueltos en una sola lectura: antes eran 3 consultas y sólo el huésped de
+  // los cobros de reserva.
+  const { data, error } = await cashMovementsQuery(admin, organization.id, CASH_LIST_COLUMNS, {
+    accountId: filters?.accountId,
+    fromDate: filters?.fromDate,
+    toDate: filters?.toDate,
+    category: (filters?.category as MovementCategory | undefined) ?? "all",
+  })
+    .order("occurred_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(filters?.limit ?? 200);
   if (error) throw new Error(error.message);
-  const rows = (data ?? []) as Array<{
-    id: string;
-    category: string;
-    ref_type: string | null;
-    ref_id: string | null;
-    [k: string]: unknown;
-  }>;
-  if (rows.length === 0) return rows;
+  return ((data ?? []) as unknown as CashListViewRow[]).map(toCashListRow);
+}
 
-  // Resolvemos el guest_name del huésped pagador para movimientos de
-  // booking_payment. Hacemos 2 queries extra (bookings + schedules)
-  // para evitar N+1: ya teníamos los movements en memoria, juntamos los
-  // ids y traemos las relaciones en batch.
-  const bookingMovs = rows.filter(
-    (r) => r.category === "booking_payment" && r.ref_id
-  );
-  const directBookingIds = bookingMovs
-    .filter((r) => r.ref_type === "booking")
-    .map((r) => r.ref_id as string);
-  const scheduleIds = bookingMovs
-    .filter((r) => r.ref_type === "payment_schedule")
-    .map((r) => r.ref_id as string);
+// ════════════════════════════════════════════════════════════════════════════
+// Buscador de Caja (migración 071)
+// ════════════════════════════════════════════════════════════════════════════
 
-  const [bookingsRes, schedulesRes] = await Promise.all([
-    directBookingIds.length
-      ? admin
-          .from("bookings")
-          .select("id, guest:guests(full_name)")
-          .in("id", directBookingIds)
-          .eq("organization_id", organization.id)
-      : Promise.resolve({ data: [] as Array<{ id: string; guest: { full_name: string } | null }> }),
-    scheduleIds.length
-      ? admin
-          .from("booking_payment_schedule")
-          .select("id, booking_id, booking:bookings(guest:guests(full_name))")
-          .in("id", scheduleIds)
-          .eq("organization_id", organization.id)
-      : Promise.resolve({
-          data: [] as Array<{
-            id: string;
-            booking_id: string;
-            booking: { guest: { full_name: string } | null } | null;
-          }>,
-        }),
-  ]);
+/** Columnas de v_cash_movements_search que pinta una lista de movimientos. */
+const CASH_LIST_COLUMNS =
+  "id, organization_id, account_id, direction, amount, currency, category, ref_type, ref_id, unit_id, owner_id, description, occurred_at, created_at, created_by, billable_to, account_name, account_color, account_type, running_balance, unit_code, unit_name, owner_name, party_name, party_kind, place_label";
 
-  const guestByBookingId = new Map<string, string | null>();
-  for (const bk of (bookingsRes.data ?? []) as Array<{ id: string; guest: { full_name: string } | null }>) {
-    guestByBookingId.set(bk.id, bk.guest?.full_name ?? null);
-  }
-  const guestByScheduleId = new Map<string, string | null>();
-  for (const sch of (schedulesRes.data ?? []) as Array<{
-    id: string;
-    booking: { guest: { full_name: string } | null } | null;
-  }>) {
-    guestByScheduleId.set(sch.id, sch.booking?.guest?.full_name ?? null);
-  }
+type CashListViewRow = {
+  id: string;
+  organization_id: string;
+  account_id: string;
+  direction: MovementDirection;
+  amount: number | string;
+  currency: string;
+  category: MovementCategory;
+  ref_type: string | null;
+  ref_id: string | null;
+  unit_id: string | null;
+  owner_id: string | null;
+  description: string | null;
+  occurred_at: string;
+  created_at: string;
+  created_by: string | null;
+  billable_to: "apartcba" | "owner" | "guest";
+  account_name: string;
+  account_color: string | null;
+  account_type: string;
+  running_balance: number | string;
+  unit_code: string | null;
+  unit_name: string | null;
+  owner_name: string | null;
+  party_name: string | null;
+  party_kind: MovementPartyKind | null;
+  place_label: string | null;
+};
 
-  return rows.map((r) => {
-    let guest_name: string | null = null;
-    if (r.category === "booking_payment" && r.ref_id) {
-      if (r.ref_type === "booking") {
-        guest_name = guestByBookingId.get(r.ref_id as string) ?? null;
-      } else if (r.ref_type === "payment_schedule") {
-        guest_name = guestByScheduleId.get(r.ref_id as string) ?? null;
+function toCashListRow(r: CashListViewRow): CashMovementListRow {
+  return {
+    id: r.id,
+    organization_id: r.organization_id,
+    account_id: r.account_id,
+    direction: r.direction,
+    amount: Number(r.amount),
+    currency: r.currency,
+    category: r.category,
+    ref_type: r.ref_type,
+    ref_id: r.ref_id,
+    unit_id: r.unit_id,
+    owner_id: r.owner_id,
+    description: r.description,
+    occurred_at: r.occurred_at,
+    created_at: r.created_at,
+    created_by: r.created_by,
+    billable_to: r.billable_to,
+    account: {
+      id: r.account_id,
+      name: r.account_name,
+      currency: r.currency,
+      type: r.account_type,
+      color: r.account_color,
+    },
+    unit: r.unit_id && r.unit_code ? { id: r.unit_id, code: r.unit_code, name: r.unit_name ?? "" } : null,
+    owner: r.owner_id && r.owner_name ? { id: r.owner_id, full_name: r.owner_name } : null,
+    running_balance: Number(r.running_balance),
+    party_name: r.party_name?.trim() || null,
+    party_kind: r.party_kind,
+    place_label: r.place_label,
+  };
+}
+
+type CashListFilters = {
+  accountId?: string;
+  fromDate?: string;
+  toDate?: string;
+  category?: MovementCategory | "all";
+  direction?: MovementDirection | "all";
+  billableTo?: "apartcba" | "owner" | "guest" | "all";
+  tokens?: CashSearchToken[];
+};
+
+/**
+ * Lectura de v_cash_movements_search con los filtros de Caja. La vista es
+ * sólo service_role (security_invoker, sin grants a authenticated): el corte
+ * por organización lo pone esta función, siempre.
+ */
+function cashMovementsQuery(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  columns: string,
+  f: CashListFilters,
+  options?: { count?: "exact" },
+) {
+  let q = admin
+    .from("v_cash_movements_search")
+    .select(columns, options)
+    .eq("organization_id", organizationId);
+  if (f.accountId) q = q.eq("account_id", f.accountId);
+  if (f.fromDate) q = q.gte("occurred_at", f.fromDate);
+  if (f.toDate) q = q.lte("occurred_at", f.toDate);
+  if (f.category && f.category !== "all") q = q.eq("category", f.category);
+  if (f.direction && f.direction !== "all") q = q.eq("direction", f.direction);
+  if (f.billableTo && f.billableTo !== "all") q = q.eq("billable_to", f.billableTo);
+  // Un `.or()` por token: PostgREST los combina con AND → tienen que estar todos.
+  for (const t of f.tokens ?? []) q = q.or(cashSearchTokenFilter(t));
+  return q;
+}
+
+/**
+ * Entradas y salidas de TODO lo que matchea (no sólo de la página visible),
+ * por moneda. Se lee en tandas avanzando por lo que devolvió cada una, así un
+ * tope de filas de PostgREST nunca trunca la suma en silencio.
+ */
+async function sumCashTotals(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  f: CashListFilters,
+): Promise<CashTotals> {
+  const byCurrency = new Map<string, CashTotals[number]>();
+  let offset = 0;
+  // El conteo viaja con la primera tanda: con eso se sabe cuándo terminar sin
+  // una lectura extra "para ver si quedó algo" (en la práctica, una sola tanda).
+  let expected = Infinity;
+  for (let round = 0; round < 50 && offset < expected; round++) {
+    const { data, error, count } = await cashMovementsQuery(
+      admin,
+      organizationId,
+      "id, direction, amount, currency",
+      f,
+      round === 0 ? { count: "exact" } : undefined,
+    )
+      .order("id")
+      .range(offset, offset + 999);
+    if (error) throw new Error(error.message);
+    if (round === 0 && typeof count === "number") expected = count;
+    const rows = (data ?? []) as unknown as Array<{ direction: MovementDirection; amount: number | string; currency: string }>;
+    if (rows.length === 0) break;
+    for (const r of rows) {
+      const t = byCurrency.get(r.currency) ?? { currency: r.currency, in: 0, out: 0, count_in: 0, count_out: 0 };
+      if (r.direction === "in") {
+        t.in += Number(r.amount);
+        t.count_in++;
+      } else {
+        t.out += Number(r.amount);
+        t.count_out++;
       }
+      byCurrency.set(r.currency, t);
     }
-    return { ...r, linked_guest_name: guest_name };
-  });
+    offset += rows.length;
+  }
+  // La moneda con más movimientos primero (en la práctica, ARS).
+  return [...byCurrency.values()].sort(
+    (a, b) => b.count_in + b.count_out - (a.count_in + a.count_out),
+  );
+}
+
+const cashSearchSchema = z.object({
+  query: z.string().max(200),
+  accountId: z.string().uuid().optional(),
+  direction: z.enum(["in", "out", "all"]).default("all"),
+  offset: z.number().int().min(0).max(100_000).default(0),
+  limit: z.number().int().min(1).max(100).default(30),
+  /** Sumar entradas/salidas de todo lo que matchea (no hace falta al paginar ni al cambiar de dirección). */
+  withTotals: z.boolean().default(true),
+});
+
+export type CashSearchInput = z.input<typeof cashSearchSchema>;
+
+export type CashSearchResult =
+  | {
+      ok: true;
+      rows: CashMovementListRow[];
+      /** Cuántos matchean con el filtro de dirección aplicado. */
+      total: number;
+      /** Entradas/salidas de todo lo que matchea, sin el filtro de dirección. null si no se pidieron. */
+      totals: CashTotals | null;
+    }
+  | { ok: false; error: string };
+
+/**
+ * "La lupita" de Caja: busca en TODO el historial de la organización (o de una
+ * cuenta) por depto, persona (huésped, propietario, inquilino), concepto o
+ * importe. Se llama desde el cliente mientras se tipea, así que es un endpoint
+ * público: chequea el permiso de Caja acá adentro, no sólo en la página.
+ */
+export async function searchCashMovements(input: CashSearchInput): Promise<CashSearchResult> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "cash", "view") || (await getOwnerScope())) {
+    return { ok: false, error: "No tenés acceso a Caja." };
+  }
+  const parsed = cashSearchSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "No se entendió la búsqueda." };
+  const { query, accountId, direction, offset, limit, withTotals } = parsed.data;
+
+  const tokens = parseCashSearch(query);
+  if (tokens.length === 0) return { ok: true, rows: [], total: 0, totals: [] };
+
+  const admin = createAdminClient();
+  const base: CashListFilters = { accountId, tokens };
+  try {
+    const [page, totals] = await Promise.all([
+      cashMovementsQuery(admin, organization.id, CASH_LIST_COLUMNS, { ...base, direction }, { count: "exact" })
+        .order("occurred_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + limit - 1),
+      withTotals ? sumCashTotals(admin, organization.id, base) : Promise.resolve(null),
+    ]);
+    if (page.error) throw new Error(page.error.message);
+    const rows = ((page.data ?? []) as unknown as CashListViewRow[]).map(toCashListRow);
+    return { ok: true, rows, total: page.count ?? rows.length, totals };
+  } catch (e) {
+    console.error("[caja] searchCashMovements", e);
+    return { ok: false, error: "No se pudo buscar. Probá de nuevo en un momento." };
+  }
 }
 
 export async function createAccount(input: AccountInput) {
@@ -729,8 +905,10 @@ export async function getAccountStats(
 }
 
 export async function listAccountMovements(filters: ListMovementsFilters): Promise<{
-  rows: EnrichedMovementRow[];
+  rows: CashMovementListRow[];
   total: number;
+  /** Entradas/salidas de TODO lo filtrado (no sólo de la página visible). */
+  totals: CashTotals;
 }> {
   await requireSession();
   const { organization } = await getCurrentOrg();
@@ -740,104 +918,30 @@ export async function listAccountMovements(filters: ListMovementsFilters): Promi
   const from = page * pageSize;
   const to = from + pageSize - 1;
 
-  let q = admin
-    .from("v_cash_movements_enriched")
-    .select(
-      `id, organization_id, account_id, direction, amount, currency, category, ref_type, ref_id, unit_id, owner_id, description, occurred_at, created_at, created_by, billable_to, account_name, account_color, account_type, running_balance`,
-      { count: "exact" }
-    )
-    .eq("account_id", filters.accountId)
-    .eq("organization_id", organization.id);
+  // Misma vista que el buscador del tablero: el saldo corrido se calcula sobre
+  // la cuenta entera ANTES de filtrar (la ventana sólo recibe el filtro por
+  // cuenta/org), así cada fila muestra el saldo real aunque se busque.
+  const f: CashListFilters = {
+    accountId: filters.accountId,
+    fromDate: filters.fromDate,
+    toDate: filters.toDate,
+    category: filters.category,
+    direction: filters.direction,
+    billableTo: filters.billableTo,
+    tokens: parseCashSearch(filters.search),
+  };
 
-  if (filters.fromDate) q = q.gte("occurred_at", filters.fromDate);
-  if (filters.toDate) q = q.lte("occurred_at", filters.toDate);
-  if (filters.category && filters.category !== "all") q = q.eq("category", filters.category);
-  if (filters.direction && filters.direction !== "all") q = q.eq("direction", filters.direction);
-  if (filters.billableTo && filters.billableTo !== "all") q = q.eq("billable_to", filters.billableTo);
-  if (filters.search && filters.search.trim()) {
-    q = q.ilike("description", `%${filters.search.trim()}%`);
-  }
-
-  const { data, error, count } = await q.order("occurred_at", { ascending: false }).range(from, to);
+  const [{ data, error, count }, totals] = await Promise.all([
+    cashMovementsQuery(admin, organization.id, CASH_LIST_COLUMNS, f, { count: "exact" })
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(from, to),
+    sumCashTotals(admin, organization.id, f),
+  ]);
   if (error) throw new Error(error.message);
 
-  // Hidratar unit/owner para cada row (SELECT en batch sobre la vista no incluye joins)
-  const rows = (data ?? []) as Array<{
-    id: string;
-    organization_id: string;
-    account_id: string;
-    direction: MovementDirection;
-    amount: number;
-    currency: string;
-    category: MovementCategory;
-    ref_type: string | null;
-    ref_id: string | null;
-    unit_id: string | null;
-    owner_id: string | null;
-    description: string | null;
-    occurred_at: string;
-    created_at: string;
-    created_by: string | null;
-    billable_to: "apartcba" | "owner" | "guest";
-    account_name: string;
-    account_color: string | null;
-    account_type: string;
-    running_balance: number;
-  }>;
-
-  const unitIds = Array.from(new Set(rows.map((r) => r.unit_id).filter(Boolean) as string[]));
-  const ownerIds = Array.from(new Set(rows.map((r) => r.owner_id).filter(Boolean) as string[]));
-
-  const [{ data: units }, { data: owners }] = await Promise.all([
-    unitIds.length
-      ? admin
-          .from("units")
-          .select("id, code, name")
-          .in("id", unitIds)
-          .eq("organization_id", organization.id)
-      : Promise.resolve({ data: [] as Array<{ id: string; code: string; name: string }> }),
-    ownerIds.length
-      ? admin
-          .from("owners")
-          .select("id, full_name")
-          .in("id", ownerIds)
-          .eq("organization_id", organization.id)
-      : Promise.resolve({ data: [] as Array<{ id: string; full_name: string }> }),
-  ]);
-
-  const unitMap = new Map((units ?? []).map((u) => [u.id, u]));
-  const ownerMap = new Map((owners ?? []).map((o) => [o.id, o]));
-
-  const enriched: EnrichedMovementRow[] = rows.map((r) => ({
-    id: r.id,
-    organization_id: r.organization_id,
-    account_id: r.account_id,
-    direction: r.direction,
-    amount: Number(r.amount),
-    currency: r.currency,
-    category: r.category,
-    ref_type: r.ref_type,
-    ref_id: r.ref_id,
-    unit_id: r.unit_id,
-    owner_id: r.owner_id,
-    description: r.description,
-    occurred_at: r.occurred_at,
-    created_at: r.created_at,
-    created_by: r.created_by,
-    billable_to: r.billable_to,
-    account: {
-      id: r.account_id,
-      name: r.account_name,
-      currency: r.currency,
-      type: r.account_type,
-      color: r.account_color,
-    },
-    unit: r.unit_id ? unitMap.get(r.unit_id) ?? null : null,
-    owner: r.owner_id ? ownerMap.get(r.owner_id) ?? null : null,
-    running_balance: Number(r.running_balance),
-  }));
-
-  return { rows: enriched, total: count ?? enriched.length };
+  const rows = ((data ?? []) as unknown as CashListViewRow[]).map(toCashListRow);
+  return { rows, total: count ?? rows.length, totals };
 }
 
 export async function getMovementDetail(movementId: string): Promise<MovementDetail | null> {

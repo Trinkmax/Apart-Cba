@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { ArrowDownToLine, ArrowUpFromLine, ArrowRightLeft, Link2, History, Building, User2, BedDouble } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -13,8 +14,9 @@ import {
 import { formatDateTime, formatMoney, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { MovementDetailSheet } from "./movement-detail-sheet";
+import { CATEGORY_SHORT_LABELS, Highlight, PartyTag, PlaceTag, movementTitle } from "./movement-display";
 import type { CashAccount, Unit } from "@/lib/types/database";
-import type { CashMovementAuditEntry, EnrichedMovementRow } from "@/lib/actions/cash";
+import type { CashMovementAuditEntry, CashMovementListRow } from "@/lib/actions/cash";
 
 const BILLABLE_BADGE: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
   apartcba: {
@@ -34,56 +36,60 @@ const BILLABLE_BADGE: Record<string, { icon: React.ReactNode; label: string; cls
   },
 };
 
-const CATEGORY_LABELS: Record<string, string> = {
-  booking_payment: "Reserva",
-  maintenance: "Mantenimiento",
-  cleaning: "Limpieza",
-  owner_settlement: "Liquidación",
-  transfer: "Transferencia",
-  adjustment: "Ajuste",
-  salary: "Sueldo",
-  utilities: "Servicios",
-  tax: "Impuestos",
-  supplies: "Insumos",
-  commission: "Comisión",
-  refund: "Devolución",
-  extra_charge: "Extra",
-  rent_collection: "Alquiler",
-  rent_owner_payout: "Rendición",
-  security_deposit: "Depósito",
-  agency_fee: "Honorarios",
-  other: "Otro",
-};
 
 interface Props {
-  rows: EnrichedMovementRow[];
+  rows: CashMovementListRow[];
   accounts: CashAccount[];
   units: Pick<Unit, "id" | "code" | "name">[];
   accountCurrency: string;
   latestAudit?: Record<string, CashMovementAuditEntry>;
+  /** Tokens ya normalizados de la búsqueda (?q=), para resaltar lo que coincidió. */
+  highlight?: string[];
+  /** Lo que se tipeó, tal cual: para ofrecer buscarlo en todas las cuentas. */
+  searchQuery?: string;
 }
 
-export function AccountMovementsTable({ rows, accounts, units, accountCurrency, latestAudit }: Props) {
+export function AccountMovementsTable({
+  rows,
+  accounts,
+  units,
+  accountCurrency,
+  latestAudit,
+  highlight,
+  searchQuery,
+}: Props) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   if (rows.length === 0) {
+    const q = searchQuery?.trim();
     return (
-      <Card className="p-12 text-center border-dashed text-sm text-muted-foreground">
-        Sin movimientos para los filtros seleccionados.
+      <Card className="p-12 gap-2 text-center border-dashed text-sm text-muted-foreground">
+        <p>{q ? `Nada con «${q}» en esta cuenta.` : "Sin movimientos para los filtros seleccionados."}</p>
+        {q && (
+          <p className="text-xs">
+            Puede estar en otra cuenta:{" "}
+            <Link
+              href={`/dashboard/caja?q=${encodeURIComponent(q)}`}
+              className="font-medium text-foreground underline underline-offset-4 hover:text-primary"
+            >
+              buscar «{q}» en todas las cuentas
+            </Link>
+          </p>
+        )}
       </Card>
     );
   }
 
   return (
     <TooltipProvider delayDuration={150}>
-      <Card className="overflow-hidden">
+      <Card className="gap-0 overflow-hidden py-0">
         <div className="divide-y">
           {/* Header desktop */}
           <div className="hidden md:grid grid-cols-12 gap-3 px-4 py-2 bg-muted/30 text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
             <div className="col-span-1">Tipo</div>
             <div className="col-span-4">Concepto</div>
             <div className="col-span-2">Categoría</div>
-            <div className="col-span-1">Vinculado</div>
+            <div className="col-span-1">Depto</div>
             <div className="col-span-2 text-right">Importe</div>
             <div className="col-span-2 text-right">Saldo</div>
           </div>
@@ -93,6 +99,8 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
             const isTransfer = m.category === "transfer";
             const hasLink = !!m.ref_type;
             const auditEntry = latestAudit?.[m.id];
+            const { title, partyInTitle } = movementTitle(m);
+            const party = m.party_name && !partyInTitle ? m.party_name : null;
 
             const iconCls = cn(
               "size-8 rounded-lg flex items-center justify-center shrink-0",
@@ -120,7 +128,7 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                 type="button"
                 onClick={() => setOpenId(m.id)}
                 className="w-full text-left hover:bg-accent/40 active:bg-accent/60 transition-colors focus:outline-none focus:bg-accent/40"
-                aria-label={`Ver detalle del movimiento ${m.description ?? CATEGORY_LABELS[m.category]}`}
+                aria-label={`Ver detalle del movimiento ${title}`}
               >
                 {/* MOBILE */}
                 <div className="md:hidden flex items-start gap-3 p-3">
@@ -128,7 +136,7 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="text-sm font-medium truncate">
-                        {m.description ?? CATEGORY_LABELS[m.category] ?? m.category}
+                        <Highlight text={title} tokens={highlight} />
                       </div>
                       <div className={cn(amountCls, "text-sm shrink-0")}>
                         {isIn ? "+" : "−"} {formatMoney(m.amount, m.currency)}
@@ -136,7 +144,7 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap mt-1 text-[11px] text-muted-foreground">
                       <Badge variant="secondary" className="font-normal text-[10px] h-4 px-1.5">
-                        {CATEGORY_LABELS[m.category] ?? m.category}
+                        {CATEGORY_SHORT_LABELS[m.category] ?? m.category}
                       </Badge>
                       {m.billable_to && (
                         <span
@@ -150,7 +158,17 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                         </span>
                       )}
                       {hasLink && <Link2 size={10} className="opacity-60" />}
-                      {m.unit && <span className="font-mono">{m.unit.code}</span>}
+                      {m.place_label && (
+                        <PlaceTag
+                          label={m.place_label}
+                          detail={m.unit?.name}
+                          tokens={highlight}
+                          className="max-w-[45%] text-foreground/80"
+                        />
+                      )}
+                      {party && (
+                        <PartyTag name={party} kind={m.party_kind} tokens={highlight} className="max-w-[60%]" />
+                      )}
                       {auditEntry && <AuditStamp entry={auditEntry} />}
                     </div>
                     <div className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
@@ -165,13 +183,21 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                   <div className="col-span-1 flex items-center"><div className={iconCls}>{icon}</div></div>
                   <div className="col-span-4 min-w-0">
                     <div className="text-sm font-medium truncate">
-                      {m.description ?? CATEGORY_LABELS[m.category] ?? m.category}
+                      <Highlight text={title} tokens={highlight} />
                     </div>
-                    <div className="text-xs text-muted-foreground">{formatDateTime(m.occurred_at)}</div>
+                    <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      <span className="shrink-0">{formatDateTime(m.occurred_at)}</span>
+                      {party && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <PartyTag name={party} kind={m.party_kind} tokens={highlight} />
+                        </>
+                      )}
+                    </div>
                   </div>
                   <div className="col-span-2 flex items-center gap-1.5 flex-wrap">
                     <Badge variant="secondary" className="font-normal text-[10px]">
-                      {CATEGORY_LABELS[m.category] ?? m.category}
+                      {CATEGORY_SHORT_LABELS[m.category] ?? m.category}
                     </Badge>
                     {m.billable_to && (
                       <Tooltip>
@@ -195,7 +221,9 @@ export function AccountMovementsTable({ rows, accounts, units, accountCurrency, 
                   </div>
                   <div className="col-span-1 text-xs text-muted-foreground flex items-center gap-1.5 min-w-0">
                     {hasLink && <Link2 size={10} className="opacity-60 shrink-0" />}
-                    {m.unit && <span className="font-mono truncate">{m.unit.code}</span>}
+                    {m.place_label && (
+                      <PlaceTag label={m.place_label} detail={m.unit?.name} tokens={highlight} className="max-w-full" />
+                    )}
                   </div>
                   <div className="col-span-2 text-right">
                     <div className={amountCls}>
