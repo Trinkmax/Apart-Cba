@@ -198,6 +198,11 @@ function computeTotals(
   };
 }
 
+/** Lo lanza persistSettlement ante una liquidación manual (073); lo traducen sus callers. */
+const MANUAL_SETTLEMENT_ERROR = "MANUAL_SETTLEMENT";
+const MANUAL_SETTLEMENT_MESSAGE =
+  "Es una liquidación armada a mano: no se regenera con las reservas del sistema (duplicaría lo cargado). Editá sus filas en el detalle.";
+
 function revalidateSettlement(id?: string) {
   // Ambas vistas (Por propietario / Por período) viven ahora en esta única ruta.
   revalidatePath("/dashboard/liquidaciones");
@@ -697,6 +702,12 @@ async function persistSettlement(opts: {
     (s) => s.id !== existing?.id && s.status !== "anulada",
   );
 
+  if (existing?.origin === "manual") {
+    // Una liquidación armada en blanco (073) se carga a mano: regenerarla
+    // conservaría esas filas pero les SUMARÍA las reservas del sistema, y lo
+    // tipeado quedaría duplicado. Ni «Regenerar» ni «Generar todas» la tocan.
+    throw new Error(MANUAL_SETTLEMENT_ERROR);
+  }
   if (existing && existing.status !== "borrador") {
     // "ya está" lo usan generateSettlement y el lote para reconocer el caso;
     // el resto es la salida, la misma que muestra el diálogo «Generar».
@@ -991,7 +1002,7 @@ export async function generateSettlement(
   | { ok: true; settlement: OwnerSettlement; lines: SettlementLine[] }
   | {
       ok: false;
-      reason: "no_units" | "already_closed" | "forbidden" | "unknown";
+      reason: "no_units" | "already_closed" | "manual" | "forbidden" | "unknown";
       message: string;
     }
 > {
@@ -1064,6 +1075,9 @@ export async function generateSettlement(
         message: "El propietario no tiene unidades asignadas",
       };
     }
+    if (msg === MANUAL_SETTLEMENT_ERROR) {
+      return { ok: false, reason: "manual", message: MANUAL_SETTLEMENT_MESSAGE };
+    }
     if (/ya está/.test(msg)) {
       return { ok: false, reason: "already_closed", message: msg };
     }
@@ -1112,6 +1126,131 @@ export async function generateSettlement(
   };
 }
 
+const blankSettlementSchema = z.object({
+  ownerId: z.string().uuid(),
+  year: z.number().int().min(2020).max(2100),
+  month: z.number().int().min(1).max(12),
+});
+
+/**
+ * Crea una liquidación EN BLANCO (migración 073): el documento vacío del
+ * propietario para el período, sin ninguna línea automática. Se carga a mano
+ * en el detalle con «Agregar reserva» / «Agregar cargo» y desde ahí sigue el
+ * camino de cualquier otra (revisar, enviar, «Registrar pago» → Caja).
+ *
+ * Queda `origin = 'manual'`: persistSettlement se niega a regenerarla, así
+ * «Regenerar» y «Generar todas» nunca le suman las reservas del sistema a lo
+ * que la persona cargó.
+ *
+ * Una por propietario y período (el índice único ignora el estado): si ya hay
+ * una, se devuelve su id para abrirla en lugar de crear otra.
+ */
+export async function createBlankSettlement(
+  input: z.input<typeof blankSettlementSchema>,
+): Promise<
+  | { ok: true; settlementId: string }
+  | {
+      ok: false;
+      reason: "exists" | "forbidden" | "invalid";
+      message: string;
+      settlementId?: string;
+    }
+> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "create")) {
+    return {
+      ok: false,
+      reason: "forbidden",
+      message: "No tenés permisos para crear liquidaciones",
+    };
+  }
+  const parsed = blankSettlementSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, reason: "invalid", message: "Elegí el propietario y el período" };
+  }
+  const { ownerId, year, month } = parsed.data;
+  const admin = createAdminClient();
+
+  const { data: owner } = await admin
+    .from("owners")
+    .select("id, full_name")
+    .eq("id", ownerId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (!owner) {
+    return { ok: false, reason: "invalid", message: "Propietario no encontrado" };
+  }
+
+  const period = formatPeriod(year, month);
+  const name = (owner.full_name as string).trim();
+  const findExisting = () =>
+    admin
+      .from("owner_settlements")
+      .select("id, status")
+      .eq("organization_id", organization.id)
+      .eq("owner_id", ownerId)
+      .eq("period_year", year)
+      .eq("period_month", month)
+      .eq("currency", BASE_CURRENCY)
+      .maybeSingle();
+  const existsResult = (row: { id: string; status: string }) => ({
+    ok: false as const,
+    reason: "exists" as const,
+    settlementId: row.id,
+    message:
+      row.status === "anulada"
+        ? `Hay una liquidación anulada de ${period} para ${name} y bloquea crear otra: eliminala desde la lista de Liquidaciones.`
+        : `${name} ya tiene una liquidación de ${period}. Abrila y cargale lo que falte.`,
+  });
+
+  const { data: existing } = await findExisting();
+  if (existing) return existsResult(existing as { id: string; status: string });
+
+  const now = new Date().toISOString();
+  const { data, error } = await admin
+    .from("owner_settlements")
+    .insert({
+      organization_id: organization.id,
+      owner_id: ownerId,
+      period_year: year,
+      period_month: month,
+      currency: BASE_CURRENCY,
+      status: "borrador",
+      origin: "manual",
+      generated_by: session.userId,
+      generated_at: now,
+      last_edited_by: session.userId,
+      last_edited_at: now,
+    })
+    .select("id")
+    .single();
+  if (error) {
+    // Doble click / dos personas a la vez: la otra ya la creó.
+    if (error.code === "23505") {
+      const { data: raced } = await findExisting();
+      if (raced) return existsResult(raced as { id: string; status: string });
+    }
+    throw new Error(error.message);
+  }
+  const settlementId = data.id as string;
+
+  // Sin snapshot: no es un cambio que se deshaga, es el nacimiento del
+  // documento (deshacer sólo recorre entradas con foto).
+  await admin.from("settlement_audit").insert({
+    organization_id: organization.id,
+    settlement_id: settlementId,
+    action: "create",
+    actor_user_id: session.userId,
+    actor_name: actorNameOf(session),
+    changes: { kind: "create_blank", periodo: period },
+    side_effects: [],
+  });
+
+  revalidateSettlement(settlementId);
+  return { ok: true, settlementId };
+}
+
 /** Totales de la previsualización, por moneda nativa (sin convertir). */
 interface PreviewCurrencyTotals {
   gross: number;
@@ -1146,7 +1285,7 @@ export async function previewSettlement(
       byCurrency: Record<string, PreviewCurrencyTotals>;
       stats: SettlementBuildStats;
       /** Liquidación ya existente para owner+período (moneda base), si la hay. */
-      existing: { id: string; status: SettlementStatus } | null;
+      existing: { id: string; status: SettlementStatus; origin: "auto" | "manual" } | null;
     }
   | { ok: false; reason: "no_units" | "forbidden" | "unknown"; message: string }
 > {
@@ -1247,7 +1386,7 @@ export async function previewSettlement(
 
   const { data: existing } = await admin
     .from("owner_settlements")
-    .select("id, status")
+    .select("id, status, origin")
     .eq("organization_id", organization.id)
     .eq("owner_id", parsed.data.ownerId)
     .eq("period_year", parsed.data.year)
@@ -1262,7 +1401,11 @@ export async function previewSettlement(
     byCurrency,
     stats: built.stats,
     existing: existing
-      ? { id: existing.id as string, status: existing.status as SettlementStatus }
+      ? {
+          id: existing.id as string,
+          status: existing.status as SettlementStatus,
+          origin: (existing.origin as "auto" | "manual" | null) ?? "auto",
+        }
       : null,
   };
 }
@@ -1373,7 +1516,9 @@ export async function generateSettlementsForPeriod(
         skipped:
           msg === "NO_UNITS"
             ? "Sin unidades asignadas"
-            : /ya está/.test(msg)
+            : msg === MANUAL_SETTLEMENT_ERROR
+              ? "Armada a mano (no se regenera)"
+              : /ya está/.test(msg)
               ? "Ya cerrada (no se regenera)"
               : msg,
       };

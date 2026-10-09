@@ -26,6 +26,10 @@ import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { addSettlementBookingRow } from "@/lib/actions/settlements";
+import {
+  managementCommissionAmount,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
 
 type Unit = { id: string; code: string; name: string };
 
@@ -50,6 +54,7 @@ export function AddBookingRowDialog({
   units,
   currentNet,
   lockedUnitId,
+  commissionBase = "gross",
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -63,6 +68,8 @@ export function AddBookingRowDialog({
    * paso extra de elegirla cada vez.
    */
   lockedUnitId?: string;
+  /** Base de la comisión de la org (bruto, o bruto − canal). Misma regla que la generación. */
+  commissionBase?: CommissionBase;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -83,27 +90,47 @@ export function AddBookingRowDialog({
   const [gross, setGross] = useState("");
   const [pct, setPct] = useState("20");
   const [commission, setCommission] = useState("");
+  // Lo que se queda Airbnb / Booking: en una reserva de canal cargada a mano
+  // hace falta para que el neto del propietario dé lo que dio en la plataforma.
+  const [channel, setChannel] = useState("");
   const [expenses, setExpenses] = useState("");
   // Default = moneda base del documento. Si el usuario carga una reserva
   // pagada en USD/EUR, la cambia acá y se persiste por línea.
   const [rowCurrency, setRowCurrency] = useState<string>(currency);
 
-  const rowNet = round2(num(gross) - num(commission) - num(expenses));
+  const rowNet = round2(num(gross) - num(commission) - num(channel) - num(expenses));
   const projected = round2(currentNet + rowNet);
   const isForeign = rowCurrency !== currency;
 
+  // La comisión se calcula con la MISMA regla que la generación
+  // (booking-economics): sobre el bruto, o sobre bruto − canal si la org
+  // liquida así.
+  function recomputeCommission(g: number, p: number, ch: number): string {
+    const c = managementCommissionAmount({
+      total: g,
+      commissionPct: p,
+      channelPct: g > 0 ? (ch / g) * 100 : 0,
+      commissionBase,
+    });
+    return String(c ?? 0);
+  }
   function onGross(v: string) {
     setGross(v);
-    setCommission(String(round2((num(v) * num(pct)) / 100)));
+    setCommission(recomputeCommission(num(v), num(pct), num(channel)));
   }
   function onPct(v: string) {
     setPct(v);
-    setCommission(String(round2((num(gross) * num(v)) / 100)));
+    setCommission(recomputeCommission(num(gross), num(v), num(channel)));
+  }
+  function onChannel(v: string) {
+    setChannel(v);
+    setCommission(recomputeCommission(num(gross), num(pct), num(v)));
   }
   function onCommission(v: string) {
     setCommission(v);
     const g = num(gross);
-    setPct(g > 0 ? String(round2((num(v) / g) * 100)) : "0");
+    const base = commissionBase === "net_of_channel" ? round2(g - num(channel)) : g;
+    setPct(base > 0 ? String(round2((num(v) / base) * 100)) : "0");
   }
 
   function close() {
@@ -115,13 +142,18 @@ export function AddBookingRowDialog({
     setGross("");
     setPct("20");
     setCommission("");
+    setChannel("");
     setExpenses("");
     setRowCurrency(currency);
     onOpenChange(false);
   }
 
+  // Con una sola unidad no hay nada que elegir (el caso típico de una
+  // liquidación armada desde cero): viene puesta.
+  const effectiveUnitId = unitId || (units.length === 1 ? units[0].id : "");
+
   function save() {
-    if (!unitId) {
+    if (!effectiveUnitId) {
       toast.error("Elegí una unidad");
       return;
     }
@@ -133,13 +165,14 @@ export function AddBookingRowDialog({
       try {
         await addSettlementBookingRow({
           settlement_id: settlementId,
-          unit_id: unitId,
+          unit_id: effectiveUnitId,
           guest_name: guest.trim() || null,
           check_in: checkIn || null,
           check_out: checkOut || null,
           nights: Math.max(0, Math.round(num(nights))),
           gross: round2(num(gross)),
           commission: round2(num(commission)),
+          channel_commission: round2(num(channel)),
           expenses: round2(num(expenses)),
           currency: rowCurrency,
         });
@@ -195,7 +228,7 @@ export function AddBookingRowDialog({
                 <Label>Unidad</Label>
                 <UnitCombobox
                   units={units}
-                  value={unitId}
+                  value={effectiveUnitId}
                   onChange={(id) => setUnitId(id ?? "")}
                   placeholder="Elegí una unidad"
                 />
@@ -265,7 +298,18 @@ export function AddBookingRowDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 items-end gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label>Comisión del canal</Label>
+              <Input
+                type="number"
+                step="0.01"
+                inputMode="decimal"
+                placeholder="0"
+                value={channel}
+                onChange={(e) => onChannel(e.target.value)}
+              />
+            </div>
             <div className="space-y-1.5">
               <Label>Gastos (limpieza / expensas)</Label>
               <Input

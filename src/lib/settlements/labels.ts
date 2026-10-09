@@ -109,6 +109,8 @@ export const SETTLEMENT_STATUS_META: Record<
  * botones Deshacer / Rehacer, que tienen que nombrar el MISMO cambio.
  */
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
+  // Migración 073: liquidación armada en blanco, para cargar a mano.
+  create: "Creada en blanco",
   line_add: "Cargo agregado",
   row_add: "Reserva agregada",
   line_update: "Cargo editado",

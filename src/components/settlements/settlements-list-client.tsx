@@ -298,6 +298,8 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
   // Las filas ya están agrupadas por mes, así que acá alcanza con el período
   // del ciclo de ajuste ("Período 1/3") para distinguir de un vistazo.
   const cycleLabel = formatPeriodCycle(s.period_index, s.period_cycle);
+  // Armada en blanco (073): se distingue de un vistazo porque no se regenera.
+  const manual = s.origin === "manual";
   return (
     <div className="flex items-center group hover:bg-accent/30 transition-colors">
       <Link
@@ -319,7 +321,7 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
           <div
             className={cn(
               "flex items-center gap-1.5 flex-wrap mt-1",
-              !cycleLabel && "sm:mt-0",
+              !cycleLabel && !manual && "sm:mt-0",
             )}
           >
             <Badge
@@ -339,6 +341,14 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
             {cycleLabel && (
               <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
                 {cycleLabel}
+              </span>
+            )}
+            {manual && (
+              <span
+                className="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title="Armada a mano: no se regenera con las reservas del sistema"
+              >
+                A mano
               </span>
             )}
           </div>

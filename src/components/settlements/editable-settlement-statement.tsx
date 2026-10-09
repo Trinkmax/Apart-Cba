@@ -84,7 +84,10 @@ import {
 import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { formatMoney, formatDate, formatTimeAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { managementCommissionAmount } from "@/lib/finance/booking-economics";
+import {
+  managementCommissionAmount,
+  type CommissionBase,
+} from "@/lib/finance/booking-economics";
 import {
   SETTLEMENT_LINE_META,
   describeAuditChange,
@@ -1706,6 +1709,7 @@ export function EditableSettlementStatement({
   periodSuggestion = null,
   undoState,
   drift = {},
+  commissionBase = "gross",
 }: {
   model: StatementModel;
   settlementId: string;
@@ -1720,6 +1724,8 @@ export function EditableSettlementStatement({
   undoState: UndoState;
   /** Filas cuya reserva cambió después de armarlas (ref_id → motivos). */
   drift?: Record<string, string[]>;
+  /** Base de la comisión de la org: con ella «Agregar reserva» calcula la comisión. */
+  commissionBase?: CommissionBase;
 }) {
   const c = currency;
   // Columna "Canal" sólo si el documento tiene comisión de plataforma > 0.
@@ -2345,6 +2351,7 @@ export function EditableSettlementStatement({
         units={units}
         currentNet={model.totals.net}
         lockedUnitId={addBookingUnitId ?? undefined}
+        commissionBase={commissionBase}
       />
       {editCharge && (
         <ChargeDialog

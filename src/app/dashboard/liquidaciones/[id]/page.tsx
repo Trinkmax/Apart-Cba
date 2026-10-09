@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { Archive, ArrowLeft, Coins } from "lucide-react";
+import { Archive, ArrowLeft, Coins, PencilLine } from "lucide-react";
 import {
   getSettlement,
   listSettlementAudit,
@@ -43,7 +43,7 @@ export default async function SettlementDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const { role } = await getCurrentOrg();
+  const { role, organization } = await getCurrentOrg();
   if (!can(role, "settlements", "view")) redirect("/dashboard");
 
   const settlement = (await getSettlement(
@@ -147,6 +147,7 @@ export default async function SettlementDetailPage({
           public_token: settlement.public_token,
           owner_email: settlement.owner.email,
           net_payable: Number(settlement.net_payable),
+          origin: settlement.origin ?? "auto",
         }}
         statementInput={statementInput}
         branding={branding}
@@ -280,6 +281,20 @@ export default async function SettlementDetailPage({
         </div>
       )}
 
+      {settlement.origin === "manual" && settlement.status !== "anulada" && (
+        // Migración 073: se armó en blanco. Sin este aviso, el que la abre
+        // después busca «Regenerar» y no entiende por qué no está.
+        <div className="flex items-start gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-xs text-muted-foreground">
+          <PencilLine size={14} className="mt-px shrink-0 text-foreground/70" />
+          <span>
+            <span className="font-medium text-foreground">Armada a mano.</span>{" "}
+            Se carga con «Agregar reserva» y «Agregar cargo» y no se regenera
+            con las reservas del sistema, así lo cargado nunca se duplica. Al
+            registrar el pago impacta en Caja como cualquier otra.
+          </span>
+        </div>
+      )}
+
       {canUpdate ? (
         <EditableSettlementStatement
           model={model}
@@ -292,6 +307,7 @@ export default async function SettlementDetailPage({
           periodSuggestion={periodSuggestion}
           undoState={undoState}
           drift={Object.fromEntries(drift.map((d) => [d.ref_id, d.reasons]))}
+          commissionBase={organization.commission_base ?? "gross"}
         />
       ) : (
         <SettlementStatement model={model} />

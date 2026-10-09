@@ -751,6 +751,13 @@ export interface OwnerSettlement {
   /** Aclaración corta opcional del período, impresa en el documento (≤160). */
   period_note: string | null;
   status: SettlementStatus;
+  /**
+   * `auto`: la arma el sistema con las reservas del período (Generar,
+   * Regenerar, Generar todas). `manual`: se creó en blanco y se carga a mano —
+   * nunca se regenera (sumaría las reservas del sistema a lo tipeado).
+   * Migración 073.
+   */
+  origin: "auto" | "manual";
   currency: string;
   gross_revenue: number;
   commission_amount: number;

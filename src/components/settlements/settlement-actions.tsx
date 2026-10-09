@@ -61,6 +61,8 @@ export function SettlementActions({
     public_token: string;
     owner_email: string | null;
     net_payable: number;
+    /** 'manual' = armada en blanco (073): no se regenera con las reservas. */
+    origin: "auto" | "manual";
   };
   statementInput: StatementInput;
   branding: ExportBranding;
@@ -160,7 +162,7 @@ export function SettlementActions({
         <Link2 size={14} /> Link
       </Button>
 
-      {canCreate && s === "borrador" && (
+      {canCreate && s === "borrador" && settlement.origin !== "manual" && (
         <Button
           variant="outline"
           size="sm"
