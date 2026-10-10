@@ -18,6 +18,14 @@ describe("monthOverlapNights (P1)", () => {
     // Check-in el último día del mes: 1 noche, no 0 (antes se salteaba).
     expect(monthOverlapNights("2026-07-31", "2026-08-01", 2026, 7)).toBe(1);
   });
+
+  it("una estadía que cruza varios meses reparte todas sus noches (ALCORTA2, 11/09 → 08/11)", () => {
+    // La liquidación generaba 19/30 en septiembre y 30/31 en octubre.
+    expect(monthOverlapNights("2026-09-11", "2026-11-08", 2026, 9)).toBe(20);
+    expect(monthOverlapNights("2026-09-11", "2026-11-08", 2026, 10)).toBe(31);
+    expect(monthOverlapNights("2026-09-11", "2026-11-08", 2026, 11)).toBe(7);
+    expect(20 + 31 + 7).toBe(nightsBetween("2026-09-11", "2026-11-08"));
+  });
 });
 
 describe("helpers de período", () => {

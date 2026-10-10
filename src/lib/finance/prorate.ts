@@ -3,15 +3,17 @@
  *
  * Todo trabaja sobre strings `YYYY-MM-DD` y `Date.UTC`: la zona horaria del
  * proceso no puede mover un día. `new Date(y, m-1, 1).toISOString()` (lo que
- * hace hoy settlements.ts para armar el período) da bien en Vercel sólo porque
- * el proceso corre en UTC; en una máquina en -03 corre el mes un día.
+ * hacía settlements.ts hasta el 09/10/2026 para armar el período) da bien en
+ * Vercel sólo porque el proceso corre en UTC; en una zona al este de UTC corre
+ * el mes un día.
  *
  * REGLA DE ORO: el fin del mes es EXCLUSIVO — el día 1 del mes siguiente —,
  * igual que `check_out_date`. Con el fin inclusivo (el último día del mes) y
  * una resta de fechas que ya cuenta noches, un mes completo da 29/30 o 30/31:
  * es el bug de las 11 líneas automáticas de septiembre 2026 ("(29/30 días)",
- * ROSARIO, BSAS1, ORO, ITU…). Resultados cuenta noches exactas con esto y
- * marca `prorrateo_viejo` donde la liquidación contó otra cosa.
+ * ROSARIO, BSAS1, ORO, ITU…). La generación de liquidaciones y Resultados
+ * cuentan con esto; Resultados marca `prorrateo_viejo` en las liquidaciones
+ * generadas antes del arreglo.
  */
 
 const DAY_MS = 86_400_000;

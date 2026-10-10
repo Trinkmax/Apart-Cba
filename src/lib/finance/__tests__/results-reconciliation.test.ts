@@ -188,7 +188,7 @@ describe("mensual", () => {
     expect(r.prorate).toEqual({ nights: 31, of: 31 });
   });
 
-  it("P3: porción automática con prorate_days 29 en un mes de 30 noches → prorrateo_viejo sin 'regenerala'", () => {
+  it("P3: porción automática con prorate_days 29 en un mes de 30 noches → prorrateo_viejo; en borrador, regenerala (la generación ya cuenta bien)", () => {
     const b = booking({
       id: "m1",
       mode: "mensual",
@@ -208,15 +208,14 @@ describe("mensual", () => {
     const r = rowOf(res, "m1");
     expect(codes(r)).toContain("prorrateo_viejo");
     const issue = r.issues.find((i) => i.code === "prorrateo_viejo")!;
-    expect(issue.detail).toBe("Se liquidaron 29 días y el mes tiene 30 noches ocupadas.");
-    expect(issue.detail).not.toMatch(/regenerala/i);
+    expect(issue.detail).toBe("Se liquidaron 29 días y el mes tiene 30 noches ocupadas. Está en borrador: regenerala.");
     expect(issue.group).toBe("prorrateo_mensual");
     expect(r.settled?.rate_diff).toBeNull();
     expect(r.outcome).toBe("sin_conciliar");
     expect(r.parts.unreconciled).toBe(900_000);
   });
 
-  it("P3b: prorrateo mal contado + reserva editada después de generar → solo prorrateo_viejo (nunca 'regenerala')", () => {
+  it("P3b: prorrateo mal contado + reserva editada después de generar → solo prorrateo_viejo (no 'desactualizada')", () => {
     const b = booking({
       id: "m1",
       mode: "mensual",
@@ -243,7 +242,7 @@ describe("mensual", () => {
     expect(codes(r)).toContain("prorrateo_viejo");
     expect(codes(r)).not.toContain("liquidacion_vieja");
     expect(r.issues[0].code).toBe("prorrateo_viejo");
-    expect(r.issues.map((i) => i.detail).join(" ")).not.toMatch(/regenerala/i);
+    expect(r.issues[0].detail.endsWith("Está en borrador: regenerala.")).toBe(true);
     expect(res.review.map((i) => i.id)).not.toContain("liquidacion_desactualizada");
   });
 
@@ -1083,7 +1082,8 @@ describe("regresiones de la revisión", () => {
     const r = rowOf(res, "deh");
     expect(r.guest_total).toBe(945_000);
     const issue = r.issues.find((i) => i.code === "prorrateo_viejo")!;
-    expect(issue.detail).toBe("Se liquidaron 30 días y el mes tiene 31 noches ocupadas.");
+    // Fila manual: regenerar la conserva tal cual, así que el consejo es editarla.
+    expect(issue.detail).toBe("Se liquidaron 30 días y el mes tiene 31 noches ocupadas. Editá la fila.");
     expect(issue.at_stake).toBe(30_483.87); // una noche
     expect(r.settled?.rate_diff).toBeNull();
     expect(res.totals[0].settled.rate_diff).toBe(0);

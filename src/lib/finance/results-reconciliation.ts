@@ -1244,11 +1244,12 @@ export function evaluateRow(draft: DraftRow, ctx: EvalContext): ReconciledRow {
   }
 
   // 3a · Prorrateo mensual mal contado. Va ANTES que "desactualizada" y la
-  // excluye: settlements.ts cuenta el mes con fin inclusivo (un mes completo
-  // sale 29/30, 11 líneas automáticas de septiembre 2026), así que si la
-  // brecha es el prorrateo, decir "regenerala" manda al operador a
-  // reproducir el mismo error. Resultados cuenta noches exactas y marca la
-  // porción en vez de "corregirla" en silencio.
+  // excluye: hasta el 09/10/2026 settlements.ts contaba el mes con fin
+  // inclusivo (un mes completo salía 29/30, 11 líneas automáticas de
+  // septiembre 2026), y esas liquidaciones conservan el número viejo hasta
+  // que se regeneran. La causa es la cuenta, no un cambio de la reserva.
+  // Resultados cuenta noches exactas y marca la porción en vez de
+  // "corregirla" en silencio.
   //
   // Una fila editada (`!all_auto`) cuenta sólo si el importe sigue siendo el
   // que calculó el sistema con el prorrateo viejo: `updateSettlementBookingRow`
@@ -1288,7 +1289,12 @@ export function evaluateRow(draft: DraftRow, ctx: EvalContext): ReconciledRow {
     if (firstHit) {
       push(
         "prorrateo_viejo",
-        ISSUE_TEXT.prorrateoViejo(firstHit.piece.prorate_days as number, firstHit.nights),
+        ISSUE_TEXT.prorrateoViejo(
+          firstHit.piece.prorate_days as number,
+          firstHit.nights,
+          firstHit.piece.status,
+          firstHit.piece.all_auto,
+        ),
         stake,
         liqHref(firstHit.piece.settlement_id),
         REVIEW_GROUP_META.prorrateo_mensual.cta,

@@ -21,6 +21,7 @@ import {
   nextPeriodInCycle,
 } from "@/lib/settlements/labels";
 import { zonedTimeToUtc, addDaysYmd } from "@/lib/dates";
+import { monthBounds, monthOverlapNights } from "@/lib/finance/prorate";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import {
   PAYMENT_UNDO_REASON_MAX,
@@ -287,9 +288,11 @@ async function buildSettlementLines(opts: {
   if (!unitOwners || unitOwners.length === 0) throw new NoUnitsError();
 
   const unitIds = unitOwners.map((uo) => uo.unit_id);
-  const periodStart = new Date(year, month - 1, 1).toISOString().slice(0, 10);
-  const periodEnd = new Date(year, month, 0).toISOString().slice(0, 10);
-  const daysInMonth = new Date(year, month, 0).getDate();
+  // Strings `YYYY-MM-DD` sin `Date` local: la zona del proceso no mueve el mes.
+  const bounds = monthBounds(year, month);
+  const periodStart = bounds.start;
+  const periodEnd = addDaysYmd(bounds.endExclusive, -1);
+  const daysInMonth = bounds.days;
 
   // Regen-safe: si ya hay una liquidación BORRADOR de este owner+período,
   // liberamos sus tickets ya cobrados para volver a evaluarlos. Sin esto, al
@@ -378,9 +381,13 @@ async function buildSettlementLines(opts: {
 
     if (mode === "mensual") {
       // ── Mensual: prorratear renta + expensas por días ocupados del mes ──
+      // Las fechas son las que se leen en la fila (del 11 al 30), pero las
+      // noches se cuentan con el fin de mes EXCLUSIVO, igual que el check-out:
+      // con `dayDiff(overlapStart, periodEnd)` una estadía que seguía después
+      // de fin de mes perdía su última noche (mes completo = 29/30, 30/31).
       const overlapStart = b.check_in_date > periodStart ? b.check_in_date : periodStart;
       const overlapEnd = b.check_out_date < periodEnd ? b.check_out_date : periodEnd;
-      const occupiedDays = dayDiff(overlapStart, overlapEnd);
+      const occupiedDays = monthOverlapNights(b.check_in_date, b.check_out_date, year, month);
       if (occupiedDays === 0) {
         stats.mensualSkipped++;
         continue;

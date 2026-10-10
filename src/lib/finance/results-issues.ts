@@ -87,9 +87,8 @@ export type InfoFlag =
   | "pieza_en_cero";
 /**
  * `prorrateo_mensual` tiene grupo propio y no comparte "La liquidación quedó
- * desactualizada": regenerar HOY reproduce el mismo error de un día menos
- * (settlements.ts sigue con el fin de mes inclusivo), así que decirle al
- * operador "regenerala" lo mandaría a un loop.
+ * desactualizada": la reserva no cambió, lo que estaba mal era la cuenta de
+ * noches de la generación (fin de mes inclusivo, corregido el 09/10/2026).
  */
 export type ReviewGroup =
   | "unidad"
@@ -254,12 +253,13 @@ export const ISSUE_TEXT = {
     `La reserva cambió el ${shortDate(changedAt)} y la liquidación de ${monthLabel} es del ${shortDate(generatedAt)}. ` +
     statusTail(status, "regenerala.", "editá la fila."),
   /**
-   * Sin coletilla de "regenerala": la generación todavía cuenta el mes con fin
-   * inclusivo (settlements.ts no se toca en esta entrega), así que regenerar
-   * vuelve a escribir los mismos 29 días.
+   * Desde el 09/10/2026 la generación cuenta bien las noches del mes, así que
+   * un borrador automático se arregla regenerándolo. Una fila editada a mano
+   * sobrevive a la regeneración: esa hay que editarla.
    */
-  prorrateoViejo: (prorateDays: number, nights: number) =>
-    `Se liquidaron ${prorateDays} días y el mes tiene ${nights} noches ocupadas.`,
+  prorrateoViejo: (prorateDays: number, nights: number, status: SettlementStatus, regenerable: boolean) =>
+    `Se liquidaron ${prorateDays} días y el mes tiene ${nights} noches ocupadas. ` +
+    (regenerable ? statusTail(status, "regenerala.", "editá la fila.") : "Editá la fila."),
   liquidadoDeMas: (ownerRate: number, guestTotal: number, currency: string) =>
     `Se liquidaron ${formatMoney(ownerRate, currency)} y el huésped pagó ${formatMoney(guestTotal, currency)}.`,
   posibleDoble: (rows: number, periodsLabel: string) =>
