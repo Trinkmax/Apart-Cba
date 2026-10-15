@@ -15,10 +15,16 @@ import {
   type ManualSettlementStatus,
   MAX_PERIOD_CYCLE,
   MAX_PERIOD_NOTE_LENGTH,
+  MAX_UNIT_PERIODS,
+  describeSettlementPeriod,
   formatPeriod,
-  formatPeriodCycle,
   formatPeriodFull,
+  formatSettlementPeriodFull,
+  hasUnitPeriods,
   nextPeriodInCycle,
+  parseUnitPeriods,
+  type PeriodSuggestion,
+  type UnitPeriods,
 } from "@/lib/settlements/labels";
 import { zonedTimeToUtc, addDaysYmd } from "@/lib/dates";
 import { monthBounds, monthOverlapNights } from "@/lib/finance/prorate";
@@ -55,10 +61,58 @@ import type {
   SettlementStatus,
   SettlementAuditEntry,
 } from "@/lib/types/database";
-import type { StatementInput } from "@/lib/settlements/statement-model";
+import {
+  buildStatementModel,
+  statementInputFromRecord,
+  type StatementRecord,
+} from "@/lib/settlements/statement-model";
+import { buildOwnerSettlementEmail } from "@/lib/settlements/owner-email";
 import { getOwnerScope, ownerFilter, scopeFilter } from "@/lib/auth/owner-scope";
 
 type Admin = ReturnType<typeof createAdminClient>;
+
+/**
+ * Códigos de las unidades con período propio (migración 074), para nombrarlas
+ * fuera del documento: egreso de Caja, historial, avisos. Una sola lectura, y
+ * sólo cuando algún documento va por departamento.
+ */
+async function unitCodesForPeriods(
+  admin: Admin,
+  organizationId: string,
+  ...rawPeriods: unknown[]
+): Promise<Map<string, string>> {
+  const ids = Array.from(
+    new Set(rawPeriods.flatMap((raw) => Object.keys(parseUnitPeriods(raw)))),
+  );
+  if (ids.length === 0) return new Map();
+  const { data } = await admin
+    .from("units")
+    .select("id, code")
+    .eq("organization_id", organizationId)
+    .in("id", ids);
+  return new Map(
+    (data ?? []).map((u) => [
+      String(u.id).toLowerCase(),
+      String(u.code ?? "").trim(),
+    ]),
+  );
+}
+
+/** "Octubre 2026 · Período 1/3" o "Octubre 2026 · DF-1 2/3 · DF-2 3/3". */
+async function settlementPeriodText(
+  admin: Admin,
+  organizationId: string,
+  s: {
+    period_year: number;
+    period_month: number;
+    period_index?: number | null;
+    period_cycle?: number | null;
+    unit_periods?: unknown;
+  },
+): Promise<string> {
+  const codes = await unitCodesForPeriods(admin, organizationId, s.unit_periods);
+  return formatSettlementPeriodFull(s, codes);
+}
 
 const LINE_TYPES = [
   "booking_revenue",
@@ -1564,6 +1618,8 @@ type EditableSettlement = {
   /** Período del ciclo de ajuste — viaja al detalle del asiento de Caja. */
   period_index: number | null;
   period_cycle: number | null;
+  /** Período por departamento (074), crudo de la base. */
+  unit_periods: unknown;
   currency: string;
   net_payable: number;
   paid_movement_id: string | null;
@@ -1591,6 +1647,11 @@ export interface SettlementSnapshot {
     period_index: number | null;
     period_cycle: number | null;
     period_note: string | null;
+    /**
+     * Período por departamento (migración 074). Opcional: los snapshots
+     * anteriores no lo traen y el RPC los restaura con `{}`.
+     */
+    unit_periods?: UnitPeriods;
   };
   lines: Record<string, unknown>[];
   /**
@@ -1622,7 +1683,7 @@ async function captureSettlementSnapshot(
       admin
         .from("owner_settlements")
         .select(
-          "unit_order, exchange_rates, period_index, period_cycle, period_note",
+          "unit_order, exchange_rates, period_index, period_cycle, period_note, unit_periods",
         )
         .eq("id", settlementId)
         .maybeSingle(),
@@ -1640,6 +1701,9 @@ async function captureSettlementSnapshot(
       period_index: header?.period_index ?? null,
       period_cycle: header?.period_cycle ?? null,
       period_note: header?.period_note ?? null,
+      // Tal cual está en la base (ya validado por el CHECK): restaurarlo
+      // "limpio" podría perder una entrada que el documento todavía usa.
+      unit_periods: (header?.unit_periods ?? {}) as UnitPeriods,
     },
     lines: (lines ?? []) as Record<string, unknown>[],
     tickets: (tickets ?? []) as {
@@ -1705,7 +1769,7 @@ async function loadEditableSettlement(
   const { data: s } = await admin
     .from("owner_settlements")
     .select(
-      "id, status, organization_id, owner_id, period_year, period_month, period_index, period_cycle, currency, net_payable, paid_movement_id",
+      "id, status, organization_id, owner_id, period_year, period_month, period_index, period_cycle, unit_periods, currency, net_payable, paid_movement_id",
     )
     .eq("id", settlementId)
     .eq("organization_id", organizationId)
@@ -1791,11 +1855,10 @@ async function reconcileAfterEdit(opts: {
       .eq("id", before.paid_movement_id)
       .maybeSingle();
     if (payMov) {
-      const periodLabel = formatPeriodFull(
-        before.period_year,
-        before.period_month,
-        before.period_index,
-        before.period_cycle,
+      const periodLabel = await settlementPeriodText(
+        admin,
+        before.organization_id,
+        before,
       );
       const direction = delta > 0 ? "out" : "in";
       const amount = round2(Math.abs(delta));
@@ -3443,7 +3506,19 @@ export async function setSettlementExchangeRate(
 // (1/3, 2/3, 3/3). Es metadata del documento: NO mueve importes ni toca Caja,
 // así que va por el camino liviano (loadEditableSettlementMinimal + audit),
 // igual que los reordenamientos.
+//
+// Dos modos que se excluyen (la base no admite los dos a la vez):
+//   • uno para todo el documento (046): period_index / period_cycle;
+//   • uno por departamento (074): unit_periods — el propietario con varios
+//     deptos tiene cada contrato en un punto distinto del ciclo.
 // ════════════════════════════════════════════════════════════════════════════
+
+const unitPeriodSchema = z.object({
+  unit_id: z.string().uuid(),
+  index: z.coerce.number().int().min(1).max(MAX_PERIOD_CYCLE),
+  /** null = "Período N" sin denominador. */
+  cycle: z.coerce.number().int().min(1).max(MAX_PERIOD_CYCLE).nullable(),
+});
 
 const periodCycleSchema = z
   .object({
@@ -3458,6 +3533,12 @@ const periodCycleSchema = z
       .max(MAX_PERIOD_NOTE_LENGTH)
       .nullable()
       .transform((v) => (v ? v : null)),
+    /**
+     * Período por departamento (074). Con al menos una entrada el documento va
+     * por depto e `index`/`cycle` se ignoran. Ausente o vacío = uno para todo
+     * el documento. Una unidad del documento que no viene = "no aplica".
+     */
+    units: z.array(unitPeriodSchema).max(MAX_UNIT_PERIODS).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.index == null && v.cycle != null) {
@@ -3474,65 +3555,145 @@ const periodCycleSchema = z
         message: `El período no puede ser mayor que el ciclo (máximo ${v.cycle})`,
       });
     }
+    const seen = new Set<string>();
+    (v.units ?? []).forEach((u, i) => {
+      if (u.cycle != null && u.index > u.cycle) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["units", i, "index"],
+          message: `El período no puede ser mayor que el ciclo (máximo ${u.cycle})`,
+        });
+      }
+      const id = u.unit_id.toLowerCase();
+      if (seen.has(id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["units", i, "unit_id"],
+          message: "La misma unidad vino dos veces",
+        });
+      }
+      seen.add(id);
+    });
   });
 
+export type SetSettlementPeriodResult =
+  | { ok: true; label: string | null }
+  | { ok: false; error: string };
+
 /**
- * Setea (o borra) el período del ciclo de ajuste que cubre la liquidación.
- * Persiste en `owner_settlements.period_{index,cycle,note}` y queda en el
- * historial. No recalcula totales ni reconcilia Caja: es rotulado, no plata.
+ * Setea (o borra) el período del ciclo de ajuste que cubre la liquidación —
+ * uno para todo el documento o uno por departamento. Persiste en
+ * `owner_settlements.period_{index,cycle,note}` / `unit_periods`, queda en el
+ * historial y se deshace como cualquier edición. No recalcula totales ni
+ * reconcilia Caja: es rotulado, no plata.
+ *
+ * Devuelve el error en vez de lanzarlo: en producción Next.js reemplaza el
+ * mensaje de toda excepción de una Server Action y el toast quedaba en inglés.
  */
 export async function setSettlementPeriodCycle(
   input: z.input<typeof periodCycleSchema>,
-) {
+): Promise<SetSettlementPeriodResult> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) {
-    throw new Error("No tenés permisos para editar liquidaciones");
+    return { ok: false, error: "No tenés permisos para editar liquidaciones" };
   }
-  // safeParse a propósito: `ZodError.message` es el JSON de los issues, así que
-  // un .parse() haría llegar un blob al toast en vez del texto en español.
   const parsed = periodCycleSchema.safeParse(input);
   if (!parsed.success) {
-    throw new Error(
-      parsed.error.issues[0]?.message ?? "Datos del período inválidos",
-    );
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? "Datos del período inválidos",
+    };
   }
   const v = parsed.data;
   const admin = createAdminClient();
-  const s = await loadEditableSettlementMinimal(
-    admin,
-    organization.id,
-    v.settlement_id,
+  let s: Awaited<ReturnType<typeof loadEditableSettlementMinimal>>;
+  try {
+    s = await loadEditableSettlementMinimal(
+      admin,
+      organization.id,
+      v.settlement_id,
+    );
+  } catch (e) {
+    // "Liquidación no encontrada" / "está anulada": las tiene que leer alguien.
+    return { ok: false, error: (e as Error).message };
+  }
+
+  // El estado previo sale del snapshot recién tomado: misma lectura, y es
+  // exactamente lo que va a restaurar «Deshacer».
+  const prev = s.snapshot.header;
+  const units = v.units ?? [];
+  const perUnit = units.length > 0;
+  const nextUnitPeriods: UnitPeriods = Object.fromEntries(
+    units.map((u) => [
+      u.unit_id.toLowerCase(),
+      { index: u.index, cycle: u.cycle },
+    ]),
   );
 
-  const { data: prev } = await admin
-    .from("owner_settlements")
-    .select("period_index, period_cycle, period_note")
-    .eq("id", s.id)
-    .maybeSingle();
+  // Una sola lectura para dos cosas: que cada unidad sea de la organización
+  // (el id queda guardado en el documento) y los códigos para el historial.
+  const codes = await unitCodesForPeriods(
+    admin,
+    organization.id,
+    nextUnitPeriods,
+    prev.unit_periods,
+  );
+  if (Object.keys(nextUnitPeriods).some((id) => !codes.has(id))) {
+    return {
+      ok: false,
+      error:
+        "Una de las unidades ya no está disponible. Recargá la página y volvé a intentar.",
+    };
+  }
 
-  // Sin índice no hay período: borramos el ciclo y la nota también, para no
-  // dejar metadata huérfana que el CHECK de la migración 046 rechazaría.
-  const nextIndex = v.index;
+  // Sin ningún período no hay aclaración que sostener: se borra con él, como
+  // pedía la 046 (y el CHECK no admite un ciclo sin índice).
+  const nextIndex = perUnit ? null : v.index;
   const nextCycle = nextIndex == null ? null : v.cycle;
-  const nextNote = nextIndex == null ? null : v.note;
+  const nextNote = perUnit || nextIndex != null ? v.note : null;
+  const next = {
+    period_index: nextIndex,
+    period_cycle: nextCycle,
+    unit_periods: perUnit ? nextUnitPeriods : {},
+  };
+  const to = describeSettlementPeriod(next, codes);
+
+  // Guardar sin cambios no escribe nada: si no, el historial se llena de
+  // "Período actualizado: X → X" y «Deshacer» tendría que saltearlos.
+  const prevUnits = parseUnitPeriods(prev.unit_periods);
+  const sameUnits =
+    Object.keys(prevUnits).length === Object.keys(next.unit_periods).length &&
+    Object.entries(next.unit_periods).every(
+      ([id, p]) =>
+        prevUnits[id]?.index === p.index && prevUnits[id]?.cycle === p.cycle,
+    );
+  if (
+    sameUnits &&
+    (prev.period_index ?? null) === nextIndex &&
+    (prev.period_cycle ?? null) === nextCycle &&
+    (prev.period_note ?? null) === nextNote
+  ) {
+    return { ok: true, label: to };
+  }
 
   const now = new Date().toISOString();
   const { error } = await admin
     .from("owner_settlements")
     .update({
-      period_index: nextIndex,
-      period_cycle: nextCycle,
+      ...next,
       period_note: nextNote,
       last_edited_by: session.userId,
       last_edited_at: now,
       updated_at: now,
     })
-    .eq("id", s.id);
-  if (error) throw new Error(error.message);
+    .eq("id", s.id)
+    .eq("organization_id", organization.id);
+  if (error) {
+    return { ok: false, error: `No se pudo guardar el período: ${error.message}` };
+  }
 
-  const from = formatPeriodCycle(prev?.period_index, prev?.period_cycle);
-  const to = formatPeriodCycle(nextIndex, nextCycle);
+  const from = describeSettlementPeriod(prev, codes);
 
   await admin.from("settlement_audit").insert({
     organization_id: organization.id,
@@ -3543,7 +3704,7 @@ export async function setSettlementPeriodCycle(
     changes: {
       kind: "period_cycle",
       period: { from: from ?? "sin período", to: to ?? "sin período" },
-      note: { from: prev?.period_note ?? null, to: nextNote },
+      note: { from: prev.period_note ?? null, to: nextNote },
     },
     side_effects: [],
     snapshot: s.snapshot,
@@ -3551,19 +3712,20 @@ export async function setSettlementPeriodCycle(
   await dropRedoStack(admin, s.id);
   revalidateSettlement(s.id);
 
-  return { ok: true as const, label: to };
+  return { ok: true, label: to };
 }
 
 /**
  * Sugiere el período que sigue mirando la última liquidación del mismo
  * propietario con período cargado (anterior en el calendario). Al llegar al
- * final del ciclo vuelve a 1 — ahí es donde se aplica el ajuste por IPC.
+ * final del ciclo vuelve a 1 — ahí es donde se aplica el ajuste por IPC. Si
+ * aquella iba por departamento, sugiere el que sigue para cada uno.
  *
  * Devuelve `null` si el propietario todavía no tiene ninguna con período.
  */
 export async function suggestSettlementPeriodCycle(
   settlementId: string,
-): Promise<{ index: number; cycle: number | null; fromLabel: string } | null> {
+): Promise<PeriodSuggestion | null> {
   const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "update")) return null;
   const id = z.string().uuid().parse(settlementId);
@@ -3580,39 +3742,60 @@ export async function suggestSettlementPeriodCycle(
   // "Anterior en el calendario" tiene que filtrarse EN la query: si se filtrara
   // en JS después de un limit, un propietario con muchas liquidaciones más
   // nuevas se quedaría sin sugerencia. `or(...)` arma (year < Y) OR (year = Y
-  // AND month < M) — el orden desc + limit 1 nos deja la inmediata anterior.
+  // AND month < M) — el orden desc nos deja primero la inmediata anterior.
+  // "Con período" en cambio son dos columnas (046 y 074) y va en JS sobre el
+  // último año: un período que no se usó en doce meses no es una pista útil.
   const { period_year: y, period_month: m } = current;
 
   const { data: prevRows } = await admin
     .from("owner_settlements")
-    .select("period_year, period_month, period_index, period_cycle")
+    .select("period_year, period_month, period_index, period_cycle, unit_periods")
     .eq("organization_id", organization.id)
     .eq("owner_id", current.owner_id)
     .neq("id", id)
     .neq("status", "anulada")
-    .not("period_index", "is", null)
     .or(`period_year.lt.${y},and(period_year.eq.${y},period_month.lt.${m})`)
     .order("period_year", { ascending: false })
     .order("period_month", { ascending: false })
-    .limit(1);
+    .limit(12);
 
-  const prev = prevRows?.[0];
-  if (!prev?.period_index) return null;
+  const prev = (prevRows ?? []).find(
+    (r) => r.period_index != null || hasUnitPeriods(r.unit_periods),
+  );
+  if (!prev) return null;
 
   // Meses transcurridos entre aquella liquidación y ésta: si hubo un mes sin
   // liquidar, el ciclo igual avanzó y la sugerencia tiene que reflejarlo.
   const steps =
     (y * 12 + m) - (prev.period_year * 12 + prev.period_month);
 
+  if (prev.period_index != null) {
+    return {
+      fromLabel: formatPeriodFull(
+        prev.period_year,
+        prev.period_month,
+        prev.period_index,
+        prev.period_cycle,
+      ),
+      uniform: {
+        index: nextPeriodInCycle(prev.period_index, prev.period_cycle, steps),
+        cycle: prev.period_cycle,
+      },
+      units: {},
+    };
+  }
+
+  const units: UnitPeriods = {};
+  for (const [unitId, p] of Object.entries(parseUnitPeriods(prev.unit_periods))) {
+    units[unitId] = {
+      index: nextPeriodInCycle(p.index, p.cycle, steps),
+      cycle: p.cycle,
+    };
+  }
   return {
-    index: nextPeriodInCycle(prev.period_index, prev.period_cycle, steps),
-    cycle: prev.period_cycle,
-    fromLabel: formatPeriodFull(
-      prev.period_year,
-      prev.period_month,
-      prev.period_index,
-      prev.period_cycle,
-    ),
+    fromLabel: `${formatPeriod(prev.period_year, prev.period_month)} · por departamento`,
+    uniform: null,
+    units,
   };
 }
 
@@ -4184,7 +4367,7 @@ export async function getSettlementByToken(token: string) {
     .from("owner_settlements")
     .select(
       `id, organization_id, owner_id, period_year, period_month, status, currency,
-       period_index, period_cycle, period_note, unit_order, exchange_rates,
+       period_index, period_cycle, period_note, unit_periods, unit_order, exchange_rates,
        gross_revenue, commission_amount, deductions_amount, net_payable,
        generated_at, sent_at, paid_at, public_token,
        owner:owners(id, full_name, bank_name, cbu, alias_cbu, preferred_currency),
@@ -4229,7 +4412,7 @@ export async function listOwnersForPeriod(year: number, month: number) {
       admin
         .from("owner_settlements")
         .select(
-          "id, owner_id, status, net_payable, currency, generated_at, period_index, period_cycle",
+          "id, owner_id, status, net_payable, currency, generated_at, period_index, period_cycle, unit_periods",
         )
         .eq("organization_id", organization.id)
         .filter(...ownerFilter(ownerScope))
@@ -4263,6 +4446,9 @@ export async function listOwnersForPeriod(year: number, month: number) {
     net_payable: number;
     currency: string;
     generated_at: string | null;
+    period_index: number | null;
+    period_cycle: number | null;
+    unit_periods: unknown;
   };
   const byOwner = new Map<string, PeriodSettlement[]>();
   for (const s of (settles ?? []) as PeriodSettlement[]) {
@@ -4485,7 +4671,7 @@ export async function registerSettlementPayment(
   const { data: settlement } = await admin
     .from("owner_settlements")
     .select(
-      "id, owner_id, period_year, period_month, period_index, period_cycle, status, currency, net_payable, paid_movement_id",
+      "id, owner_id, period_year, period_month, period_index, period_cycle, unit_periods, status, currency, net_payable, paid_movement_id",
     )
     .eq("id", v.settlement_id)
     .eq("organization_id", organization.id)
@@ -4560,13 +4746,13 @@ export async function registerSettlementPayment(
   }
 
   const occurredAt = v.paid_at ?? new Date().toISOString();
-  // El egreso de Caja lleva el período del ciclo ("Julio 2026 · Período 1/3"):
-  // es donde después se busca qué se le pagó al propietario.
-  const periodLabel = formatPeriodFull(
-    settlement.period_year,
-    settlement.period_month,
-    settlement.period_index,
-    settlement.period_cycle,
+  // El egreso de Caja lleva el período del ciclo ("Julio 2026 · Período 1/3",
+  // o "Julio 2026 · DF-1 2/3 · DF-2 3/3" por depto): es donde después se busca
+  // qué se le pagó al propietario.
+  const periodLabel = await settlementPeriodText(
+    admin,
+    organization.id,
+    settlement,
   );
   const multi = accountIds.length > 1;
   const baseDesc = v.notes?.trim() || `Pago liquidación ${periodLabel}`;
@@ -4819,7 +5005,7 @@ export async function getSettlementPaymentUndoPreview(
   const { data: s } = await admin
     .from("owner_settlements")
     .select(
-      "id, status, paid_at, paid_movement_id, net_payable, currency, period_year, period_month, period_index, period_cycle, owner:owners(full_name)",
+      "id, status, paid_at, paid_movement_id, net_payable, currency, period_year, period_month, period_index, period_cycle, unit_periods, owner:owners(full_name)",
     )
     .eq("id", parsed.data)
     .eq("organization_id", organization.id)
@@ -4844,12 +5030,7 @@ export async function getSettlementPaymentUndoPreview(
     ok: true,
     preview: {
       settlement_id: s.id as string,
-      period_label: formatPeriodFull(
-        s.period_year,
-        s.period_month,
-        s.period_index,
-        s.period_cycle,
-      ),
+      period_label: await settlementPeriodText(admin, organization.id, s),
       owner_name: owner?.full_name ?? null,
       currency: s.currency as string,
       net_payable: Number(s.net_payable),
@@ -4993,30 +5174,11 @@ export async function sendSettlementToOwner(settlementId: string) {
 
   const branding = await getOrganizationBranding();
 
-  const statementInput: StatementInput = {
-    id: detail.id,
-    period_year: detail.period_year,
-    period_month: detail.period_month,
-    period_index: detail.period_index,
-    period_cycle: detail.period_cycle,
-    period_note: detail.period_note,
-    status: detail.status,
-    currency: detail.currency,
-    gross_revenue: Number(detail.gross_revenue),
-    commission_amount: Number(detail.commission_amount),
-    deductions_amount: Number(detail.deductions_amount),
-    net_payable: Number(detail.net_payable),
-    generated_at: detail.generated_at,
-    sent_at: detail.sent_at,
-    paid_at: detail.paid_at,
-    owner: {
-      full_name: owner.full_name,
-      bank_name: owner.bank_name,
-      cbu: owner.cbu,
-      alias_cbu: owner.alias_cbu,
-    },
-    lines: (detail.lines ?? []) as StatementInput["lines"],
-  };
+  // El mismo armado que el detalle y el link público: antes éste se olvidaba
+  // del orden de unidades y de los tipos de cambio, y el PDF adjunto sumaba
+  // distinto que la pantalla. Ahora además trae el período por depto (074).
+  const statementInput = statementInputFromRecord(detail as StatementRecord);
+  const model = buildStatementModel(statementInput);
 
   const [{ renderSettlementXlsxBuffer }, { renderSettlementPdfBuffer }] =
     await Promise.all([
@@ -5028,71 +5190,20 @@ export async function sendSettlementToOwner(settlementId: string) {
     renderSettlementPdfBuffer(statementInput, branding),
   ]);
 
-  const periodLabel = formatPeriod(detail.period_year, detail.period_month);
-  // El propietario necesita ver de una qué período del ciclo de ajuste está
-  // cobrando (1/3, 2/3, 3/3): va en el asunto, en el header y en el cuerpo.
-  const cycleLabel = formatPeriodCycle(
-    detail.period_index,
-    detail.period_cycle,
-  );
-  const periodFullLabel = cycleLabel
-    ? `${periodLabel} · ${cycleLabel}`
-    : periodLabel;
-  const periodNote =
-    typeof detail.period_note === "string" && detail.period_note.trim()
-      ? detail.period_note.trim()
-      : null;
-  const net = formatMoney(Number(detail.net_payable), detail.currency);
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
-  const link = `${appUrl}/liquidacion/${detail.public_token}`;
-  const brand = branding.primary_color || "#0F766E";
-  const firstName = owner.full_name.split(/\s+/)[0] || owner.full_name;
-
-  // `period_note` lo tipea el staff: escapamos antes de meterlo en el HTML.
-  const esc = (s: string) =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
-  const html = `
-<div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;color:#0f172a">
-  <div style="background:${brand};color:#fff;padding:22px 26px;border-radius:14px 14px 0 0">
-    <div style="font-size:12px;letter-spacing:.1em;opacity:.85">${esc(branding.name.toUpperCase())}</div>
-    <div style="font-size:21px;font-weight:700;margin-top:6px">Liquidación · ${esc(periodLabel)}</div>
-    ${cycleLabel ? `<div style="display:inline-block;margin-top:8px;padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.18);font-size:12px;font-weight:600">${esc(cycleLabel)}</div>` : ""}
-  </div>
-  <div style="border:1px solid #e2e8f0;border-top:0;border-radius:0 0 14px 14px;padding:26px">
-    <p style="margin:0 0 14px">Hola ${esc(firstName)}, te compartimos tu liquidación correspondiente a <strong>${esc(periodFullLabel)}</strong>.</p>
-    ${periodNote ? `<p style="margin:0 0 14px;font-size:13px;color:#64748b">${esc(periodNote)}</p>` : ""}
-    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;margin:18px 0">
-      <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.1em">Neto por pagar</div>
-      <div style="font-size:28px;font-weight:800;color:${brand};margin-top:6px">${net}</div>
-    </div>
-    <div style="text-align:center;margin:24px 0">
-      <a href="${link}" style="background:${brand};color:#fff;text-decoration:none;padding:13px 24px;border-radius:9px;font-weight:600;display:inline-block">Ver liquidación online</a>
-    </div>
-    <p style="font-size:13px;color:#64748b;margin:14px 0 0">Adjuntamos el detalle completo en <strong>Excel</strong> y <strong>PDF</strong>. Ante cualquier consulta podés responder este correo.</p>
-    <p style="font-size:12px;color:#94a3b8;margin:18px 0 0">${esc(branding.name)}${branding.legal_name ? " · " + esc(branding.legal_name) : ""}</p>
-  </div>
-</div>`.trim();
-
-  const text = [
-    `Liquidación ${periodFullLabel} — ${branding.name}`,
-    ...(periodNote ? [``, periodNote] : []),
-    ``,
-    `Neto por pagar: ${net}`,
-    `Ver online: ${link}`,
-    ``,
-    `Adjuntamos el detalle en Excel y PDF.`,
-  ].join("\n");
+  const { subject, html, text } = buildOwnerSettlementEmail({
+    model,
+    ownerName: owner.full_name,
+    net: formatMoney(Number(detail.net_payable), detail.currency),
+    link: `${appUrl}/liquidacion/${detail.public_token}`,
+    branding,
+  });
 
   const { sendGuestMail } = await import("@/lib/email/guest");
   const sent = await sendGuestMail({
     organizationId: organization.id,
     to: owner.email,
-    subject: `Liquidación ${periodFullLabel} · ${branding.name}`,
+    subject,
     html,
     text,
     attachments: [

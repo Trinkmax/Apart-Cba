@@ -49,15 +49,33 @@ function ensureSpace(doc: jsPDF, y: number, needed: number): number {
   return y;
 }
 
-function sectionBar(doc: jsPDF, y: number, text: string, brand: RGB): number {
+function sectionBar(
+  doc: jsPDF,
+  y: number,
+  text: string,
+  brand: RGB,
+  /** A la derecha de la barra: el período de esa unidad (074). */
+  right?: string | null,
+): number {
+  const barW = PAGE_W - MARGIN_X * 2;
   doc.setFillColor(248, 250, 252);
-  doc.rect(MARGIN_X, y, PAGE_W - MARGIN_X * 2, 8, "F");
+  doc.rect(MARGIN_X, y, barW, 8, "F");
   doc.setFillColor(brand[0], brand[1], brand[2]);
   doc.rect(MARGIN_X, y, 1.4, 8, "F");
+  doc.setTextColor(brand[0], brand[1], brand[2]);
+  let titleW = barW - 8;
+  if (right) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    const r = pdfSafe(right);
+    doc.text(r, PAGE_W - MARGIN_X - 3, y + 5.3, { align: "right" });
+    titleW -= doc.getTextWidth(r) + 6;
+  }
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9.5);
-  doc.setTextColor(brand[0], brand[1], brand[2]);
-  doc.text(text, MARGIN_X + 4, y + 5.4);
+  // Con el período a la derecha, un nombre largo se corta antes de pisarlo.
+  const lines = doc.splitTextToSize(text, titleW) as string[];
+  doc.text(lines.length > 1 ? `${lines[0]}...` : text, MARGIN_X + 4, y + 5.4);
   doc.setTextColor(INK[0], INK[1], INK[2]);
   return y + 11;
 }
@@ -119,11 +137,12 @@ export async function buildSettlementDoc(
     align: "right",
   });
   // Período del ciclo de ajuste (1/3, 2/3…): el propietario tiene que verlo
-  // apenas abre el PDF, no enterrado en el cuerpo.
-  if (model.periodCycleLabel) {
+  // apenas abre el PDF, no enterrado en el cuerpo. Con deptos en períodos
+  // distintos dice "Período por departamento" y el detalle va abajo.
+  if (model.periodBadgeLabel) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
-    doc.text(pdfSafe(model.periodCycleLabel), PAGE_W - MARGIN_X, 29.5, {
+    doc.text(pdfSafe(model.periodBadgeLabel), PAGE_W - MARGIN_X, 29.5, {
       align: "right",
     });
     doc.setFont("helvetica", "normal");
@@ -153,7 +172,8 @@ export async function buildSettlementDoc(
   field("Estado", model.statusLabel, MARGIN_X + 96 + 34 + 6, y);
 
   // "Período 1/3" va como sub-línea del campo Período: no entra en la misma
-  // línea sin pisar el campo Estado (34mm de ancho disponible).
+  // línea sin pisar el campo Estado (34mm de ancho disponible). Por depto no
+  // hace falta: el de cada uno va en la línea de abajo, a todo el ancho.
   if (model.periodCycleLabel) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
@@ -163,6 +183,29 @@ export async function buildSettlementDoc(
     doc.setFont("helvetica", "normal");
   }
   y += model.periodCycleLabel ? 18 : 14;
+
+  // Deptos en períodos distintos (074): el de cada uno en una línea a todo el
+  // ancho, para leerlos juntos sin recorrer el documento. Cada bloque además
+  // lo repite en su barra.
+  if (!model.periodCycleLabel && model.unitPeriods.length > 0) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
+    doc.text("PERÍODO DEL CICLO DE AJUSTE", MARGIN_X, y);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(brand[0], brand[1], brand[2]);
+    const unitLines = doc.splitTextToSize(
+      pdfSafe(
+        model.unitPeriods.map((p) => `${p.code}: ${p.label}`).join("   ·   "),
+      ),
+      PAGE_W - MARGIN_X * 2,
+    ) as string[];
+    doc.text(unitLines, MARGIN_X, y + 5);
+    doc.setTextColor(INK[0], INK[1], INK[2]);
+    doc.setFont("helvetica", "normal");
+    y += 5 + unitLines.length * 4.4 + 3;
+  }
 
   // Aclaración del período, a todo el ancho (puede ser larga).
   if (model.periodNote) {
@@ -211,7 +254,7 @@ export async function buildSettlementDoc(
 
   for (const u of model.units) {
     y = ensureSpace(doc, y, 30);
-    y = sectionBar(doc, y, `${u.code} · ${u.name}`, brand);
+    y = sectionBar(doc, y, `${u.code} · ${u.name}`, brand, u.period?.label);
 
     autoTable(doc, {
       startY: y,

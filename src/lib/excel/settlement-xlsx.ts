@@ -73,9 +73,17 @@ export function buildSettlementWorkbook(
   wb.creator = branding.name;
   wb.created = new Date();
 
-  // El encabezado ocupa 3 filas + 1 spacer; la aclaración del período agrega
-  // una cuarta, así que el panel congelado se corre con ella.
-  const headerRows = model.periodNote ? 5 : 4;
+  // Deptos en períodos distintos (migración 074): una fila con el de cada uno.
+  const unitPeriodsRow =
+    !model.periodCycleLabel && model.unitPeriods.length > 0
+      ? `Período del ciclo de ajuste:   ${model.unitPeriods
+          .map((p) => `${p.code} ${p.short}`)
+          .join("   ·   ")}`
+      : null;
+
+  // El encabezado ocupa 3 filas + 1 spacer; los períodos por depto y la
+  // aclaración agregan una cada uno, así que el panel congelado se corre.
+  const headerRows = 4 + (unitPeriodsRow ? 1 : 0) + (model.periodNote ? 1 : 0);
 
   const ws = wb.addWorksheet("Liquidación", {
     views: [{ state: "frozen", ySplit: headerRows, showGridLines: false }],
@@ -130,6 +138,13 @@ export function buildSettlementWorkbook(
     `${model.number}   ·   Propietario: ${model.owner.full_name}   ·   Estado: ${model.statusLabel}`,
     { font: { size: 10, color: { argb: MUTED } }, height: 18 },
   );
+  if (unitPeriodsRow) {
+    mergeRow(unitPeriodsRow, {
+      font: { bold: true, size: 10, color: { argb: brand } },
+      alignment: { vertical: "middle", horizontal: "left", wrapText: true },
+      height: model.unitPeriods.length > 4 ? 30 : 18,
+    });
+  }
   // Aclaración del período (si la cargaron): va pegada al encabezado para que
   // se lea junto con el "Período 1/3" y no se pierda entre las tablas.
   if (model.periodNote) {
@@ -188,7 +203,7 @@ export function buildSettlementWorkbook(
 
   // ── Bloques por unidad ──
   for (const u of model.units) {
-    mergeRow(`▌  ${u.code} — ${u.name}`, {
+    mergeRow(`▌  ${u.code} — ${u.name}${u.period ? `   ·   ${u.period.label}` : ""}`, {
       font: { bold: true, size: 10, color: { argb: brand } },
       fill: { type: "pattern", pattern: "solid", fgColor: { argb: ZEBRA } },
       alignment: { vertical: "middle", horizontal: "left", indent: 1 },

@@ -10,8 +10,8 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { SettlementDeleteButton } from "@/components/settlements/settlement-delete-button";
 import { formatMoney, getInitials } from "@/lib/format";
 import {
+  describeSettlementPeriod,
   formatPeriod,
-  formatPeriodCycle,
   formatPeriodFull,
   SETTLEMENT_STATUS_META,
 } from "@/lib/settlements/labels";
@@ -80,9 +80,8 @@ export function SettlementsListClient({ settlements }: Props) {
       if (statusFilter !== "all" && s.status !== statusFilter) return false;
       if (!q) return true;
       const period = formatPeriod(s.period_year, s.period_month).toLowerCase();
-      // Permite buscar "período 2" o "2/3" además del mes.
-      const cycle =
-        formatPeriodCycle(s.period_index, s.period_cycle)?.toLowerCase() ?? "";
+      // Permite buscar "período 2", "2/3" o "por depto" además del mes.
+      const cycle = describeSettlementPeriod(s)?.toLowerCase() ?? "";
       const status =
         SETTLEMENT_STATUS_META[
           s.status as keyof typeof SETTLEMENT_STATUS_META
@@ -296,8 +295,9 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
   const meta =
     SETTLEMENT_STATUS_META[s.status as keyof typeof SETTLEMENT_STATUS_META];
   // Las filas ya están agrupadas por mes, así que acá alcanza con el período
-  // del ciclo de ajuste ("Período 1/3") para distinguir de un vistazo.
-  const cycleLabel = formatPeriodCycle(s.period_index, s.period_cycle);
+  // del ciclo de ajuste ("Período 1/3", o "Por depto · 1/3 · 2/3") para
+  // distinguir de un vistazo.
+  const cycleLabel = describeSettlementPeriod(s);
   // Armada en blanco (073): se distingue de un vistazo porque no se regenera.
   const manual = s.origin === "manual";
   return (

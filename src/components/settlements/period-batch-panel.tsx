@@ -32,8 +32,8 @@ import {
 import {
   MONTHS,
   SETTLEMENT_STATUS_META,
+  describeSettlementPeriod,
   formatPeriod,
-  formatPeriodCycle,
 } from "@/lib/settlements/labels";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -46,6 +46,8 @@ type PeriodSettlement = {
   /** Período del ciclo de ajuste por IPC (migración 046). */
   period_index?: number | null;
   period_cycle?: number | null;
+  /** Período por departamento (migración 074). */
+  unit_periods?: unknown;
 };
 
 type Row = {
@@ -342,9 +344,7 @@ export function PeriodBatchPanel({
                   <TableCell className="font-medium">
                     {d.owner.full_name}
                     {(() => {
-                      const cycleLabel = st
-                        ? formatPeriodCycle(st.period_index, st.period_cycle)
-                        : null;
+                      const cycleLabel = st ? describeSettlementPeriod(st) : null;
                       return cycleLabel ? (
                         <span className="ml-2 inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary align-middle">
                           {cycleLabel}

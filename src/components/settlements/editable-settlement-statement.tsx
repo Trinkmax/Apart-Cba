@@ -106,11 +106,13 @@ import {
   setSettlementExchangeRate,
 } from "@/lib/actions/settlements";
 import type { StatementModel } from "@/lib/settlements/statement-model";
+import type { PeriodSuggestion } from "@/lib/settlements/labels";
 import type { SettlementLine, SettlementAuditEntry } from "@/lib/types/database";
 import { AddBookingRowDialog } from "./add-booking-row-dialog";
 import {
   PeriodCycleEditor,
-  type PeriodCycleSuggestion,
+  UnitPeriodChip,
+  type PeriodEditorUnit,
 } from "./period-cycle-editor";
 import { UndoRedoButtons, type UndoState } from "./undo-redo-buttons";
 import { SettlementStatusMenu } from "./settlement-status-menu";
@@ -894,6 +896,7 @@ function SortableUnitBlock({
   pending,
   sensors,
   reorderableBookings,
+  periodSlot,
   onAddBooking,
   onRowClick,
   onRowDelete,
@@ -909,6 +912,8 @@ function SortableUnitBlock({
   sensors: ReturnType<typeof useSensors>;
   /** true → drag entre filas de esta unidad; false → solo lectura. */
   reorderableBookings: boolean;
+  /** Período del ciclo de ESTA unidad (documento por departamento, 074). */
+  periodSlot?: React.ReactNode;
   onAddBooking: () => void;
   onRowClick: (b: StatementBookingRowT) => void;
   onRowDelete: (b: StatementBookingRowT) => void;
@@ -958,6 +963,7 @@ function SortableUnitBlock({
             · {unit.name}
           </span>
         </h3>
+        {periodSlot}
         {editable && unit.unit_id && (
           <Button
             size="sm"
@@ -1719,7 +1725,7 @@ export function EditableSettlementStatement({
   units: Unit[];
   audit: SettlementAuditEntry[];
   /** Continuación del ciclo de ajuste sugerida a partir del mes anterior. */
-  periodSuggestion?: PeriodCycleSuggestion | null;
+  periodSuggestion?: PeriodSuggestion | null;
   /** Qué hay para deshacer / rehacer en este documento (migración 047). */
   undoState: UndoState;
   /** Filas cuya reserva cambió después de armarlas (ref_id → motivos). */
@@ -1771,6 +1777,23 @@ export function EditableSettlementStatement({
 
   const lastEdit = audit[0] ?? null;
   const editable = status !== "anulada";
+
+  // Unidades del documento con su período del ciclo (074), en el orden del
+  // documento. Alimenta el editor del encabezado y el chip de cada bloque.
+  const periodUnits: PeriodEditorUnit[] = model.units.flatMap((u) =>
+    u.unit_id
+      ? [
+          {
+            id: u.unit_id,
+            code: u.code,
+            name: u.name,
+            period: u.period
+              ? { index: u.period.index, cycle: u.period.cycle }
+              : null,
+          },
+        ]
+      : [],
+  );
 
   // ── Estado local espejo del modelo, para optimistic updates del DnD.
   // Patrón "set state durante render" (igual que PmsBoard): sincroniza cuando
@@ -1968,12 +1991,12 @@ export function EditableSettlementStatement({
               {model.periodLabel}
             </div>
             <div className="flex items-center justify-end gap-1.5 flex-wrap mt-1">
-              {model.periodCycleLabel && (
+              {model.periodBadgeLabel && (
                 <span
                   className="inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full"
                   style={{ backgroundColor: "oklch(1 0 0 / 0.22)" }}
                 >
-                  {model.periodCycleLabel}
+                  {model.periodBadgeLabel}
                 </span>
               )}
               <SettlementStatusMenu
@@ -2040,9 +2063,11 @@ export function EditableSettlementStatement({
           <PeriodCycleEditor
             settlementId={settlementId}
             periodLabel={model.periodLabel}
+            mode={model.periodMode}
             periodIndex={model.periodIndex}
             periodCycle={model.periodCycle}
             periodNote={model.periodNote}
+            units={periodUnits}
             suggestion={periodSuggestion}
             editable={editable}
           />
@@ -2192,6 +2217,26 @@ export function EditableSettlementStatement({
                   pending={pending}
                   sensors={sensors}
                   reorderableBookings={editable && !!u.unit_id}
+                  periodSlot={
+                    // Sólo por departamento: con un período para todo el
+                    // documento el bloque no repite lo que dice el encabezado.
+                    model.periodMode === "per_unit" && u.unit_id ? (
+                      <UnitPeriodChip
+                        settlementId={settlementId}
+                        unit={
+                          periodUnits.find((p) => p.id === u.unit_id) ?? {
+                            id: u.unit_id,
+                            code: u.code,
+                            name: u.name,
+                            period: null,
+                          }
+                        }
+                        units={periodUnits}
+                        periodNote={model.periodNote}
+                        editable={editable}
+                      />
+                    ) : null
+                  }
                   onAddBooking={() => {
                     if (u.unit_id) {
                       setAddBookingUnitId(u.unit_id);

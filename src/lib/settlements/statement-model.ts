@@ -2,9 +2,12 @@ import type { SettlementLine, SettlementLineMeta } from "@/lib/types/database";
 import {
   formatPeriod,
   formatPeriodCycle,
-  formatPeriodFull,
+  formatPeriodCycleShort,
+  parseUnitPeriods,
+  PER_UNIT_PERIOD_LABEL,
   settlementNumber,
   SETTLEMENT_STATUS_META,
+  type UnitPeriods,
 } from "./labels";
 
 /**
@@ -57,6 +60,12 @@ export interface StatementInput {
   period_cycle?: number | null;
   /** Aclaración corta del período, impresa en el documento. */
   period_note?: string | null;
+  /**
+   * Período por departamento (migración 074): `unit_id → {index, cycle}`. Se
+   * excluye con `period_index` — o uno para todo el documento, o uno por
+   * unidad. Una unidad del documento sin entrada = "no aplica".
+   */
+  unit_periods?: UnitPeriods | null;
   status: string;
   /** Moneda BASE del documento (ARS por default). */
   currency: string;
@@ -118,10 +127,25 @@ export interface StatementBookingRow {
   missingRate: boolean;
 }
 
+/** Período del ciclo de una unidad, ya rotulado (migración 074). */
+export interface StatementUnitPeriod {
+  index: number;
+  cycle: number | null;
+  /** "Período 2/3" */
+  label: string;
+  /** "2/3" — para listas con el código adelante ("DF-1 2/3"). */
+  short: string;
+}
+
 export interface StatementUnitGroup {
   unit_id: string | null;
   code: string;
   name: string;
+  /**
+   * Período de ESTA unidad cuando el documento va por departamento. `null` en
+   * los otros modos o si a la unidad no le aplica ese mes.
+   */
+  period: StatementUnitPeriod | null;
   rows: StatementBookingRow[];
   /** Subtotales convertidos a moneda base. */
   subtotal: {
@@ -162,12 +186,36 @@ export interface StatementModel {
   number: string;
   /** "Julio 2026" — el mes calendario liquidado. */
   periodLabel: string;
-  /** "Período 1/3" — posición en el ciclo de ajuste. `null` si no se cargó. */
+  /**
+   * Cómo se cargó el período: uno para todo el documento (046), uno por
+   * departamento (074) o ninguno.
+   */
+  periodMode: "none" | "uniform" | "per_unit";
+  /**
+   * "Período 1/3" — cuando TODO el documento está en el mismo punto del ciclo:
+   * modo uniforme, o por depto con todas sus unidades en el mismo período.
+   * `null` si no hay período o si los deptos están en períodos distintos.
+   */
   periodCycleLabel: string | null;
-  /** Valores crudos, para el editor del encabezado. */
+  /**
+   * Lo que va en el chip del encabezado: `periodCycleLabel` o, si los deptos
+   * difieren, "Período por departamento". `null` = no hay nada que mostrar.
+   */
+  periodBadgeLabel: string | null;
+  /** Valores crudos del período uniforme, para el editor del encabezado. */
   periodIndex: number | null;
   periodCycle: number | null;
-  /** "Julio 2026 · Período 1/3" — lo que va en títulos, asunto de email, etc. */
+  /**
+   * Modo por depto: las unidades del documento QUE TIENEN período, en el orden
+   * del documento. Vacío en los otros modos.
+   */
+  unitPeriods: Array<
+    { unit_id: string; code: string; name: string } & StatementUnitPeriod
+  >;
+  /**
+   * "Julio 2026 · Período 1/3" — lo que va en títulos, asunto de email, etc.
+   * Con deptos en períodos distintos queda sólo el mes: el detalle va aparte.
+   */
   periodFullLabel: string;
   /** Aclaración corta opcional del período. */
   periodNote: string | null;
@@ -328,6 +376,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         unit_id: u?.id ?? null,
         code: u?.code ?? "—",
         name: u?.name ?? "Sin unidad",
+        period: null,
         rows: [],
         subtotal: {
           gross: 0,
@@ -432,6 +481,58 @@ export function buildStatementModel(s: StatementInput): StatementModel {
     ug.currencies = Array.from(currencySet).sort();
   }
 
+  // ── Período del ciclo de ajuste (046 uniforme / 074 por depto) ───────────
+  // La base no admite los dos a la vez; si igual llegaran, gana el uniforme,
+  // que es el que se ve en el encabezado.
+  const uniformLabel = formatPeriodCycle(s.period_index, s.period_cycle);
+  const byUnit = uniformLabel ? {} : parseUnitPeriods(s.unit_periods);
+  const periodMode: StatementModel["periodMode"] = uniformLabel
+    ? "uniform"
+    : Object.keys(byUnit).length > 0
+      ? "per_unit"
+      : "none";
+  if (periodMode === "per_unit") {
+    for (const ug of units) {
+      const p = ug.unit_id ? byUnit[ug.unit_id.toLowerCase()] : undefined;
+      ug.period = p
+        ? {
+            index: p.index,
+            cycle: p.cycle,
+            label: formatPeriodCycle(p.index, p.cycle)!,
+            short: formatPeriodCycleShort(p.index, p.cycle)!,
+          }
+        : null;
+    }
+  }
+  // Códigos y nombres recortados: en la base hay "DF-1    " y estas listas van
+  // en una línea ("DF-1 2/3 · DF-2 3/3"), donde los espacios sí se ven.
+  const unitPeriods = units.flatMap((ug) =>
+    ug.unit_id && ug.period
+      ? [
+          {
+            unit_id: ug.unit_id,
+            code: ug.code.trim(),
+            name: ug.name.trim(),
+            ...ug.period,
+          },
+        ]
+      : [],
+  );
+  // Por depto, el documento entero tiene UN período sólo si todas sus unidades
+  // lo tienen y coinciden. Con una que "no aplica" ya no se puede decir que el
+  // documento es "Período 2/3": va el detalle por unidad.
+  const unitsWithId = units.filter((ug) => ug.unit_id);
+  const sharedUnitLabel =
+    unitPeriods.length > 0 &&
+    unitPeriods.length === unitsWithId.length &&
+    unitPeriods.every((p) => p.label === unitPeriods[0].label)
+      ? unitPeriods[0].label
+      : null;
+  const periodCycleLabel = uniformLabel ?? sharedUnitLabel;
+  const periodBadgeLabel =
+    periodCycleLabel ?? (unitPeriods.length > 0 ? PER_UNIT_PERIOD_LABEL : null);
+  const periodLabel = formatPeriod(s.period_year, s.period_month);
+
   // Totales del documento: sumamos en base. La regla es la misma que en el
   // backend (`computeTotals` con conversion), así que matchean los valores
   // persistidos en `owner_settlements.{gross_revenue,commission_amount,...}`.
@@ -493,16 +594,16 @@ export function buildStatementModel(s: StatementInput): StatementModel {
 
   return {
     number: settlementNumber(s.id, s.period_year, s.period_month),
-    periodLabel: formatPeriod(s.period_year, s.period_month),
-    periodCycleLabel: formatPeriodCycle(s.period_index, s.period_cycle),
-    periodIndex: s.period_index ?? null,
-    periodCycle: s.period_cycle ?? null,
-    periodFullLabel: formatPeriodFull(
-      s.period_year,
-      s.period_month,
-      s.period_index,
-      s.period_cycle,
-    ),
+    periodLabel,
+    periodMode,
+    periodCycleLabel,
+    periodBadgeLabel,
+    periodIndex: uniformLabel ? (s.period_index ?? null) : null,
+    periodCycle: uniformLabel ? (s.period_cycle ?? null) : null,
+    unitPeriods,
+    periodFullLabel: periodCycleLabel
+      ? `${periodLabel} · ${periodCycleLabel}`
+      : periodLabel,
     periodNote: s.period_note?.trim() ? s.period_note.trim() : null,
     currency: baseCurrency,
     status: s.status,
@@ -524,5 +625,115 @@ export function buildStatementModel(s: StatementInput): StatementModel {
     generated_at: s.generated_at ?? null,
     sent_at: s.sent_at ?? null,
     paid_at: s.paid_at ?? null,
+  };
+}
+
+/**
+ * Fila de `owner_settlements` con su propietario y sus líneas, tal como la
+ * traen los selects del detalle, el link público y el envío por mail
+ * (`*, owner:owners(…), lines:settlement_lines(*, unit:units(id, code, name))`).
+ */
+export interface StatementRecord {
+  id: string;
+  period_year: number;
+  period_month: number;
+  period_index?: number | null;
+  period_cycle?: number | null;
+  period_note?: string | null;
+  unit_periods?: unknown;
+  status: string;
+  currency: string;
+  gross_revenue: number | string;
+  commission_amount: number | string;
+  deductions_amount: number | string;
+  net_payable: number | string;
+  generated_at?: string | null;
+  sent_at?: string | null;
+  paid_at?: string | null;
+  unit_order?: unknown;
+  exchange_rates?: unknown;
+  owner?: {
+    full_name: string;
+    bank_name?: string | null;
+    cbu?: string | null;
+    alias_cbu?: string | null;
+  } | null;
+  lines?: Array<{
+    id: string;
+    line_type: SettlementLine["line_type"];
+    ref_type: string | null;
+    ref_id: string | null;
+    unit_id: string | null;
+    description: string;
+    amount: number | string;
+    sign: "+" | "-";
+    currency?: string | null;
+    is_manual?: boolean | null;
+    meta?: SettlementLineMeta | null;
+    display_order?: number | null;
+    unit?: { id: string; code: string; name: string } | null;
+  }> | null;
+}
+
+/**
+ * Arma el `StatementInput` desde la fila de la base. Una sola traducción para
+ * el detalle, el link público y el mail: cuando cada uno armaba la suya, el
+ * mail se olvidaba del orden de unidades y de los tipos de cambio (el PDF que
+ * recibía el propietario sumaba distinto que la pantalla).
+ */
+export function statementInputFromRecord(r: StatementRecord): StatementInput {
+  const rates: Record<string, number> = {};
+  if (r.exchange_rates && typeof r.exchange_rates === "object") {
+    for (const [ccy, rate] of Object.entries(
+      r.exchange_rates as Record<string, unknown>,
+    )) {
+      const n = Number(rate);
+      if (Number.isFinite(n) && n > 0) rates[ccy] = n;
+    }
+  }
+  return {
+    id: r.id,
+    period_year: r.period_year,
+    period_month: r.period_month,
+    period_index: r.period_index ?? null,
+    period_cycle: r.period_cycle ?? null,
+    period_note: r.period_note ?? null,
+    unit_periods: parseUnitPeriods(r.unit_periods),
+    status: r.status,
+    currency: r.currency,
+    gross_revenue: Number(r.gross_revenue),
+    commission_amount: Number(r.commission_amount),
+    deductions_amount: Number(r.deductions_amount),
+    net_payable: Number(r.net_payable),
+    generated_at: r.generated_at ?? null,
+    sent_at: r.sent_at ?? null,
+    paid_at: r.paid_at ?? null,
+    owner: r.owner
+      ? {
+          full_name: r.owner.full_name,
+          bank_name: r.owner.bank_name ?? null,
+          cbu: r.owner.cbu ?? null,
+          alias_cbu: r.owner.alias_cbu ?? null,
+        }
+      : null,
+    unit_order: Array.isArray(r.unit_order)
+      ? r.unit_order.filter((u): u is string => typeof u === "string")
+      : [],
+    exchange_rates: rates,
+    lines: (r.lines ?? []).map((l) => ({
+      id: l.id,
+      line_type: l.line_type,
+      ref_type: l.ref_type,
+      ref_id: l.ref_id,
+      unit_id: l.unit_id,
+      description: l.description,
+      amount: Number(l.amount),
+      sign: l.sign,
+      currency: l.currency ?? null,
+      is_manual: l.is_manual ?? null,
+      meta: l.meta ?? null,
+      display_order: l.display_order ?? null,
+      unit: l.unit ?? null,
+    })),
   };
 }

@@ -77,6 +77,165 @@ export function nextPeriodInCycle(
   return ((index - 1 + jump) % cycle) + 1;
 }
 
+// ── Período por departamento (migración 074) ────────────────────────────────
+//
+// Un propietario con varios deptos tiene cada contrato en un punto distinto del
+// ciclo: "DF-1 · Período 2/3", "DF-2 · Período 3/3". Se guarda en
+// `owner_settlements.unit_periods` y se excluye con `period_index`: o hay un
+// período para todo el documento, o uno por unidad. Una unidad sin entrada =
+// "no aplica" ese mes.
+
+/** Período de UNA unidad: misma idea que `period_index` / `period_cycle`. */
+export interface UnitPeriod {
+  index: number;
+  cycle: number | null;
+}
+
+/** `unit_id → período`: lo que guarda `owner_settlements.unit_periods`. */
+export type UnitPeriods = Record<string, UnitPeriod>;
+
+/** Tope de entradas — espejo del CHECK `owner_settlements_unit_periods_valid`. */
+export const MAX_UNIT_PERIODS = 200;
+
+/**
+ * Lo que dice el encabezado cuando los deptos están en períodos distintos: el
+ * detalle de cada uno va en su bloque. "Departamento" porque es la palabra con
+ * la que lo pidieron (ver docs del pedido en la migración 074).
+ */
+export const PER_UNIT_PERIOD_LABEL = "Período por departamento";
+
+const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Entero 1..36, `null` si no vino, `undefined` si vino algo inválido. */
+function periodInt(v: unknown): number | null | undefined {
+  if (v == null) return null;
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_PERIOD_CYCLE
+    ? v
+    : undefined;
+}
+
+/**
+ * Lee `unit_periods` tal como sale de la base (jsonb → unknown) y descarta las
+ * entradas que no cumplan el contrato de la 074. La base ya las valida con un
+ * CHECK; esto es para que un JSON inesperado nunca rompa el documento.
+ */
+export function parseUnitPeriods(raw: unknown): UnitPeriods {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: UnitPeriods = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const id = key.toLowerCase();
+    if (!UUID_KEY.test(id) || !value || typeof value !== "object") continue;
+    const v = value as { index?: unknown; cycle?: unknown };
+    const index = periodInt(v.index);
+    const cycle = periodInt(v.cycle);
+    if (index == null || cycle === undefined) continue;
+    if (cycle != null && index > cycle) continue;
+    out[id] = { index, cycle };
+  }
+  return out;
+}
+
+/** true si el documento tiene al menos un período por departamento. */
+export function hasUnitPeriods(raw: unknown): boolean {
+  return Object.keys(parseUnitPeriods(raw)).length > 0;
+}
+
+/**
+ * "2/3" — para listas que ya llevan el código de la unidad adelante
+ * ("DF-1 2/3"). Sin ciclo: "período 2", porque un "2" suelto no se entiende.
+ */
+export function formatPeriodCycleShort(
+  index?: number | null,
+  cycle?: number | null,
+): string | null {
+  if (!index || index < 1) return null;
+  return cycle && cycle > 0 ? `${index}/${cycle}` : `período ${index}`;
+}
+
+/** Los períodos distintos, ordenados por mes del ciclo y después por largo. */
+function distinctUnitPeriods(periods: UnitPeriods): UnitPeriod[] {
+  const distinct = new Map<string, UnitPeriod>();
+  for (const p of Object.values(periods)) {
+    distinct.set(`${p.index}/${p.cycle ?? ""}`, p);
+  }
+  return Array.from(distinct.values()).sort(
+    (a, b) => a.index - b.index || (a.cycle ?? 0) - (b.cycle ?? 0),
+  );
+}
+
+/**
+ * Resumen para listados que NO tienen los códigos de las unidades: "Período
+ * 2/3" si todos los deptos coinciden, "Por depto · 1/3 · 2/3" si no.
+ */
+export function summarizeUnitPeriods(periods: UnitPeriods): string | null {
+  const list = distinctUnitPeriods(periods);
+  if (list.length === 0) return null;
+  if (list.length === 1) return formatPeriodCycle(list[0].index, list[0].cycle);
+  return `Por depto · ${list
+    .map((p) => formatPeriodCycleShort(p.index, p.cycle))
+    .join(" · ")}`;
+}
+
+/**
+ * El período de un documento en una línea, para lo que vive fuera del
+ * documento (egreso de Caja, historial, avisos): "Período 1/3" o, por depto,
+ * "DF-1 2/3 · DF-2 3/3" (si todos coinciden, "Período 2/3"). Con `codes`
+ * (unit_id → código) nombra las unidades; sin ellos, o si no encuentra
+ * ninguna, cae al resumen sin nombres. `null` = sin período.
+ */
+export function describeSettlementPeriod(
+  s: {
+    period_index?: number | null;
+    period_cycle?: number | null;
+    unit_periods?: unknown;
+  },
+  codes?: ReadonlyMap<string, string>,
+): string | null {
+  const uniform = formatPeriodCycle(s.period_index, s.period_cycle);
+  if (uniform) return uniform;
+  const periods = parseUnitPeriods(s.unit_periods);
+  // Todos en el mismo período (o ninguno): una sola etiqueta lo dice todo.
+  if (distinctUnitPeriods(periods).length <= 1) {
+    return summarizeUnitPeriods(periods);
+  }
+  const named = Object.entries(periods)
+    .map(([id, p]) => ({ code: codes?.get(id)?.trim(), p }))
+    .filter((e): e is { code: string; p: UnitPeriod } => !!e.code)
+    .sort((a, b) =>
+      a.code.localeCompare(b.code, "es", { numeric: true, sensitivity: "base" }),
+    );
+  if (named.length === 0) return summarizeUnitPeriods(periods);
+  return named
+    .map((e) => `${e.code} ${formatPeriodCycleShort(e.p.index, e.p.cycle)}`)
+    .join(" · ");
+}
+
+/** Lo que propone "seguir el ciclo" en la liquidación siguiente. */
+export interface PeriodSuggestion {
+  /** De dónde sale: "Septiembre 2026 · Período 1/3" o "… · por departamento". */
+  fromLabel: string;
+  /** La anterior tenía un período para todo el documento: el que sigue. */
+  uniform: UnitPeriod | null;
+  /** La anterior iba por depto: el que sigue para cada unidad (unit_id →). */
+  units: UnitPeriods;
+}
+
+/** "Octubre 2026 · DF-1 2/3 · DF-2 3/3" — `formatPeriodFull` con deptos. */
+export function formatSettlementPeriodFull(
+  s: {
+    period_year: number;
+    period_month: number;
+    period_index?: number | null;
+    period_cycle?: number | null;
+    unit_periods?: unknown;
+  },
+  codes?: ReadonlyMap<string, string>,
+): string {
+  const base = formatPeriod(s.period_year, s.period_month);
+  const suffix = describeSettlementPeriod(s, codes);
+  return suffix ? `${base} · ${suffix}` : base;
+}
+
 /**
  * Número de liquidación legible y determinístico: LIQ-2026-05-AB12CD.
  * Mismo criterio que el comprobante de Caja (REC-…) para consistencia.

@@ -750,6 +750,14 @@ export interface OwnerSettlement {
   period_cycle: number | null;
   /** Aclaración corta opcional del período, impresa en el documento (≤160). */
   period_note: string | null;
+  /**
+   * Período del ciclo por departamento (migración 074): `unit_id → {index,
+   * cycle}`. Un propietario con varios deptos tiene cada contrato en un punto
+   * distinto del ciclo. Se excluye con `period_index`: o hay un período para
+   * todo el documento o uno por unidad. `{}` = no se usa. Leerlo siempre con
+   * `parseUnitPeriods` (lib/settlements/labels).
+   */
+  unit_periods: Record<string, { index: number; cycle: number | null }>;
   status: SettlementStatus;
   /**
    * `auto`: la arma el sistema con las reservas del período (Generar,

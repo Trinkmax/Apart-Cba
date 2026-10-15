@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
 import { SETTLEMENT_LINE_META } from "@/lib/settlements/labels";
 import type { StatementModel, StatementBookingRow } from "@/lib/settlements/statement-model";
 
+const PERIOD_CHIP =
+  "inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary";
+
 function Neg({ n, currency }: { n: number; currency: string }) {
   if (!n) return <span className="text-muted-foreground">—</span>;
   return (
@@ -63,12 +66,12 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
               {model.periodLabel}
             </div>
             <div className="flex items-center gap-1.5 flex-wrap">
-              {model.periodCycleLabel && (
+              {model.periodBadgeLabel && (
                 <span
                   className="inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-full"
                   style={{ backgroundColor: "oklch(1 0 0 / 0.22)" }}
                 >
-                  {model.periodCycleLabel}
+                  {model.periodBadgeLabel}
                 </span>
               )}
               <div
@@ -105,12 +108,24 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
           <dd className="text-sm font-medium mt-0.5 leading-snug">
             {model.periodLabel}
           </dd>
-          {model.periodCycleLabel && (
+          {model.periodCycleLabel ? (
             <dd className="mt-1">
-              <span className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
-                {model.periodCycleLabel}
-              </span>
+              <span className={PERIOD_CHIP}>{model.periodCycleLabel}</span>
             </dd>
+          ) : (
+            // Deptos en períodos distintos (074): el de cada uno, a la vista
+            // apenas se abre el documento; el detalle se repite en su bloque.
+            model.unitPeriods.length > 0 && (
+              <dd className="mt-1 flex flex-wrap gap-1">
+                {model.unitPeriods.map((p) => (
+                  <span key={p.unit_id} className={PERIOD_CHIP}>
+                    <span className="font-medium">{p.code}</span>
+                    <span aria-hidden className="opacity-50">·</span>
+                    {p.short}
+                  </span>
+                ))}
+              </dd>
+            )
           )}
           {model.periodNote && (
             <dd className="text-[11px] text-muted-foreground mt-1 leading-snug">
@@ -173,12 +188,17 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
           <div key={u.code} className="space-y-0">
             <div className="flex items-center gap-2 mb-2">
               <span className="h-4 w-1 rounded-full bg-primary" />
-              <h3 className="text-sm font-semibold min-w-0">
+              <h3 className="text-sm font-semibold min-w-0 flex-1">
                 {u.code}{" "}
                 <span className="text-muted-foreground font-normal">
                   · {u.name}
                 </span>
               </h3>
+              {u.period && (
+                <span className={cn(PERIOD_CHIP, "shrink-0")}>
+                  {u.period.label}
+                </span>
+              )}
             </div>
 
             {/* Ancho: planilla clásica */}

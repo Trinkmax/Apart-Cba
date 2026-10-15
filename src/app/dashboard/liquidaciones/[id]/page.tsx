@@ -15,13 +15,16 @@ import { getCurrentOrg, getOrganizationBranding } from "@/lib/actions/org";
 import { listAccounts } from "@/lib/actions/cash";
 import { can } from "@/lib/permissions";
 import { formatMoney } from "@/lib/format";
-import { SETTLEMENT_STATUS_META } from "@/lib/settlements/labels";
+import {
+  hasUnitPeriods,
+  SETTLEMENT_STATUS_META,
+} from "@/lib/settlements/labels";
 import { SettlementStatement } from "@/components/settlements/settlement-statement";
 import { EditableSettlementStatement } from "@/components/settlements/editable-settlement-statement";
 import { SettlementActions } from "@/components/settlements/settlement-actions";
 import {
   buildStatementModel,
-  type StatementInput,
+  statementInputFromRecord,
 } from "@/lib/settlements/statement-model";
 import type {
   OwnerSettlement,
@@ -68,8 +71,9 @@ export default async function SettlementDetailPage({
     listSettlementSiblings(id),
     listSettlementMergedSiblings(id),
     listOwnerUnits(settlement.owner_id),
-    // Sólo tiene sentido ofrecer "seguir el ciclo" si todavía no se cargó.
-    settlement.period_index == null
+    // Sólo tiene sentido ofrecer "seguir el ciclo" si todavía no se cargó
+    // (ni para todo el documento ni por departamento).
+    settlement.period_index == null && !hasUnitPeriods(settlement.unit_periods)
       ? suggestSettlementPeriodCycle(id)
       : Promise.resolve(null),
     getSettlementUndoState(id),
@@ -82,46 +86,7 @@ export default async function SettlementDetailPage({
   const paid =
     settlement.status === "pagada" || !!settlement.paid_movement_id;
 
-  const statementInput: StatementInput = {
-    id: settlement.id,
-    period_year: settlement.period_year,
-    period_month: settlement.period_month,
-    period_index: settlement.period_index,
-    period_cycle: settlement.period_cycle,
-    period_note: settlement.period_note,
-    status: settlement.status,
-    currency: settlement.currency,
-    gross_revenue: Number(settlement.gross_revenue),
-    commission_amount: Number(settlement.commission_amount),
-    deductions_amount: Number(settlement.deductions_amount),
-    net_payable: Number(settlement.net_payable),
-    generated_at: settlement.generated_at,
-    sent_at: settlement.sent_at,
-    paid_at: settlement.paid_at,
-    owner: {
-      full_name: settlement.owner.full_name,
-      bank_name: settlement.owner.bank_name,
-      cbu: settlement.owner.cbu,
-      alias_cbu: settlement.owner.alias_cbu,
-    },
-    unit_order: settlement.unit_order ?? [],
-    exchange_rates: settlement.exchange_rates ?? {},
-    lines: (settlement.lines ?? []).map((l) => ({
-      id: l.id,
-      line_type: l.line_type,
-      ref_type: l.ref_type,
-      ref_id: l.ref_id,
-      unit_id: l.unit_id,
-      description: l.description,
-      amount: Number(l.amount),
-      sign: l.sign,
-      currency: l.currency,
-      is_manual: l.is_manual,
-      meta: l.meta,
-      display_order: l.display_order,
-      unit: l.unit,
-    })),
-  };
+  const statementInput = statementInputFromRecord(settlement);
 
   const model = buildStatementModel(statementInput);
 

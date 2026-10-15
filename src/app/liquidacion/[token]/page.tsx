@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { getSettlementByToken } from "@/lib/actions/settlements";
 import {
   buildStatementModel,
-  type StatementInput,
+  statementInputFromRecord,
 } from "@/lib/settlements/statement-model";
 import { SettlementStatement } from "@/components/settlements/settlement-statement";
 import { SettlementExportButtons } from "@/components/settlements/settlement-export-buttons";
@@ -48,6 +48,7 @@ export default async function PublicSettlementPage({
     period_index: number | null;
     period_cycle: number | null;
     period_note: string | null;
+    unit_periods: unknown;
     status: string;
     currency: string;
     gross_revenue: number;
@@ -69,52 +70,11 @@ export default async function PublicSettlementPage({
   };
   const org = res.org;
 
-  const statementInput: StatementInput = {
-    id: s.id,
-    period_year: s.period_year,
-    period_month: s.period_month,
-    period_index: s.period_index,
-    period_cycle: s.period_cycle,
-    period_note: s.period_note,
-    status: s.status,
-    currency: s.currency,
-    gross_revenue: Number(s.gross_revenue),
-    commission_amount: Number(s.commission_amount),
-    deductions_amount: Number(s.deductions_amount),
-    net_payable: Number(s.net_payable),
-    generated_at: s.generated_at,
-    sent_at: s.sent_at,
-    paid_at: s.paid_at,
-    owner: s.owner
-      ? {
-          full_name: s.owner.full_name,
-          bank_name: s.owner.bank_name,
-          cbu: s.owner.cbu,
-          alias_cbu: s.owner.alias_cbu,
-        }
-      : null,
-    // Mismo orden, monedas y TC que el detalle del panel: el link público
-    // tiene que mostrar el documento tal cual lo revisó el operador (la
-    // columna "Canal" también sale del modelo, así que aparece sola).
-    unit_order: s.unit_order ?? [],
-    exchange_rates: s.exchange_rates ?? {},
-    lines: (s.lines ?? []).map((l) => ({
-      id: l.id,
-      line_type: l.line_type,
-      ref_type: l.ref_type,
-      ref_id: l.ref_id,
-      unit_id: l.unit_id,
-      description: l.description,
-      amount: Number(l.amount),
-      sign: l.sign,
-      currency: l.currency,
-      is_manual: l.is_manual,
-      meta: l.meta,
-      display_order: l.display_order,
-      unit: l.unit,
-    })),
-  };
-
+  // Mismo armado que el detalle del panel (orden, monedas, TC y período por
+  // depto): el link público tiene que mostrar el documento tal cual lo revisó
+  // el operador (la columna "Canal" también sale del modelo, así que aparece
+  // sola).
+  const statementInput = statementInputFromRecord(s);
   const model = buildStatementModel(statementInput);
   const branding = {
     name: org?.name ?? "Liquidación",
