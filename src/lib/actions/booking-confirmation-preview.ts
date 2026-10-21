@@ -51,9 +51,10 @@ export async function getBookingConfirmationPreview(bookingId: string): Promise<
     | null;
   const unit = booking.unit as unknown as { name: string } | null;
 
-  // Pre-cargamos el modal con el copy del dueño (mismo mensaje que la card de
-  // WhatsApp: seña + restante + depósito ya completos), no con el template genérico.
-  const template = await buildOwnerConfirmationDraft(bookingId);
+  // Pre-cargamos el modal con el mismo mensaje que se copia desde la reserva
+  // para WhatsApp: la "Confirmación de reserva" de la org si la editó, y si
+  // no el copy del dueño (seña + restante + depósito ya completos).
+  const template = await buildOwnerConfirmationDraft(bookingId, organization.id);
 
   return {
     ok: true,

@@ -373,6 +373,11 @@ export interface Unit {
   check_in_window_end: string | null;
   marketplace_rating_avg: number;
   marketplace_rating_count: number;
+  // ─── Para el huésped (migración 076) ──────────────────────────────────────
+  /** Link de Google Maps que va en los mensajes ({{unit.maps_url}}). */
+  guest_maps_url: string | null;
+  /** Instructivo propio del depto: cómo entrar, piso, wifi… ({{unit.instructions}}). */
+  guest_instructions: string | null;
 }
 
 /**
@@ -1933,7 +1938,7 @@ export interface EmailChangeRequest {
 }
 
 export type MessageChannel = "email" | "whatsapp";
-export type MessageEventType = "booking_confirmed";  // futuro: 'booking_reminder', 'review_request', etc.
+export type MessageEventType = "booking_confirmed" | "booking_instructions";
 
 export interface OrgMessageTemplate {
   id: string;

@@ -19,6 +19,7 @@ import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
 import { pickChargeOwner, type UnitOwnerLite } from "@/lib/settlements/charge-owner";
 import { getOwnerScope, scopeFilter } from "@/lib/auth/owner-scope";
 import { unitPriceKinds } from "@/lib/units/pricing";
+import { GUEST_INSTRUCTIONS_MAX, normalizeMapsUrl } from "@/lib/units/guest-info";
 import { revalidateStorefront } from "@/lib/marketplace/storefront";
 
 const unitSchema = z.object({
@@ -947,4 +948,83 @@ export async function unlinkOwnerFromUnit(unitOwnerId: string, unitId: string) {
     .eq("unit_id", unitId);
   if (error) throw new Error(error.message);
   revalidatePath(`/dashboard/unidades/${unitId}`);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Datos de cada depto para el huésped (migración 076)
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface UnitGuestInfo {
+  id: string;
+  code: string;
+  name: string;
+  address: string | null;
+  guest_maps_url: string | null;
+  guest_instructions: string | null;
+}
+
+/** Los deptos activos con lo que va al instructivo (Configuración → Comunicaciones). */
+export async function listUnitsGuestInfo(): Promise<UnitGuestInfo[]> {
+  await requireSession();
+  const { organization } = await getCurrentOrg();
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("units")
+    .select("id, code, name, address, guest_maps_url, guest_instructions")
+    .eq("organization_id", organization.id)
+    .eq("active", true)
+    .order("position")
+    .order("code");
+  if (error) throw new Error(error.message);
+  return (data ?? []) as UnitGuestInfo[];
+}
+
+const unitGuestInfoSchema = z.object({
+  unit_id: z.string().uuid(),
+  guest_maps_url: z.string().optional().nullable(),
+  guest_instructions: z
+    .string()
+    .max(GUEST_INSTRUCTIONS_MAX, `El instructivo es demasiado largo (máximo ${GUEST_INSTRUCTIONS_MAX.toLocaleString("es-AR")} caracteres).`)
+    .optional()
+    .nullable(),
+});
+
+export async function updateUnitGuestInfo(
+  input: z.infer<typeof unitGuestInfoSchema>
+): Promise<
+  | { ok: true; unit: UnitGuestInfo }
+  | { ok: false; error: string; field?: "guest_maps_url" | "guest_instructions" }
+> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "units", "update")) {
+    return { ok: false, error: "No tenés permiso para editar los deptos." };
+  }
+  const parsed = unitGuestInfoSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const field = issue?.path[0] === "guest_instructions" ? "guest_instructions" : undefined;
+    return { ok: false, error: issue?.message ?? "Datos inválidos", field };
+  }
+  const maps = normalizeMapsUrl(parsed.data.guest_maps_url);
+  if (!maps.ok) return { ok: false, error: maps.error, field: "guest_maps_url" };
+  const instructions = parsed.data.guest_instructions?.trim() || null;
+
+  const admin = createAdminClient();
+  const { data, error } = await admin
+    .from("units")
+    .update({ guest_maps_url: maps.url, guest_instructions: instructions })
+    .eq("id", parsed.data.unit_id)
+    .eq("organization_id", organization.id)
+    .select("id, code, name, address, guest_maps_url, guest_instructions")
+    .maybeSingle();
+  if (error) {
+    logActionError("updateUnitGuestInfo", error);
+    return { ok: false, error: "No se pudo guardar. Probá de nuevo." };
+  }
+  if (!data) return { ok: false, error: "No encontramos ese depto." };
+
+  revalidatePath("/dashboard/configuracion/comunicaciones");
+  revalidatePath("/dashboard/reservas", "layout"); // el instructivo de cada reserva
+  return { ok: true, unit: data as UnitGuestInfo };
 }

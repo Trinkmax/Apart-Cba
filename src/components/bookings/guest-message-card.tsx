@@ -1,22 +1,32 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Copy, Check, MessageCircle, Loader2, Save } from "lucide-react";
+import Link from "next/link";
+import { Loader2, Save, PencilLine } from "lucide-react";
 import { toast } from "sonner";
 import { formatMoney } from "@/lib/format";
 import {
   renderBookingConfirmationText,
   effectiveSena,
 } from "@/lib/email/booking-confirmation";
+import {
+  missingUnitFields,
+  renderGuestMessage,
+  templateUsesDeposit,
+  withDeposit,
+  type BookingMessageVariables,
+} from "@/lib/email/booking-message";
 import { setBookingDeposit } from "@/lib/actions/bookings";
+import { MessageCopyActions, MissingUnitInfoNotice } from "./guest-message-parts";
 
 /**
  * Mensaje de confirmación ya completado + editor de seña con preview en vivo.
  * Al cambiar la seña el mensaje se re-renderiza al instante; "Guardar" la
  * persiste en la reserva (`deposit_amount`) para que también la use el email.
  *
- * El botón de WhatsApp NO precarga el texto vía `wa.me?text=` (en iOS eso rompe
- * los emojis → ◇): copia el mensaje y abre el chat; el usuario pega.
+ * El texto es el de la "Confirmación de reserva" de la org (Configuración →
+ * Comunicaciones) si la editó; si no, el mensaje original del dueño. La seña
+ * sólo se ofrece si el mensaje la muestra: hay orgs que no cobran seña.
  */
 export function GuestMessageCard({
   bookingId,
@@ -32,6 +42,10 @@ export function GuestMessageCard({
   securityDeposit,
   phone,
   canEdit,
+  customTemplate,
+  variables,
+  editHref,
+  unitInfoHref,
 }: {
   bookingId: string;
   guestName: string;
@@ -49,8 +63,15 @@ export function GuestMessageCard({
   securityDeposit: number | null;
   phone?: string | null;
   canEdit: boolean;
+  /** Plantilla editada por la org. null = mensaje original. */
+  customTemplate?: string | null;
+  /** Datos de la reserva para completar la plantilla. */
+  variables: BookingMessageVariables;
+  /** Dónde se edita el mensaje (sólo para quien puede). */
+  editHref?: string | null;
+  /** Dónde se cargan los datos del depto (sólo para quien puede). */
+  unitInfoHref?: string | null;
 }) {
-  const [copied, setCopied] = useState(false);
   // La seña suele ser el valor de una noche → default + chip de acceso rápido.
   const nights = Math.max(
     1,
@@ -77,46 +98,24 @@ export function GuestMessageCard({
   const dirty = senaNum !== saved;
   const pct = (p: number) => String(Math.round(total * p));
 
-  const message = renderBookingConfirmationText({
-    guestName,
-    unitTitle,
-    checkInIso,
-    checkOutIso,
-    guestsCount,
-    currency,
-    total,
-    deposit: senaNum,
-    securityDeposit,
-  });
+  const custom = customTemplate ?? null;
+  const showSena = canEdit && (custom === null || templateUsesDeposit(custom));
+  const missing = custom === null ? [] : missingUnitFields(custom, variables);
 
-  const waDigits = phone ? phone.replace(/[^\d]/g, "") : "";
-  const waUrl = waDigits ? `https://wa.me/${waDigits}` : null;
-
-  async function writeClipboard(): Promise<boolean> {
-    try {
-      await navigator.clipboard.writeText(message);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function copy() {
-    if (await writeClipboard()) {
-      setCopied(true);
-      toast.success("Mensaje copiado", { description: "Pegalo donde quieras mandarlo." });
-      setTimeout(() => setCopied(false), 2000);
-    } else {
-      toast.error("No se pudo copiar", { description: "Copialo manualmente desde el cuadro." });
-    }
-  }
-
-  function onWhatsApp() {
-    void writeClipboard();
-    toast.success("Mensaje copiado 📋", {
-      description: "Pegalo en el chat de WhatsApp que se abrió.",
-    });
-  }
+  const message =
+    custom !== null
+      ? renderGuestMessage(custom, withDeposit(variables, senaNum, total))
+      : renderBookingConfirmationText({
+          guestName,
+          unitTitle,
+          checkInIso,
+          checkOutIso,
+          guestsCount,
+          currency,
+          total,
+          deposit: senaNum,
+          securityDeposit,
+        });
 
   function saveSena() {
     startTransition(async () => {
@@ -145,36 +144,24 @@ export function GuestMessageCard({
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             Ya completado con los datos. Copialo y pegalo en WhatsApp.
+            {editHref ? (
+              <>
+                {" "}
+                <Link
+                  href={editHref}
+                  className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-2 hover:underline"
+                >
+                  <PencilLine size={12} />
+                  Editar el mensaje
+                </Link>
+              </>
+            ) : null}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={copy}
-            className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg border border-input bg-background text-sm font-medium hover:bg-accent transition-colors"
-          >
-            {copied ? (
-              <Check size={14} className="text-emerald-600" />
-            ) : (
-              <Copy size={14} />
-            )}
-            {copied ? "Copiado" : "Copiar"}
-          </button>
-          {waUrl ? (
-            <a
-              href={waUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={onWhatsApp}
-              className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-lg bg-[#25D366] text-white text-sm font-medium hover:brightness-95 transition"
-            >
-              <MessageCircle size={14} />
-              Copiar y abrir chat
-            </a>
-          ) : null}
-        </div>
+        <MessageCopyActions message={message} phone={phone} />
       </div>
 
-      {canEdit ? (
+      {showSena ? (
         <div className="rounded-xl border border-border bg-muted/30 p-3 sm:p-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <label className="text-xs font-medium text-muted-foreground">
@@ -241,6 +228,8 @@ export function GuestMessageCard({
           </div>
         </div>
       ) : null}
+
+      <MissingUnitInfoNotice missing={missing} href={unitInfoHref} />
 
       <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-foreground bg-muted/40 border rounded-xl p-4">
         {message}

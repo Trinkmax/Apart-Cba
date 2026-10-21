@@ -68,7 +68,7 @@ function cap(s: string): string {
 }
 
 /** "Viernes 4 de julio" */
-function fmtLong(iso: string): string {
+export function fmtLong(iso: string): string {
   const d = new Date(iso + "T12:00:00");
   return `${cap(DIAS[d.getDay()])} ${d.getDate()} de ${MESES[d.getMonth()]}`;
 }
@@ -473,7 +473,7 @@ export interface BookingConfirmationTextParams {
 }
 
 /** Formato de plata para el mensaje: sin decimales si es entero (más limpio en WhatsApp). */
-function moneyMsg(n: number, currency: string): string {
+export function moneyMsg(n: number, currency: string): string {
   const decimals = Number.isInteger(n) ? 0 : 2;
   try {
     return new Intl.NumberFormat("es-AR", {

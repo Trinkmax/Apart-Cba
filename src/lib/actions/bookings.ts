@@ -2679,7 +2679,7 @@ export async function confirmBookingWithMessages(
 
   // Audit log de bookings está fuera de scope para Spec 2.
 
-  const ctx = await buildBookingContext(parsed.data.bookingId);
+  const ctx = await buildBookingContext(parsed.data.bookingId, organization.id);
   if (!ctx) return { ok: false, error: "No se pudo cargar el contexto del booking" };
 
   const channelsSent: string[] = [];
@@ -2695,7 +2695,7 @@ export async function confirmBookingWithMessages(
         subject = parsed.data.emailOverride.subject ?? null;
         body = parsed.data.emailOverride.body;
       } else {
-        const draft = await buildOwnerConfirmationDraft(parsed.data.bookingId);
+        const draft = await buildOwnerConfirmationDraft(parsed.data.bookingId, organization.id);
         if (!draft) {
           channelsFailed.push({ channel: "email", error: "No se pudo armar el mensaje" });
           subject = null;
@@ -2758,7 +2758,7 @@ export async function resendBookingConfirmation(
   const allowedChannels = parsed.data.channels.filter((c) => c === "email");
   if (allowedChannels.length === 0) return { ok: false, error: "Solo email disponible" };
 
-  const ctx = await buildBookingContext(parsed.data.bookingId);
+  const ctx = await buildBookingContext(parsed.data.bookingId, organization.id);
   if (!ctx) return { ok: false, error: "Booking no encontrado" };
   if (!ctx.guestEmail) return { ok: false, error: "Huésped sin email" };
 
@@ -2768,7 +2768,7 @@ export async function resendBookingConfirmation(
     subject = parsed.data.emailOverride.subject ?? null;
     body = parsed.data.emailOverride.body;
   } else {
-    const draft = await buildOwnerConfirmationDraft(parsed.data.bookingId);
+    const draft = await buildOwnerConfirmationDraft(parsed.data.bookingId, organization.id);
     if (!draft) return { ok: false, error: "No se pudo armar el mensaje" };
     subject = draft.subject;
     body = draft.body;

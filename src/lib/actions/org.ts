@@ -12,6 +12,10 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { isAdminLevel } from "@/lib/permissions";
 import { BOOKING_STATUS_META, BOOKING_SOURCE_META } from "@/lib/constants";
 import { findInvalidVariables } from "@/lib/email/templates/variables";
+import {
+  DEFAULT_GUEST_MESSAGES,
+  GUEST_MESSAGE_EVENTS,
+} from "@/lib/email/templates/guest-defaults";
 import { normalizeChannelCommissionMap } from "@/lib/finance/booking-economics";
 import type {
   BookingSource,
@@ -786,57 +790,103 @@ export async function deleteOrgDomain(): Promise<{ ok: true } | { ok: false; err
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// Spec 2 — Templates de mensajes
+// Mensajes al huésped (Configuración → Comunicaciones)
 // ════════════════════════════════════════════════════════════════════════
 
-const updateTemplateSchema = z.object({
-  id: z.string().uuid(),
-  subject: z.string().max(300).optional().nullable(),
-  body: z.string().min(1).max(10000),
+const guestTemplateKeySchema = z.object({
+  event_type: z.enum(GUEST_MESSAGE_EVENTS),
+});
+
+const updateTemplateSchema = guestTemplateKeySchema.extend({
+  body: z
+    .string()
+    .trim()
+    .min(1, "El mensaje no puede quedar vacío.")
+    .max(10000, "El mensaje es demasiado largo (máximo 10.000 caracteres)."),
 });
 
 export type UpdateTemplateInput = z.infer<typeof updateTemplateSchema>;
 
+function revalidateGuestMessages() {
+  revalidatePath("/dashboard/configuracion/comunicaciones");
+  // La ficha de cada reserva muestra los mensajes ya completos.
+  revalidatePath("/dashboard/reservas", "layout");
+}
+
+/**
+ * Guarda un mensaje al huésped de la org. Upsert por (org, evento, canal):
+ * el instructivo no tiene fila hasta que se guarda la primera vez.
+ */
 export async function updateOrgTemplate(
   input: UpdateTemplateInput
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   await requireSession();
-  const { organization } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) {
+    return { ok: false, error: "No tenés permiso para editar los mensajes." };
+  }
   const parsed = updateTemplateSchema.safeParse(input);
   if (!parsed.success) {
     return { ok: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
   }
 
-  const admin = createAdminClient();
-  const { data: tpl, error: lookupError } = await admin
-    .from("org_message_templates")
-    .select("id, organization_id, event_type, channel")
-    .eq("id", parsed.data.id)
-    .maybeSingle();
-  if (lookupError) return { ok: false, error: lookupError.message };
-  if (!tpl) return { ok: false, error: "Template no encontrado" };
-  if (tpl.organization_id !== organization.id) {
-    return { ok: false, error: "Template no pertenece a tu organización" };
-  }
-
-  const invalid = findInvalidVariables(parsed.data.body, tpl.event_type);
+  const invalid = findInvalidVariables(parsed.data.body, parsed.data.event_type);
   if (invalid.length > 0) {
     return {
       ok: false,
-      error: `Variables no válidas: ${invalid.map((v) => `{{${v}}}`).join(", ")}`,
+      error: `Hay datos que no existen: ${invalid.map((v) => `{{${v}}}`).join(", ")}. Borralos e insertalos desde la lista de datos.`,
     };
   }
 
-  const { error: updateError } = await admin
-    .from("org_message_templates")
-    .update({
-      subject: parsed.data.subject ?? null,
+  const admin = createAdminClient();
+  const { error } = await admin.from("org_message_templates").upsert(
+    {
+      organization_id: organization.id,
+      event_type: parsed.data.event_type,
+      channel: "whatsapp",
+      subject: null,
       body: parsed.data.body,
       is_default: false,
-    })
-    .eq("id", parsed.data.id);
-  if (updateError) return { ok: false, error: updateError.message };
+    },
+    { onConflict: "organization_id,event_type,channel" }
+  );
+  if (error) return { ok: false, error: error.message };
 
-  revalidatePath("/dashboard/configuracion/comunicaciones");
+  revalidateGuestMessages();
+  return { ok: true };
+}
+
+/**
+ * Vuelve un mensaje a como viene de fábrica. La confirmación recupera el
+ * mensaje original calculado en código (y el editor, su texto de arranque);
+ * el instructivo deja de aparecer en las reservas pero conserva lo escrito,
+ * para poder reactivarlo guardando.
+ */
+export async function restoreOrgTemplate(
+  input: z.infer<typeof guestTemplateKeySchema>
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) {
+    return { ok: false, error: "No tenés permiso para editar los mensajes." };
+  }
+  const parsed = guestTemplateKeySchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Mensaje desconocido." };
+  const event = parsed.data.event_type;
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("org_message_templates")
+    .update(
+      event === "booking_confirmed"
+        ? { is_default: true, body: DEFAULT_GUEST_MESSAGES[event] }
+        : { is_default: true }
+    )
+    .eq("organization_id", organization.id)
+    .eq("event_type", event)
+    .eq("channel", "whatsapp");
+  if (error) return { ok: false, error: error.message };
+
+  revalidateGuestMessages();
   return { ok: true };
 }

@@ -6,7 +6,9 @@ import { listUnitsForBookingForm } from "@/lib/actions/units";
 import { listAccounts, listMovementsForBooking, listLatestAuditByAccount } from "@/lib/actions/cash";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { listChannelRequestsForOverlapCheck } from "@/lib/actions/channel-requests";
-import { can } from "@/lib/permissions";
+import { can, isAdminLevel } from "@/lib/permissions";
+import { getGuestMessageTemplates } from "@/lib/email/booking-templates";
+import { bookingMessageVariables } from "@/lib/email/booking-message";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +21,7 @@ import { QuickPayCard } from "@/components/bookings/quick-pay-card";
 import { ExtraChargeDialog } from "@/components/bookings/extra-charge-dialog";
 import { BookingPaymentsSection } from "@/components/bookings/booking-payments-section";
 import { GuestMessageCard } from "@/components/bookings/guest-message-card";
+import { GuestInstructionsCard } from "@/components/bookings/guest-instructions-card";
 import { PaymentReportsCard } from "@/components/bookings/payment-reports-card";
 import { BookingChannelStatus } from "@/components/bookings/booking-channel-status";
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
@@ -53,7 +56,7 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
   ]);
   if (!booking) notFound();
   const b = booking as unknown as BookingDetail;
-  const [unitBookings, latestAuditByMovement, requestOverlaps] = await Promise.all([
+  const [unitBookings, latestAuditByMovement, requestOverlaps, guestTemplates] = await Promise.all([
     listBookings({ unitId: b.unit_id }),
     canViewMoney
       ? listLatestAuditByAccount(
@@ -64,8 +67,19 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
     // Solicitudes de OTA sin confirmar: advertencia blanda si se cambian las
     // fechas de esta reserva encima de una.
     listChannelRequestsForOverlapCheck().catch(() => []),
+    getGuestMessageTemplates(organization.id),
   ]);
   const unitsForMovement = units.map((u) => ({ id: u.id, code: u.code, name: u.name }));
+  // Mensajes al huésped (Configuración → Comunicaciones), completos con los
+  // datos de esta reserva. Los links a editar sólo para quien entra ahí.
+  const messageVars = bookingMessageVariables({
+    booking: b,
+    guest: b.guest,
+    unit: b.unit,
+    org: organization,
+  });
+  const comunicacionesHref = isAdminLevel(role) ? "/dashboard/configuracion/comunicaciones" : null;
+  const instructivo = guestTemplates.booking_instructions;
   const src = BOOKING_SOURCE_META[b.source];
   const nights = formatNights(b.check_in_date, b.check_out_date);
   // Las reservas que llegan por iCal entran sin importe: mientras el total sea
@@ -434,6 +448,22 @@ export default async function BookingDetailPage({ params }: { params: Promise<{ 
             securityDeposit={b.security_deposit != null ? Number(b.security_deposit) : null}
             phone={b.guest?.phone ?? null}
             canEdit={canEditBooking}
+            customTemplate={guestTemplates.booking_confirmed.custom ? guestTemplates.booking_confirmed.body : null}
+            variables={messageVars}
+            editHref={comunicacionesHref && `${comunicacionesHref}?abrir=booking_confirmed`}
+            unitInfoHref={comunicacionesHref && `${comunicacionesHref}#deptos`}
+          />
+        </Card>
+      )}
+
+      {canEditBooking && instructivo.custom && !b.is_block && (
+        <Card className="p-4 sm:p-5">
+          <GuestInstructionsCard
+            template={instructivo.body}
+            variables={messageVars}
+            phone={b.guest?.phone ?? null}
+            editHref={comunicacionesHref && `${comunicacionesHref}?abrir=booking_instructions`}
+            unitInfoHref={comunicacionesHref && `${comunicacionesHref}#deptos`}
           />
         </Card>
       )}
