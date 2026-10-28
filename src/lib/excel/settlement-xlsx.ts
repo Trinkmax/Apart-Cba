@@ -5,7 +5,7 @@ import {
   type StatementModel,
 } from "@/lib/settlements/statement-model";
 import { formatDate } from "@/lib/format";
-import { settlementNetLabel } from "@/lib/settlements/labels";
+import { settlementNetLabel, settlementPaidCaption } from "@/lib/settlements/labels";
 
 export type XlsxBranding = {
   name: string;
@@ -323,7 +323,14 @@ export function buildSettlementWorkbook(
     totalLine("Ganancia del propietario", model.totals.ownerEarnings);
     totalLine("− Cobrado por el propietario", -model.totals.ownerCollected);
   }
-  totalLine(settlementNetLabel(model.totals.net).toUpperCase(), Math.abs(model.totals.net), true);
+  totalLine(
+    settlementNetLabel(model.totals.net, model.status).toUpperCase(),
+    Math.abs(model.totals.net),
+    true,
+  );
+  if (model.status === "pagada" && model.totals.net >= 0) {
+    totalLine(settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy")), 0);
+  }
   r++;
 
   // ── Datos bancarios ──
@@ -334,7 +341,7 @@ export function buildSettlementWorkbook(
   ].filter(Boolean);
   // Saldo a cargo del propietario: no hay nada que transferirle.
   if (bankParts.length > 0 && model.totals.net >= 0) {
-    mergeRow(`Transferir a:  ${bankParts.join("  ·  ")}`, {
+    mergeRow(`${model.status === "pagada" ? "Transferido a" : "Transferir a"}:  ${bankParts.join("  ·  ")}`, {
       font: { bold: true, size: 10, color: { argb: INK } },
       fill: { type: "pattern", pattern: "solid", fgColor: { argb: ZEBRA } },
       alignment: { vertical: "middle", horizontal: "left", indent: 1 },

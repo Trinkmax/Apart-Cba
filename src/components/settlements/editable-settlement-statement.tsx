@@ -92,6 +92,7 @@ import {
   SETTLEMENT_LINE_META,
   describeAuditChange,
   settlementNetLabel,
+  settlementPaidCaption,
 } from "@/lib/settlements/labels";
 import {
   updateSettlementBookingRow,
@@ -2126,7 +2127,7 @@ export function EditableSettlementStatement({
           )}
         >
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {settlementNetLabel(model.totals.net)}
+            {settlementNetLabel(model.totals.net, model.status)}
           </div>
           <div
             className={cn(
@@ -2138,9 +2139,15 @@ export function EditableSettlementStatement({
           >
             {formatMoney(Math.abs(model.totals.net), c)}
           </div>
+          {model.status === "pagada" && model.totals.net >= 0 && (
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              {settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy"))}{" "}
+              {formatMoney(0, c)}
+            </div>
+          )}
         </div>
       </div>
-      <OwnerEarningsStrip totals={model.totals} currency={c} />
+      <OwnerEarningsStrip totals={model.totals} currency={c} status={model.status} />
 
       {/* Banner contexto Caja */}
       {editable && (

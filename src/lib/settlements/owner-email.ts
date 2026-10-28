@@ -33,7 +33,7 @@ export function buildOwnerSettlementEmail({
   const brand = branding.primary_color || "#0F766E";
   // Neto negativo: el propietario cobró directo y debe la diferencia. El
   // rótulo lo dice; el importe va sin signo.
-  const netLabel = settlementNetLabel(model.totals.net);
+  const netLabel = settlementNetLabel(model.totals.net, model.status);
   const netShown = model.totals.net < 0 ? net.replace(/[-−]/, "") : net;
   // Si cobró él (077), el neto es sólo lo que falta transferir: le decimos
   // también cuánto ganó y cuánto ya tiene en la mano.

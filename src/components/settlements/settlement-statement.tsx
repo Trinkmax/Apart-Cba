@@ -10,7 +10,11 @@ import {
 } from "@/components/ui/table";
 import { formatMoney, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { SETTLEMENT_LINE_META, settlementNetLabel } from "@/lib/settlements/labels";
+import {
+  SETTLEMENT_LINE_META,
+  settlementNetLabel,
+  settlementPaidCaption,
+} from "@/lib/settlements/labels";
 import type { StatementModel, StatementBookingRow } from "@/lib/settlements/statement-model";
 import { OwnerEarningsStrip } from "./owner-earnings-strip";
 
@@ -162,7 +166,7 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
           )}
         >
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            {settlementNetLabel(model.totals.net)}
+            {settlementNetLabel(model.totals.net, model.status)}
           </div>
           <div
             className={cn(
@@ -174,9 +178,15 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
           >
             {formatMoney(Math.abs(model.totals.net), c)}
           </div>
+          {model.status === "pagada" && model.totals.net >= 0 && (
+            <div className="text-[11px] text-muted-foreground mt-0.5">
+              {settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy"))}{" "}
+              {formatMoney(0, c)}
+            </div>
+          )}
         </div>
       </div>
-      <OwnerEarningsStrip totals={model.totals} currency={c} />
+      <OwnerEarningsStrip totals={model.totals} currency={c} status={model.status} />
 
       {/* Planilla por unidad */}
       <div className="p-3 @[34rem]:p-6 space-y-5 @[34rem]:space-y-6">

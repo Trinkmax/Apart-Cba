@@ -17,7 +17,7 @@ import {
   type StatementModel,
 } from "@/lib/settlements/statement-model";
 import { pdfSafe, pdfNeg } from "@/lib/pdf/text";
-import { settlementNetLabel } from "@/lib/settlements/labels";
+import { settlementNetLabel, settlementPaidCaption } from "@/lib/settlements/labels";
 
 /** Marcador de celda vacía (en-dash, válido en WinAnsi). */
 const EMPTY = "–";
@@ -442,11 +442,29 @@ export async function buildSettlementDoc(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(ownerOwes ? 9 : 11);
   doc.setTextColor(brand[0], brand[1], brand[2]);
-  doc.text(settlementNetLabel(model.totals.net).toUpperCase(), boxX + 4, y + 33 + extra);
+  doc.text(
+    settlementNetLabel(model.totals.net, model.status).toUpperCase(),
+    boxX + 4,
+    y + 33 + extra,
+  );
   doc.setFontSize(11);
   doc.text(money(Math.abs(model.totals.net), model.currency), boxX + 82, y + 33 + extra, {
     align: "right",
   });
+  if (model.status === "pagada" && !ownerOwes) {
+    // Ya saldada: que el propietario lea que nadie le debe nada a nadie.
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
+    doc.text(
+      pdfSafe(
+        `${settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy"))} ${money(0, model.currency)}`,
+      ),
+      boxX + 82,
+      y + 38 + extra,
+      { align: "right" },
+    );
+  }
   doc.setTextColor(INK[0], INK[1], INK[2]);
   if (model.missingRates.length > 0) {
     doc.setFont("helvetica", "normal");
@@ -473,7 +491,7 @@ export async function buildSettlementDoc(
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
-    doc.text("PAGAR A", MARGIN_X, y + 7);
+    doc.text(model.status === "pagada" ? "PAGADO A" : "PAGAR A", MARGIN_X, y + 7);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     doc.setTextColor(INK[0], INK[1], INK[2]);

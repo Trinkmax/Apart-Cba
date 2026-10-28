@@ -12,9 +12,11 @@ import type { StatementModel } from "@/lib/settlements/statement-model";
 export function OwnerEarningsStrip({
   totals,
   currency,
+  status,
 }: {
   totals: StatementModel["totals"];
   currency: string;
+  status: string;
 }) {
   if (!(totals.ownerCollected > 0)) return null;
   return (
@@ -38,7 +40,7 @@ export function OwnerEarningsStrip({
           −{formatMoney(totals.ownerCollected, currency)}
         </div>
         <div className="text-[11px] text-muted-foreground mt-0.5">
-          Ganancia − lo que ya cobró = {settlementNetLabel(totals.net).toLowerCase()}
+          Ganancia − lo que ya cobró = {settlementNetLabel(totals.net, status).toLowerCase()}
         </div>
       </div>
     </div>

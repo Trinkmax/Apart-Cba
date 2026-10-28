@@ -373,7 +373,15 @@ export const LOCKED_STATUSES: SettlementStatus[] = ["revisada", "enviada", "paga
  * la administración la diferencia. Con "Neto por pagar −$ 300.750" y su CBU
  * bajo "Pagar a", el documento le decía lo contrario (Habitana, 28/10/2026).
  * El importe se muestra en positivo: el rótulo ya dice quién le paga a quién.
+ * Pagada: "Neto pagado" — con "por pagar" una liquidación ya saldada parecía
+ * una deuda, y la tentación era anular el pago para dejarla en cero.
  */
-export function settlementNetLabel(net: number): string {
-  return net < 0 ? "A cargo del propietario" : "Neto por pagar";
+export function settlementNetLabel(net: number, status?: string | null): string {
+  if (net < 0) return "A cargo del propietario";
+  return status === "pagada" ? "Neto pagado" : "Neto por pagar";
+}
+
+/** "Pagado el 27/10/2026 · saldo" — lo que acompaña al neto de una pagada. */
+export function settlementPaidCaption(paidAt: string | null, formatDay: (iso: string) => string): string {
+  return paidAt ? `Pagado el ${formatDay(paidAt)} · saldo` : "Pagado · saldo";
 }
