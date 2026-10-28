@@ -91,6 +91,7 @@ import {
 import {
   SETTLEMENT_LINE_META,
   describeAuditChange,
+  settlementNetLabel,
 } from "@/lib/settlements/labels";
 import {
   updateSettlementBookingRow,
@@ -2113,7 +2114,7 @@ export function EditableSettlementStatement({
           )}
         >
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Neto por pagar
+            {settlementNetLabel(model.totals.net)}
           </div>
           <div
             className={cn(
@@ -2123,7 +2124,7 @@ export function EditableSettlementStatement({
                 : "text-rose-600 dark:text-rose-400",
             )}
           >
-            {formatMoney(model.totals.net, c)}
+            {formatMoney(Math.abs(model.totals.net), c)}
           </div>
         </div>
       </div>

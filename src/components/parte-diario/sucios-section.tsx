@@ -21,10 +21,16 @@ import {
 } from "@/lib/actions/parte-diario";
 import { createCleaningTask } from "@/lib/actions/cleaning";
 import { zonedTimeToUtc } from "@/lib/dates";
+import { formatDayRelative } from "@/lib/format";
 import type {
   ParteDiarioCleaningRow,
   ParteDiarioCleanerLoad,
 } from "@/lib/types/database";
+
+/** "ayer" / "lun 26/10": el día que tocaba, sin la hora. */
+function overdueDayLabel(scheduledFor: string): string {
+  return formatDayRelative(scheduledFor).split(" · ")[0].toLowerCase();
+}
 
 interface SuciosSectionProps {
   date: string;
@@ -124,6 +130,8 @@ export function SuciosSection({ date, rows, cleaners, canEdit }: SuciosSectionPr
           cost: null,
           cost_currency: "ARS",
           notes: null,
+          // Atada a la salida: así el check-out no crea otra limpieza duplicada.
+          booking_out_id: row.booking_out_id,
         });
         toast.success("Tarea creada");
       } catch (err) {
@@ -179,6 +187,7 @@ export function SuciosSection({ date, rows, cleaners, canEdit }: SuciosSectionPr
             className={cn(
               "flex items-center gap-3 px-5 py-3 hover:bg-muted/30 transition-colors",
               row.task_id === null && "bg-amber-500/5",
+              row.overdue && "bg-red-500/5",
             )}
           >
             <div className="min-w-0 flex-1">
@@ -187,6 +196,15 @@ export function SuciosSection({ date, rows, cleaners, canEdit }: SuciosSectionPr
                   {row.unit_code}
                 </span>
                 <span className="text-sm text-muted-foreground truncate">{row.unit_name}</span>
+                {row.overdue ? (
+                  <span
+                    suppressHydrationWarning
+                    className="inline-flex shrink-0 items-center gap-1 text-[10px] font-bold uppercase text-red-600 dark:text-red-400"
+                  >
+                    <AlertCircle className="size-3" />
+                    atrasada · {overdueDayLabel(row.scheduled_for)}
+                  </span>
+                ) : null}
                 {row.task_id === null ? (
                   <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase text-amber-600 dark:text-amber-400">
                     <AlertCircle className="size-3" />

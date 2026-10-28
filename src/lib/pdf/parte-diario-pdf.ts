@@ -263,7 +263,9 @@ function renderSuciosSection(
     rows.map((r) => [
       `${r.unit_code}  ${r.unit_name}`,
       r.assigned_to_name ?? (r.task_id ? "— Sin asignar" : "Crear tarea"),
-      r.status ? CLEANING_STATUS_LABEL[r.status] : "Pendiente de creación",
+      r.status
+        ? `${CLEANING_STATUS_LABEL[r.status]}${r.overdue ? " (atrasada)" : ""}`
+        : "Pendiente de creación",
       r.check_out_time ? r.check_out_time.slice(0, 5) : "—",
     ]),
     color,

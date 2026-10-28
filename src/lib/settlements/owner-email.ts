@@ -1,4 +1,5 @@
 import type { StatementModel } from "./statement-model";
+import { settlementNetLabel } from "./labels";
 
 /**
  * El mail que recibe el propietario con su liquidación: asunto, HTML y texto
@@ -29,6 +30,10 @@ export function buildOwnerSettlementEmail({
   };
 }): { subject: string; html: string; text: string } {
   const brand = branding.primary_color || "#0F766E";
+  // Neto negativo: el propietario cobró directo y debe la diferencia. El
+  // rótulo lo dice; el importe va sin signo.
+  const netLabel = settlementNetLabel(model.totals.net);
+  const netShown = model.totals.net < 0 ? net.replace(/[-−]/, "") : net;
   const firstName = ownerName.trim().split(/\s+/)[0] || ownerName;
   const badge = model.periodBadgeLabel;
   // Un solo período para todo el documento ya está en el título y el asunto:
@@ -66,8 +71,8 @@ export function buildOwnerSettlementEmail({
     ${unitTable}
     ${model.periodNote ? `<p style="margin:0 0 14px;font-size:13px;color:#64748b">${esc(model.periodNote)}</p>` : ""}
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:18px;text-align:center;margin:18px 0">
-      <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.1em">Neto por pagar</div>
-      <div style="font-size:28px;font-weight:800;color:${brand};margin-top:6px">${esc(net)}</div>
+      <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.1em">${esc(netLabel)}</div>
+      <div style="font-size:28px;font-weight:800;color:${brand};margin-top:6px">${esc(netShown)}</div>
     </div>
     <div style="text-align:center;margin:24px 0">
       <a href="${esc(link)}" style="background:${brand};color:#fff;text-decoration:none;padding:13px 24px;border-radius:9px;font-weight:600;display:inline-block">Ver liquidación online</a>
@@ -88,7 +93,7 @@ export function buildOwnerSettlementEmail({
       : []),
     ...(model.periodNote ? [``, model.periodNote] : []),
     ``,
-    `Neto por pagar: ${net}`,
+    `${netLabel}: ${netShown}`,
     `Ver online: ${link}`,
     ``,
     `Adjuntamos el detalle en Excel y PDF.`,

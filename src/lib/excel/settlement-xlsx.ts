@@ -5,6 +5,7 @@ import {
   type StatementModel,
 } from "@/lib/settlements/statement-model";
 import { formatDate } from "@/lib/format";
+import { settlementNetLabel } from "@/lib/settlements/labels";
 
 export type XlsxBranding = {
   name: string;
@@ -317,7 +318,7 @@ export function buildSettlementWorkbook(
   }
   totalLine("− Comisión", -model.totals.commission);
   totalLine("− Gastos", -model.totals.deductions);
-  totalLine("NETO POR PAGAR", model.totals.net, true);
+  totalLine(settlementNetLabel(model.totals.net).toUpperCase(), Math.abs(model.totals.net), true);
   r++;
 
   // ── Datos bancarios ──
@@ -326,7 +327,8 @@ export function buildSettlementWorkbook(
     model.owner.cbu ? `CBU ${model.owner.cbu}` : null,
     model.owner.alias_cbu ? `alias ${model.owner.alias_cbu}` : null,
   ].filter(Boolean);
-  if (bankParts.length > 0) {
+  // Saldo a cargo del propietario: no hay nada que transferirle.
+  if (bankParts.length > 0 && model.totals.net >= 0) {
     mergeRow(`Transferir a:  ${bankParts.join("  ·  ")}`, {
       font: { bold: true, size: 10, color: { argb: INK } },
       fill: { type: "pattern", pattern: "solid", fgColor: { argb: ZEBRA } },

@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/table";
 import { formatMoney, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { SETTLEMENT_LINE_META } from "@/lib/settlements/labels";
+import { SETTLEMENT_LINE_META, settlementNetLabel } from "@/lib/settlements/labels";
 import type { StatementModel, StatementBookingRow } from "@/lib/settlements/statement-model";
 
 const PERIOD_CHIP =
@@ -161,7 +161,7 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
           )}
         >
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Neto por pagar
+            {settlementNetLabel(model.totals.net)}
           </div>
           <div
             className={cn(
@@ -171,7 +171,7 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
                 : "text-rose-600 dark:text-rose-400",
             )}
           >
-            {formatMoney(model.totals.net, c)}
+            {formatMoney(Math.abs(model.totals.net), c)}
           </div>
         </div>
       </div>

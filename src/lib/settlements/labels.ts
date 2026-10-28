@@ -365,3 +365,14 @@ export type ManualSettlementStatus = (typeof MANUAL_SETTLEMENT_STATUSES)[number]
  * asiento de ajuste y el movimiento queda protegido (cash_movement_settlement_lock).
  */
 export const LOCKED_STATUSES: SettlementStatus[] = ["revisada", "enviada", "pagada"];
+
+/**
+ * Rótulo del neto de una liquidación. Negativo = el propietario cobró directo
+ * de los huéspedes (se descuenta como "Ajuste −" en Otros cargos) y le debe a
+ * la administración la diferencia. Con "Neto por pagar −$ 300.750" y su CBU
+ * bajo "Pagar a", el documento le decía lo contrario (Habitana, 28/10/2026).
+ * El importe se muestra en positivo: el rótulo ya dice quién le paga a quién.
+ */
+export function settlementNetLabel(net: number): string {
+  return net < 0 ? "A cargo del propietario" : "Neto por pagar";
+}

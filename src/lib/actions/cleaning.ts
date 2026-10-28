@@ -101,6 +101,7 @@ const cleaningSchema = z.object({
   cost: z.coerce.number().min(0).optional().nullable(),
   cost_currency: z.string().default("ARS"),
   notes: z.string().optional().nullable(),
+  booking_out_id: z.string().uuid().optional().nullable(),
 });
 
 export type CleaningInput = z.infer<typeof cleaningSchema>;
@@ -345,6 +346,22 @@ export async function createCleaningTask(input: CleaningInput) {
       ? validated.checklist
       : await checklistForOrg(organization.id);
   const admin = createAdminClient();
+  // El Parte diario crea la limpieza de un check-out que no tenía tarea: va
+  // atada a esa reserva. El trigger de check-out sólo reconoce como "la
+  // limpieza de esta salida" a las tareas con su booking_out_id; sin el
+  // vínculo, al marcar la salida creaba OTRA sin asignar que quien limpia no
+  // ve (Habitana COF II/DZN, 27/10/2026). Sólo si la reserva es de esta org y
+  // de esta unidad.
+  if (validated.booking_out_id) {
+    const { data: outBooking } = await admin
+      .from("bookings")
+      .select("id")
+      .eq("id", validated.booking_out_id)
+      .eq("organization_id", organization.id)
+      .eq("unit_id", validated.unit_id)
+      .maybeSingle();
+    if (!outBooking) validated.booking_out_id = null;
+  }
   const { data, error } = await admin
     .from("cleaning_tasks")
     .insert({ ...validated, checklist, organization_id: organization.id })

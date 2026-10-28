@@ -17,6 +17,7 @@ import {
   type StatementModel,
 } from "@/lib/settlements/statement-model";
 import { pdfSafe, pdfNeg } from "@/lib/pdf/text";
+import { settlementNetLabel } from "@/lib/settlements/labels";
 
 /** Marcador de celda vacía (en-dash, válido en WinAnsi). */
 const EMPTY = "–";
@@ -409,11 +410,15 @@ export async function buildSettlementDoc(
   doc.setDrawColor(brand[0], brand[1], brand[2]);
   doc.setLineWidth(0.4);
   doc.line(boxX + 4, y + 24 + extra, boxX + 82, y + 24 + extra);
+  // Neto negativo = el propietario cobró directo y debe la diferencia: el
+  // rótulo lo dice y el importe va en positivo (ver settlementNetLabel).
+  const ownerOwes = model.totals.net < 0;
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
+  doc.setFontSize(ownerOwes ? 9 : 11);
   doc.setTextColor(brand[0], brand[1], brand[2]);
-  doc.text("NETO POR PAGAR", boxX + 4, y + 33 + extra);
-  doc.text(money(model.totals.net, model.currency), boxX + 82, y + 33 + extra, {
+  doc.text(settlementNetLabel(model.totals.net).toUpperCase(), boxX + 4, y + 33 + extra);
+  doc.setFontSize(11);
+  doc.text(money(Math.abs(model.totals.net), model.currency), boxX + 82, y + 33 + extra, {
     align: "right",
   });
   doc.setTextColor(INK[0], INK[1], INK[2]);
@@ -436,7 +441,9 @@ export async function buildSettlementDoc(
     model.owner.cbu ? `CBU: ${model.owner.cbu}` : null,
     model.owner.alias_cbu ? `Alias: ${model.owner.alias_cbu}` : null,
   ].filter(Boolean) as string[];
-  if (bankParts.length > 0) {
+  // Si el saldo es a cargo del propietario, sus datos bancarios no van: nadie
+  // le transfiere nada.
+  if (bankParts.length > 0 && !ownerOwes) {
     doc.setFont("helvetica", "bold");
     doc.setFontSize(8);
     doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);

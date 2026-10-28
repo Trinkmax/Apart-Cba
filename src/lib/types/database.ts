@@ -1825,6 +1825,8 @@ export interface ParteDiarioCleaningRow {
   guest_name: string | null;
   /** Hora aproximada de check-out para priorizar la cola de limpieza. */
   check_out_time: string | null;
+  /** Quedó de un día anterior sin hacer y la unidad sigue sucia: se arrastra al parte. Ausente en snapshots viejos. */
+  overdue?: boolean;
 }
 
 export interface ParteDiarioMaintenanceRow {

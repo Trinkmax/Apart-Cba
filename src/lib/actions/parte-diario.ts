@@ -129,6 +129,42 @@ export async function updateParteDiarioSettings(
 
 const ASSIGNABLE_CLEANING_ROLES: UserRole[] = ["limpieza", "recepcion", "mantenimiento"];
 
+// ─── Limpiezas que quedaron de días anteriores ──────────────────────────────
+// Una limpieza que no se hizo el día que tocaba sigue haciendo falta. Sucios y
+// el Parte de cada persona miraban sólo el rango del día, así que una tarea
+// atrasada desaparecía de los dos al día siguiente: nadie la veía para
+// asignarla y quien limpia no la tenía en su lista (Habitana, 28/10/2026).
+// Se arrastran las de unidades que siguen sucias (units.status = 'limpieza',
+// lo mismo que pinta el calendario) y de la última semana: hay orgs con
+// decenas de tareas viejas que nadie cerró sobre unidades ya ocupadas, y no
+// tienen que inundar el Parte.
+const CARRY_OVER_DAYS = 7;
+
+/** `select` tiene que traer `unit:units!inner(...)`: el filtro por estado de la unidad va sobre ese embed. */
+function carriedOverCleanings(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  dayStartIso: string,
+  select: string,
+) {
+  const fromIso = new Date(
+    new Date(dayStartIso).getTime() - CARRY_OVER_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  return admin
+    .from("cleaning_tasks")
+    .select(select)
+    .eq("organization_id", orgId)
+    .gte("scheduled_for", fromIso)
+    .lt("scheduled_for", dayStartIso)
+    .is("archived_at", null)
+    .eq("unit.status", "limpieza");
+}
+
+/** Abiertas, o terminadas en el día del parte (para que no desaparezcan del Parte apenas se tildan). */
+function carriedOverStatusFilter(dayStartIso: string): string {
+  return `status.in.(pendiente,en_progreso),and(status.eq.completada,completed_at.gte.${dayStartIso})`;
+}
+
 async function loadCleanerLoads(
   orgId: string,
   reportDate: string,
@@ -243,7 +279,7 @@ async function buildSnapshot(
   };
 
   // BATCH 1 — todas independientes
-  const [outRes, inRes, cleaningRowsRes, ticketsRes, requestsRes, membersRes] =
+  const [outRes, inRes, cleaningRowsRes, ticketsRes, requestsRes, membersRes, carriedRes] =
     await Promise.all([
       admin
         .from("bookings")
@@ -306,9 +342,18 @@ async function buildSnapshot(
         .eq("organization_id", orgId)
         .eq("active", true)
         .in("role", ASSIGNABLE_CLEANING_ROLES),
+      carriedOverCleanings(
+        admin,
+        orgId,
+        dayRange.startIso,
+        `id, unit_id, scheduled_for, status, assigned_to, booking_out_id,
+         unit:units!inner(id, code, name)`,
+      ).or(carriedOverStatusFilter(dayRange.startIso)),
     ]);
 
   const cleaningJoinRows = (cleaningRowsRes.data ?? []) as unknown as CleaningJoin[];
+  const carriedRows = (carriedRes.data ?? []) as unknown as CleaningJoin[];
+  const allCleaningRows = [...cleaningJoinRows, ...carriedRows];
   const ticketRows = (ticketsRes.data ?? []) as unknown as TicketJoin[];
   const conciergeRows = (requestsRes.data ?? []) as unknown as ConciergeJoin[];
   const memberRows = (membersRes.data ?? []) as { user_id: string; role: UserRole }[];
@@ -352,12 +397,12 @@ async function buildSnapshot(
 
   const allUserIds = new Set<string>();
   for (const m of memberRows) allUserIds.add(m.user_id);
-  for (const c of cleaningJoinRows) if (c.assigned_to) allUserIds.add(c.assigned_to);
+  for (const c of allCleaningRows) if (c.assigned_to) allUserIds.add(c.assigned_to);
   for (const t of ticketRows) if (t.assigned_to) allUserIds.add(t.assigned_to);
   for (const r of conciergeRows) if (r.assigned_to) allUserIds.add(r.assigned_to);
 
   const missingBookingIds = new Set<string>();
-  for (const c of cleaningJoinRows) {
+  for (const c of allCleaningRows) {
     if (c.booking_out_id && !bookingMetaById.has(c.booking_out_id)) {
       missingBookingIds.add(c.booking_out_id);
     }
@@ -399,7 +444,7 @@ async function buildSnapshot(
     });
   }
 
-  const realCleanings: ParteDiarioCleaningRow[] = cleaningJoinRows.map((c) => {
+  const toCleaningRow = (c: CleaningJoin, overdue: boolean): ParteDiarioCleaningRow => {
     const meta = c.booking_out_id ? bookingMetaById.get(c.booking_out_id) : undefined;
     return {
       task_id: c.id,
@@ -413,9 +458,14 @@ async function buildSnapshot(
       booking_out_id: c.booking_out_id,
       guest_name: meta?.guest_name ?? null,
       check_out_time: meta?.check_out_time ?? null,
+      overdue,
     };
-  });
+  };
+  const realCleanings = cleaningJoinRows.map((c) => toCleaningRow(c, false));
+  const carriedCleanings = carriedRows.map((c) => toCleaningRow(c, true));
 
+  // Sólo las del día tapan al "fantasma" de un check-out: una atrasada es otra
+  // salida, y el check-out de hoy necesita su propia limpieza.
   const realUnitIds = new Set(realCleanings.map((c) => c.unit_id));
   const ghosts: ParteDiarioCleaningRow[] = checkOuts
     .filter((b) => !realUnitIds.has(b.unit_id))
@@ -433,8 +483,10 @@ async function buildSnapshot(
       check_out_time: null,
     }));
 
-  const sucios = [...realCleanings, ...ghosts].sort((a, b) =>
-    a.unit_code.localeCompare(b.unit_code),
+  // Atrasadas primero: son las que más urgen.
+  const sucios = [...carriedCleanings, ...realCleanings, ...ghosts].sort(
+    (a, b) =>
+      Number(!!b.overdue) - Number(!!a.overdue) || a.unit_code.localeCompare(b.unit_code),
   );
 
   const arreglos: ParteDiarioMaintenanceRow[] = ticketRows.map((t) => ({
@@ -467,7 +519,7 @@ async function buildSnapshot(
 
   // Cleaner loads computados inline a partir de cleaningJoinRows + members. Evita la query extra de loadCleanerLoads.
   const cleanerLoadCounts = new Map<string, number>();
-  for (const c of cleaningJoinRows) {
+  for (const c of allCleaningRows) {
     if (!c.assigned_to) continue;
     if (c.status !== "pendiente" && c.status !== "en_progreso") continue;
     cleanerLoadCounts.set(c.assigned_to, (cleanerLoadCounts.get(c.assigned_to) ?? 0) + 1);
@@ -538,8 +590,15 @@ export async function getParteDiarioForUser(
   const reportDate = date ?? todayYmdInTz(settings.timezone);
 
   const admin = createAdminClient();
+  const dayStartIso = dayRangeInTz(reportDate, settings.timezone).startIso;
 
-  const [{ data: cleaningRows }, { data: tickets }, { data: requests }, { data: profile }] =
+  const [
+    { data: cleaningRows },
+    { data: tickets },
+    { data: requests },
+    { data: profile },
+    { data: carriedCleaningRows },
+  ] =
     await Promise.all([
       admin
         .from("cleaning_tasks")
@@ -575,6 +634,16 @@ export async function getParteDiarioForUser(
         .in("status", ["pendiente", "en_progreso"])
         .order("priority", { ascending: false }),
       admin.from("user_profiles").select("full_name").eq("user_id", targetUser).maybeSingle(),
+      carriedOverCleanings(
+        admin,
+        organization.id,
+        dayStartIso,
+        `id, unit_id, scheduled_for, status, assigned_to, booking_out_id,
+         unit:units!inner(id, code, name)`,
+      )
+        .eq("assigned_to", targetUser)
+        .or(carriedOverStatusFilter(dayStartIso))
+        .order("scheduled_for"),
     ]);
 
   type CleaningJoin = {
@@ -609,9 +678,11 @@ export async function getParteDiarioForUser(
     unit: { id: string; code: string; name: string } | null;
   };
 
+  const dayCleaningRows = (cleaningRows ?? []) as unknown as CleaningJoin[];
+  const carriedRows = (carriedCleaningRows ?? []) as unknown as CleaningJoin[];
   const outBookingIds = Array.from(
     new Set(
-      ((cleaningRows ?? []) as unknown as CleaningJoin[])
+      [...carriedRows, ...dayCleaningRows]
         .map((r) => r.booking_out_id)
         .filter((v): v is string => !!v),
     ),
@@ -635,24 +706,28 @@ export async function getParteDiarioForUser(
     }
   }
 
-  const cleanings: ParteDiarioCleaningRow[] = ((cleaningRows ?? []) as unknown as CleaningJoin[]).map(
-    (c) => {
-      const meta = c.booking_out_id ? bookingMetaById.get(c.booking_out_id) : undefined;
-      return {
-        task_id: c.id,
-        unit_id: c.unit_id,
-        unit_code: c.unit?.code ?? "—",
-        unit_name: c.unit?.name ?? "—",
-        scheduled_for: c.scheduled_for,
-        status: c.status,
-        assigned_to: c.assigned_to,
-        assigned_to_name: null,
-        booking_out_id: c.booking_out_id,
-        guest_name: meta?.guest_name ?? null,
-        check_out_time: meta?.check_out_time ?? null,
-      };
-    },
-  );
+  const toCleaningRow = (c: CleaningJoin, overdue: boolean): ParteDiarioCleaningRow => {
+    const meta = c.booking_out_id ? bookingMetaById.get(c.booking_out_id) : undefined;
+    return {
+      task_id: c.id,
+      unit_id: c.unit_id,
+      unit_code: c.unit?.code ?? "—",
+      unit_name: c.unit?.name ?? "—",
+      scheduled_for: c.scheduled_for,
+      status: c.status,
+      assigned_to: c.assigned_to,
+      assigned_to_name: null,
+      booking_out_id: c.booking_out_id,
+      guest_name: meta?.guest_name ?? null,
+      check_out_time: meta?.check_out_time ?? null,
+      overdue,
+    };
+  };
+  // Las atrasadas arriba: es lo primero que hay que hacer en el turno.
+  const cleanings: ParteDiarioCleaningRow[] = [
+    ...carriedRows.map((c) => toCleaningRow(c, true)),
+    ...dayCleaningRows.map((c) => toCleaningRow(c, false)),
+  ];
 
   const maintenance: ParteDiarioMaintenanceRow[] = ((tickets ?? []) as unknown as TicketJoin[]).map(
     (t) => ({
@@ -814,15 +889,24 @@ async function autoAssignCleaningsInternal(
   const admin = createAdminClient();
 
   const assignRange = dayRangeInTz(date, timezone);
-  const { data: tasks } = await admin
-    .from("cleaning_tasks")
-    .select("id")
-    .eq("organization_id", orgId)
-    .gte("scheduled_for", assignRange.startIso)
-    .lt("scheduled_for", assignRange.endIso)
-    .is("assigned_to", null)
-    .in("status", ["pendiente", "en_progreso"]);
-  const unassignedIds = (tasks ?? []).map((t) => (t as { id: string }).id);
+  const [{ data: tasks }, { data: carried }] = await Promise.all([
+    admin
+      .from("cleaning_tasks")
+      .select("id")
+      .eq("organization_id", orgId)
+      .gte("scheduled_for", assignRange.startIso)
+      .lt("scheduled_for", assignRange.endIso)
+      .is("assigned_to", null)
+      .in("status", ["pendiente", "en_progreso"]),
+    // Las atrasadas que muestra Sucios también se reparten: si no, el botón
+    // "Auto-asignar" seguía visible y respondía "Todo asignado".
+    carriedOverCleanings(admin, orgId, assignRange.startIso, "id, unit:units!inner(status)")
+      .is("assigned_to", null)
+      .in("status", ["pendiente", "en_progreso"]),
+  ]);
+  const unassignedIds = [...(carried ?? []), ...(tasks ?? [])].map(
+    (t) => (t as unknown as { id: string }).id,
+  );
   if (unassignedIds.length === 0) return { assigned: 0 };
 
   const loads = await loadCleanerLoads(orgId, date, timezone);

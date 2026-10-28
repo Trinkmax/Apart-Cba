@@ -6,6 +6,7 @@ import { Check, Loader2, ListTodo, Sparkles, Wrench } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CLEANING_STATUS_META, TICKET_PRIORITY_META } from "@/lib/constants";
 import { changeCleaningStatus } from "@/lib/actions/cleaning";
+import { formatDayRelative } from "@/lib/format";
 import { MobileProgressRing } from "./mobile-progress-ring";
 import type {
   MobileParteDiarioPayload,
@@ -255,6 +256,14 @@ function CleaningCard({
             <span className={cn("text-sm truncate", done && "line-through text-muted-foreground")}>
               {row.unit_name}
             </span>
+            {row.overdue && !done ? (
+              <span
+                suppressHydrationWarning
+                className="ml-auto shrink-0 rounded-full bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-400"
+              >
+                Atrasada · {formatDayRelative(row.scheduled_for).split(" · ")[0].toLowerCase()}
+              </span>
+            ) : null}
           </div>
           <p className="text-xs text-muted-foreground mt-0.5 truncate">
             {row.guest_name && row.check_out_time
