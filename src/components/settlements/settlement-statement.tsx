@@ -12,6 +12,7 @@ import { formatMoney, formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { SETTLEMENT_LINE_META, settlementNetLabel } from "@/lib/settlements/labels";
 import type { StatementModel, StatementBookingRow } from "@/lib/settlements/statement-model";
+import { OwnerEarningsStrip } from "./owner-earnings-strip";
 
 const PERIOD_CHIP =
   "inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary";
@@ -175,6 +176,7 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
           </div>
         </div>
       </div>
+      <OwnerEarningsStrip totals={model.totals} currency={c} />
 
       {/* Planilla por unidad */}
       <div className="p-3 @[34rem]:p-6 space-y-5 @[34rem]:space-y-6">

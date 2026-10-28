@@ -123,6 +123,7 @@ const LINE_TYPES = [
   "adjustment",
   "monthly_rent_fraction",
   "expenses_fraction",
+  "owner_collected",
 ] as const;
 
 /**
@@ -1989,6 +1990,8 @@ export async function addSettlementLine(input: z.input<typeof lineInputSchema>) 
     throw new Error("No tenés permisos para editar liquidaciones");
   }
   const v = lineInputSchema.parse(input);
+  // Lo que cobró el propietario siempre resta: es plata que ya tiene él.
+  if (v.line_type === "owner_collected") v.sign = "-";
   const admin = createAdminClient();
   const before = await loadEditableSettlement(
     admin,
@@ -2081,6 +2084,9 @@ export async function updateSettlementLine(
     organization.id,
     line.settlement_id,
   );
+  // Lo que cobró el propietario siempre resta (también al pasar un ajuste a
+  // ese tipo).
+  if ((v.line_type ?? line.line_type) === "owner_collected") v.sign = "-";
 
   const patch: Record<string, unknown> = {
     is_manual: true,

@@ -235,15 +235,23 @@ export interface StatementModel {
   /**
    * Totales SIEMPRE en moneda base (ARS). `gross`, `commission` y `net` son
    * los persistidos; `deductions` acá EXCLUYE la comisión del canal (que va en
-   * `channelCommission`), mientras que `owner_settlements.deductions_amount`
-   * la incluye porque no tiene columna propia. deductions + channelCommission
-   * = deductions_amount.
+   * `channelCommission`) y lo cobrado por el propietario (`ownerCollected`),
+   * mientras que `owner_settlements.deductions_amount` incluye las dos cosas
+   * porque no tienen columna propia. deductions + channelCommission +
+   * ownerCollected = deductions_amount.
    */
   totals: {
     gross: number;
     commission: number;
     channelCommission: number;
     deductions: number;
+    /** Líneas `owner_collected`: plata que el propietario ya tiene en la mano (077). */
+    ownerCollected: number;
+    /**
+     * Lo que ganó el propietario en el período: bruto − canal − comisión −
+     * gastos = net + ownerCollected. Sólo difiere del neto si cobró él.
+     */
+    ownerEarnings: number;
     net: number;
   };
   /**
@@ -543,6 +551,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
     let commission = 0;
     let channelCommission = 0;
     let deductions = 0;
+    let ownerCollected = 0;
     let net = 0;
     const pushLine = (
       amount: number,
@@ -558,6 +567,7 @@ export function buildStatementModel(s: StatementInput): StatementModel {
         net -= c;
         if (lineType === "commission") commission += c;
         else if (lineType === "channel_commission") channelCommission += c;
+        else if (lineType === "owner_collected") ownerCollected += c;
         else deductions += c;
       }
     };
@@ -574,6 +584,8 @@ export function buildStatementModel(s: StatementInput): StatementModel {
       commission: round2(commission),
       channelCommission: round2(channelCommission),
       deductions: round2(deductions),
+      ownerCollected: round2(ownerCollected),
+      ownerEarnings: round2(net + ownerCollected),
       net: round2(net),
     };
   })();

@@ -318,6 +318,11 @@ export function buildSettlementWorkbook(
   }
   totalLine("− Comisión", -model.totals.commission);
   totalLine("− Gastos", -model.totals.deductions);
+  if (model.totals.ownerCollected > 0) {
+    // Cobró él (077): lo que ganó en el mes y lo que ya tiene en la mano.
+    totalLine("Ganancia del propietario", model.totals.ownerEarnings);
+    totalLine("− Cobrado por el propietario", -model.totals.ownerCollected);
+  }
   totalLine(settlementNetLabel(model.totals.net).toUpperCase(), Math.abs(model.totals.net), true);
   r++;
 

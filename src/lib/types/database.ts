@@ -883,7 +883,13 @@ export interface SettlementLine {
     | "cleaning_charge"
     | "adjustment"
     | "monthly_rent_fraction"
-    | "expenses_fraction";
+    | "expenses_fraction"
+    /**
+     * Plata que el propietario cobró directo al huésped (o le pagó la OTA).
+     * Siempre resta del neto, pero no es un gasto: el resumen la muestra
+     * aparte (Ganancia del propietario − Ya cobrado = Neto). Migración 077.
+     */
+    | "owner_collected";
   ref_type: string | null;
   ref_id: string | null;
   unit_id: string | null;

@@ -117,6 +117,7 @@ import {
 } from "./period-cycle-editor";
 import { UndoRedoButtons, type UndoState } from "./undo-redo-buttons";
 import { SettlementStatusMenu } from "./settlement-status-menu";
+import { OwnerEarningsStrip } from "./owner-earnings-strip";
 
 type LineType = SettlementLine["line_type"];
 type Unit = { id: string; code: string; name: string };
@@ -1345,6 +1346,7 @@ function SortableChargeRow({
 
 const CHARGE_TYPES: { value: LineType; label: string }[] = [
   { value: "adjustment", label: "Ajuste" },
+  { value: "owner_collected", label: "Cobrado por el propietario" },
   { value: "cleaning_charge", label: "Limpieza" },
   { value: "maintenance_charge", label: "Mantenimiento" },
   { value: "expenses_fraction", label: "Expensas / servicios" },
@@ -1455,7 +1457,12 @@ function ChargeDialog({
               <Label>Tipo</Label>
               <Select
                 value={lineType}
-                onValueChange={(v) => setLineType(v as LineType)}
+                onValueChange={(v) => {
+                  setLineType(v as LineType);
+                  // Lo que cobró el propietario siempre resta (el server
+                  // también lo fuerza).
+                  if (v === "owner_collected") setSign("-");
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -1474,6 +1481,7 @@ function ChargeDialog({
               <Select
                 value={sign}
                 onValueChange={(v) => setSign(v as "+" | "-")}
+                disabled={lineType === "owner_collected"}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -1490,7 +1498,11 @@ function ChargeDialog({
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Ej: Luz, reintegro, bonificación…"
+              placeholder={
+                lineType === "owner_collected"
+                  ? "Ej: Darwin Núñez, 24 al 26/10 (directo)"
+                  : "Ej: Luz, reintegro, bonificación…"
+              }
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -2128,6 +2140,7 @@ export function EditableSettlementStatement({
           </div>
         </div>
       </div>
+      <OwnerEarningsStrip totals={model.totals} currency={c} />
 
       {/* Banner contexto Caja */}
       {editable && (

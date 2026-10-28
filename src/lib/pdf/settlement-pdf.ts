@@ -384,7 +384,10 @@ export async function buildSettlementDoc(
   // ── Totales ──
   // Una línea más ("- Comisión del canal") cuando hay canal: el box crece 6mm
   // y todo lo de abajo se corre lo mismo. Sin canal, posiciones de siempre.
-  const extra = hasChannel ? 6 : 0;
+  // Si el propietario cobró él (077), dos renglones más antes del neto:
+  // "Ganancia del propietario" y "- Cobrado por el propietario" (12mm).
+  const collected = model.totals.ownerCollected > 0 ? 12 : 0;
+  const extra = (hasChannel ? 6 : 0) + collected;
   y = ensureSpace(doc, y, 46 + extra);
   const boxX = PAGE_W - MARGIN_X - 86;
   doc.setFillColor(248, 250, 252);
@@ -405,8 +408,31 @@ export async function buildSettlementDoc(
       y + 13,
     );
   }
-  line("- Comisión", pdfNeg(money(model.totals.commission, model.currency)), y + 13 + extra);
-  line("- Gastos", pdfNeg(money(model.totals.deductions, model.currency)), y + 19 + extra);
+  const top = extra - collected; // corrimiento del canal, como siempre
+  line("- Comisión", pdfNeg(money(model.totals.commission, model.currency)), y + 13 + top);
+  line("- Gastos", pdfNeg(money(model.totals.deductions, model.currency)), y + 19 + top);
+  if (collected > 0) {
+    // Lo que ganó el propietario en el mes, y lo que ya tiene en la mano: el
+    // neto sólo es lo que falta transferir (Habitana, 28/10/2026).
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.2);
+    doc.line(boxX + 4, y + 21.5 + top, boxX + 82, y + 21.5 + top);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(INK[0], INK[1], INK[2]);
+    doc.text("Ganancia del propietario", boxX + 4, y + 26 + top);
+    doc.text(
+      pdfSafe(money(model.totals.ownerEarnings, model.currency)),
+      boxX + 82,
+      y + 26 + top,
+      { align: "right" },
+    );
+    line(
+      "- Cobrado por el propietario",
+      pdfNeg(money(model.totals.ownerCollected, model.currency)),
+      y + 31 + top,
+    );
+  }
   doc.setDrawColor(brand[0], brand[1], brand[2]);
   doc.setLineWidth(0.4);
   doc.line(boxX + 4, y + 24 + extra, boxX + 82, y + 24 + extra);

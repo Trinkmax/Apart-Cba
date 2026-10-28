@@ -103,6 +103,9 @@ describe("buildStatementModel · comisión del canal", () => {
       commission: 17_000,
       channelCommission: 15_000,
       deductions: 10_000,
+      // Sin "Cobrado por el propietario" (077) la ganancia es el neto.
+      ownerCollected: 0,
+      ownerEarnings: 58_000,
       net: 58_000,
     });
     expect(m.hasChannelCommission).toBe(true);

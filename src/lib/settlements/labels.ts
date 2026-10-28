@@ -320,6 +320,7 @@ export const SETTLEMENT_LINE_META: Record<
   maintenance_charge:    { label: "Mantenimiento", color: "#f97316" },
   expenses_fraction:     { label: "Expensas",      color: "#a78bfa" },
   adjustment:            { label: "Ajuste",        color: "#64748b" },
+  owner_collected:       { label: "Cobrado por el propietario", color: "#0ea5e9" },
 };
 
 /**
