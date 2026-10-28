@@ -451,14 +451,14 @@ export async function buildSettlementDoc(
   doc.text(money(Math.abs(model.totals.net), model.currency), boxX + 82, y + 33 + extra, {
     align: "right",
   });
-  if (model.status === "pagada" && !ownerOwes) {
+  if (model.status === "pagada") {
     // Ya saldada: que el propietario lea que nadie le debe nada a nadie.
     doc.setFont("helvetica", "normal");
     doc.setFontSize(7);
     doc.setTextColor(MUTED[0], MUTED[1], MUTED[2]);
     doc.text(
       pdfSafe(
-        `${settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy"))} ${money(0, model.currency)}`,
+        `${settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy"), ownerOwes)} ${money(0, model.currency)}`,
       ),
       boxX + 82,
       y + 38 + extra,

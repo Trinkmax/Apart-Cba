@@ -328,8 +328,15 @@ export function buildSettlementWorkbook(
     Math.abs(model.totals.net),
     true,
   );
-  if (model.status === "pagada" && model.totals.net >= 0) {
-    totalLine(settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy")), 0);
+  if (model.status === "pagada") {
+    totalLine(
+      settlementPaidCaption(
+        model.paid_at,
+        (d) => formatDate(d, "dd/MM/yyyy"),
+        model.totals.net < 0,
+      ),
+      0,
+    );
   }
   r++;
 

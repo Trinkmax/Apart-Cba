@@ -374,14 +374,24 @@ export const LOCKED_STATUSES: SettlementStatus[] = ["revisada", "enviada", "paga
  * bajo "Pagar a", el documento le decía lo contrario (Habitana, 28/10/2026).
  * El importe se muestra en positivo: el rótulo ya dice quién le paga a quién.
  * Pagada: "Neto pagado" — con "por pagar" una liquidación ya saldada parecía
- * una deuda, y la tentación era anular el pago para dejarla en cero.
+ * una deuda, y la tentación era anular el pago para dejarla en cero. Si el
+ * neto era negativo, «Registrar cobro» la salda: "Cobrado al propietario".
  */
 export function settlementNetLabel(net: number, status?: string | null): string {
-  if (net < 0) return "A cargo del propietario";
-  return status === "pagada" ? "Neto pagado" : "Neto por pagar";
+  const paid = status === "pagada";
+  if (net < 0) return paid ? "Cobrado al propietario" : "A cargo del propietario";
+  return paid ? "Neto pagado" : "Neto por pagar";
 }
 
-/** "Pagado el 27/10/2026 · saldo" — lo que acompaña al neto de una pagada. */
-export function settlementPaidCaption(paidAt: string | null, formatDay: (iso: string) => string): string {
-  return paidAt ? `Pagado el ${formatDay(paidAt)} · saldo` : "Pagado · saldo";
+/**
+ * "Pagado el 27/10/2026 · saldo" — lo que acompaña al neto de una pagada
+ * ("Cobrado el …" cuando el que debía era el propietario).
+ */
+export function settlementPaidCaption(
+  paidAt: string | null,
+  formatDay: (iso: string) => string,
+  collected = false,
+): string {
+  const verb = collected ? "Cobrado" : "Pagado";
+  return paidAt ? `${verb} el ${formatDay(paidAt)} · saldo` : `${verb} · saldo`;
 }

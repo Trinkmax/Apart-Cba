@@ -15,6 +15,11 @@ describe("settlementNetLabel", () => {
   it("pagada: ya no es una deuda", () => {
     expect(settlementNetLabel(53_875, "pagada")).toBe("Neto pagado");
   });
+
+  it("negativa y saldada con «Registrar cobro»", () => {
+    expect(settlementNetLabel(-300_750, "pagada")).toBe("Cobrado al propietario");
+    expect(settlementNetLabel(-300_750, "revisada")).toBe("A cargo del propietario");
+  });
 });
 
 describe("settlementPaidCaption", () => {
@@ -26,5 +31,11 @@ describe("settlementPaidCaption", () => {
 
   it("sin fecha", () => {
     expect(settlementPaidCaption(null, () => "x")).toBe("Pagado · saldo");
+  });
+
+  it("cobro al propietario", () => {
+    expect(settlementPaidCaption("2026-10-28T15:00:00Z", () => "28/10/2026", true)).toBe(
+      "Cobrado el 28/10/2026 · saldo",
+    );
   });
 });

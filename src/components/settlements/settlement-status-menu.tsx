@@ -147,7 +147,7 @@ export function SettlementStatusMenu({
                 <span className="flex-1 min-w-0">
                   <span className="block font-medium">Anular el pago</span>
                   <span className="block text-[10.5px] text-muted-foreground">
-                    Vuelve a Revisada y borra el egreso de Caja.
+                    Vuelve a Revisada y borra su movimiento de Caja.
                   </span>
                 </span>
               </DropdownMenuItem>

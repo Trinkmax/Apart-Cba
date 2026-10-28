@@ -224,7 +224,8 @@ export function SettlementActions({
             size="sm"
             className="gap-2 bg-emerald-600 hover:bg-emerald-700"
           >
-            <Wallet size={14} /> Registrar pago
+            <Wallet size={14} />{" "}
+            {settlement.net_payable < 0 ? "Registrar cobro" : "Registrar pago"}
           </Button>
         </RecordPaymentDialog>
       )}

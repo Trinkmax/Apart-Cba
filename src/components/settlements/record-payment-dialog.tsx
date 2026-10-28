@@ -66,9 +66,14 @@ export function RecordPaymentDialog({
     [accounts, currency],
   );
   const net = round2(Number(netPayable));
+  // Neto negativo: el propietario cobró él y le paga la diferencia a la
+  // administración. Mismo diálogo, al revés: ingresos en vez de egresos.
+  const collect = net < 0;
+  const target = round2(Math.abs(net));
+  const what = collect ? "el cobro" : "el pago";
 
   const [splits, setSplits] = useState<Split[]>([
-    { ...newSplit(net > 0 ? net.toFixed(2) : ""), account_id: "" },
+    { ...newSplit(target > 0 ? target.toFixed(2) : ""), account_id: "" },
   ]);
   const [paidAt, setPaidAt] = useState(todayYmdInTz());
   const [notes, setNotes] = useState("");
@@ -76,8 +81,8 @@ export function RecordPaymentDialog({
   const total = round2(
     splits.reduce((s, r) => s + (parseAmountInput(r.amount) ?? 0), 0),
   );
-  const remaining = round2(net - total);
-  const sumBalanced = net > 0 && Math.abs(remaining) < 0.01;
+  const remaining = round2(target - total);
+  const sumBalanced = target > 0 && Math.abs(remaining) < 0.01;
   // Toda línea con importe > 0 debe tener cuenta elegida (si no, el verde de
   // "cuadra" sería engañoso). El botón se habilita solo si además cuadra.
   const positiveRows = splits.filter((s) => (parseAmountInput(s.amount) ?? 0) > 0);
@@ -85,7 +90,7 @@ export function RecordPaymentDialog({
   const balanced = sumBalanced && positiveRows.length > 0 && allPositiveHaveAccount;
 
   function reset() {
-    setSplits([{ ...newSplit(net > 0 ? net.toFixed(2) : ""), account_id: "" }]);
+    setSplits([{ ...newSplit(target > 0 ? target.toFixed(2) : ""), account_id: "" }]);
     setPaidAt(todayYmdInTz());
     setNotes("");
   }
@@ -144,21 +149,22 @@ export function RecordPaymentDialog({
           notes: notes.trim() || undefined,
         });
         if (!res.ok) {
-          toast.error("No se pudo registrar el pago", { description: res.error });
+          toast.error(`No se pudo registrar ${what}`, { description: res.error });
           return;
         }
-        toast.success("Pago registrado", {
+        const mov = collect ? "ingreso" : "egreso";
+        toast.success(collect ? "Cobro registrado" : "Pago registrado", {
           description:
             rows.length > 1
-              ? `Se crearon ${rows.length} egresos en Caja y la liquidación quedó pagada.`
-              : "Se creó el egreso en Caja y la liquidación quedó pagada.",
+              ? `Se crearon ${rows.length} ${mov}s en Caja y la liquidación quedó saldada.`
+              : `Se creó el ${mov} en Caja y la liquidación quedó saldada.`,
         });
         setOpen(false);
         router.refresh();
       } catch (e) {
         // Sin respuesta no sabemos si llegó a registrarse. Reintentar no
         // duplica (el servidor rechaza un segundo pago), pero conviene mirar.
-        toastActionFailure(e, "No se pudo registrar el pago", {
+        toastActionFailure(e, `No se pudo registrar ${what}`, {
           retry:
             "Revisá la conexión. Antes de reintentar, recargá la página y fijate si la liquidación quedó pagada.",
         });
@@ -178,28 +184,30 @@ export function RecordPaymentDialog({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Wallet size={18} className="text-primary" /> Registrar pago
+            <Wallet size={18} className="text-primary" />{" "}
+            {collect ? "Registrar cobro" : "Registrar pago"}
           </DialogTitle>
           <DialogDescription>
-            Crea un egreso en Caja por cada cuenta y marca la liquidación como
-            pagada.
+            {collect
+              ? "El propietario cobró él y te paga la diferencia. Crea un ingreso en Caja por cada cuenta y deja la liquidación saldada."
+              : "Crea un egreso en Caja por cada cuenta y marca la liquidación como pagada."}
           </DialogDescription>
         </DialogHeader>
 
         {eligible.length === 0 ? (
           <p className="text-sm text-muted-foreground py-4">
             No hay cuentas de Caja activas en {currency}. Creá una en Caja antes
-            de registrar el pago.
+            de registrar {what}.
           </p>
         ) : (
           <div className="space-y-4 mt-1">
             {/* Neto objetivo */}
             <div className="flex items-center justify-between rounded-lg border bg-muted/40 px-3 py-2">
               <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                Neto a pagar
+                {collect ? "Te paga el propietario" : "Neto a pagar"}
               </span>
               <span className="font-semibold tabular-nums">
-                {formatMoney(net, currency)}
+                {formatMoney(target, currency)}
               </span>
             </div>
 
@@ -331,7 +339,7 @@ export function RecordPaymentDialog({
             ) : (
               <Wallet size={14} />
             )}
-            Registrar pago
+            {collect ? "Registrar cobro" : "Registrar pago"}
           </Button>
         </DialogFooter>
       </DialogContent>

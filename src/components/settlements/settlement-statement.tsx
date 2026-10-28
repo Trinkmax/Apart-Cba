@@ -173,14 +173,20 @@ export function SettlementStatement({ model }: { model: StatementModel }) {
               "text-xl font-bold mt-1 tabular-nums",
               model.totals.net >= 0
                 ? "text-emerald-600 dark:text-emerald-400"
-                : "text-rose-600 dark:text-rose-400",
+                : model.status === "pagada"
+                  ? "text-foreground" // ya cobrada: nadie le debe a nadie
+                  : "text-rose-600 dark:text-rose-400",
             )}
           >
             {formatMoney(Math.abs(model.totals.net), c)}
           </div>
-          {model.status === "pagada" && model.totals.net >= 0 && (
+          {model.status === "pagada" && (
             <div className="text-[11px] text-muted-foreground mt-0.5">
-              {settlementPaidCaption(model.paid_at, (d) => formatDate(d, "dd/MM/yyyy"))}{" "}
+              {settlementPaidCaption(
+                model.paid_at,
+                (d) => formatDate(d, "dd/MM/yyyy"),
+                model.totals.net < 0,
+              )}{" "}
               {formatMoney(0, c)}
             </div>
           )}

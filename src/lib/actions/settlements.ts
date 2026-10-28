@@ -4694,22 +4694,27 @@ export async function registerSettlementPayment(
   }
 
   const net = round2(Number(settlement.net_payable));
-  if (!(net > 0)) {
-    return {
-      ok: false,
-      error: "El neto por pagar no es positivo: no se puede registrar el pago",
-    };
+  if (net === 0) {
+    return { ok: false, error: "El neto es cero: no hay nada que pagar ni cobrar" };
   }
+  // Neto negativo = el propietario cobró él y le debe la diferencia a la
+  // administración: lo que se registra es un COBRO, un ingreso en Caja. Antes
+  // no había cómo saldarla y seguía "A cargo del propietario" en rojo aunque
+  // ya hubiera pagado (Habitana, 28/10/2026). Mismo circuito que el pago:
+  // ref settlement_payment + paid_movement_id, así «Anular el pago» lo deshace.
+  const collect = net < 0;
+  const target = Math.abs(net);
+  const what = collect ? "el cobro" : "el pago";
 
   // Normalizar entrada: splits explícitos, o el par legacy account_id/amount.
   const rawSplits =
     v.splits && v.splits.length > 0
       ? v.splits
       : v.account_id
-        ? [{ account_id: v.account_id, amount: v.amount ?? net }]
+        ? [{ account_id: v.account_id, amount: v.amount ?? target }]
         : [];
   if (rawSplits.length === 0) {
-    return { ok: false, error: "Elegí al menos una cuenta de Caja para el pago" };
+    return { ok: false, error: `Elegí al menos una cuenta de Caja para ${what}` };
   }
 
   // Consolidar importes por cuenta (por si repiten la misma cuenta) y validar.
@@ -4720,10 +4725,12 @@ export async function registerSettlementPayment(
   const splitTotal = round2(
     Array.from(byAccount.values()).reduce((a, b) => a + b, 0),
   );
-  if (Math.abs(splitTotal - net) > 0.01) {
+  if (Math.abs(splitTotal - target) > 0.01) {
     return {
       ok: false,
-      error: `La suma de las cuentas (${formatMoney(splitTotal, settlement.currency)}) debe igualar el neto por pagar (${formatMoney(net, settlement.currency)})`,
+      error: `La suma de las cuentas (${formatMoney(splitTotal, settlement.currency)}) debe igualar ${
+        collect ? "lo que te paga el propietario" : "el neto por pagar"
+      } (${formatMoney(target, settlement.currency)})`,
     };
   }
 
@@ -4761,13 +4768,14 @@ export async function registerSettlementPayment(
     settlement,
   );
   const multi = accountIds.length > 1;
-  const baseDesc = v.notes?.trim() || `Pago liquidación ${periodLabel}`;
+  const baseDesc =
+    v.notes?.trim() || `${collect ? "Cobro" : "Pago"} liquidación ${periodLabel}`;
 
-  // 1) Egresos en Caja (uno por cuenta)
+  // 1) Egresos en Caja (uno por cuenta) — ingresos si es un cobro
   const rows = accountIds.map((id) => ({
     organization_id: organization.id,
     account_id: id,
-    direction: "out" as const,
+    direction: collect ? ("in" as const) : ("out" as const),
     amount: byAccount.get(id)!,
     currency: settlement.currency,
     category: "owner_settlement" as const,
@@ -4849,7 +4857,7 @@ export async function registerSettlementPayment(
 
   const sideEffects = accountIds.map(
     (id) =>
-      `Egreso en Caja ${formatMoney(byAccount.get(id)!, settlement.currency)} (${accountMap.get(id)!.name})`,
+      `${collect ? "Ingreso" : "Egreso"} en Caja ${formatMoney(byAccount.get(id)!, settlement.currency)} (${accountMap.get(id)!.name})`,
   );
 
   await admin.from("settlement_audit").insert({
@@ -4862,6 +4870,7 @@ export async function registerSettlementPayment(
       status: { from: settlement.status, to: "pagada" },
       amount: net,
       cuentas: accountIds.length,
+      ...(collect ? { cobro: true } : {}),
     },
     side_effects: sideEffects,
   });

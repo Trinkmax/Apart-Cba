@@ -362,7 +362,9 @@ function SettlementRow({ s }: { s: SettlementWithOwner }) {
               "font-semibold tabular-nums text-sm sm:text-base",
               s.net_payable >= 0
                 ? "text-emerald-600 dark:text-emerald-400"
-                : "text-rose-600 dark:text-rose-400",
+                : s.status === "pagada"
+                  ? "text-foreground" // cobrada: ya no se debe nada
+                  : "text-rose-600 dark:text-rose-400",
             )}
           >
             {formatMoney(s.net_payable, s.currency)}
