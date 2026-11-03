@@ -9,12 +9,49 @@ import { UNIT_REF_SELECT } from "@/lib/constants";
 import { isAdminLevel } from "@/lib/permissions";
 import {
   DEFAULT_ORG_TIMEZONE,
+  addDaysYmd,
   dayRangeInTz,
   todayYmdInTz,
+  ymdInTz,
   zonedTimeToUtc,
 } from "@/lib/dates";
 import { DEFAULT_CHECKLIST } from "@/lib/cleaning/default-checklist";
-import type { CleaningEvent, CleaningStatus, CleaningTask } from "@/lib/types/database";
+import {
+  CHECKOUT_BOOKING_STATUSES,
+  CLEANING_OVERDUE_DAYS,
+  computeCleanlinessByUnit,
+  computeUnitCleanliness,
+  isStayContinuation,
+  taskCoversCheckout,
+  uncoveredCheckouts,
+  type CleanlinessStay,
+  type CleanlinessTask,
+  type UnitCleanliness,
+} from "@/lib/cleaning/cleanliness";
+import type {
+  CleaningEvent,
+  CleaningStatus,
+  CleaningTask,
+  UnitStatus,
+} from "@/lib/types/database";
+
+/**
+ * El motivo va a la fila que acaba de crear el trigger, y sólo a esa: con
+ * `.order().limit()` el UPDATE de PostgREST pisaba el motivo de TODO el historial
+ * de la unidad.
+ */
+async function setLatestStatusReason(unitId: string, reason: string): Promise<void> {
+  const admin = createAdminClient();
+  const { data: latest } = await admin
+    .from("unit_status_history")
+    .select("id")
+    .eq("unit_id", unitId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!latest) return;
+  await admin.from("unit_status_history").update({ reason }).eq("id", latest.id);
+}
 
 // Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
 // estaba en status='limpieza' y ya no le quedan tareas por hacer, la liberamos.
@@ -84,12 +121,7 @@ async function releaseUnitIfNoActiveCleaning(
 
   // El status_history queda registrado por el trigger tg_units_status_history.
   // Marcamos la razón a posteriori si es posible.
-  await admin
-    .from("unit_status_history")
-    .update({ reason: "Auto: cleaning task finalizada/borrada" })
-    .eq("unit_id", unitId)
-    .order("created_at", { ascending: false })
-    .limit(1);
+  await setLatestStatusReason(unitId, "Auto: cleaning task finalizada/borrada");
 }
 
 const cleaningSchema = z.object({
@@ -193,17 +225,52 @@ export async function ensureCleaningTasksForCheckouts(
 
   const { data: outs } = await admin
     .from("bookings")
-    .select("id, unit_id, check_out_time")
+    .select("id, unit_id, check_out_date, check_out_time, guest_id, lease_group_id")
     .eq("organization_id", organizationId)
     .eq("check_out_date", date)
     .eq("is_block", false) // los bloqueos OTA no generan limpieza
-    .in("status", ["confirmada", "check_in", "check_out"]);
+    .in("status", [...CHECKOUT_BOOKING_STATUSES]);
 
-  const outBookings = (outs ?? []) as Array<{
+  const allOuts = (outs ?? []) as Array<{
     id: string;
     unit_id: string;
+    check_out_date: string;
     check_out_time: string | null;
+    guest_id: string | null;
+    lease_group_id: string | null;
   }>;
+  if (allOuts.length === 0) return [];
+
+  // Renovaciones y tramos de un alquiler mensual: el mismo huésped sigue en la
+  // unidad, así que no hay salida ni nada que limpiar. Si el ticket ya se había
+  // creado (renovó después), se saca: si la renovación se cae, esta misma función
+  // lo vuelve a crear; una cancelación, en cambio, no se resucitaría.
+  const { data: nexts } = await admin
+    .from("bookings")
+    .select("id, unit_id, check_in_date, guest_id, lease_group_id")
+    .eq("organization_id", organizationId)
+    .eq("check_in_date", date)
+    .eq("is_block", false)
+    .in("status", [...CHECKOUT_BOOKING_STATUSES]);
+  const nextStays = (nexts ?? []) as Array<{
+    id: string;
+    unit_id: string;
+    check_in_date: string;
+    guest_id: string | null;
+    lease_group_id: string | null;
+  }>;
+  const continuingIds = allOuts
+    .filter((out) => nextStays.some((next) => isStayContinuation(out, next)))
+    .map((out) => out.id);
+  if (continuingIds.length > 0) {
+    await admin
+      .from("cleaning_tasks")
+      .delete()
+      .eq("organization_id", organizationId)
+      .in("booking_out_id", continuingIds)
+      .eq("status", "pendiente");
+  }
+  const outBookings = allOuts.filter((out) => !continuingIds.includes(out.id));
   if (outBookings.length === 0) return [];
 
   // Idempotencia doble:
@@ -211,9 +278,9 @@ export async function ensureCleaningTasksForCheckouts(
   //    (rango, no eq — los timestamps reales nunca matchean una medianoche
   //    exacta). Las canceladas NO cuentan: si se cancela una reserva y la
   //    unidad se revende para la misma noche, el booking nuevo necesita su task.
-  //  - sameBooking: ese booking ya tiene task (cualquier estado, incluso
-  //    cancelada — si el staff la canceló a mano no la resucitamos; también
-  //    cubre la task del trigger de check-out aunque haya quedado en otro día).
+  //  - sameBooking: ese booking ya tiene una task que resuelve ESTA salida
+  //    (taskCoversCheckout). Una cancelada no se resucita, pero una cerrada para
+  //    una fecha anterior no cuenta: la reserva se extendió y esta salida es otra.
   const { startIso, endIso } = dayRangeInTz(date, timezone);
   const bookingIds = outBookings.map((b) => b.id);
   const [{ data: sameDay }, { data: sameBooking }] = await Promise.all([
@@ -227,7 +294,7 @@ export async function ensureCleaningTasksForCheckouts(
       .is("archived_at", null),
     admin
       .from("cleaning_tasks")
-      .select("booking_out_id")
+      .select("booking_out_id, status, scheduled_for")
       .eq("organization_id", organizationId)
       .in("booking_out_id", bookingIds),
   ]);
@@ -235,7 +302,20 @@ export async function ensureCleaningTasksForCheckouts(
     (sameDay ?? []).map((r) => (r as { unit_id: string }).unit_id),
   );
   const coveredBookingIds = new Set(
-    (sameBooking ?? []).map((r) => (r as { booking_out_id: string }).booking_out_id),
+    (
+      (sameBooking ?? []) as Array<{
+        booking_out_id: string;
+        status: CleaningStatus;
+        scheduled_for: string;
+      }>
+    )
+      .filter((r) =>
+        taskCoversCheckout(
+          { status: r.status, scheduled_date: ymdInTz(new Date(r.scheduled_for), timezone) },
+          date,
+        ),
+      )
+      .map((r) => r.booking_out_id),
   );
 
   // Acumular las filas de cleaning_tasks a insertar (saltando las que ya existen
@@ -325,6 +405,377 @@ export async function ensureCleaningTasksForCheckouts(
   }
 
   return created;
+}
+
+// ─── Sucio / limpio ─────────────────────────────────────────────────────────
+// Ver src/lib/cleaning/cleanliness.ts: el estado se calcula, no se guarda.
+
+type CleanlinessTaskRow = CleanlinessTask & {
+  verified_at: string | null;
+  completed_at: string | null;
+};
+type CleanlinessStayRow = CleanlinessStay & { check_out_time: string | null };
+
+async function loadCleanlinessInputs(
+  organizationId: string,
+  timezone: string,
+  unitId?: string,
+): Promise<{
+  today: string;
+  tasks: CleanlinessTaskRow[];
+  stays: CleanlinessStayRow[];
+}> {
+  const admin = createAdminClient();
+  const today = todayYmdInTz(timezone);
+  const tomorrow = addDaysYmd(today, 1);
+  const fromIso = dayRangeInTz(addDaysYmd(today, -CLEANING_OVERDUE_DAYS), timezone).startIso;
+  const toIso = dayRangeInTz(tomorrow, timezone).endIso;
+
+  // Todas las tareas, no sólo las abiertas: una cerrada es la decisión de que ya
+  // no hace falta limpiar. Tampoco se filtran las archivadas: el reset del lunes
+  // no puede borrar esa decisión.
+  let tasksQuery = admin
+    .from("cleaning_tasks")
+    .select("id, unit_id, status, scheduled_for, booking_out_id, verified_at, completed_at")
+    .eq("organization_id", organizationId)
+    .gte("scheduled_for", fromIso)
+    .lt("scheduled_for", toIso);
+  // Las estadías que pisan hoy o mañana alcanzan: las que salen, las que entran y
+  // la que tapa una tarea vieja.
+  let staysQuery = admin
+    .from("bookings")
+    .select("id, unit_id, status, check_in_date, check_out_date, check_out_time, guest_id, lease_group_id")
+    .eq("organization_id", organizationId)
+    .eq("is_block", false)
+    .in("status", [...CHECKOUT_BOOKING_STATUSES])
+    .lte("check_in_date", tomorrow)
+    .gte("check_out_date", today);
+  if (unitId) {
+    tasksQuery = tasksQuery.eq("unit_id", unitId);
+    staysQuery = staysQuery.eq("unit_id", unitId);
+  }
+  const [tasksRes, staysRes] = await Promise.all([tasksQuery, staysQuery]);
+  if (tasksRes.error) throw new Error(tasksRes.error.message);
+  if (staysRes.error) throw new Error(staysRes.error.message);
+
+  const tasks = ((tasksRes.data ?? []) as Array<
+    Omit<CleanlinessTaskRow, "scheduled_date"> & { scheduled_for: string }
+  >).map((t) => ({
+    ...t,
+    scheduled_date: ymdInTz(new Date(t.scheduled_for), timezone),
+  }));
+  return { today, tasks, stays: (staysRes.data ?? []) as CleanlinessStayRow[] };
+}
+
+/**
+ * Las unidades sucias de la org, por id. Una unidad que no aparece está limpia.
+ * Sólo para admin y recepción: limpieza ve únicamente lo que tiene asignado y
+ * el propietario no opera esto.
+ */
+export async function listUnitCleanliness(): Promise<Record<string, UnitCleanliness>> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) return {};
+  const timezone = organization.timezone || DEFAULT_ORG_TIMEZONE;
+  const admin = createAdminClient();
+  const [{ today, tasks, stays }, limpieza] = await Promise.all([
+    loadCleanlinessInputs(organization.id, timezone),
+    admin
+      .from("units")
+      .select("id")
+      .eq("organization_id", organization.id)
+      .eq("status", "limpieza"),
+  ]);
+  if (limpieza.error) throw new Error(limpieza.error.message);
+  return computeCleanlinessByUnit({
+    today,
+    tasks,
+    stays,
+    limpiezaUnitIds: (limpieza.data ?? []).map((u) => u.id as string),
+  });
+}
+
+export type SetUnitCleanlinessResult =
+  | { ok: true; cleanliness: UnitCleanliness | null }
+  | { ok: false; error: string };
+
+/**
+ * El botón sucio/limpio del calendario y de la ficha de la unidad: la operación
+ * cambia sobre la marcha ("un depto renovó y se quedó, ese no se limpia y se
+ * limpia otro") y tiene que poder decirlo sin abrir un ticket.
+ *
+ * La decisión se guarda EN las tareas de limpieza, no en una columna aparte: así
+ * el calendario, Limpieza y el Parte diario dicen lo mismo y lo marcado a mano le
+ * aparece a quien limpia.
+ *
+ * Sin `revalidatePath` a propósito: cualquier llamada hace que Next re-renderice
+ * la página actual dentro de la respuesta de la action, y en el calendario eso son
+ * todas las unidades y reservas por cada clic. El tablero se actualiza por la capa
+ * en vivo (también en otras pestañas) y las rutas dinámicas no quedan cacheadas al
+ * navegar.
+ */
+export async function setUnitCleanliness(
+  unitId: string,
+  target: "limpio" | "sucio",
+): Promise<SetUnitCleanlinessResult> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!isAdminLevel(role)) {
+    return { ok: false, error: "No tenés permiso para cambiar si una unidad está limpia o sucia." };
+  }
+  const parsed = z
+    .object({ unitId: z.string().uuid(), target: z.enum(["limpio", "sucio"]) })
+    .safeParse({ unitId, target });
+  if (!parsed.success) return { ok: false, error: "No se pudo identificar la unidad." };
+
+  const admin = createAdminClient();
+  const { data: unit, error: unitError } = await admin
+    .from("units")
+    .select("id, status")
+    .eq("id", unitId)
+    .eq("organization_id", organization.id)
+    .maybeSingle();
+  if (unitError) {
+    console.error("[cleaning/setUnitCleanliness]", unitError.message);
+    return { ok: false, error: "No se pudo guardar. Probá de nuevo." };
+  }
+  if (!unit) return { ok: false, error: "No encontramos esa unidad." };
+
+  const timezone = organization.timezone || DEFAULT_ORG_TIMEZONE;
+  const context: CleanlinessWriteContext = {
+    organizationId: organization.id,
+    userId: session.userId,
+    unitId,
+    unitStatus: unit.status as UnitStatus,
+    timezone,
+  };
+
+  try {
+    if (target === "limpio") await markUnitClean(context);
+    else await markUnitDirty(context);
+
+    const [{ today, tasks, stays }, { data: fresh }] = await Promise.all([
+      loadCleanlinessInputs(organization.id, timezone, unitId),
+      admin.from("units").select("status").eq("id", unitId).maybeSingle(),
+    ]);
+    return {
+      ok: true,
+      cleanliness: computeUnitCleanliness({
+        unitStatus: (fresh?.status as UnitStatus | undefined) ?? null,
+        tasks,
+        stays,
+        today,
+      }),
+    };
+  } catch (err) {
+    console.error("[cleaning/setUnitCleanliness]", (err as Error).message);
+    return { ok: false, error: "No se pudo guardar. Probá de nuevo." };
+  }
+}
+
+interface CleanlinessWriteContext {
+  organizationId: string;
+  userId: string;
+  unitId: string;
+  unitStatus: UnitStatus;
+  timezone: string;
+}
+
+async function setUnitStatusByHand(
+  context: CleanlinessWriteContext,
+  status: UnitStatus,
+  reason: string,
+): Promise<void> {
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("units")
+    .update({ status, status_changed_by: context.userId })
+    .eq("id", context.unitId)
+    .eq("organization_id", context.organizationId);
+  if (error) throw new Error(error.message);
+  await setLatestStatusReason(context.unitId, reason);
+}
+
+/**
+ * Cierra en un paso todo lo que está para hoy o antes de mañana. Queda en
+ * "verificada" sin `completed_at`, que es exactamente lo que la migración 075 lee
+ * como "cerrada en un paso": si se tocó ANTES de que el huésped se fuera y después
+ * se marca la salida, vuelve a aparecer sucio. Nunca un departamento sucio que no
+ * figura.
+ */
+async function markUnitClean(context: CleanlinessWriteContext): Promise<void> {
+  const { organizationId, unitId, userId, unitStatus, timezone } = context;
+  const admin = createAdminClient();
+  const { today, tasks, stays } = await loadCleanlinessInputs(organizationId, timezone, unitId);
+  const tomorrow = addDaysYmd(today, 1);
+
+  // La unidad primero, con la persona: si se cierra antes la tarea, el trigger la
+  // pasa a disponible sin autor y aunque haya un huésped adentro.
+  if (unitStatus === "limpieza") {
+    const { count } = await admin
+      .from("bookings")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .eq("unit_id", unitId)
+      .eq("status", "check_in")
+      .eq("is_block", false)
+      .lte("check_in_date", today)
+      .gt("check_out_date", today);
+    await setUnitStatusByHand(
+      context,
+      (count ?? 0) > 0 ? "ocupado" : "disponible",
+      "Marcado limpio a mano",
+    );
+  }
+
+  // Una salida de hoy o de mañana sin tarea todavía (el cron recién la crea a la
+  // medianoche): se crea para que la decisión quede guardada y no vuelva a avisar.
+  const uncovered = uncoveredCheckouts({ tasks, stays, today });
+  if (uncovered.length > 0) {
+    const checklist = await checklistForOrg(organizationId);
+    const { data: created, error } = await admin
+      .from("cleaning_tasks")
+      .insert(
+        uncovered.map((stay) => ({
+          organization_id: organizationId,
+          unit_id: unitId,
+          booking_out_id: stay.id,
+          scheduled_for: zonedTimeToUtc(
+            stay.check_out_date,
+            (stay.check_out_time ?? "11:00").slice(0, 5),
+            timezone,
+          ).toISOString(),
+          status: "pendiente",
+          checklist,
+        })),
+      )
+      .select("id");
+    if (error) throw new Error(error.message);
+    await admin.from("cleaning_events").insert(
+      (created ?? []).map((t) => ({
+        cleaning_task_id: t.id,
+        organization_id: organizationId,
+        actor_id: userId,
+        event_type: "created",
+        to_status: "pendiente",
+        metadata: { source: "unit_cleanliness_button" },
+      })),
+    );
+  }
+
+  // Sin cota inferior: "limpio" también cierra las viejas que ya no avisan.
+  const { data: open, error: openError } = await admin
+    .from("cleaning_tasks")
+    .select("id, status")
+    .eq("organization_id", organizationId)
+    .eq("unit_id", unitId)
+    .in("status", ["pendiente", "en_progreso"])
+    .lt("scheduled_for", dayRangeInTz(tomorrow, timezone).endIso);
+  if (openError) throw new Error(openError.message);
+  const openTasks = (open ?? []) as Array<{ id: string; status: CleaningStatus }>;
+  if (openTasks.length === 0) return;
+
+  const { error: closeError } = await admin
+    .from("cleaning_tasks")
+    .update({ status: "verificada", verified_by: userId })
+    .eq("organization_id", organizationId)
+    .in("id", openTasks.map((t) => t.id));
+  if (closeError) throw new Error(closeError.message);
+
+  await admin.from("cleaning_events").insert(
+    openTasks.map((t) => ({
+      cleaning_task_id: t.id,
+      organization_id: organizationId,
+      actor_id: userId,
+      event_type: "status_changed",
+      from_status: t.status,
+      to_status: "verificada",
+      metadata: { source: "unit_cleanliness_button" },
+    })),
+  );
+}
+
+async function markUnitDirty(context: CleanlinessWriteContext): Promise<void> {
+  const { organizationId, unitId, userId, unitStatus, timezone } = context;
+  const admin = createAdminClient();
+  const { today, tasks, stays } = await loadCleanlinessInputs(organizationId, timezone, unitId);
+
+  // Lo que se cerró hoy en un paso se reabre: es deshacer el "limpio". Crear otra
+  // tarea dejaba dos tickets para la misma salida. Una limpieza que alguien hizo
+  // de verdad (completed_at) no se toca: si volvió a ensuciarse, es otra.
+  const startOfToday = new Date(dayRangeInTz(today, timezone).startIso).getTime();
+  const reopen = tasks.filter(
+    (t) =>
+      t.status === "verificada" &&
+      !t.completed_at &&
+      t.verified_at !== null &&
+      new Date(t.verified_at).getTime() >= startOfToday,
+  );
+  if (reopen.length > 0) {
+    const { error } = await admin
+      .from("cleaning_tasks")
+      .update({ status: "pendiente", verified_at: null, verified_by: null })
+      .eq("organization_id", organizationId)
+      .in("id", reopen.map((t) => t.id));
+    if (error) throw new Error(error.message);
+    await admin.from("cleaning_events").insert(
+      reopen.map((t) => ({
+        cleaning_task_id: t.id,
+        organization_id: organizationId,
+        actor_id: userId,
+        event_type: "status_changed",
+        from_status: "verificada",
+        to_status: "pendiente",
+        metadata: { source: "unit_cleanliness_button" },
+      })),
+    );
+  }
+
+  const reopenedIds = new Set(reopen.map((t) => t.id));
+  const afterReopen = tasks.map((t) =>
+    reopenedIds.has(t.id) ? { ...t, status: "pendiente" as const } : t,
+  );
+  const alreadyDirty = computeUnitCleanliness({
+    unitStatus,
+    tasks: afterReopen,
+    stays,
+    today,
+  });
+  if (!alreadyDirty) {
+    // Sin reserva asociada: es lo que le dice al cálculo que es sucio ya, no
+    // "cuando salga". Si después se marca el check-out, el trigger la adopta.
+    const { data: created, error } = await admin
+      .from("cleaning_tasks")
+      .insert({
+        organization_id: organizationId,
+        unit_id: unitId,
+        booking_out_id: null,
+        scheduled_for: new Date().toISOString(),
+        status: "pendiente",
+        checklist: await checklistForOrg(organizationId),
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    await admin.from("cleaning_events").insert({
+      cleaning_task_id: created.id,
+      organization_id: organizationId,
+      actor_id: userId,
+      event_type: "created",
+      to_status: "pendiente",
+      metadata: { source: "unit_cleanliness_button" },
+    });
+  }
+
+  // El rayado del calendario sólo si no hay nadie: con una estadía en curso (aun
+  // sin el check-in marcado, Apart CBA no siempre lo marca) el aviso alcanza y no
+  // hay que tapar la ocupación. Mantenimiento y bloqueado no se pisan.
+  const stayInProgress = stays.some(
+    (s) => s.status !== "check_out" && s.check_in_date <= today && s.check_out_date > today,
+  );
+  if (!stayInProgress && ["disponible", "reservado", "ocupado"].includes(unitStatus)) {
+    await setUnitStatusByHand(context, "limpieza", "Marcado sucio a mano");
+  }
 }
 
 export async function createCleaningTask(input: CleaningInput) {

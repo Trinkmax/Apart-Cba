@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { generatePaymentReminders } from "@/lib/actions/notifications";
 import { dispatchEvent } from "@/lib/crm/workflows/dispatcher";
 import { DEFAULT_ORG_TIMEZONE, addDaysYmd, todayYmdInTz } from "@/lib/dates";
+import { CHECKOUT_BOOKING_STATUSES } from "@/lib/cleaning/cleanliness";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -202,7 +203,7 @@ export async function GET(req: Request) {
       .select("organization_id, check_out_date")
       .in("check_out_date", [today, tomorrow])
       .eq("is_block", false)
-      .in("status", ["confirmada", "check_in", "check_out"]);
+      .in("status", [...CHECKOUT_BOOKING_STATUSES]);
 
     const orgDates = new Map<string, Set<string>>();
     for (const r of (checkoutOrgRows ?? []) as Array<{

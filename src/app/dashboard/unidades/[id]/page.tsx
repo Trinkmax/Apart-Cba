@@ -12,7 +12,10 @@ import {
 import { getUnit } from "@/lib/actions/units";
 import { listOwners } from "@/lib/actions/owners";
 import { getCurrentOrg } from "@/lib/actions/org";
-import { can } from "@/lib/permissions";
+import { listUnitCleanliness } from "@/lib/actions/cleaning";
+import { can, isAdminLevel } from "@/lib/permissions";
+import { LiveRefresh } from "@/components/realtime/live-refresh";
+import { UnitCleanlinessCard } from "@/components/units/unit-cleanliness-card";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -37,6 +40,9 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
   ]);
   if (!unit) notFound();
   const u = unit as unknown as UnitDetail;
+  const canMarkCleanliness = isAdminLevel(role);
+  // Si no se pudo leer no se muestra: "no sé" no puede verse como "limpio".
+  const cleanlinessByUnit = canMarkCleanliness ? await listUnitCleanliness().catch(() => null) : null;
   const meta = UNIT_STATUS_META[u.status];
   const canViewMoney = can(role, "payments", "view");
   // Mantenimiento y limpieza entran a la ficha (units: view) pero no la
@@ -55,6 +61,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
+      {canMarkCleanliness && <LiveRefresh tables={["units", "cleaning_tasks"]} />}
       <Link
         href="/dashboard/unidades"
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
@@ -82,6 +89,9 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
               <span className="status-dot" style={{ backgroundColor: meta.color }} />
               {meta.label}
             </Badge>
+            {cleanlinessByUnit && (
+              <UnitCleanlinessCard unitId={u.id} initial={cleanlinessByUnit[u.id] ?? null} />
+            )}
             {u.address && (
               <div className="flex items-start gap-1.5 mt-2 text-xs sm:text-sm text-muted-foreground">
                 <MapPin size={13} className="mt-0.5 shrink-0" />

@@ -31,6 +31,7 @@ export function LiquidacionesTabs({
   currency,
   periodRows,
   canCreate,
+  canDelete,
 }: {
   initialTab: SettlementsTab;
   settlements: ComponentProps<typeof SettlementsListClient>["settlements"];
@@ -41,6 +42,7 @@ export function LiquidacionesTabs({
   currency: string;
   periodRows: ComponentProps<typeof PeriodBatchPanel>["rows"];
   canCreate: boolean;
+  canDelete: boolean;
 }) {
   const [tab, setTab] = useState<SettlementsTab>(initialTab);
 
@@ -93,6 +95,7 @@ export function LiquidacionesTabs({
           currency={currency}
           rows={periodRows}
           canCreate={canCreate}
+          canDelete={canDelete}
         />
       )}
     </div>

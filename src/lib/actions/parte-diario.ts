@@ -38,6 +38,7 @@ import {
   todayYmdInTz,
   tomorrowYmdInTz,
 } from "@/lib/dates";
+import { CHECKOUT_BOOKING_STATUSES, isStayContinuation } from "@/lib/cleaning/cleanliness";
 
 function dateLabelEs(ymd: string): string {
   // Render bonito en español: "Miércoles 7 de mayo".
@@ -243,6 +244,7 @@ async function buildSnapshot(
     check_out_date: string;
     check_in_time: string | null;
     check_out_time: string | null;
+    lease_group_id: string | null;
     unit: { id: string; code: string; name: string } | null;
     guest: { id: string; full_name: string } | null;
   };
@@ -285,26 +287,29 @@ async function buildSnapshot(
         .from("bookings")
         .select(
           `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
-           check_in_time, check_out_time,
+           check_in_time, check_out_time, lease_group_id,
            unit:units(id, code, name),
            guest:guests(id, full_name)`,
         )
         .eq("organization_id", orgId)
         .eq("check_out_date", reportDate)
         .eq("is_block", false) // los bloqueos OTA no son check-outs reales
-        .in("status", ["confirmada", "check_in", "check_out"]),
+        .in("status", [...CHECKOUT_BOOKING_STATUSES]),
+      // Las `pendiente` también: ocupan calendario y hay estadías reales que nunca
+      // pasan de ahí. Sin esto, el departamento no aparecía en el Parte ni al
+      // entrar ni al salir, justo donde se organiza la limpieza.
       admin
         .from("bookings")
         .select(
           `id, unit_id, guest_id, status, mode, check_in_date, check_out_date,
-           check_in_time, check_out_time,
+           check_in_time, check_out_time, lease_group_id,
            unit:units(id, code, name),
            guest:guests(id, full_name)`,
         )
         .eq("organization_id", orgId)
         .eq("check_in_date", reportDate)
         .eq("is_block", false) // los bloqueos OTA no son check-ins reales
-        .in("status", ["confirmada", "check_in"]),
+        .in("status", ["pendiente", "confirmada", "check_in"]),
       admin
         .from("cleaning_tasks")
         .select(
@@ -351,7 +356,24 @@ async function buildSnapshot(
       ).or(carriedOverStatusFilter(dayRange.startIso)),
     ]);
 
-  const cleaningJoinRows = (cleaningRowsRes.data ?? []) as unknown as CleaningJoin[];
+  // Un tramo que sigue con el mismo huésped no es una salida ni una llegada: nadie
+  // se mueve ni hay nada que limpiar.
+  const outRows = (outRes.data ?? []) as unknown as BookingJoin[];
+  const inRows = (inRes.data ?? []) as unknown as BookingJoin[];
+  const continuingOutIds = new Set<string>();
+  const continuingInIds = new Set<string>();
+  for (const out of outRows) {
+    for (const next of inRows) {
+      if (isStayContinuation(out, next)) {
+        continuingOutIds.add(out.id);
+        continuingInIds.add(next.id);
+      }
+    }
+  }
+
+  const cleaningJoinRows = ((cleaningRowsRes.data ?? []) as unknown as CleaningJoin[]).filter(
+    (c) => !c.booking_out_id || !continuingOutIds.has(c.booking_out_id),
+  );
   const carriedRows = (carriedRes.data ?? []) as unknown as CleaningJoin[];
   const allCleaningRows = [...cleaningJoinRows, ...carriedRows];
   const ticketRows = (ticketsRes.data ?? []) as unknown as TicketJoin[];
@@ -379,10 +401,12 @@ async function buildSnapshot(
     const tb = b[timeKey] ?? "99:99:99";
     return ta.localeCompare(tb) || a.unit_code.localeCompare(b.unit_code);
   };
-  const checkOuts = ((outRes.data ?? []) as unknown as BookingJoin[])
+  const checkOuts = outRows
+    .filter((b) => !continuingOutIds.has(b.id))
     .map(mapBooking)
     .sort(sortByTime("check_out_time"));
-  const checkIns = ((inRes.data ?? []) as unknown as BookingJoin[])
+  const checkIns = inRows
+    .filter((b) => !continuingInIds.has(b.id))
     .map(mapBooking)
     .sort(sortByTime("check_in_time"));
 

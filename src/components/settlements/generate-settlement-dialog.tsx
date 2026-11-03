@@ -45,6 +45,8 @@ import {
 import { settlementRegenerateHint } from "@/lib/settlements/payment-undo";
 import { isStaleDeployError, toastActionFailure } from "@/lib/action-failure";
 import { cn } from "@/lib/utils";
+import { todayYmdInTz } from "@/lib/dates";
+import { defaultSettlementPeriod, isPeriodUnfinished } from "@/lib/settlements/period-guard";
 import {
   OwnerUnitPicker,
   type OwnerUnitSelection,
@@ -82,8 +84,10 @@ export function GenerateSettlementDialog({
   const router = useRouter();
   const now = new Date();
   const [selection, setSelection] = useState<OwnerUnitSelection | null>(null);
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1);
+  // A principios de mes arranca en el que cerró: ver period-guard.ts.
+  const today = todayYmdInTz();
+  const [year, setYear] = useState(() => defaultSettlementPeriod(today).year);
+  const [month, setMonth] = useState(() => defaultSettlementPeriod(today).month);
   const [mode, setMode] = useState<Mode>("auto");
   const [preview, setPreview] = useState<Preview | null>(null);
   // Contador de pedidos: si el usuario cambia el mes dos veces seguidas, la
@@ -315,6 +319,13 @@ export function GenerateSettlementDialog({
               </Select>
             </div>
           </div>
+          {isPeriodUnfinished({ year, month }, today) && (
+            <p className="flex items-start gap-1.5 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden />
+              {formatPeriod(year, month)} todavía no terminó. Lo habitual es liquidar el mes
+              que ya cerró.
+            </p>
+          )}
 
           <div className="space-y-1.5">
             <Label id="settlement-mode-label">¿Cómo la armás?</Label>

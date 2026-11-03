@@ -9,7 +9,6 @@ import {
   DollarSign,
   ExternalLink,
   Wrench,
-  Sparkles,
   Ban,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +18,13 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { UNIT_STATUS_META } from "@/lib/constants";
 import { formatDate, formatMoney, getInitials } from "@/lib/format";
 import { unitMonthlyPrice, unitPriceKinds } from "@/lib/units/pricing";
+import {
+  CLEANLINESS_LABEL,
+  cleanlinessHint,
+  type UnitCleanliness,
+} from "@/lib/cleaning/cleanliness";
+import { CleanlinessSwitch } from "./unit-cleanliness-controls";
+import type { CleanlinessTarget } from "./use-unit-cleanliness";
 import type { UnitWithRelations } from "@/lib/types/database";
 
 interface PmsUnitPopoverProps {
@@ -30,6 +36,11 @@ interface PmsUnitPopoverProps {
   currency: string;
   /** Si es false, esconde "Ingresos" y las tarifas (noche y/o mes, según la vocación). */
   canViewMoney?: boolean;
+  /** Si está, muestra sucio/limpio con su botón. Sólo admin y recepción. */
+  cleanliness?: {
+    state: UnitCleanliness | null;
+    onMark: (target: CleanlinessTarget) => void;
+  };
 }
 
 export function PmsUnitPopoverContent({
@@ -40,6 +51,7 @@ export function PmsUnitPopoverContent({
   revenue,
   currency,
   canViewMoney = true,
+  cleanliness,
 }: PmsUnitPopoverProps) {
   const meta = UNIT_STATUS_META[unit.status];
   // Cada vocación muestra sus precios (migraciones 063 y 066): temporaria →
@@ -83,6 +95,28 @@ export function PmsUnitPopoverContent({
           <Stat label="Ingresos" value={formatMoney(revenue, currency)} compact />
         )}
       </div>
+
+      {cleanliness && (
+        <>
+          <Separator />
+          <div className="px-4 py-2.5 flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                Limpieza
+              </div>
+              <div className="text-xs font-medium">
+                {cleanliness.state ? CLEANLINESS_LABEL[cleanliness.state.due] : "Limpio"}
+              </div>
+              {cleanliness.state && (
+                <div className="text-[11px] text-muted-foreground">
+                  {cleanlinessHint(cleanliness.state)}
+                </div>
+              )}
+            </div>
+            <CleanlinessSwitch state={cleanliness.state} onMark={cleanliness.onMark} />
+          </div>
+        </>
+      )}
 
       <Separator />
 
@@ -170,11 +204,6 @@ export function PmsUnitPopoverContent({
             <ExternalLink size={12} /> Ver unidad
           </Button>
         </Link>
-        {unit.status !== "limpieza" && (
-          <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" title="Programar limpieza (próximamente)">
-            <Sparkles size={12} />
-          </Button>
-        )}
         {unit.status !== "bloqueado" && (
           <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs text-muted-foreground" title="Bloquear (próximamente)">
             <Ban size={12} />

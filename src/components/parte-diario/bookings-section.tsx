@@ -67,6 +67,12 @@ function BookingRow({ row, isCheckIn }: { row: ParteDiarioBookingRow; isCheckIn:
           )}
         </p>
       </div>
+      {/* Ocupa el departamento igual, pero quien organiza tiene que saber que no está confirmada. */}
+      {row.status === "pendiente" && (
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 shrink-0 bg-amber-500/10 ring-amber-500/30 text-amber-700 dark:text-amber-300">
+          Sin confirmar
+        </span>
+      )}
       <span
         className={cn(
           "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ring-1 shrink-0",

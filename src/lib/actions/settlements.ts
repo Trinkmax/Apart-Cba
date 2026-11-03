@@ -68,6 +68,12 @@ import {
 } from "@/lib/settlements/statement-model";
 import { buildOwnerSettlementEmail } from "@/lib/settlements/owner-email";
 import { getOwnerScope, ownerFilter, scopeFilter } from "@/lib/auth/owner-scope";
+import {
+  revertKeepReason,
+  summarizePeriodRevert,
+  type PeriodRevertCandidate,
+  type PeriodRevertPreview,
+} from "@/lib/settlements/period-revert";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -4618,6 +4624,230 @@ export async function deleteSettlement(
 
   revalidateSettlement();
   return { ok: true };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Revertir un mes generado por error. Las reglas: lib/settlements/period-revert.ts
+// ════════════════════════════════════════════════════════════════════════════
+const REVERT_READ_PAGE = 1000;
+const REVERT_IDS_PER_REQUEST = 100;
+
+function chunked<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
+/**
+ * Qué liquidaciones tienen filas en otra tabla. Pagina: un mes muy editado puede
+ * pasar las 1000 filas de PostgREST, y una historia cortada haría pasar por
+ * intacta a una liquidación que alguien trabajó. Si no pudo leer, tira: mejor no
+ * borrar nada.
+ */
+async function settlementIdsWithRows(
+  ids: string[],
+  read: (
+    chunk: string[],
+    from: number,
+    to: number,
+  ) => PromiseLike<{
+    data: { settlement_id: string }[] | null;
+    error: { message: string } | null;
+  }>,
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  for (const chunk of chunked(ids, REVERT_IDS_PER_REQUEST)) {
+    for (let from = 0; ; from += REVERT_READ_PAGE) {
+      const { data, error } = await read(chunk, from, from + REVERT_READ_PAGE - 1);
+      if (error) throw new Error(error.message);
+      for (const row of data ?? []) found.add(row.settlement_id);
+      if (!data || data.length < REVERT_READ_PAGE) break;
+    }
+  }
+  return found;
+}
+
+async function loadPeriodRevertCandidates(
+  admin: Admin,
+  organizationId: string,
+  year: number,
+  month: number,
+): Promise<PeriodRevertCandidate[]> {
+  const { data, error } = await admin
+    .from("owner_settlements")
+    .select(
+      "id, status, origin, paid_movement_id, last_edited_by, net_payable, currency, owner:owners(full_name)",
+    )
+    .eq("organization_id", organizationId)
+    .eq("period_year", year)
+    .eq("period_month", month)
+    .neq("status", "anulada");
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as unknown as Array<{
+    id: string;
+    status: string;
+    origin: string | null;
+    paid_movement_id: string | null;
+    last_edited_by: string | null;
+    net_payable: number;
+    currency: string;
+    owner: { full_name: string } | null;
+  }>;
+  const ids = rows.map((r) => r.id);
+  const [withManualLines, withEdits] = await Promise.all([
+    settlementIdsWithRows(ids, (chunk, from, to) =>
+      admin
+        .from("settlement_lines")
+        .select("settlement_id")
+        .in("settlement_id", chunk)
+        .eq("is_manual", true)
+        .order("id")
+        .range(from, to),
+    ),
+    // Regenerar no es trabajo de una persona: es lo mismo que vuelve a hacer el botón.
+    settlementIdsWithRows(ids, (chunk, from, to) =>
+      admin
+        .from("settlement_audit")
+        .select("settlement_id")
+        .in("settlement_id", chunk)
+        .neq("action", "regenerate")
+        .order("id")
+        .range(from, to),
+    ),
+  ]);
+
+  return rows.map((r) => ({
+    id: r.id,
+    status: r.status,
+    origin: r.origin,
+    paid_movement_id: r.paid_movement_id,
+    last_edited_by: r.last_edited_by,
+    has_manual_lines: withManualLines.has(r.id),
+    has_edits: withEdits.has(r.id),
+    net_payable: Number(r.net_payable),
+    currency: r.currency,
+    owner_name: r.owner?.full_name?.trim() || "Sin propietario",
+  }));
+}
+
+const periodSchema = z.object({
+  year: z.number().int().min(2000).max(2100),
+  month: z.number().int().min(1).max(12),
+});
+
+/** Lo que haría «Revertir», para mostrarlo antes de confirmar. No escribe nada. */
+export async function previewPeriodRevert(
+  year: number,
+  month: number,
+): Promise<{ ok: true; preview: PeriodRevertPreview } | { ok: false; error: string }> {
+  await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "delete")) {
+    return { ok: false, error: "No tenés permisos para eliminar liquidaciones" };
+  }
+  const parsed = periodSchema.safeParse({ year, month });
+  if (!parsed.success) return { ok: false, error: "Período inválido" };
+
+  try {
+    const candidates = await loadPeriodRevertCandidates(
+      createAdminClient(),
+      organization.id,
+      parsed.data.year,
+      parsed.data.month,
+    );
+    return { ok: true, preview: summarizePeriodRevert(candidates) };
+  } catch (err) {
+    console.error("[settlements/previewPeriodRevert]", (err as Error).message);
+    return { ok: false, error: "No se pudo revisar el mes. Probá de nuevo." };
+  }
+}
+
+const periodRevertSchema = periodSchema.extend({
+  ids: z.array(z.string().uuid()).min(1).max(2000),
+});
+
+/**
+ * Elimina los borradores de un mes generado por error. Recibe los ids que la
+ * persona vio y vuelve a chequear cada uno: nunca borra algo que no se le mostró
+ * (otro pudo generar más mientras tanto) ni algo que dejó de cumplir las reglas
+ * (otro pudo editarlo). `settlement_audit` se va con la liquidación, así que el
+ * rastro de quién lo hizo queda en `activity_log`.
+ */
+export async function revertSettlementsForPeriod(input: {
+  year: number;
+  month: number;
+  ids: string[];
+}): Promise<{ ok: true; deleted: number } | { ok: false; error: string }> {
+  const session = await requireSession();
+  const { organization, role } = await getCurrentOrg();
+  if (!can(role, "settlements", "delete")) {
+    return { ok: false, error: "No tenés permisos para eliminar liquidaciones" };
+  }
+  const parsed = periodRevertSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "No se pudo identificar qué revertir." };
+  const { year, month, ids } = parsed.data;
+  const admin = createAdminClient();
+
+  try {
+    const shown = new Set(ids);
+    const candidates = await loadPeriodRevertCandidates(admin, organization.id, year, month);
+    const toDelete = candidates.filter((c) => shown.has(c.id) && !revertKeepReason(c));
+    const deleted: PeriodRevertCandidate[] = [];
+
+    for (const chunk of chunked(toDelete, REVERT_IDS_PER_REQUEST)) {
+      const chunkIds = chunk.map((c) => c.id);
+      // Igual que deleteSettlement: sin esto los tickets quedan como "ya cobrados"
+      // y octubre no los incluiría.
+      const { error: ticketsError } = await admin
+        .from("maintenance_tickets")
+        .update({ charged_to_owner_at: null, charged_to_settlement_id: null })
+        .in("charged_to_settlement_id", chunkIds);
+      if (ticketsError) throw new Error(ticketsError.message);
+
+      const { data, error } = await admin
+        .from("owner_settlements")
+        .delete()
+        .eq("organization_id", organization.id)
+        .in("id", chunkIds)
+        .eq("status", "borrador")
+        .eq("origin", "auto")
+        .is("paid_movement_id", null)
+        .select("id");
+      if (error) throw new Error(error.message);
+      const gone = new Set((data ?? []).map((row) => row.id as string));
+      deleted.push(...chunk.filter((c) => gone.has(c.id)));
+    }
+
+    if (deleted.length > 0) {
+      const { error: logError } = await admin.from("activity_log").insert({
+        organization_id: organization.id,
+        user_id: session.userId,
+        action: "settlements_period_reverted",
+        resource_type: "owner_settlements",
+        details: {
+          period_year: year,
+          period_month: month,
+          deleted: deleted.map((c) => ({
+            id: c.id,
+            owner: c.owner_name,
+            net_payable: c.net_payable,
+            currency: c.currency,
+          })),
+        },
+      });
+      if (logError) {
+        console.error("[settlements/revertSettlementsForPeriod] activity_log", logError.message);
+      }
+    }
+
+    revalidateSettlement();
+    return { ok: true, deleted: deleted.length };
+  } catch (err) {
+    console.error("[settlements/revertSettlementsForPeriod]", (err as Error).message);
+    revalidateSettlement();
+    return { ok: false, error: "No se pudo revertir el mes. Revisá la lista y probá de nuevo." };
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════

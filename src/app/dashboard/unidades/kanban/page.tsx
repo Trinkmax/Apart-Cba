@@ -5,8 +5,9 @@ import { listAccounts } from "@/lib/actions/cash";
 import { listScheduleInRange } from "@/lib/actions/payment-schedule";
 import { listDateMarksInRange } from "@/lib/actions/date-marks";
 import { listChannelRequestsInRange } from "@/lib/actions/channel-requests";
+import { listUnitCleanliness } from "@/lib/actions/cleaning";
 import { getCurrentOrg } from "@/lib/actions/org";
-import { can } from "@/lib/permissions";
+import { can, isAdminLevel } from "@/lib/permissions";
 import { completionCutoffYmd, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 import { PmsBoard } from "@/components/units/pms/pms-board";
 import { isoAddDays } from "@/components/units/pms/pms-constants";
@@ -43,7 +44,8 @@ export default async function PmsGridPage({
   const canViewMoney = can(role, "payments", "view");
   const canRegisterExpense = can(role, "cash", "create");
   const canEditBookings = can(role, "bookings", "update");
-  const [units, bookings, accounts, schedule, dateMarks, needsGuest, requests] = await Promise.all([
+  const canMarkCleanliness = isAdminLevel(role);
+  const [units, bookings, accounts, schedule, dateMarks, needsGuest, requests, cleanliness] = await Promise.all([
     listUnitsEnriched(),
     listBookingsInRange(startISO, bookingsEndISO),
     canViewMoney || canRegisterExpense ? listAccounts() : Promise.resolve([]),
@@ -55,6 +57,8 @@ export default async function PmsGridPage({
     // reserva. `null` (y no `[]`) si falla: el board lo usa para NO desalojar
     // la capa que ya tenga cargada.
     listChannelRequestsInRange(startISO, bookingsEndISO).catch(() => null),
+    // Mismo criterio: `null` no es "está todo limpio".
+    canMarkCleanliness ? listUnitCleanliness().catch(() => null) : Promise.resolve(null),
   ]);
   const expenseDefaultId = accounts.find((a) => a.is_expense_default)?.id ?? null;
 
@@ -62,6 +66,8 @@ export default async function PmsGridPage({
     <PmsBoard
       initialUnits={units}
       initialBookings={bookings}
+      initialCleanliness={cleanliness}
+      canMarkCleanliness={canMarkCleanliness}
       accounts={accounts}
       initialSchedule={schedule}
       initialDateMarks={dateMarks}

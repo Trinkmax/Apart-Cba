@@ -41,6 +41,7 @@ import {
   Plus,
   Search,
   SlidersHorizontal,
+  Sparkles,
   UserPlus,
   Wallet,
   X,
@@ -185,6 +186,13 @@ import {
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
+import { CleanlinessRowButton } from "./unit-cleanliness-controls";
+import {
+  useUnitCleanliness,
+  type CleanlinessMap,
+  type CleanlinessTarget,
+} from "./use-unit-cleanliness";
+import type { UnitCleanliness } from "@/lib/cleaning/cleanliness";
 import { DateMarkPopover } from "./date-mark-popover";
 
 // Dialogs pesados (~1.4k y ~580 líneas) cargados bajo demanda: el chunk no se
@@ -345,6 +353,10 @@ type RequestOverlap = {
 interface PmsBoardProps {
   initialUnits: UnitWithRelations[];
   initialBookings: BookingWithRelations[];
+  /** Unidades sucias. `null`: el servidor no pudo leerlas; el tablero reintenta. */
+  initialCleanliness?: CleanlinessMap | null;
+  /** Admin y recepción: ven sucio/limpio y lo pueden marcar. */
+  canMarkCleanliness?: boolean;
   /** Cuentas de caja activas para el form de booking (cobro al crear/editar) */
   accounts?: Pick<CashAccount, "id" | "name" | "currency" | "type">[];
   /** Cuotas mensuales — para badges 1/N flotantes sobre las barras */
@@ -507,6 +519,8 @@ function computeDragTarget(
 export function PmsBoard({
   initialUnits,
   initialBookings,
+  initialCleanliness = null,
+  canMarkCleanliness = false,
   accounts = [],
   initialSchedule = [],
   initialDateMarks = [],
@@ -677,6 +691,26 @@ export function PmsBoard({
     defaultMode: null,
   };
   const [unitFilters, setUnitFilters] = useState<UnitSearchFilters>(EMPTY_UNIT_FILTERS);
+
+  // ── Sucio / limpio ─────────────────────────────────────────────────────────
+  const { byUnit: cleanlinessByUnit, mark: markCleanliness } = useUnitCleanliness({
+    initial: initialCleanliness,
+    enabled: canMarkCleanliness,
+  });
+  const [onlyDirtyRequested, setOnlyDirtyRequested] = useState(false);
+  const dirtyCounts = useMemo(() => {
+    let total = 0;
+    let tomorrow = 0;
+    for (const unit of units) {
+      const state = cleanlinessByUnit[unit.id];
+      if (!state) continue;
+      total += 1;
+      if (state.due === "tomorrow") tomorrow += 1;
+    }
+    return { total, tomorrow };
+  }, [units, cleanlinessByUnit]);
+  // Cuando se limpia la última, volver a todas: una grilla vacía no dice nada.
+  const onlyDirty = onlyDirtyRequested && dirtyCounts.total > 0;
 
   const activeUnitFilterCount = useMemo(() => {
     let n = 0;
@@ -1580,6 +1614,7 @@ export function PmsBoard({
       // o alguna de sus reservas. La fila se muestra con TODA su ocupación.
       if (search.active && !search.shownUnitIds.has(u.id)) continue;
       searchMatches += 1;
+      if (onlyDirty && !cleanlinessByUnit[u.id]) continue;
       if (!passesAttributes(u)) {
         attrMisses += 1;
         continue;
@@ -1593,7 +1628,15 @@ export function PmsBoard({
       shown.push(u);
     }
     return { units: shown, searchMatches, attrMisses, busyMatches };
-  }, [units, unitFilters, availabilityPending, availabilityStatus, search]);
+  }, [
+    units,
+    unitFilters,
+    availabilityPending,
+    availabilityStatus,
+    search,
+    onlyDirty,
+    cleanlinessByUnit,
+  ]);
   const filteredUnits = unitFilterResult.units;
 
   // Estado vacío: decir la verdad de por qué no hay filas. "Nada coincide"
@@ -3050,7 +3093,7 @@ export function PmsBoard({
                     <span className="text-destructive">Disponibilidad sin verificar</span>
                   ) : (
                     <>
-                      {activeUnitFilterCount > 0 || search.active
+                      {activeUnitFilterCount > 0 || search.active || onlyDirty
                         ? `${filteredUnits.length} de ${units.length} unidades · `
                         : `${units.length} unidades · `}
                       {headerCounts.inView}{" "}
@@ -3343,6 +3386,31 @@ export function PmsBoard({
                     />
                   </PopoverContent>
                 </Popover>
+              )}
+
+              {/* Cuántas hay que limpiar, sin tener que recorrer todas las filas */}
+              {canMarkCleanliness && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-pressed={onlyDirty}
+                  disabled={dirtyCounts.total === 0}
+                  onClick={() => setOnlyDirtyRequested((v) => !v)}
+                  title={
+                    dirtyCounts.total === 0
+                      ? "No hay nada para limpiar hoy ni mañana"
+                      : `${dirtyCounts.total - dirtyCounts.tomorrow} para hoy · ${dirtyCounts.tomorrow} para mañana. Tocá para ver sólo esas.`
+                  }
+                  className={cn(
+                    "h-8 gap-1.5 text-xs",
+                    onlyDirty &&
+                      "border-cyan-700 bg-cyan-700 text-white hover:bg-cyan-800 hover:text-white",
+                  )}
+                >
+                  <Sparkles size={12} aria-hidden />
+                  Sucios
+                  <span className="font-semibold tabular-nums">{dirtyCounts.total}</span>
+                </Button>
               )}
 
               {/* Buscar deptos: filtros por disponibilidad/cap/precio */}
@@ -3898,6 +3966,26 @@ export function PmsBoard({
                     {units.length}{isMobile ? "" : " activas"}
                   </div>
                 </div>
+                {/* En el celular va acá: la barra de arriba ya no tiene lugar y
+                    esta esquina queda a la vista al scrollear. */}
+                {isMobile && canMarkCleanliness && dirtyCounts.total > 0 && (
+                  <button
+                    type="button"
+                    aria-pressed={onlyDirty}
+                    aria-label={`Sucios: ${dirtyCounts.total}. Ver sólo esas unidades`}
+                    onClick={() => setOnlyDirtyRequested((v) => !v)}
+                    className={cn(
+                      "relative ml-auto inline-flex h-6 shrink-0 items-center gap-0.5 rounded-full px-1.5 text-[10px] font-semibold tabular-nums",
+                      "after:absolute after:-inset-1.5 after:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-600",
+                      onlyDirty
+                        ? "bg-cyan-700 text-white"
+                        : "bg-cyan-500/15 text-cyan-800 ring-1 ring-inset ring-cyan-600/40 dark:text-cyan-200",
+                    )}
+                  >
+                    <Sparkles size={10} aria-hidden />
+                    {dirtyCounts.total}
+                  </button>
+                )}
               </div>
 
               <div className="relative" style={{ width: gridWidth }}>
@@ -4059,6 +4147,9 @@ export function PmsBoard({
                       availabilityStatus.kind === "ready" &&
                       availabilityStatus.tentative.has(unit.id)
                     }
+                    cleanliness={cleanlinessByUnit[unit.id] ?? null}
+                    canMarkCleanliness={canMarkCleanliness}
+                    onMarkCleanliness={markCleanliness}
                   />
 
                   {/* La fila aparece por una coincidencia (huésped, código)
@@ -4755,6 +4846,9 @@ function UnitCellHeader({
   compact = false,
   canViewMoney = true,
   requestWarning = false,
+  cleanliness = null,
+  canMarkCleanliness = false,
+  onMarkCleanliness,
 }: {
   unit: UnitWithRelations;
   occupancyPct: number;
@@ -4772,31 +4866,46 @@ function UnitCellHeader({
    * retiene la venta en esas fechas. Se marca para que nadie la venda a ciegas.
    */
   requestWarning?: boolean;
+  cleanliness?: UnitCleanliness | null;
+  canMarkCleanliness?: boolean;
+  onMarkCleanliness?: (
+    unit: { id: string; code: string },
+    target: CleanlinessTarget,
+  ) => void;
 }) {
   const meta = UNIT_STATUS_META[unit.status];
   const overlay = UNIT_OVERLAY_STYLE[unit.status];
+  const markThisUnit = (target: CleanlinessTarget) => onMarkCleanliness?.(unit, target);
   return (
     <Popover open={isOpen} onOpenChange={onOpenChange}>
-      <PopoverAnchor asChild>
-        <button
-          type="button"
-          onClick={() => onOpenChange(!isOpen)}
-          className={cn(
-            "sticky left-0 z-20 shrink-0 flex items-center border-r bg-background hover:bg-accent/40 transition-colors text-left group",
-            compact ? "gap-1.5 px-1.5" : "gap-2.5 px-3"
-          )}
-          style={{ width: sidebarWidth }}
-        >
-          {/* Status stripe vertical izquierda */}
-          <div
-            className="absolute left-0 top-0 bottom-0 w-[3px] transition-all"
-            style={{ backgroundColor: meta.color }}
+      {/* El botón que abre la ficha va de fondo y el contenido encima sin recibir
+          clics: el de sucio/limpio no puede ir adentro de otro botón. */}
+      <div
+        className={cn(
+          "group/unit-cell sticky left-0 z-20 shrink-0 flex items-center border-r bg-background text-left",
+          compact ? "gap-1.5 px-1.5" : "gap-2.5 px-3"
+        )}
+        style={{ width: sidebarWidth }}
+      >
+        <PopoverAnchor asChild>
+          <button
+            type="button"
+            onClick={() => onOpenChange(!isOpen)}
+            aria-label={`Ver ${unit.code}`}
+            className="absolute inset-0 hover:bg-accent/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
           />
+        </PopoverAnchor>
+
+        {/* Status stripe vertical izquierda */}
+        <div
+          className="pointer-events-none absolute left-0 top-0 bottom-0 w-[3px] transition-all"
+          style={{ backgroundColor: meta.color }}
+        />
 
           {!compact && (
             <div
               className={cn(
-                "size-8 rounded-lg shrink-0 flex items-center justify-center ring-1 transition-all",
+                "pointer-events-none relative size-8 rounded-lg shrink-0 flex items-center justify-center ring-1 transition-all",
                 overlay ? "ring-transparent" : "ring-border/60"
               )}
               style={{
@@ -4811,7 +4920,7 @@ function UnitCellHeader({
             </div>
           )}
 
-          <div className="min-w-0 flex-1 pl-1">
+          <div className="pointer-events-none relative min-w-0 flex-1 pl-1">
             <div className="flex items-center gap-1">
               <span
                 className={cn(
@@ -4835,20 +4944,40 @@ function UnitCellHeader({
               )}
             </div>
             {!compact && (
-              <div className="text-[10px] text-muted-foreground truncate">
-                {unit.name}
+              <div className="mt-0.5 flex min-h-[18px] items-center gap-1">
+                {/* Sucia: el aviso ocupa el renglón del nombre, que igual está en la ficha. */}
+                {!cleanliness && (
+                  <span className="min-w-0 truncate text-[10px] text-muted-foreground">
+                    {unit.name}
+                  </span>
+                )}
+                <CleanlinessRowButton
+                  unitCode={unit.code}
+                  state={cleanliness}
+                  canMark={canMarkCleanliness}
+                  onMark={markThisUnit}
+                />
               </div>
             )}
             {compact && (
-              <div className="text-[9px] tabular-nums text-foreground/70 mt-0.5">
-                {occupancyPct.toFixed(0)}%
+              <div className="mt-0.5 flex items-center gap-1">
+                <span className="text-[9px] tabular-nums text-foreground/70">
+                  {occupancyPct.toFixed(0)}%
+                </span>
+                <CleanlinessRowButton
+                  unitCode={unit.code}
+                  state={cleanliness}
+                  canMark={canMarkCleanliness}
+                  compact
+                  onMark={markThisUnit}
+                />
               </div>
             )}
           </div>
 
           {/* Mini occupancy bar — solo en desktop */}
           {!compact && (
-            <div className="flex flex-col items-end gap-0.5 shrink-0">
+            <div className="pointer-events-none relative flex flex-col items-end gap-0.5 shrink-0">
               <span className="text-[9px] font-semibold tabular-nums text-foreground/80">
                 {occupancyPct.toFixed(0)}%
               </span>
@@ -4867,8 +4996,7 @@ function UnitCellHeader({
               </div>
             </div>
           )}
-        </button>
-      </PopoverAnchor>
+      </div>
       <PopoverContent align="start" side="right" className="p-0 w-auto">
         <PmsUnitPopoverContent
           unit={unit}
@@ -4878,6 +5006,9 @@ function UnitCellHeader({
           revenue={revenue}
           currency={currency}
           canViewMoney={canViewMoney}
+          cleanliness={
+            canMarkCleanliness ? { state: cleanliness, onMark: markThisUnit } : undefined
+          }
         />
       </PopoverContent>
     </Popover>

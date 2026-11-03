@@ -6,6 +6,8 @@ import {
 import { listOwners } from "@/lib/actions/owners";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { can } from "@/lib/permissions";
+import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
+import { defaultSettlementPeriod } from "@/lib/settlements/period-guard";
 import { LiquidacionesTabs } from "@/components/settlements/liquidaciones-tabs";
 import type { OwnerSettlement, Owner } from "@/lib/types/database";
 
@@ -23,13 +25,16 @@ export default async function LiquidacionesPage({
     currency?: string;
   }>;
 }) {
-  const { role } = await getCurrentOrg();
+  const { organization, role } = await getCurrentOrg();
   if (!can(role, "settlements", "view")) redirect("/dashboard");
 
   const sp = await searchParams;
-  const now = new Date();
-  const year = Number(sp.year) || now.getFullYear();
-  const monthRaw = Number(sp.month) || now.getMonth() + 1;
+  // A principios de mes abre en el que cerró: ver period-guard.ts.
+  const defaultPeriod = defaultSettlementPeriod(
+    todayYmdInTz(organization.timezone || DEFAULT_ORG_TIMEZONE),
+  );
+  const year = Number(sp.year) || defaultPeriod.year;
+  const monthRaw = Number(sp.month) || defaultPeriod.month;
   const month = Math.min(12, Math.max(1, monthRaw));
   const currency = sp.currency || "all";
   const initialTab = sp.tab === "periodo" ? "periodo" : "propietario";
@@ -60,6 +65,7 @@ export default async function LiquidacionesPage({
   }));
 
   const canCreate = can(role, "settlements", "create");
+  const canDelete = can(role, "settlements", "delete");
 
   return (
     <div className="page-x page-y max-w-6xl mx-auto">
@@ -73,6 +79,7 @@ export default async function LiquidacionesPage({
         currency={currency}
         periodRows={periodRows}
         canCreate={canCreate}
+        canDelete={canDelete}
       />
     </div>
   );

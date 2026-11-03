@@ -37,6 +37,20 @@ import {
 } from "@/lib/settlements/labels";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { todayYmdInTz } from "@/lib/dates";
+import { isPeriodUnfinished, lastClosedPeriod } from "@/lib/settlements/period-guard";
+import { PeriodRevertButton } from "./period-revert-button";
 
 type PeriodSettlement = {
   id: string;
@@ -64,6 +78,7 @@ export function PeriodBatchPanel({
   currency,
   rows,
   canCreate,
+  canDelete,
 }: {
   year: number;
   month: number;
@@ -71,6 +86,7 @@ export function PeriodBatchPanel({
   currency: string;
   rows: Row[];
   canCreate: boolean;
+  canDelete: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -82,6 +98,12 @@ export function PeriodBatchPanel({
   const [navPending, startNav] = useTransition();
   const [query, setQuery] = useState("");
   const nowYear = new Date().getFullYear();
+  const [confirmUnfinished, setConfirmUnfinished] = useState(false);
+  const today = todayYmdInTz();
+  const periodLabel = formatPeriod(year, month);
+  const closedPeriod = lastClosedPeriod(today);
+  const closedLabel = formatPeriod(closedPeriod.year, closedPeriod.month);
+  const hasSettlements = rows.some((r) => r.settlements.some((s) => s.status !== "anulada"));
 
   function navigate(next: { year?: number; month?: number; currency?: string }) {
     const y = next.year ?? year;
@@ -92,6 +114,16 @@ export function PeriodBatchPanel({
         `/dashboard/liquidaciones?tab=periodo&year=${y}&month=${m}&currency=${c}`,
       );
     });
+  }
+
+  /**
+   * Generar un mes que no terminó es casi siempre un error, y dos veces fue el
+   * mes equivocado de toda la organización: se pregunta antes, ofreciendo el que
+   * cerró. Fuera de esto sigue siendo un clic.
+   */
+  function requestGenerateAll() {
+    if (isPeriodUnfinished({ year, month }, todayYmdInTz())) setConfirmUnfinished(true);
+    else generateAll();
   }
 
   function generateAll() {
@@ -283,10 +315,24 @@ export function PeriodBatchPanel({
             />
           </div>
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {canDelete && hasSettlements && (
+            <PeriodRevertButton
+              year={year}
+              month={month}
+              onReverted={() => {
+                // Si era el mes que no correspondía, se sigue en el que sí.
+                if (isPeriodUnfinished({ year, month }, todayYmdInTz())) {
+                  navigate(closedPeriod);
+                } else {
+                  router.refresh();
+                }
+              }}
+            />
+          )}
           {canCreate && (
             <Button
-              onClick={generateAll}
+              onClick={requestGenerateAll}
               disabled={pending}
               className="gap-2"
             >
@@ -438,6 +484,31 @@ export function PeriodBatchPanel({
           )}
         </Table>
       </div>
+
+      <AlertDialog open={confirmUnfinished} onOpenChange={setConfirmUnfinished}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{periodLabel} todavía no terminó</AlertDialogTitle>
+            <AlertDialogDescription>
+              Si generás ahora, se liquidan las reservas de un mes en curso. Lo habitual es
+              liquidar el mes que ya cerró: {closedLabel}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              // `outline` no define el color de texto y quedaba el blanco del primario.
+              className={cn(buttonVariants({ variant: "outline" }), "text-foreground")}
+              onClick={generateAll}
+            >
+              Generar {MONTHS[month - 1]} igual
+            </AlertDialogAction>
+            <AlertDialogAction onClick={() => navigate(closedPeriod)}>
+              Ir a {closedLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }
