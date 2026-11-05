@@ -767,9 +767,10 @@ export function UnitFormDialog({
                   Es lo que le descontás al propietario cuando generás la liquidación.
                 </p>
                 <p>
-                  Manda esta comisión, la de la unidad. Si con algún propietario
-                  arreglaste otro porcentaje, cargale la excepción en la ficha de la
-                  unidad → pestaña <strong>Propietarios</strong>.
+                  Se usa si no hay otra que mande. Primero rige lo acordado con el
+                  propietario (ficha de la unidad → pestaña <strong>Propietarios</strong>)
+                  y después la comisión por canal de la organización, si la tenés
+                  configurada. Cambiarla no reescribe filas ya editadas de una liquidación.
                 </p>
               </div>
             </TabsContent>

@@ -23,6 +23,7 @@ import { EditUnitButton } from "@/components/units/edit-unit-button";
 import { UnitOwnersManager } from "@/components/units/unit-owners-manager";
 import { UNIT_DEFAULT_MODE_META, UNIT_STATUS_META } from "@/lib/constants";
 import { formatMoney } from "@/lib/format";
+import { commissionSummary, unitCommissionLabel } from "@/lib/finance/commission-summary";
 import { unitMonthlyPrice, unitPriceKinds } from "@/lib/units/pricing";
 import { cn } from "@/lib/utils";
 import type { Unit, UnitOwner, Owner } from "@/lib/types/database";
@@ -33,7 +34,7 @@ type UnitDetail = Unit & {
 
 export default async function UnitDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const [unit, owners, { role }] = await Promise.all([
+  const [unit, owners, { organization, role }] = await Promise.all([
     getUnit(id),
     listOwners(),
     getCurrentOrg(),
@@ -58,6 +59,11 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
   const monthlyPrice = unitMonthlyPrice(u);
   const modeMeta = UNIT_DEFAULT_MODE_META[u.default_mode] ?? UNIT_DEFAULT_MODE_META.temporario;
   const currency = u.base_price_currency ?? "ARS";
+  const normalCommissionLabel = commissionSummary({
+    bySource: organization.commission_by_source,
+    unitPct: u.default_commission_pct,
+    orgPct: organization.default_commission_pct,
+  });
 
   return (
     <div className="page-x page-y max-w-5xl mx-auto space-y-4 sm:space-y-5 md:space-y-6">
@@ -208,7 +214,15 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground">Comisión de administración</div>
-                  <div className="font-medium">{u.default_commission_pct ?? 0}%</div>
+                  <div className="font-medium">
+                    {unitCommissionLabel({
+                      owners: u.unit_owners.map((uo) => ({
+                        name: uo.owner.full_name,
+                        override: uo.commission_pct_override,
+                      })),
+                      summary: normalCommissionLabel,
+                    })}
+                  </div>
                 </div>
               </div>
             </Card>
@@ -234,7 +248,7 @@ export default async function UnitDetailPage({ params }: { params: Promise<{ id:
             unitId={u.id}
             unitOwners={u.unit_owners}
             availableOwners={owners}
-            unitDefaultCommissionPct={u.default_commission_pct}
+            normalCommissionLabel={normalCommissionLabel}
             canEdit={can(role, "units", "update")}
           />
         </TabsContent>

@@ -32,35 +32,31 @@ import {
   updateUnitOwnerCommission,
 } from "@/lib/actions/units";
 import { getInitials } from "@/lib/format";
+import {
+  formatCommissionPct,
+  ownerCommissionWarning,
+  parseOwnerCommission,
+} from "@/lib/finance/commission-summary";
 import type { UnitOwner, Owner } from "@/lib/types/database";
 
 interface UnitOwnersManagerProps {
   unitId: string;
   unitOwners: (UnitOwner & { owner: Owner })[];
   availableOwners: Owner[];
-  /** La comisión de la unidad: es la que rige si el propietario no tiene excepción. */
-  unitDefaultCommissionPct: number | null;
+  /** La que rige si el propietario no tiene acuerdo propio (`commissionSummary`). */
+  normalCommissionLabel: string;
   /**
-   * Agregar, quitar y editar la excepción de comisión (units:update). Sin el
-   * permiso el servidor lo rechaza, así que la lista queda de sólo lectura.
+   * Agregar, quitar y editar el acuerdo de comisión (units:update). Sin el permiso
+   * el servidor lo rechaza, así que la lista queda de sólo lectura.
    */
   canEdit?: boolean;
-}
-
-/** `null` = sin excepción, se usa la comisión de la unidad. */
-function parseOverride(raw: string): { ok: true; value: number | null } | { ok: false } {
-  const trimmed = raw.trim();
-  if (trimmed === "") return { ok: true, value: null };
-  const n = Number(trimmed.replace(",", "."));
-  if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false };
-  return { ok: true, value: n };
 }
 
 export function UnitOwnersManager({
   unitId,
   unitOwners,
   availableOwners,
-  unitDefaultCommissionPct,
+  normalCommissionLabel,
   canEdit = false,
 }: UnitOwnersManagerProps) {
   const router = useRouter();
@@ -76,8 +72,13 @@ export function UnitOwnersManager({
 
   const comisionDe = (override: number | null | undefined) =>
     override !== null && override !== undefined
-      ? `Comisión de administración: ${override}% (solo para este propietario)`
-      : `Comisión de administración: ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`;
+      ? `Comisión de administración: ${formatCommissionPct(Number(override))} (acordada con este propietario, manda sobre las demás)`
+      : `Comisión de administración: ${normalCommissionLabel}`;
+
+  const addOverrideParsed = parseOwnerCommission(override);
+  const addWarning = addOverrideParsed.ok ? ownerCommissionWarning(addOverrideParsed.value) : null;
+  const editParsed = parseOwnerCommission(editingValue);
+  const editWarning = editParsed.ok ? ownerCommissionWarning(editParsed.value) : null;
 
   const totalPct = unitOwners.reduce((acc, uo) => acc + Number(uo.ownership_pct), 0);
   const linkedIds = new Set(unitOwners.map((uo) => uo.owner_id));
@@ -100,14 +101,15 @@ export function UnitOwnersManager({
       toast.error("La suma de % de propiedad no puede pasar 100");
       return;
     }
-    const parsedOverride = parseOverride(override);
-    if (!parsedOverride.ok) {
+    if (!addOverrideParsed.ok) {
       toast.error("Comisión inválida", { description: "Tiene que ser un número entre 0 y 100." });
       return;
     }
+    if (addWarning && !window.confirm(`${addWarning}\n\n¿Guardar igual?`)) return;
+    const commission = addOverrideParsed.value;
     startTransition(async () => {
       try {
-        await linkOwnerToUnit(unitId, selectedOwner, pct, isPrimary, parsedOverride.value);
+        await linkOwnerToUnit(unitId, selectedOwner, pct, isPrimary, commission);
         toast.success("Propietario agregado");
         setOpen(false);
         setSelectedOwner("");
@@ -128,18 +130,19 @@ export function UnitOwnersManager({
 
   function handleSaveOverride() {
     if (!editing) return;
-    const parsed = parseOverride(editingValue);
-    if (!parsed.ok) {
+    if (!editParsed.ok) {
       toast.error("Comisión inválida", { description: "Tiene que ser un número entre 0 y 100." });
       return;
     }
+    if (editWarning && !window.confirm(`${editWarning}\n\n¿Guardar igual?`)) return;
+    const commission = editParsed.value;
     startTransition(async () => {
       try {
-        await updateUnitOwnerCommission(editing.id, unitId, parsed.value);
+        await updateUnitOwnerCommission(editing.id, unitId, commission);
         toast.success(
-          parsed.value === null
-            ? "Ahora usa la comisión de la unidad"
-            : `Comisión de administración: ${parsed.value}%`
+          commission === null
+            ? "Ahora usa la comisión normal"
+            : `Comisión de administración: ${formatCommissionPct(commission)}`
         );
         setEditing(null);
         router.refresh();
@@ -170,8 +173,8 @@ export function UnitOwnersManager({
         <div>
           <h2 className="text-sm font-semibold">Propietarios</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Total asignado: {totalPct.toFixed(0)}% / 100% · Comisión de administración
-            de la unidad: {unitDefaultCommissionPct ?? 20}%
+            Total asignado: {totalPct.toFixed(0)}% / 100% · Comisión normal:{" "}
+            {normalCommissionLabel}
           </p>
         </div>
         {canEdit && (
@@ -219,12 +222,19 @@ export function UnitOwnersManager({
                     step="0.01"
                     value={override}
                     onChange={(e) => setOverride(e.target.value)}
-                    placeholder={`Vacío = ${unitDefaultCommissionPct ?? 20}% (la de la unidad)`}
+                    placeholder="Vacío = la comisión normal"
                   />
-                  <p className="text-[11px] text-muted-foreground leading-snug">
-                    Solo si con este propietario arreglaste un porcentaje distinto. Lo
-                    podés cambiar cuando quieras.
-                  </p>
+                  {addWarning ? (
+                    <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300" role="alert">
+                      {addWarning}
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground leading-snug">
+                      Solo si con este propietario arreglaste un porcentaje distinto: manda
+                      sobre cualquier otra comisión. Vacío rige la normal:{" "}
+                      {normalCommissionLabel}.
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center justify-between pt-2">
                   <Label htmlFor="is_primary" className="cursor-pointer">Marcar como propietario principal</Label>
@@ -319,12 +329,18 @@ export function UnitOwnersManager({
                 inputMode="decimal"
                 value={editingValue}
                 onChange={(e) => setEditingValue(e.target.value)}
-                placeholder={`${unitDefaultCommissionPct ?? 20}`}
+                placeholder="Vacío = la comisión normal"
                 autoFocus
               />
-              <p className="text-[11px] text-muted-foreground leading-snug">
-                Dejalo vacío para usar la comisión de la unidad ({unitDefaultCommissionPct ?? 20}%).
-              </p>
+              {editWarning ? (
+                <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300" role="alert">
+                  {editWarning}
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Dejalo vacío para usar la comisión normal: {normalCommissionLabel}.
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter className="gap-2">

@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { UnitCombobox } from "@/components/ui/unit-combobox";
 import { linkUnitToOwner } from "@/lib/actions/owners";
+import { ownerCommissionWarning, parseOwnerCommission } from "@/lib/finance/commission-summary";
 
 /**
  * Autocontenido (mismo patrón que UnitOwnersManager): renderiza su propio
@@ -37,21 +38,23 @@ export function AssignUnitDialog({
   const [pct, setPct] = useState(100);
   const [override, setOverride] = useState("");
   const [isPrimary, setIsPrimary] = useState(false);
+  const parsedOverride = parseOwnerCommission(override);
+  const overrideWarning = parsedOverride.ok ? ownerCommissionWarning(parsedOverride.value) : null;
 
   function handleAdd() {
     if (!unitId || pct <= 0) {
       toast.error("Elegí una unidad y un % válido");
       return;
     }
+    if (!parsedOverride.ok) {
+      toast.error("Comisión inválida", { description: "Tiene que ser un número entre 0 y 100." });
+      return;
+    }
+    if (overrideWarning && !window.confirm(`${overrideWarning}\n\n¿Guardar igual?`)) return;
+    const commission = parsedOverride.value;
     startTransition(async () => {
       try {
-        await linkUnitToOwner(
-          ownerId,
-          unitId,
-          pct,
-          isPrimary,
-          override === "" ? null : Number(override),
-        );
+        await linkUnitToOwner(ownerId, unitId, pct, isPrimary, commission);
         toast.success("Unidad asignada");
         setOpen(false);
         setUnitId("");
@@ -113,12 +116,19 @@ export function AssignUnitDialog({
               step="0.01"
               value={override}
               onChange={(e) => setOverride(e.target.value)}
-              placeholder="Vacío = la comisión de la unidad"
+              placeholder="Vacío = la comisión normal"
             />
-            <p className="text-[11px] text-muted-foreground leading-snug">
-              Solo si con este propietario arreglaste un porcentaje distinto al de la
-              unidad. Después se edita desde la ficha de la unidad → Propietarios.
-            </p>
+            {overrideWarning ? (
+              <p className="text-[11px] leading-snug text-amber-700 dark:text-amber-300" role="alert">
+                {overrideWarning}
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                Solo si con este propietario arreglaste un porcentaje distinto: manda sobre
+                cualquier otra comisión. Después se edita desde la ficha de la unidad →
+                Propietarios.
+              </p>
+            )}
           </div>
           <div className="flex items-center justify-between pt-2">
             <Label htmlFor="assign_is_primary" className="cursor-pointer">
