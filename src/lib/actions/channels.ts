@@ -15,6 +15,12 @@ import { computeLinkHealth } from "@/lib/channels/health";
 import { processStoredEvent, reprojectReservation } from "@/lib/channels/ingest";
 import { reservationEventFromRow } from "@/lib/channels/dispatch";
 import { sha256Hex } from "@/lib/channels/token";
+import {
+  emailChannelView,
+  forwardingRequestFromEvent,
+  GMAIL_FORWARDING_LABEL,
+  type EmailChannelView,
+} from "@/lib/channels/gmail-forwarding";
 import type {
   Channel,
   ChannelIssueRow,
@@ -66,6 +72,8 @@ export interface ChannelsOverview {
     last_email_at: string | null;
   } | null;
   emailAddress: string | null;
+  /** Estado del reenvío de mails, con el pedido de confirmación de Gmail si lo hay. */
+  email: EmailChannelView;
   awaitingData: number;
   units: { id: string; code: string; name: string }[];
 }
@@ -74,44 +82,57 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
   const { organization } = await requireChannelsAccess("view");
   const admin = createAdminClient();
 
-  const [linksRes, issuesRes, settingsRes, orgRes, unitsRes, awaitingRes] = await Promise.all([
-    admin
-      .from("channel_links")
-      .select("*, unit:units(id, code, name)")
-      .eq("organization_id", organization.id)
-      .order("created_at", { ascending: true }),
-    admin
-      .from("channel_issues")
-      .select("*, link:channel_links(channel, unit:units(id, code, name))")
-      .eq("organization_id", organization.id)
-      .eq("status", "open")
-      .order("severity", { ascending: true })
-      .order("created_at", { ascending: false })
-      .limit(100),
-    admin
-      .from("channel_settings")
-      .select("email_ingest_enabled, email_verified_at, last_email_at")
-      .eq("organization_id", organization.id)
-      .maybeSingle(),
-    admin
-      .from("organizations")
-      .select("inbound_email_token")
-      .eq("id", organization.id)
-      .single(),
-    admin
-      .from("units")
-      .select("id, code, name")
-      .eq("organization_id", organization.id)
-      .eq("active", true)
-      .order("code"),
-    admin
-      .from("channel_reservations")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organization.id)
-      .eq("external_status", "active")
-      .not("booking_id", "is", null)
-      .eq("guest", "{}"),
-  ]);
+  const [linksRes, issuesRes, settingsRes, orgRes, unitsRes, awaitingRes, forwardingRes] =
+    await Promise.all([
+      admin
+        .from("channel_links")
+        .select("*, unit:units(id, code, name)")
+        .eq("organization_id", organization.id)
+        .order("created_at", { ascending: true }),
+      admin
+        .from("channel_issues")
+        .select("*, link:channel_links(channel, unit:units(id, code, name))")
+        .eq("organization_id", organization.id)
+        .eq("status", "open")
+        .order("severity", { ascending: true })
+        .order("created_at", { ascending: false })
+        .limit(100),
+      admin
+        .from("channel_settings")
+        .select("email_ingest_enabled, email_verified_at, last_email_at")
+        .eq("organization_id", organization.id)
+        .maybeSingle(),
+      admin
+        .from("organizations")
+        .select("inbound_email_token")
+        .eq("id", organization.id)
+        .single(),
+      admin
+        .from("units")
+        .select("id, code, name")
+        .eq("organization_id", organization.id)
+        .eq("active", true)
+        .order("code"),
+      admin
+        .from("channel_reservations")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organization.id)
+        .eq("external_status", "active")
+        .not("booking_id", "is", null)
+        .eq("guest", "{}"),
+      // El último pedido de confirmación de Gmail: trae el código que la persona
+      // tiene que pegar en Gmail (ese mail no lo lee nadie más).
+      admin
+        .from("channel_events")
+        .select("created_at, payload")
+        .eq("organization_id", organization.id)
+        .eq("transport", "email")
+        .eq("event_type", "email_unparsed")
+        .eq("payload->>ignored", GMAIL_FORWARDING_LABEL)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
   const rawLinks = (linksRes.data ?? []) as (ChannelLinkRow & {
     unit: { id: string; code: string; name: string };
@@ -151,11 +172,18 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
   const token = orgRes.data?.inbound_email_token as string | undefined;
   const emailAddress = domain && token ? `ota-${token}@${domain}` : null;
 
+  const email = emailChannelView({
+    verifiedAt: settingsRes.data?.email_verified_at ?? null,
+    request: forwardingRequestFromEvent(forwardingRes.data ?? null),
+    now: new Date(),
+  });
+
   return {
     links,
     issues,
     settings: settingsRes.data ?? null,
     emailAddress,
+    email,
     awaitingData: awaitingRes.count ?? 0,
     units: unitsRes.data ?? [],
   };

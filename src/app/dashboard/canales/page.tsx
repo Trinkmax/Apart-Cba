@@ -232,7 +232,7 @@ export default async function CanalesPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <EmailSettingsCard
           emailAddress={overview.emailAddress}
-          verifiedAt={overview.settings?.email_verified_at ?? null}
+          view={overview.email}
           lastEmailAt={overview.settings?.last_email_at ?? null}
         />
         <Card className="p-4 sm:p-5 space-y-2">

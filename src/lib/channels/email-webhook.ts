@@ -2,6 +2,11 @@ import crypto from "crypto";
 import { Resend } from "resend";
 import { normalizeInboundEmail } from "./email-adapter";
 import { ingestEvent, openIssue } from "./ingest";
+import {
+  GMAIL_FORWARDING_LABEL,
+  parseGmailForwardingConfirmation,
+  type GmailForwardingConfirmation,
+} from "./gmail-forwarding";
 import type { ResendInboundEmail } from "@/lib/inbound/types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -139,6 +144,15 @@ export async function handleResendInbound(
     text: fetched.text ?? "",
   };
 
+  // La confirmación de reenvío de Gmail llega ANTES de que Gmail reenvíe nada:
+  // no es un mail reenviado, así que no verifica el canal (marcarlo mostraba
+  // "Funcionando" a casillas que nunca reenviaron). Se guarda para mostrar el
+  // código y el enlace en Canales: nadie más puede verlos.
+  const forwarding = parseGmailForwardingConfirmation(email);
+  if (forwarding) {
+    return recordForwardingConfirmation(admin, { orgId, emailId, email, forwarding });
+  }
+
   // marca de actividad del canal de email de la org (verifica el reenvío)
   await admin
     .from("channel_settings")
@@ -222,15 +236,74 @@ export async function handleResendInbound(
   };
 }
 
+async function recordForwardingConfirmation(
+  admin: AdminClient,
+  input: {
+    orgId: string;
+    emailId: string;
+    email: ResendInboundEmail;
+    forwarding: GmailForwardingConfirmation;
+  },
+): Promise<EmailWebhookResult> {
+  const { orgId, emailId, email, forwarding } = input;
+  const { error } = await admin.from("channel_events").insert({
+    organization_id: orgId,
+    transport: "email",
+    event_type: "email_unparsed",
+    dedupe_key: `email:${emailId}`,
+    content_hash: crypto
+      .createHash("sha256")
+      .update(email.html || email.text || "")
+      .digest("hex"),
+    payload: {
+      subject: (email.subject || "").slice(0, 150),
+      from_domain: email.from.split("@").pop()?.slice(0, 60) ?? null,
+      ignored: GMAIL_FORWARDING_LABEL,
+      gmail_forwarding: {
+        code: forwarding.code,
+        confirm_url: forwarding.confirmUrl,
+        requester: forwarding.requester,
+      },
+    },
+    status: "processed",
+  });
+  if (error) {
+    if (error.code === "23505") return { ok: true, status: "duplicate", httpStatus: 200 };
+    // 5xx para que Resend reintente: si este mail se pierde, la org no puede
+    // terminar de configurar el reenvío.
+    console.error("[channels/email] confirmación de Gmail: insert falló", error.message);
+    return { ok: false, status: "event_insert_failed", httpStatus: 500 };
+  }
+
+  // Aviso en la campana, que además refresca Canales en vivo (la pantalla
+  // escucha `notifications`). El código NO va acá: las notificaciones las ve
+  // todo el equipo; el código, sólo quien entra a Canales.
+  const { error: notifyErr } = await admin.from("notifications").insert({
+    organization_id: orgId,
+    type: "other",
+    severity: "warning",
+    title: "Gmail pide confirmar el reenvío de mails",
+    body: `${forwarding.requester ?? "Una cuenta de Gmail"} quiere reenviar sus mails a la dirección de Canales de venta. Entrá a Canales para ver el código y confirmarlo.`,
+    action_url: "/dashboard/canales",
+    target_role: "admin",
+    dedup_key: `gmail_forwarding:${emailId}`,
+  });
+  if (notifyErr && notifyErr.code !== "23505") {
+    console.error("[channels/email] aviso de confirmación de Gmail falló", notifyErr.message);
+  }
+  return { ok: true, status: "gmail_forwarding_confirmation", httpStatus: 200 };
+}
+
 /**
  * Emails de OTA que NO son eventos de reserva y no deben abrir incidencias.
  * Sólo corre cuando el parseo falló — un email que sí parsea como reserva o
  * cancelación jamás pasa por acá. Devuelve la razón (para auditoría) o null.
  */
 function classifyIgnorable(from: string, subject: string): string | null {
-  // Confirmaciones de reenvío de Gmail y avisos de Google
-  if (/@google\.com$|@google\.com>/i.test(from.trim()) || /forwarding-noreply@/i.test(from)) {
-    return "reenvio_gmail";
+  // Avisos de Google que llegan reenviados. La confirmación de reenvío de Gmail
+  // no pasa por acá: no es ruido, es un paso pendiente (gmail-forwarding.ts).
+  if (/@google\.com$|@google\.com>/i.test(from.trim())) {
+    return "google";
   }
   const s = subject;
   if (/rese[ñn]a|review/i.test(s)) return "resena";
