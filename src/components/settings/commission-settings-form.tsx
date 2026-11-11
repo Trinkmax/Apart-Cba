@@ -57,7 +57,14 @@ function parsePct(raw: string): number | null {
   return Number.isFinite(n) ? n : NaN;
 }
 
-export function CommissionSettingsForm({ initial }: { initial: Initial }) {
+export function CommissionSettingsForm({
+  initial,
+  unitCommissions,
+}: {
+  initial: Initial;
+  /** "9 unidades con 0% · 1 con 10%": lo que rige en un canal sin comisión propia. */
+  unitCommissions: string | null;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -88,7 +95,8 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
   // plata. Usa los valores que la persona está tipeando, no los guardados.
   const example = useMemo(() => {
     const channelPct = parsePct(pcts[exampleSource]);
-    // El % propio del canal gana sobre el general — igual que en la liquidación.
+    // Sin % propio del canal rige el de cada unidad, que acá no se conoce: se
+    // ejemplifica con el general y la etiqueta lo aclara (`exampleUsesUnitPct`).
     const own = parsePct(mine[exampleSource]);
     const commissionPct =
       own !== null && Number.isFinite(own) ? own : parsePct(adminPct);
@@ -100,6 +108,8 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
       commissionBase: base,
     });
   }, [pcts, mine, exampleSource, adminPct, base]);
+  const exampleOwnPct = parsePct(mine[exampleSource]);
+  const exampleUsesUnitPct = exampleOwnPct === null || !Number.isFinite(exampleOwnPct);
 
   function handleSubmit() {
     const parsedAdmin = parsePct(adminPct);
@@ -243,12 +253,16 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
                       onChange={(e) =>
                         setMine((p) => ({ ...p, [c.source]: e.target.value }))
                       }
-                      placeholder={String(initial.default_commission_pct)}
+                      // Una palabra y no un número: acá iba el general (20) en gris,
+                      // que parecía cargado y no es lo que se cobra si queda vacío.
+                      placeholder="Unidad"
                       className="font-mono pr-7 h-9"
                     />
-                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                      %
-                    </span>
+                    {mine[c.source].trim() !== "" && (
+                      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                        %
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -257,9 +271,10 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
         </div>
 
         <p className="text-[11px] text-muted-foreground leading-snug">
-          El porcentaje gris es el de la unidad: mientras dejes tu comisión vacía, se
-          usa ese. Si un propietario tiene un porcentaje acordado en su unidad, ese
-          manda siempre por encima de esta tabla.
+          Donde dice «Unidad», ese canal no tiene comisión propia y rige la de cada
+          unidad{unitCommissions ? ` (hoy: ${unitCommissions})` : ""}. Si un propietario
+          tiene un porcentaje acordado en su unidad, ese manda siempre por encima de
+          esta tabla.
         </p>
       </div>
 
@@ -355,7 +370,8 @@ export function CommissionSettingsForm({ initial }: { initial: Initial }) {
           </dd>
 
           <dt className="text-muted-foreground">
-            Tu comisión ({example.commissionPct}% sobre {formatMoney(example.commissionBaseAmount, cur)})
+            Tu comisión ({exampleUsesUnitPct ? "rige la de la unidad; ejemplo: " : ""}
+            {example.commissionPct}% sobre {formatMoney(example.commissionBaseAmount, cur)})
           </dt>
           <dd className="text-right tabular-nums text-violet-700 dark:text-violet-300">
             − {formatMoney(example.commission, cur)}

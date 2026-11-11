@@ -1,12 +1,15 @@
 import { redirect } from "next/navigation";
 import { getCurrentOrg } from "@/lib/actions/org";
+import { listUnitsForBookingForm } from "@/lib/actions/units";
 import { isAdminLevel } from "@/lib/permissions";
 import { CommissionSettingsForm } from "@/components/settings/commission-settings-form";
 import { DEFAULT_COMMISSION_BASE } from "@/lib/finance/booking-economics";
+import { unitCommissionDistribution } from "@/lib/finance/commission-summary";
 
 export default async function ComisionesPage() {
   const { organization, role } = await getCurrentOrg();
   if (!isAdminLevel(role)) redirect("/dashboard");
+  const units = await listUnitsForBookingForm();
 
   return (
     <section className="space-y-5">
@@ -26,6 +29,10 @@ export default async function ComisionesPage() {
           default_commission_pct: organization.default_commission_pct ?? 20,
           default_currency: organization.default_currency ?? "ARS",
         }}
+        unitCommissions={unitCommissionDistribution(
+          units.map((u) => u.default_commission_pct),
+          organization.default_commission_pct,
+        )}
       />
     </section>
   );

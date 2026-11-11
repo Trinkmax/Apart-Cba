@@ -4,6 +4,7 @@ import {
   formatCommissionPct,
   ownerCommissionWarning,
   parseOwnerCommission,
+  unitCommissionDistribution,
   unitCommissionLabel,
 } from "@/lib/finance/commission-summary";
 
@@ -29,6 +30,29 @@ describe("commissionSummary", () => {
       "Directo 0% · otros canales 10%",
     );
     expect(commissionSummary({ unitPct: 0, orgPct: 20 })).toBe("0%");
+  });
+});
+
+describe("unitCommissionDistribution", () => {
+  it("agrupa y pone primero la más común (Habitana)", () => {
+    expect(unitCommissionDistribution([0, 0, 10, 0], 20)).toBe("3 unidades con 0% · 1 con 10%");
+  });
+
+  it("singular y una sola comisión", () => {
+    expect(unitCommissionDistribution([12.5], 20)).toBe("1 unidad con 12,5%");
+    expect(unitCommissionDistribution([20, 20], 20)).toBe("2 unidades con 20%");
+  });
+
+  it("con empate ordena por porcentaje", () => {
+    expect(unitCommissionDistribution([15, 5], 20)).toBe("1 unidad con 5% · 1 con 15%");
+  });
+
+  it("una unidad sin valor cae a la general, igual que al liquidar", () => {
+    expect(unitCommissionDistribution([null, 18], 18)).toBe("2 unidades con 18%");
+  });
+
+  it("sin unidades no hay nada que decir", () => {
+    expect(unitCommissionDistribution([], 20)).toBeNull();
   });
 });
 

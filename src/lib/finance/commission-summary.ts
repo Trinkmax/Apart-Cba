@@ -38,6 +38,32 @@ export function commissionSummary(input: {
   return `${channels.join(" · ")} · otros canales ${formatCommissionPct(rest)}`;
 }
 
+/**
+ * Qué comisión tienen las unidades: "9 unidades con 0% · 1 con 10%". `null` si no hay.
+ *
+ * Es lo que rige en un canal sin comisión propia, y no se puede resumir en un número:
+ * la pantalla de Comisiones mostraba en gris el general (20) y Habitana creyó que
+ * Airbnb cobraba 20 % cuando sus unidades, que eran las que mandaban, estaban en 0 %.
+ */
+export function unitCommissionDistribution(
+  pcts: (number | null | undefined)[],
+  orgPct?: number | null,
+): string | null {
+  const counts = new Map<number, number>();
+  for (const unitPct of pcts) {
+    const { pct } = resolveCommissionPct({ unitPct, orgPct });
+    counts.set(pct, (counts.get(pct) ?? 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  return [...counts.entries()]
+    .sort(([pctA, a], [pctB, b]) => b - a || pctA - pctB)
+    .map(([pct, n], i) => {
+      const units = i > 0 ? `${n}` : `${n} ${n === 1 ? "unidad" : "unidades"}`;
+      return `${units} con ${formatCommissionPct(pct)}`;
+    })
+    .join(" · ");
+}
+
 /** Lo que rige en una unidad, contando los acuerdos con cada propietario, que mandan. */
 export function unitCommissionLabel(input: {
   owners: { name: string; override: number | null | undefined }[];
