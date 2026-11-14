@@ -122,5 +122,7 @@ export const config = {
     "/superadmin/:path*",
     "/mi-cuenta/:path*",
     "/checkout/:path*",
+    // Tex (agente): el chat corre en una route; refrescar la sesión como en las páginas.
+    "/api/tex/:path*",
   ],
 };

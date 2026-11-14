@@ -54,7 +54,7 @@ export function ActionBar({
   };
 
   return (
-    <div className="sticky bottom-0 z-30 -mx-4 sm:-mx-6 mt-6 border-t bg-background/90 backdrop-blur-xl">
+    <div className="sticky-above-bar sticky bottom-0 z-30 -mx-4 sm:-mx-6 mt-6 border-t bg-background/90 backdrop-blur-xl">
       <div className="px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-muted-foreground">
           {report?.sent_at ? (

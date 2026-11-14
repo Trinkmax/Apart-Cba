@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Toaster } from "@/components/ui/sonner";
+import { GLASS_LEVEL_SCRIPT } from "@/lib/ui/glass-level";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -51,6 +52,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="es" suppressHydrationWarning>
+      <head>
+        {/* Nivel de vidrio del celular (glass.css) ANTES de pintar: sin parpadeo
+            en los Android que no se bancan el desenfoque. */}
+        <script dangerouslySetInnerHTML={{ __html: GLASS_LEVEL_SCRIPT }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         suppressHydrationWarning
@@ -65,6 +71,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           <Toaster
             richColors
             position="bottom-right"
+            // En el celular con la barra de vidrio, los avisos salen arriba de ella (mobile-shell.css).
+            offset={{ bottom: "var(--toast-bottom, 24px)", right: "24px" }}
+            mobileOffset={{ bottom: "var(--toast-bottom, 16px)" }}
             closeButton
             containerAriaLabel="Notificaciones"
             toastOptions={{

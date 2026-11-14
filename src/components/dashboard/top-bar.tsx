@@ -26,6 +26,7 @@ import { NotificationsBell } from "@/components/notifications/notifications-bell
 import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { InstallAppListener } from "@/components/pwa/install-app-prompt";
 import { InstallAppMenuItem } from "@/components/pwa/install-app-menu-item";
+import { TexLauncher } from "@/components/tex/tex-launcher";
 import type {
   Notification,
   Organization,
@@ -130,6 +131,9 @@ export function TopBar({
       {/* Estado de la conexión en vivo. Único en toda la app: si esto no está
           en verde, lo que se ve en pantalla puede estar viejo. */}
       <LiveIndicator />
+
+      {/* Tex, el asistente: sólo si la organización lo tiene encendido. */}
+      {currentOrg.tex_enabled && currentRole !== "owner_view" ? <TexLauncher /> : null}
 
       {/* Notifications bell */}
       <NotificationsBell

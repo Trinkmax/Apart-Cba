@@ -547,7 +547,7 @@ export function WebSettingsForm({
         </Field>
       </Section>
 
-      <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-end gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="sticky-above-bar sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-end gap-3 border-t bg-background/95 px-1 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         <p className="mr-auto text-xs text-muted-foreground" aria-live="polite">
           {pending ? "Guardando…" : dirty ? "Tenés cambios sin guardar." : "Todo guardado."}
         </p>

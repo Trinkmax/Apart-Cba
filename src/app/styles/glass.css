@@ -1,0 +1,591 @@
+/* ============================================================================ */
+/* Vidrio líquido del celular (nov-2026), a la manera del «Liquid Glass» de     */
+/* iOS 26. Portado de sharp-app (src/app/styles/glass.css): mismo autor, misma  */
+/* familia de apps, números ya probados en iPhone y en Android de gama baja.    */
+/* Adaptado a la paleta salvia de Apart.                                        */
+/*                                                                              */
+/* Hecho con CSS: la refracción de verdad con filtros SVG en `backdrop-filter`  */
+/* sólo existe en Chrome (en el iPhone no se ve). La lupa de la barra la imita  */
+/* con una copia agrandada de la barra + un filtro SVG chico (lens.ts).         */
+/*                                                                              */
+/* Tres niveles que decide `GLASS_LEVEL_SCRIPT` (src/lib/ui/glass-level.ts) en  */
+/* el <head>, antes de pintar:                                                  */
+/*  - completo (sin atributo): desenfoque + saturación + brillo de borde.       */
+/*  - `html[data-glass="bar"]`: Android de memoria media; desenfoque sólo en lo */
+/*    chico (barra, pastillas), las hojas casi opacas.                          */
+/*  - `html[data-glass="lite"]`: poca memoria o sin `backdrop-filter`: mismas   */
+/*    formas y brillos, sin desenfoque ni lente.                                */
+/*                                                                              */
+/* Va SIN capa a propósito: estas reglas le tienen que ganar a las utilidades   */
+/* de Tailwind (que viven en `@layer utilities`). Colores en rgba/oklch, nunca  */
+/* `color-mix` (Safari 15.4-16.1 no lo entiende).                               */
+/* ============================================================================ */
+
+:root {
+  --lg-blur: blur(16px) saturate(170%);
+  --lg-blur-lg: blur(24px) saturate(160%);
+
+  /* Superficies chicas (barra, pastillas, botones de vidrio). */
+  --lg-tint: rgba(255, 255, 255, 0.6);
+  --lg-tint-solid: rgba(255, 255, 255, 0.96);
+  --lg-border: rgba(255, 255, 255, 0.78);
+  --lg-hairline: rgba(22, 46, 36, 0.1);
+  --lg-specular: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 1px rgba(255, 255, 255, 0.35);
+  --lg-shadow: 0 12px 32px -10px rgba(22, 46, 36, 0.3), 0 2px 8px -2px rgba(22, 46, 36, 0.1);
+
+  /* Superficies grandes (hojas). El fondo del panel es oklch(0.99 0.005 145). */
+  --lg-tint-lg: rgba(250, 252, 250, 0.82);
+  --lg-tint-lg-solid: rgba(250, 252, 250, 0.985);
+
+  /* Lo que va arriba del vidrio: mosaicos y la pastilla elegida. */
+  --lg-tile: rgba(255, 255, 255, 0.64);
+  --lg-tile-solid: rgb(255, 255, 255);
+  --lg-tile-border: rgba(255, 255, 255, 0.85);
+  --lg-pill: rgba(22, 46, 36, 0.08);
+
+  /* El mosaico de la pantalla en la que estás: salvia clara con anillo salvia. */
+  --lg-tile-on: oklch(0.955 0.03 150);
+  --lg-tile-on-ring: oklch(0.66 0.08 150);
+
+  /* Fondo del encabezado fijo de una hoja (opaco del todo). */
+  --lg-head: rgb(250, 252, 250);
+  --lg-head-fade: rgba(250, 252, 250, 0);
+}
+
+.dark {
+  --lg-tint: rgba(28, 33, 30, 0.55);
+  --lg-tint-solid: rgba(26, 31, 28, 0.96);
+  --lg-border: rgba(255, 255, 255, 0.14);
+  --lg-hairline: rgba(0, 0, 0, 0.5);
+  --lg-specular: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 1px rgba(255, 255, 255, 0.04);
+  --lg-shadow: 0 12px 32px -10px rgba(0, 0, 0, 0.6), 0 2px 8px -2px rgba(0, 0, 0, 0.35);
+
+  --lg-tint-lg: rgba(22, 27, 24, 0.82);
+  --lg-tint-lg-solid: rgba(22, 27, 24, 0.985);
+
+  --lg-tile: rgba(255, 255, 255, 0.07);
+  --lg-tile-solid: rgb(38, 44, 40);
+  --lg-tile-border: rgba(255, 255, 255, 0.1);
+  --lg-pill: rgba(255, 255, 255, 0.13);
+
+  --lg-tile-on: rgba(150, 210, 165, 0.16);
+  --lg-tile-on-ring: rgba(150, 210, 165, 0.75);
+
+  --lg-head: rgb(22, 27, 24);
+  --lg-head-fade: rgba(22, 27, 24, 0);
+}
+
+/* Superficie chica: barra, botones de vidrio, pastillas. */
+.lg-surface {
+  background: var(--lg-tint);
+  -webkit-backdrop-filter: var(--lg-blur);
+  backdrop-filter: var(--lg-blur);
+  border: 0.5px solid var(--lg-border);
+  box-shadow: var(--lg-specular), var(--lg-shadow), 0 0 0 0.5px var(--lg-hairline);
+}
+
+/* Superficie grande: hojas que suben desde abajo. */
+.lg-sheet {
+  background: var(--lg-tint-lg);
+  -webkit-backdrop-filter: var(--lg-blur-lg);
+  backdrop-filter: var(--lg-blur-lg);
+  border-top: 0.5px solid var(--lg-border);
+  box-shadow: var(--lg-specular), 0 -12px 40px -16px rgba(22, 46, 36, 0.35);
+}
+
+/* Mosaico apoyado SOBRE una superficie de vidrio: translúcido, sin desenfoque
+   propio (desenfocar arriba de algo ya desenfocado es pagar dos veces). */
+.lg-tile {
+  background: var(--lg-tile);
+  border: 0.5px solid var(--lg-tile-border);
+  box-shadow: var(--lg-specular), 0 1px 2px rgba(22, 46, 36, 0.06), 0 0 0 0.5px var(--lg-hairline);
+}
+.lg-tile-on {
+  background: var(--lg-tile-on);
+  border: 0.5px solid var(--lg-tile-on-ring);
+  box-shadow: var(--lg-specular), inset 0 0 0 1px var(--lg-tile-on-ring), 0 6px 16px -10px rgba(22, 46, 36, 0.35);
+}
+/* El foco de teclado en lo que es de vidrio: el anillo global va por
+   `box-shadow` y el vidrio lo pisa (sus sombras son el brillo del borde). */
+.lg-tile:focus-visible,
+.lg-tile-on:focus-visible,
+.lg-surface:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Navegador sin `backdrop-filter`: los mismos colores, opacos. */
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .lg-surface {
+    background: var(--lg-tint-solid);
+  }
+  .lg-sheet {
+    background: var(--lg-tint-lg-solid);
+  }
+  .lg-tile {
+    background: var(--lg-tile-solid);
+  }
+}
+
+/* Android de memoria media: lo grande sin desenfoque. */
+html[data-glass="bar"] .lg-sheet {
+  background: var(--lg-tint-lg-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-glass="bar"] .lg-sheet .lg-tile {
+  background: var(--lg-tile-solid);
+}
+
+/* Poca memoria o «reducir transparencia»: nada desenfocado. */
+html[data-glass="lite"] .lg-surface,
+html[data-glass="lite"] .lg-sheet {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-glass="lite"] .lg-surface {
+  background: var(--lg-tint-solid);
+}
+html[data-glass="lite"] .lg-sheet {
+  background: var(--lg-tint-lg-solid);
+}
+html[data-glass="lite"] .lg-tile {
+  background: var(--lg-tile-solid);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .lg-surface,
+  .lg-sheet {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  .lg-surface {
+    background: var(--lg-tint-solid);
+  }
+  .lg-sheet {
+    background: var(--lg-tint-lg-solid);
+  }
+  .lg-tile {
+    background: var(--lg-tile-solid);
+  }
+}
+
+/* Encabezado fijo adentro de una hoja que scrollea. Quieto no lleva fondo;
+   cuando el contenido empieza a pasar por debajo (`data-scrolled` en la hoja)
+   se tapa con el color de la hoja y un degradé corto al pie: el «borde de
+   scroll» de iOS 26 sin pagar otro desenfoque. */
+.lg-head::before {
+  content: "";
+  position: absolute;
+  inset: -0.5rem 0 0;
+  z-index: -1;
+  background: linear-gradient(to bottom, var(--lg-head) calc(100% - 12px), var(--lg-head-fade));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease-out;
+}
+[data-scrolled] > .lg-head::before {
+  opacity: 1;
+}
+
+/* La manija de una hoja de vidrio: tono de la manija de iOS (≈1,8:1). */
+.lg-handle {
+  background-color: rgba(22, 46, 36, 0.28);
+}
+.dark .lg-handle {
+  background-color: rgba(235, 240, 236, 0.3);
+}
+
+/* ============================================================================ */
+/* Barra de pestañas flotante: la cápsula, la pastilla que se desliza entre     */
+/* pestañas y la «lupa» que sigue al dedo (glass-tab-bar.tsx). Todo se mueve    */
+/* con transform y opacity. La lupa muestra una copia agrandada de la barra     */
+/* entera (cápsula opaca + fila), que tapa la fila de verdad: nunca se ve doble.*/
+/* Fuera de «lite», un filtro SVG chico (sólo la caja de la lupa) la dobla en   */
+/* el canto como una lente convexa, con flecos de color.                        */
+/*                                                                              */
+/* Estados de `data-lens` en la cápsula:                                        */
+/*  - `drag`: el dedo la arrastra (la lupa sigue al dedo, sin transición).      */
+/*  - `tap`:  se tocó una pestaña: la lupa se levanta y viaja hasta ella        */
+/*            (lo que muestra el video de iOS 26). Agregado sobre sharp-app.    */
+/*  - `settle`: vuelve a ser pastilla en su lugar.                              */
+/* ============================================================================ */
+
+.lg-bar {
+  /* Más cuerpo que una pastilla suelta: abajo pasa de todo (una tarjeta
+     oscura, una foto) y el texto tiene que leerse igual. */
+  --lg-tint: rgba(255, 255, 255, 0.8);
+  /* Pestañas sin elegir: gris verdoso firme (≈ 7:1 sobre la cápsula). */
+  --lgbar-ink: #46524d;
+  /* La elegida: salvia profunda (≈ 6:1 sobre la pastilla). */
+  --lgbar-active: oklch(0.43 0.085 152);
+  /* Relleno de la lupa: tapa la fila de verdad para que no se vea doble. */
+  --lg-lens-fill: rgba(255, 255, 255, 0.94);
+  --lg-lens-clear: rgba(255, 255, 255, 0.42);
+  /* La barra vista a través de la lupa: opaca (con transparencia, el filtro
+     de color no puede mezclar bien los tres canales). */
+  --lg-lens-cap: rgb(253, 254, 253);
+  --lg-lens-cap-edge: inset 0 0 0 1px rgba(22, 46, 36, 0.1), inset 0 1.5px 0 rgba(255, 255, 255, 1);
+  --lg-lens-rim: inset 0 0 0 1px rgba(255, 255, 255, 0.9), inset 3px 0 6px rgba(255, 70, 150, 0.2),
+    inset -3px 0 6px rgba(40, 170, 255, 0.2), inset 0 -2px 6px rgba(255, 220, 120, 0.18);
+  --lg-lens-shadow: 0 10px 26px -8px rgba(22, 46, 36, 0.35);
+  /* Lo que la óptica se extiende afuera de la lupa (LENS.margin, lens.ts). */
+  --lens-margin: 18px;
+  /* El canto tornasolado de la lupa (`.lg-bar-lens::before`). */
+  --lg-lens-ring: conic-gradient(
+    from 210deg,
+    rgba(255, 96, 170, 0.6),
+    rgba(255, 206, 110, 0.55),
+    rgba(96, 206, 255, 0.6),
+    rgba(176, 130, 255, 0.55),
+    rgba(255, 96, 170, 0.6)
+  );
+}
+.dark .lg-bar {
+  --lg-tint: rgba(28, 33, 30, 0.86);
+  --lg-pill: rgba(255, 255, 255, 0.11);
+  --lgbar-ink: #d3d9d5;
+  --lgbar-active: oklch(0.86 0.09 150);
+  --lg-lens-fill: rgba(46, 52, 48, 0.95);
+  --lg-lens-clear: rgba(46, 52, 48, 0.42);
+  --lg-lens-cap: rgb(28, 33, 30);
+  --lg-lens-cap-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.16), inset 0 1.5px 0 rgba(255, 255, 255, 0.2);
+  --lg-lens-rim: inset 0 0 0 1px rgba(255, 255, 255, 0.28), inset 3px 0 6px rgba(255, 70, 150, 0.22),
+    inset -3px 0 6px rgba(40, 170, 255, 0.22), inset 0 -2px 6px rgba(255, 220, 120, 0.14);
+  --lg-lens-shadow: 0 10px 26px -8px rgba(0, 0, 0, 0.7);
+}
+
+.lg-bar-capsule {
+  position: relative;
+  display: block;
+  height: var(--bar-h, 62px);
+  border-radius: 9999px;
+  /* El dedo arrastra la lupa: ni scroll, ni zoom, ni el rebote de iOS. */
+  touch-action: none;
+  transition: transform 0.38s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+/* Mientras la lupa está levantada, la cápsula entera crece un poquito. */
+.lg-bar-capsule[data-lens="drag"],
+.lg-bar-capsule[data-lens="tap"] {
+  transform: scale(1.025);
+}
+
+/* La pastilla de la pestaña elegida. La celda (`slot`) mide lo mismo que una
+   pestaña y se corre de a una (translateX en %); la pastilla va adentro, 4 px
+   más chica por lado. */
+.lg-bar-slot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  pointer-events: none;
+  transition:
+    transform 0.42s cubic-bezier(0.3, 1.2, 0.45, 1),
+    opacity 0.14s ease-out;
+}
+.lg-bar-slot[data-off] {
+  visibility: hidden;
+}
+.lg-bar-pill {
+  position: absolute;
+  inset: 4px;
+  border-radius: 9999px;
+  background: var(--lg-pill);
+  box-shadow: var(--lg-specular);
+}
+/* Mientras está la lupa, la pastilla se va de golpe (si se desvaneciera, se la
+   vería un instante en el destino antes de que llegue la gota) y salta sin
+   animarse a donde vaya a quedar. Al irse la lupa, vuelve con un fundido. */
+[data-lens] > .lg-bar-slot {
+  opacity: 0;
+  transition: none;
+}
+
+/* La lupa. La celda (`lenspos`) mide una pestaña y la mueve el dedo; el cuerpo
+   (`lens`) es 1.4 veces la pastilla de ancho y 74 px de alto (más alto que la
+   barra: se sale 6 px arriba y abajo). Los números viven también en
+   glass-tab-bar.tsx (LENS_WIDTH, LENS_HEIGHT). */
+.lg-bar-lenspos {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  pointer-events: none;
+  will-change: transform;
+  /* Se esconde con visibility y no con opacity: un padre con opacity < 1 le
+     corta el desenfoque a la lupa (pasa a ver sólo lo que tiene adentro). */
+  visibility: hidden;
+  transition: visibility 0s linear 0.14s;
+}
+[data-lens] > .lg-bar-lenspos {
+  visibility: visible;
+  transition: none;
+}
+.lg-bar-lens {
+  position: absolute;
+  left: calc(50% - (100% - 8px) * 0.7);
+  top: calc(50% - 37px);
+  width: calc((100% - 8px) * 1.4);
+  height: 74px;
+  border-radius: 9999px;
+  background: var(--lg-lens-fill);
+  box-shadow: var(--lg-lens-rim), var(--lg-lens-shadow);
+  overflow: hidden;
+  /* En reposo, del tamaño exacto de la pastilla (1/1.4 de ancho, 53/74 de alto). */
+  transform: scale(0.7143, 0.716);
+  opacity: 0;
+  transition:
+    transform 0.38s cubic-bezier(0.3, 1.2, 0.45, 1),
+    opacity 0.14s ease-out;
+}
+[data-lens] .lg-bar-lens {
+  opacity: 1;
+  transition:
+    transform 0.38s cubic-bezier(0.3, 1.2, 0.45, 1),
+    opacity 0.08s ease-out;
+}
+[data-lens="drag"] .lg-bar-lens,
+[data-lens="tap"] .lg-bar-lens {
+  transform: scale(1);
+}
+/* Al tocar: la gota crece desde la pastilla, se estira en el sentido del viaje
+   y llega redonda (dura lo mismo que TAP_TRAVEL_MS en glass-tab-bar.tsx). */
+[data-lens="tap"][data-travel] .lg-bar-lens {
+  animation: lg-lens-travel 0.33s cubic-bezier(0.3, 0.9, 0.4, 1) 1 both;
+}
+@keyframes lg-lens-travel {
+  0% {
+    transform: scale(0.7143, 0.716);
+  }
+  38% {
+    transform: scale(1.14, 0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+/* El canto tornasolado: un anillo de 1.5 px con el degradé, recortado con una
+   máscara (el centro queda limpio). Va arriba de la copia. */
+.lg-bar-lens::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: var(--lg-lens-ring);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* El brillo de adentro: luz arriba y un reflejo más tenue abajo. */
+.lg-bar-lens::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%),
+    radial-gradient(120% 60% at 50% 100%, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0) 40%);
+  pointer-events: none;
+}
+/* Vidrio claro donde el teléfono se banca un desenfoque chico: se ve sólo por
+   el canto, donde la lente muestra lo que hay afuera de la barra. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  html:not([data-glass="lite"]) .lg-bar-lens {
+    background: var(--lg-lens-clear);
+    -webkit-backdrop-filter: blur(8px) saturate(170%);
+    backdrop-filter: blur(8px) saturate(170%);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  html:root .lg-bar-lens {
+    background: var(--lg-lens-fill);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+/* La óptica: la caja a la que se le aplica la lente. Más grande que la lupa
+   (`--lens-margin` de cada lado) y recortada a su tamaño: sin el recorte,
+   Chrome toma como región del filtro todo lo que desborda la copia. */
+.lg-bar-optics {
+  position: absolute;
+  inset: calc(-1 * var(--lens-margin));
+  overflow: hidden;
+  contain: paint;
+}
+/* La lente, sólo con el mapa listo (`data-optics`) y nunca en «lite».
+   «Reducir transparencia» va aparte y como `reduce`: Safari no conoce esa
+   media query y, metida en la misma condición, le apagaba la lente a todos. */
+@media (prefers-reduced-motion: no-preference) {
+  html:not([data-glass="lite"]) [data-optics] .lg-bar-optics {
+    filter: url(#lg-lens);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  html:root [data-optics] .lg-bar-optics {
+    filter: none;
+  }
+}
+/* La copia de la barra: la mueve el dedo junto con la lupa. Arranca en la
+   esquina de la lupa (la óptica se corre `--lens-margin`). */
+.lg-bar-lenscopy {
+  position: absolute;
+  top: var(--lens-margin);
+  left: var(--lens-margin);
+  display: flex;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+/* La cápsula de la copia: tapa la fila de verdad y, doblada por la lente, es
+   el borde curvo de la barra que se ve por el canto. */
+.lg-bar-lenscap {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: 9999px;
+  background: var(--lg-lens-cap);
+  box-shadow: var(--lg-lens-cap-edge);
+}
+/* Al tocar y al soltar, lupa y copia viajan juntas con el mismo resorte. */
+[data-lens="tap"] > .lg-bar-lenspos,
+[data-lens="settle"] > .lg-bar-lenspos {
+  transition: transform 0.42s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+[data-lens="tap"] .lg-bar-lenscopy,
+[data-lens="settle"] .lg-bar-lenscopy {
+  transition: transform 0.42s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+
+/* El resorte de iOS (amortiguado al 0.72, se pasa un 4%) donde se entiende. */
+@supports (transition-timing-function: linear(0, 1)) {
+  .lg-bar-slot {
+    transition-timing-function:
+      linear(0, 0.035, 0.123, 0.239, 0.366, 0.492, 0.61, 0.714, 0.801, 0.873, 0.929, 0.97, 1, 1.02, 1.031, 1.037,
+        1.038, 1.037, 1.033, 1.029, 1.024, 1.019, 1.015, 1.011, 1.007, 1.005, 1.003, 1.001, 1),
+      ease-out;
+  }
+  .lg-bar-lens,
+  [data-lens] .lg-bar-lens {
+    transition-timing-function:
+      linear(0, 0.035, 0.123, 0.239, 0.366, 0.492, 0.61, 0.714, 0.801, 0.873, 0.929, 0.97, 1, 1.02, 1.031, 1.037,
+        1.038, 1.037, 1.033, 1.029, 1.024, 1.019, 1.015, 1.011, 1.007, 1.005, 1.003, 1.001, 1),
+      ease-out;
+  }
+  [data-lens="tap"] > .lg-bar-lenspos,
+  [data-lens="tap"] .lg-bar-lenscopy,
+  [data-lens="settle"] > .lg-bar-lenspos,
+  [data-lens="settle"] .lg-bar-lenscopy {
+    transition-timing-function: linear(0, 0.035, 0.123, 0.239, 0.366, 0.492, 0.61, 0.714, 0.801, 0.873, 0.929, 0.97, 1,
+        1.02, 1.031, 1.037, 1.038, 1.037, 1.033, 1.029, 1.024, 1.019, 1.015, 1.011, 1.007, 1.005, 1.003, 1.001, 1);
+  }
+}
+
+/* «Reducir movimiento»: sin crecer, sin agrandar y sin resorte. La lupa es una
+   pastilla que va debajo del dedo (detrás de los íconos) y salta al soltar. */
+@media (prefers-reduced-motion: reduce) {
+  .lg-bar-capsule,
+  .lg-bar-capsule[data-lens] {
+    transform: none;
+    transition: none;
+  }
+  .lg-bar-lenspos,
+  [data-lens] > .lg-bar-lenspos {
+    z-index: 0;
+  }
+  html:root .lg-bar-lens,
+  html:root [data-lens="drag"] .lg-bar-lens,
+  html:root [data-lens="tap"] .lg-bar-lens {
+    transform: scale(0.7143, 0.716);
+    background: var(--lg-pill);
+    box-shadow: var(--lg-specular);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    animation: none;
+  }
+  .lg-bar-lenscopy,
+  .lg-bar-lens::before,
+  .lg-bar-lens::after {
+    display: none;
+  }
+}
+
+/* ============================================================================ */
+/* El círculo de Tex, al lado de la cápsula (como la pestaña de búsqueda de     */
+/* iOS 26). Al apretarlo crece como la lupa y muestra el canto tornasolado.     */
+/* ============================================================================ */
+.lg-orb {
+  position: relative;
+  flex: none;
+  width: var(--bar-h, 62px);
+  height: var(--bar-h, 62px);
+  border-radius: 9999px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.38s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+.lg-orb::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: var(--lg-lens-ring);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.14s ease-out;
+  pointer-events: none;
+}
+.lg-orb[data-pressed] {
+  transform: scale(1.12);
+}
+.lg-orb[data-pressed]::before {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lg-orb,
+  .lg-orb[data-pressed] {
+    transform: none;
+    transition: none;
+  }
+}
+
+/* Botón redondo de vidrio de las barras de arriba (volver, campana). */
+.lg-icon-btn {
+  display: inline-grid;
+  place-items: center;
+  border-radius: 9999px;
+  transition: transform 0.15s ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.lg-icon-btn:active {
+  transform: scale(0.92);
+}
+
+/* El velo de atrás de una hoja de vidrio: en «bar»/«lite» sin desenfoque (es
+   lo que hace saltar cuadros en un Android de gama baja). */
+.lg-overlay {
+  background-color: rgba(10, 20, 15, 0.28);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+html[data-glass="bar"] .lg-overlay,
+html[data-glass="lite"] .lg-overlay {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-color: rgba(10, 20, 15, 0.42);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .lg-overlay {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

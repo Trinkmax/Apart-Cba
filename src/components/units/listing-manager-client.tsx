@@ -863,7 +863,7 @@ function BasicsTab({
       {/* Sticky save bar */}
       <div
         className={cn(
-          "fixed bottom-4 left-1/2 -translate-x-1/2 z-30 transition-all duration-300",
+          "above-bar fixed bottom-4 left-1/2 -translate-x-1/2 z-30 transition-all duration-300",
           dirty
             ? "translate-y-0 opacity-100"
             : "translate-y-20 opacity-0 pointer-events-none",

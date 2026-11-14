@@ -14,6 +14,9 @@ import { listPendingCancellations } from "@/lib/actions/channel-cancellations";
 import { countPendingRequestsForOrg } from "@/lib/actions/booking-requests";
 import { can } from "@/lib/permissions";
 import { PATHNAME_HEADER, isPathAllowedForOwner } from "@/lib/auth/route-access";
+import { AppHeader } from "@/components/mobile/app-header";
+import { MobileShell } from "@/components/mobile/mobile-shell";
+import { firstNameOf } from "@/lib/tex/names";
 
 // Techo de wall-clock para todo /dashboard/* (páginas y sus Server Actions;
 // una page puede pisarlo exportando un valor mayor). Sin esto, el default de
@@ -78,25 +81,62 @@ export default async function DashboardLayout({
           profile={session.profile}
           pendingRequests={pendingRequests}
         />
-        <SidebarInset className="min-w-0 overflow-x-hidden">
-          <TopBar
-            currentOrg={organization}
-            currentRole={role}
-            memberships={session.memberships}
-            profile={session.profile}
+        {/* En el celular la ventana es la que scrollea (`overflow-x-clip` no
+            arma un contenedor de scroll): así anda el sticky de la barra de
+            arriba y el "tocá la hora y sube" de iOS. La compu queda igual. */}
+        <SidebarInset className="min-w-0 overflow-x-hidden max-md:overflow-x-clip max-md:overflow-y-visible">
+          <div className="contents max-md:hidden">
+            <TopBar
+              currentOrg={organization}
+              currentRole={role}
+              memberships={session.memberships}
+              profile={session.profile}
+              notifications={notifications}
+              unreadCount={unreadCount}
+            />
+          </div>
+          {/* La barra de arriba del celular (hermana anterior del <main>: el CSS
+              del shell la lee con `~`). */}
+          <AppHeader
+            role={role}
+            rentalsEnabled={organization.rentals_enabled}
             notifications={notifications}
             unreadCount={unreadCount}
+            subtabBadges={pendingRequests > 0 ? { solicitudes: pendingRequests } : undefined}
           />
           {organization.is_trial && organization.demo_data_seeded_at && (
             <TrialBanner canPurge={role === "admin"} />
           )}
-          <main className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 safe-bottom">
+          <main
+            data-shell-main
+            className="flex-1 overflow-y-auto overflow-x-hidden min-w-0 safe-bottom max-md:overflow-x-clip max-md:overflow-y-visible"
+          >
             {children}
           </main>
           <CancellationDecisionDialog pending={pendingCancellations} />
         </SidebarInset>
       </SidebarProvider>
         <LiveBookingAlerts />
+        {/* El celular como app: barra de vidrio + Tex + «Más». Tex también en la compu. */}
+        <MobileShell
+          role={role}
+          rentalsEnabled={organization.rentals_enabled}
+          texEnabled={organization.tex_enabled}
+          userId={session.userId}
+          user={{
+            fullName: session.profile.full_name ?? "Vos",
+            firstName: firstNameOf(session.profile.full_name),
+            avatarUrl: session.profile.avatar_url,
+          }}
+          org={{ id: organization.id, name: organization.name }}
+          memberships={session.memberships.map((m) => ({
+            id: m.organization.id,
+            name: m.organization.name,
+            role: m.role,
+          }))}
+          unreadCount={unreadCount}
+          pendingRequests={pendingRequests}
+        />
       </LiveProvider>
     </BookingStatusColorsProvider>
   );

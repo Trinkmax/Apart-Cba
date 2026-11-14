@@ -2978,7 +2978,7 @@ export function PmsBoard({
           "flex flex-col bg-background",
           zenActive
             ? "fixed z-[60] shadow-2xl ring-1 ring-border/40 transition-[top,left,width,height] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[top,left,width,height]"
-            : "h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)]"
+            : "h-[calc(100svh-var(--chrome-top,3.5rem))] md:h-[calc(100svh-4rem)]"
         )}
         style={
           zenActive
@@ -3938,7 +3938,7 @@ export function PmsBoard({
         /* ═══════ Grid ═══════ */
         <div
           ref={scrollRef}
-          className="flex-1 overflow-auto relative overscroll-contain touch-pan-x touch-pan-y"
+          className="flex-1 overflow-auto relative overscroll-contain touch-pan-x touch-pan-y max-md:pb-[var(--bar-overlay,0px)]"
           style={{ scrollbarGutter: "stable" }}
         >
           <div
@@ -4509,7 +4509,7 @@ export function PmsBoard({
               type="button"
               aria-label="Nueva reserva"
               className={cn(
-                "md:hidden fixed right-4 z-[55]",
+                "md:hidden fixed right-4 z-[55] above-bar",
                 "bottom-[calc(env(safe-area-inset-bottom,0px)+1rem)]",
                 "size-14 rounded-full bg-primary text-primary-foreground",
                 "shadow-lg shadow-primary/30 ring-1 ring-primary/40",

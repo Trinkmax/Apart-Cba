@@ -219,6 +219,10 @@ export interface Organization {
    * ajuste por índice, cobranzas, comprobantes y rendiciones. Migración 068.
    */
   rentals_enabled: boolean;
+  /** Tex (agente IA con Claude) encendido. Lo prende el superadmin. Migración 081. */
+  tex_enabled: boolean;
+  /** Tope de gasto mensual de Tex en USD. Migración 081. */
+  tex_monthly_budget_usd: number;
   /** NOT NULL mientras conserve los datos de ejemplo del alta. NULL una vez vaciados. */
   demo_data_seeded_at: string | null;
   trial_expires_at: string | null;
@@ -2926,4 +2930,56 @@ export interface EconomicIndexValue {
   value: number;
   source: "indec" | "bcra" | "datos_gob" | "argentinadatos" | "manual";
   fetched_at: string;
+}
+
+// ─── Tex, el agente (migración 081) ──────────────────────────────────────────
+
+export interface TexConversation {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  title: string | null;
+  message_count: number;
+  created_at: string;
+  last_message_at: string;
+}
+
+export interface TexMessageRow {
+  id: string;
+  seq: number;
+  conversation_id: string;
+  organization_id: string;
+  user_id: string;
+  role: "user" | "assistant";
+  /** Bloques de Anthropic tal cual (append-only: Haiku 5.5 valida la historia). */
+  content: unknown;
+  /** Lo que la app dibuja para reabrir la conversación. */
+  ui: unknown | null;
+  hidden: boolean;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  cost_usd: number;
+  request_id: string | null;
+  created_at: string;
+}
+
+export type TexActionStatus = "pending" | "executing" | "executed" | "failed" | "cancelled" | "expired";
+
+export interface TexActionRow {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  conversation_id: string;
+  tool: string;
+  payload: unknown;
+  summary: unknown;
+  status: TexActionStatus;
+  result: unknown | null;
+  error: string | null;
+  created_at: string;
+  decided_at: string | null;
+  expires_at: string;
 }

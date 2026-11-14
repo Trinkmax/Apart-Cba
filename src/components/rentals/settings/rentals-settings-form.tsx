@@ -387,7 +387,7 @@ export function RentalsSettingsForm({ initial }: { initial: RentalSettingsValues
 
       <div
         className={cn(
-          "sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-end gap-2 rounded-lg border bg-background/90 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/75 transition-shadow",
+          "sticky-above-bar sticky bottom-0 z-10 -mx-1 flex flex-wrap items-center justify-end gap-2 rounded-lg border bg-background/90 px-3 py-2.5 backdrop-blur supports-[backdrop-filter]:bg-background/75 transition-shadow",
           dirty && "shadow-lg",
         )}
       >

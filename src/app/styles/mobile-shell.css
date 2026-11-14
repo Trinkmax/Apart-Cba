@@ -1,0 +1,226 @@
+/* ============================================================================ */
+/* El shell del celular (nov-2026): barra de pestañas flotante, barra de arriba */
+/* por pantalla, sub-pestañas y hoja «Más». Sólo por debajo de 768 px (el mismo */
+/* corte que `useIsMobile`): la compu no cambia.                                */
+/*                                                                              */
+/* Lo que depende de la pantalla viene en el HTML del servidor (sin saltos al   */
+/* hidratar): la barra de arriba (`.lg-appheader`) es hermana anterior del      */
+/* <main data-shell-main> y lleva `data-subtabs` / `data-fullheight`; el CSS lo */
+/* lee con `~`, que es barato (nada de :has() sobre todo el documento).         */
+/* El estado de tiempo real lo escribe el shell en el <html>:                   */
+/*  - `data-kb="open"`: hay teclado en pantalla (la barra de abajo se va).      */
+/*  - `data-more-open`: la hoja «Más» está abierta (la barra queda arriba).     */
+/*  - `data-chrome-hidden`: una pantalla de un solo trabajo esconde la barra.   */
+/* Va SIN capa: tiene que ganarle a las utilidades de Tailwind.                 */
+/* ============================================================================ */
+
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  /* Alto de la fila de la barra de arriba, sin contar la isla/notch. Es el
+     mismo de la TopBar de siempre: los `top-[3.5rem]` existentes siguen bien. */
+  --appbar-h: 3.5rem;
+  --subtabs-h: 0px;
+  /* Barra flotante: alto de la cápsula, aire arriba de ella y separación del
+     borde de abajo. En el iPhone queda 10 px dentro de la zona de la rayita de
+     inicio (34 → 24 px), como la de iOS 26. El tercer término es para Android
+     con los tres botones (≈ 48 px de zona segura): ahí se apoya arriba. */
+  --bar-h: 62px;
+  --bar-gap: 10px;
+  --bar-offset: max(10px, calc(var(--safe-b) - 10px), calc(var(--safe-b) * 2.5 - 72px));
+  /* Lo que tapa la barra desde el borde de abajo (0 si no está). */
+  --bar-overlay: 0px;
+  /* Lo fijo de arriba y de abajo: los overlays y los "sticky" lo leen. */
+  --chrome-top: 0px;
+  --chrome-bottom: var(--safe-b);
+}
+
+@media (max-width: 767px) {
+  :root {
+    /* La pastilla de "hay cambios" (live-updates-pill) baja bajo la barra. */
+    --live-pill-top: calc(var(--appbar-h) + 0.5rem);
+  }
+  /* Los avisos (sonner) salen arriba de la barra flotante. */
+  html[data-mobile-shell] {
+    --toast-bottom: calc(var(--bar-h) + var(--bar-offset) + var(--bar-gap) + 4px);
+  }
+  html[data-mobile-shell][data-kb="open"] {
+    --toast-bottom: 16px;
+  }
+  /* Todo lo que vive adentro del <main> del shell lee estas medidas. */
+  main[data-shell-main] {
+    --bar-overlay: calc(var(--bar-h) + var(--bar-offset) + var(--bar-gap));
+    --chrome-bottom: max(var(--bar-overlay), var(--safe-b));
+    --chrome-top: calc(var(--safe-t) + var(--appbar-h) + var(--subtabs-h));
+    /* El último renglón de cada pantalla queda arriba de la barra. */
+    padding-bottom: calc(var(--chrome-bottom) + 0.75rem);
+  }
+  .lg-appheader[data-subtabs] ~ main[data-shell-main] {
+    --subtabs-h: 2.875rem;
+  }
+  /* Las pantallas de alto completo (el calendario) se reservan el lugar adentro. */
+  .lg-appheader[data-fullheight] ~ main[data-shell-main] {
+    padding-bottom: 0;
+  }
+  html[data-kb="open"] main[data-shell-main],
+  html[data-chrome-hidden] main[data-shell-main] {
+    --bar-overlay: 0px;
+  }
+
+  /* La barra flota al pie de la ventana (la ventana es la que scrollea: así
+     funciona el "tocá la hora y sube" de iOS y el sticky de la barra de arriba). */
+  .lg-bar {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: var(--bar-offset);
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition:
+      transform 0.32s cubic-bezier(0.3, 1.2, 0.45, 1),
+      opacity 0.2s ease-out;
+  }
+  html[data-kb="open"] .lg-bar,
+  html[data-chrome-hidden] .lg-bar {
+    transform: translateY(calc(100% + var(--bar-offset) + 12px));
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* Con «Más» abierta la barra queda arriba del velo y se puede tocar (los
+     diálogos y hojas viven en z-50). Radix apaga los toques fuera de la hoja
+     con `pointer-events: none` en el <body>: la barra los vuelve a prender. */
+  html[data-more-open] .lg-bar {
+    z-index: 51;
+    pointer-events: auto;
+  }
+  html[data-more-open] .lg-bar-above {
+    visibility: hidden;
+  }
+
+  /* Botones flotantes y barras "sticky bottom" de las pantallas: arriba de la
+     barra. `!important` porque algunos traen el `bottom` en un style inline
+     (el de Consejos estaba atado al alto de la nav vieja de /m). */
+  main[data-shell-main] .above-bar {
+    bottom: calc(var(--chrome-bottom) + 0.75rem) !important;
+  }
+  main[data-shell-main] .sticky-above-bar {
+    bottom: var(--chrome-bottom) !important;
+  }
+
+  /* Higiene táctil de las barras: sin selección de texto, sin el menú de
+     mantener apretado de iOS y sin la demora del doble toque. */
+  .lg-appheader,
+  .lg-bar {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .lg-appheader :is(a, button),
+  .lg-bar :is(a, button) {
+    touch-action: manipulation;
+  }
+  .lg-appheader :is(input, textarea, [contenteditable]) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+/* De 390 px para arriba la cápsula se separa 16 px de los costados. */
+@media (min-width: 390px) and (max-width: 767px) {
+  .lg-bar {
+    left: 16px;
+    right: 16px;
+  }
+}
+
+/* La barra de arriba: transparente arriba de todo; vidrio cuando el contenido
+   pasa por debajo (`data-scrolled`, lo pone AppHeader). */
+.lg-appheader {
+  transition:
+    background-color 0.2s ease-out,
+    box-shadow 0.2s ease-out;
+}
+.lg-appheader[data-scrolled] {
+  background: var(--lg-tint-lg);
+  -webkit-backdrop-filter: var(--lg-blur-lg);
+  backdrop-filter: var(--lg-blur-lg);
+  box-shadow: 0 0.5px 0 var(--lg-hairline);
+}
+html[data-glass="lite"] .lg-appheader[data-scrolled],
+html[data-glass="bar"] .lg-appheader[data-scrolled] {
+  background: var(--lg-tint-lg-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .lg-appheader[data-scrolled] {
+    background: var(--lg-tint-lg-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+/* El título chico aparece cuando el h1 de la página se fue para arriba. */
+.lg-appheader-title {
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 0.18s ease-out,
+    transform 0.22s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+.lg-appheader[data-title] .lg-appheader-title {
+  opacity: 1;
+  transform: none;
+}
+
+/* Las sub-pestañas: indicador que se desliza con el resorte de iOS. */
+.lg-subtabs-indicator {
+  transition:
+    transform 0.42s cubic-bezier(0.3, 1.2, 0.45, 1),
+    width 0.42s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  .lg-subtabs-indicator {
+    transition-timing-function: linear(0, 0.035, 0.123, 0.239, 0.366, 0.492, 0.61, 0.714, 0.801, 0.873, 0.929, 0.97, 1,
+        1.02, 1.031, 1.037, 1.038, 1.037, 1.033, 1.029, 1.024, 1.019, 1.015, 1.011, 1.007, 1.005, 1.003, 1.001, 1);
+  }
+}
+
+/* La pantalla nueva entra con un fundido (sin remontar nada: sólo la
+   animación). Sólo opacidad, nunca transform: un transform en un ancestro
+   vuelve relativos a él a los `position: fixed` de adentro (los botones
+   flotantes saltarían durante la entrada). Dos keyframes iguales con distinto
+   nombre: alternar el nombre reinicia la animación en cada navegación. */
+@keyframes lg-reveal-a {
+  from {
+    opacity: 0.001;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes lg-reveal-b {
+  from {
+    opacity: 0.001;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (max-width: 767px) and (prefers-reduced-motion: no-preference) {
+  [data-shell-main][data-reveal="a"] > * {
+    animation: lg-reveal-a 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  [data-shell-main][data-reveal="b"] > * {
+    animation: lg-reveal-b 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-appheader-title,
+  .lg-subtabs-indicator,
+  .lg-bar {
+    transition: none;
+  }
+}

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+/* El celular como app (nov-2026): vidrio líquido + shell. Sin capa, a propósito. */
+@import "./styles/glass.css";
+@import "./styles/mobile-shell.css";
+@import "./styles/tex.css";
 
 /*
  * `dark:` aplica dentro de un `.dark`, salvo que haya un `.light` más cerca.

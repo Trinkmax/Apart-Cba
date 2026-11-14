@@ -10,7 +10,7 @@ import {
   ScrollText,
   Monitor,
 } from "lucide-react";
-import { getSession } from "@/lib/actions/auth";
+import { getSessionContext } from "@/lib/actions/auth";
 import { getCurrentOrg } from "@/lib/actions/org";
 import { isAdminLevel } from "@/lib/permissions";
 import { InstallAppListener } from "@/components/pwa/install-app-prompt";
@@ -22,6 +22,9 @@ import { Logo } from "@/components/brand/logo";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { UserRole } from "@/lib/types/database";
+import { AppHeader } from "@/components/mobile/app-header";
+import { MobileShell } from "@/components/mobile/mobile-shell";
+import { firstNameOf } from "@/lib/tex/names";
 
 // Techo de wall-clock para todo /m/* (páginas y Server Actions; una page puede
 // pisarlo con un valor mayor). Acota cuánto tiempo queda reservada y facturando
@@ -70,7 +73,7 @@ const MOBILE_NAV: MobileNavItem[] = [
 ];
 
 export default async function MobileLayout({ children }: { children: React.ReactNode }) {
-  const session = await getSession();
+  const session = await getSessionContext();
   if (!session) redirect("/login");
   const { organization, role } = await getCurrentOrg();
   // La versión móvil es de operación (limpieza, mantenimiento, parte diario):
@@ -88,7 +91,8 @@ export default async function MobileLayout({ children }: { children: React.React
     >
     <div className="min-h-svh bg-background flex flex-col">
       {/* Top bar */}
-      <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl border-b safe-top safe-x">
+      {/* En el celular manda el shell nuevo (AppHeader + barra de vidrio); esto queda para la compu. */}
+      <header className="sticky top-0 z-30 bg-background/90 backdrop-blur-xl border-b safe-top safe-x max-md:hidden">
         <div className="px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
             <Logo size="sm" />
@@ -131,14 +135,21 @@ export default async function MobileLayout({ children }: { children: React.React
         </div>
       </header>
 
+      <AppHeader
+        role={role}
+        rentalsEnabled={organization.rentals_enabled}
+        notifications={session.notifications}
+        unreadCount={session.unreadCount}
+      />
+
       <InstallAppListener />
 
-      {/* Content — pb compensa la bottom nav + safe area */}
-      <main className="flex-1 pb-[calc(5rem+env(safe-area-inset-bottom))]">{children}</main>
+      {/* Content — en la compu el pb compensa la bottom nav vieja; en el celular lo reserva el shell. */}
+      <main data-shell-main className="flex-1 md:pb-[calc(5rem+env(safe-area-inset-bottom))]">{children}</main>
 
       {/* Bottom nav — usamos gridTemplateColumns inline para ser flexible al
           número de items visibles según rol (3 a 6). */}
-      <nav className="fixed bottom-0 inset-x-0 z-20 bg-background/95 backdrop-blur-xl border-t safe-bottom safe-x">
+      <nav className="fixed bottom-0 inset-x-0 z-20 bg-background/95 backdrop-blur-xl border-t safe-bottom safe-x max-md:hidden">
         <div
           className="grid max-w-md mx-auto"
           style={{ gridTemplateColumns: `repeat(${visibleItems.length}, minmax(0, 1fr))` }}
@@ -159,6 +170,25 @@ export default async function MobileLayout({ children }: { children: React.React
         </div>
       </nav>
     </div>
+    <MobileShell
+      role={role}
+      rentalsEnabled={organization.rentals_enabled}
+      texEnabled={organization.tex_enabled}
+      userId={session.userId}
+      user={{
+        fullName: session.profile.full_name ?? "Vos",
+        firstName: firstNameOf(session.profile.full_name),
+        avatarUrl: session.profile.avatar_url,
+      }}
+      org={{ id: organization.id, name: organization.name }}
+      memberships={session.memberships.map((m) => ({
+        id: m.organization.id,
+        name: m.organization.name,
+        role: m.role,
+      }))}
+      unreadCount={session.unreadCount}
+      pendingRequests={0}
+    />
     </LiveProvider>
   );
 }

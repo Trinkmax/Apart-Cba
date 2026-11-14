@@ -174,7 +174,7 @@ export function SettingsForm({ initial, channels, organizationName }: SettingsFo
 
       <TemplateGuide templateName={templateName} language={templateLang} />
 
-      <div className="sticky bottom-0 -mx-4 sm:-mx-6 border-t bg-background/90 backdrop-blur-xl px-4 sm:px-6 py-3 flex items-center justify-between gap-2">
+      <div className="sticky-above-bar sticky bottom-0 -mx-4 sm:-mx-6 border-t bg-background/90 backdrop-blur-xl px-4 sm:px-6 py-3 flex items-center justify-between gap-2">
         <Button
           type="button"
           variant="outline"

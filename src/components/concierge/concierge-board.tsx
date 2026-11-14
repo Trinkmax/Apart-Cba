@@ -216,7 +216,7 @@ export function ConciergeBoard({ organizationId, initialRequests, units, members
       <ConciergeFormDialog units={units} members={members}>
         <Button
           size="lg"
-          className="fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"
+          className="above-bar fixed bottom-6 right-6 z-40 h-14 rounded-full shadow-lg hover:shadow-xl gap-2 px-5"
         >
           <Plus size={18} /> Nueva tarea
         </Button>

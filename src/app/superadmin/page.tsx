@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateOrgDialog } from "@/components/superadmin/create-org-dialog";
 import { formatDate } from "@/lib/format";
+import { TexToggle } from "@/components/superadmin/tex-toggle";
 
 export default async function SuperadminHome() {
   const orgs = await listAllOrganizations();
@@ -52,6 +53,7 @@ export default async function SuperadminHome() {
                 <div className="flex items-center gap-1"><Globe size={11} /> {o.default_currency}</div>
                 <div className="flex items-center gap-1"><Calendar size={11} /> {formatDate(o.created_at, "MMM yyyy")}</div>
               </div>
+              <TexToggle orgId={o.id} enabled={o.tex_enabled} />
             </Card>
           ))}
         </div>

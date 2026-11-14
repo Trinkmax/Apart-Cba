@@ -22,6 +22,8 @@ import { formatDate, formatMoney } from "@/lib/format";
 import { todayYmdInTz, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 import { cn } from "@/lib/utils";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
+import { TodayBrief, TodayBriefSkeleton } from "@/components/mobile/today-brief";
+import { QuickActions } from "@/components/mobile/quick-actions";
 
 export default async function DashboardHome() {
   // getCurrentOrg está cacheado por request (React.cache): pedirlo primero
@@ -73,7 +75,8 @@ export default async function DashboardHome() {
       {/* Hero */}
       <div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
         <DashboardGreeting />
-        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0">
+        {/* En el celular esto pasa a los accesos rápidos y a "Tex te cuenta". */}
+        <div className="flex items-center gap-2.5 sm:gap-3 shrink-0 max-md:hidden">
           {canRegisterExpense && (
             <QuickExpenseDialog accounts={expenseAccounts} defaultAccountId={expenseDefaultId} units={expenseUnits}>
               <Button variant="outline" className="gap-2 h-auto py-2.5 sm:py-3 border-rose-500/30 hover:border-rose-500/60 hover:bg-rose-500/5">
@@ -98,6 +101,34 @@ export default async function DashboardHome() {
           </Card>
         </div>
       </div>
+
+      {/* Hoy en el celular: el resumen del día (Tex te cuenta) y los accesos rápidos. */}
+      {!isOwner ? (
+        <div className="space-y-3 md:hidden">
+          <Suspense fallback={<TodayBriefSkeleton />}>
+            <TodayBrief texEnabled={organization.tex_enabled} />
+          </Suspense>
+          <QuickActions
+            texEnabled={organization.tex_enabled}
+            canBookings={canViewBookings && can(role, "bookings", "create")}
+            canPayments={can(role, "payments", "create")}
+            canTickets={can(role, "tickets", "create")}
+            expenseSlot={
+              canRegisterExpense ? (
+                <QuickExpenseDialog accounts={expenseAccounts} defaultAccountId={expenseDefaultId} units={expenseUnits}>
+                  <button
+                    type="button"
+                    className="lg-tile flex shrink-0 items-center gap-2 rounded-full px-3.5 py-2.5 text-[14px] font-semibold whitespace-nowrap active:scale-[0.97]"
+                  >
+                    <ArrowUpFromLine className="size-[18px] text-rose-600" aria-hidden />
+                    Gasto
+                  </button>
+                </QuickExpenseDialog>
+              ) : null
+            }
+          />
+        </div>
+      ) : null}
 
       {/* Status grid de units — 2 columnas en mobile, denso pero legible */}
       <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">

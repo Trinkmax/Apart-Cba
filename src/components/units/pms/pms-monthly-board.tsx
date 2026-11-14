@@ -217,7 +217,7 @@ export function PmsMonthlyBoard({
         onApply={live.apply}
         isRefreshing={live.isRefreshing}
       />
-      <div className="flex flex-col h-[calc(100svh-3.5rem)] md:h-[calc(100svh-4rem)] bg-background">
+      <div className="flex flex-col h-[calc(100svh-var(--chrome-top,3.5rem))] md:h-[calc(100svh-4rem)] bg-background">
         {/* Toolbar */}
         <div className="shrink-0 border-b bg-card/50 backdrop-blur supports-[backdrop-filter]:bg-card/30">
           {/* MOBILE TOOLBAR */}
@@ -396,7 +396,7 @@ export function PmsMonthlyBoard({
         </div>
 
         {/* Grid */}
-        <div ref={scrollRef} className="flex-1 overflow-auto overscroll-contain touch-pan-x touch-pan-y">
+        <div ref={scrollRef} className="flex-1 overflow-auto overscroll-contain touch-pan-x touch-pan-y max-md:pb-[var(--bar-overlay,0px)]">
           <table className="w-full border-collapse">
             <thead className="sticky top-0 z-10 bg-background">
               <tr>
