@@ -12,6 +12,7 @@ import {
   resolveIssuesByDedupe,
 } from "./ingest";
 import { reservationEventFromRow } from "./event-row";
+import { dedupeKeyOverCancelled } from "./same-slot";
 import { appliesToLink, readChannelRequestPolicies, ttlHoursFor } from "./request-policy";
 import type {
   Channel,
@@ -538,13 +539,16 @@ async function syncLink(
         shouldRetryUnprojected(existing));
 
     if (changed) {
-      const rev = toReservationEvent({
+      const base = toReservationEvent({
         event: ev,
         organizationId: link.organization_id,
         linkId: link.id,
         unitId: link.unit_id,
         channel: link.channel,
       });
+      // Sobre una fila cancelada, el mismo contenido puede ser OTRA reserva
+      // (Booking reusa el UID): ver same-slot.ts.
+      const rev = { ...base, dedupeKey: dedupeKeyOverCancelled(base.dedupeKey, existing) };
       const r = await ingestEvent(admin, rev);
       switch (r.outcome) {
         case "created":

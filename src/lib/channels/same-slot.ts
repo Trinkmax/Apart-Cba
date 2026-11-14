@@ -71,6 +71,24 @@ export function isNewStayInSameSlot(reservation: SlotReservation, ev: SlotEvent)
 }
 
 /**
+ * La clave de deduplicación de un VEVENT que cae sobre una fila cancelada.
+ *
+ * El evento ya procesado de la reserva cancelada tiene el mismo contenido que
+ * el de una persona que reservó EXACTAMENTE las mismas fechas (mismo UID,
+ * mismas fechas): con la clave de siempre la ingesta lo daba por repetido y
+ * nunca lo miraba — ni siquiera abría el aviso. Pasaba en AT4B, Villa del Prado
+ * y Cofico de Habitana. Sobre una fila cancelada, el evento se deduplica aparte
+ * (una vez por fila: después de archivarla, la fila nueva vuelve a la clave de
+ * siempre).
+ */
+export function dedupeKeyOverCancelled(
+  baseKey: string,
+  existing: Pick<ChannelReservationRow, "id" | "external_status"> | null | undefined,
+): string {
+  return existing?.external_status === "cancelled" ? `${baseKey}:sobre-cancelada:${existing.id}` : baseKey;
+}
+
+/**
  * El UID con el que queda archivada la fila vieja. Libera el UID real para la
  * reserva nueva (`uniq_channel_res_link_uid`) sin perder de dónde vino: nunca
  * coincide con un VEVENT, así que el barrido no la vuelve a mirar.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { archivedIcalUid, isNewStayInSameSlot } from "../same-slot";
+import { archivedIcalUid, dedupeKeyOverCancelled, isNewStayInSameSlot } from "../same-slot";
 
 const cancelled = {
   is_block: false,
@@ -45,6 +45,23 @@ describe("isNewStayInSameSlot", () => {
 
   it("un tramo de más de 120 noches es un cierre, no una estadía", () => {
     expect(isNewStayInSameSlot({ ...cancelled, check_in: "2027-04-01", check_out: "2028-05-03" }, booking)).toBe(false);
+  });
+});
+
+describe("dedupeKeyOverCancelled", () => {
+  const key = "ical:link:uid@booking.com:abcd1234";
+
+  it("sobre una fila cancelada el evento se deduplica aparte: puede ser otra persona con las mismas fechas", () => {
+    const k = dedupeKeyOverCancelled(key, { id: "res-1", external_status: "cancelled" });
+    expect(k).not.toBe(key);
+    expect(k.startsWith(key)).toBe(true);
+    // Una vez por fila: la misma fila cancelada da siempre la misma clave.
+    expect(dedupeKeyOverCancelled(key, { id: "res-1", external_status: "cancelled" })).toBe(k);
+  });
+
+  it("en cualquier otro estado, la clave de siempre", () => {
+    expect(dedupeKeyOverCancelled(key, { id: "res-1", external_status: "active" })).toBe(key);
+    expect(dedupeKeyOverCancelled(key, null)).toBe(key);
   });
 });
 
