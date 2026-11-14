@@ -224,6 +224,7 @@ function attentionItems(c: {
       label: c.requests === 1 ? "Solicitud sin responder" : "Solicitudes sin responder",
       value: String(c.requests),
       detail: "Pedidos de la web que esperan tu respuesta",
+      cta: "Responder",
       tone: "amber",
     });
   }
@@ -234,6 +235,8 @@ function attentionItems(c: {
       icon: AlertTriangle,
       label: c.urgentTickets === 1 ? "Arreglo urgente" : "Arreglos urgentes",
       value: String(c.urgentTickets),
+      detail: "Tickets de mantenimiento marcados como urgentes",
+      cta: "Ver arreglos",
       tone: "rose",
     });
   }
@@ -246,10 +249,11 @@ function attentionItems(c: {
       label: byPrice ? "Reservas sin precio" : "Reservas sin huésped",
       value: String(byPrice ? c.missingPrice : c.missingGuest),
       detail: byPrice
-        ? `Las de Booking y Airbnb entran sin importe: cargalo para que el mes cierre bien.${
+        ? `Booking y Airbnb entran sin importe: cargalo para cerrar bien el mes.${
             c.missingGuest > 0 ? ` Y ${c.missingGuest} sin huésped.` : ""
           }`
         : "Les falta el nombre de quien viene",
+      cta: "Completar",
       tone: "amber",
     });
   }
@@ -260,6 +264,7 @@ function attentionItems(c: {
       icon: Wrench,
       label: "Mantenimiento abierto",
       value: String(c.openTickets),
+      cta: "Ver mantenimiento",
       tone: "neutral",
     });
   }
@@ -270,6 +275,7 @@ function attentionItems(c: {
       icon: Sparkles,
       label: "Limpiezas pendientes",
       value: String(c.cleaningPending),
+      cta: "Ver limpiezas",
       tone: "neutral",
     });
   }
@@ -280,6 +286,7 @@ function attentionItems(c: {
       icon: Bell,
       label: "Tareas pendientes",
       value: String(c.tasksPending),
+      cta: "Ver tareas",
       tone: "neutral",
     });
   }

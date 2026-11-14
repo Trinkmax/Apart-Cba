@@ -78,6 +78,8 @@ export interface DashboardKPIs {
     occupied_units: number;
     cleaning_units: number;
     maintenance_units: number;
+    reserved_units: number;
+    blocked_units: number;
   };
   bookings: {
     upcoming_30d: number;
@@ -253,6 +255,9 @@ export async function getDashboardKPIs(): Promise<DashboardKPIs> {
     occupied_units: units?.filter((u) => u.status === "ocupado").length ?? 0,
     cleaning_units: units?.filter((u) => u.status === "limpieza").length ?? 0,
     maintenance_units: units?.filter((u) => u.status === "mantenimiento").length ?? 0,
+    // Viaggiato tiene unidades «reservado»: sin esto la torta no sumaba el total.
+    reserved_units: units?.filter((u) => u.status === "reservado").length ?? 0,
+    blocked_units: units?.filter((u) => u.status === "bloqueado").length ?? 0,
   };
 
   const todayCheckIns = bookings30?.filter((b) => b.check_in_date === todayStr).length ?? 0;
