@@ -32,8 +32,8 @@ const PARTS: { key: UnitStatus; stroke: string; dot: string }[] = [
 /** Siempre en la leyenda, aunque estén en cero; Reservado y Bloqueado sólo si hay. */
 const ALWAYS: UnitStatus[] = ["ocupado", "mantenimiento", "limpieza", "disponible"];
 
-// 2 px de hueco con la torta en su tamaño mínimo (176 px).
-const GAP = gapForPixels(2, 176);
+// 2 px de hueco con la torta en su tamaño mínimo (160 px).
+const GAP = gapForPixels(2, 160);
 
 export interface UnitTotals {
   units: number;
@@ -87,7 +87,7 @@ export function UnitsNowCard({
 
       <div className="mt-4 flex flex-1 flex-col gap-5 @md:flex-row @md:items-center @md:gap-7">
         {/* La torta llena el alto que le sobra a la tarjeta (la fila la marca «Para atender»). */}
-        <div className="relative min-h-44 w-full flex-1 @md:min-h-48 @md:max-w-64">
+        <div className="relative min-h-40 w-full flex-1 @md:min-h-48 @md:max-w-64">
           <svg
             viewBox="0 0 100 100"
             className="absolute inset-0 size-full"
@@ -128,12 +128,13 @@ export function UnitsNowCard({
           </div>
         </div>
 
-        <ul className="grid shrink-0 grid-cols-2 gap-x-5 gap-y-2.5 text-[13px] @md:grid-cols-1 @md:gap-y-3">
+        {/* Centrada debajo de la torta: con cinco estados el último no deja un hueco. Al costado, en lista. */}
+        <ul className="flex shrink-0 flex-wrap justify-center gap-x-4 gap-y-2 text-[13px] @md:min-w-40 @md:flex-col @md:flex-nowrap @md:gap-y-3">
           {legend.map((p) => (
-            <li key={p.key} className={cn("flex items-center gap-2", p.count === 0 && "opacity-50")}>
+            <li key={p.key} className={cn("flex items-center gap-1.5", p.count === 0 && "opacity-50")}>
               <span className={cn("size-2.5 shrink-0 rounded-full", p.dot)} aria-hidden />
-              <span className="truncate text-muted-foreground">{p.label}</span>
-              <span className="ml-auto pl-2 font-semibold tabular-nums">{p.count}</span>
+              <span className="text-muted-foreground">{p.label}</span>
+              <span className="pl-0.5 font-semibold tabular-nums @md:ml-auto @md:pl-3">{p.count}</span>
             </li>
           ))}
         </ul>
