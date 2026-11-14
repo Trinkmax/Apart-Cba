@@ -255,6 +255,7 @@ export function TexSheet({
                 onConfirm={chat.confirm}
                 onCancel={chat.cancel}
                 onNavigate={onNavigate}
+                onReply={(text) => submit(text)}
                 onRetry={() => {
                   const prev = chat.messages[i - 1];
                   if (prev && prev.role === "user") submit(prev.text);
@@ -322,6 +323,7 @@ function Message({
   onCancel,
   onNavigate,
   onRetry,
+  onReply,
 }: {
   message: ChatMessage;
   last: boolean;
@@ -331,6 +333,7 @@ function Message({
   onCancel: (id: string) => void;
   onNavigate: () => void;
   onRetry: () => void;
+  onReply: (text: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -342,7 +345,10 @@ function Message({
     );
   }
 
-  const parts = message.parts;
+  const parts = message.parts.filter((p) => p.type !== "replies");
+  // Las respuestas rápidas van al final, sólo en el último mensaje y cuando Tex terminó de escribir.
+  const replies = [...message.parts].reverse().find((p): p is Extract<LivePart, { type: "replies" }> => p.type === "replies");
+  const showReplies = Boolean(replies && last && !message.streaming && !streaming);
   const groups: Array<{ kind: "tools"; items: Extract<LivePart, { type: "tool" }>[] } | { kind: "part"; part: LivePart }> = [];
   for (const p of parts) {
     if (p.type === "tool") {
@@ -443,6 +449,20 @@ function Message({
           }
           return null;
         })}
+        {showReplies && replies ? (
+          <div className="tex-msg-in flex flex-wrap gap-2 pt-0.5" role="group" aria-label="Respuestas rápidas">
+            {replies.items.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => onReply(r)}
+                className="rounded-full border border-[oklch(0.6_0.08_152)]/40 bg-[oklch(0.96_0.03_150)] px-3.5 py-2 text-[14px] font-medium text-[oklch(0.36_0.07_152)] shadow-sm active:scale-[0.97] dark:border-white/15 dark:bg-white/10 dark:text-[oklch(0.88_0.07_150)]"
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );

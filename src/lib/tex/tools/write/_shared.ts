@@ -15,14 +15,23 @@
  * tiene que contener TODAS las palabras que dijo la persona.
  */
 import { z } from "zod/v4";
-import { getBooking, searchBookingsGlobal } from "@/lib/actions/bookings";
+import { getBooking, searchBookingsGlobal, type BookingInput } from "@/lib/actions/bookings";
+import { listAccounts } from "@/lib/actions/cash";
 import { getGuest, searchGuests } from "@/lib/actions/guests";
 import { normalizeEmail, normalizePhoneE164 } from "@/lib/channels/guest";
-import { BOOKING_STATUS_META } from "@/lib/constants";
-import type { BookingSearchResult, BookingStatus, Guest } from "@/lib/types/database";
+import { BOOKING_SOURCE_META, BOOKING_STATUS_META, ROLE_META } from "@/lib/constants";
+import type {
+  Booking,
+  BookingSearchResult,
+  BookingSource,
+  BookingStatus,
+  CashAccount,
+  Guest,
+  UserRole,
+} from "@/lib/types/database";
 import { attempt, type ChoiceOption } from "../../tool";
 import { dateRange, fold, isYmd } from "../../format";
-import type { Resolved } from "../_resolve";
+import { resolveAccount, type Resolved } from "../_resolve";
 
 // ── Esquemas y utilidades ───────────────────────────────────────────────────
 
@@ -47,6 +56,27 @@ export function statusLabel(status: string): string {
 export function unitLabel(unit: { code?: string | null; name?: string | null } | null | undefined): string {
   return [unit?.code, unit?.name].filter(Boolean).join(" · ") || "Sin unidad";
 }
+
+/**
+ * Falta un dato: Tex lo pregunta (UNA cosa por llamada) y la app muestra
+ * `replies` como botones. Si el sistema puede sugerir un valor, va en la
+ * pregunta y como primera respuesta; nunca se inventa.
+ */
+export function ask(question: string, replies?: string[]): { ok: "ask"; question: string; replies?: string[] } {
+  const r = (replies ?? []).filter(Boolean).slice(0, 6);
+  return r.length ? { ok: "ask", question, replies: r } : { ok: "ask", question };
+}
+
+export const OTA_SOURCES = new Set<string>(["airbnb", "booking", "expedia", "vrbo"]);
+export const isOta = (source: string | null | undefined) => OTA_SOURCES.has(source ?? "");
+export const sourceLabel = (s: string) => BOOKING_SOURCE_META[s as BookingSource]?.label ?? s;
+export const nightsText = (n: number) => `${n} ${n === 1 ? "noche" : "noches"}`;
+/** "14:00:00" → "14:00"; "9:30" → "09:30". */
+export const hhmm = (t: string | null | undefined) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec((t ?? "").trim());
+  return m ? `${m[1].padStart(2, "0")}:${m[2]}` : null;
+};
+export const HHMM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
 
 /** "Hoy figura … " → varias advertencias en un solo `note`. */
 export function joinNotes(notes: Array<string | null | undefined | false>): string | undefined {
@@ -374,6 +404,33 @@ function nameContains(a: string, b: string): boolean {
   return short.some((w) => w.length >= 3) && short.every((w) => long.includes(w));
 }
 
+/** dd/mm/aaaa de un timestamp o fecha ISO. */
+function dmy(iso: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso ?? "");
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : null;
+}
+
+/**
+ * Lo que distingue a un huésped de otro con el mismo nombre: contacto,
+ * documento, última estadía; sin nada de eso, cuándo se cargó. Nunca vacío:
+ * dos «Juan Pérez» sin detalle serían la misma opción para la persona.
+ */
+export function guestDetail(
+  g: Pick<Guest, "phone" | "email" | "document_number" | "last_stay_at" | "blacklisted" | "created_at">,
+): string {
+  const lastStay = dmy(g.last_stay_at);
+  const parts = [
+    g.phone,
+    g.email,
+    g.document_number ? `doc. ${g.document_number}` : null,
+    lastStay ? `última estadía ${lastStay.slice(3)}` : null,
+    g.blacklisted ? "en lista negra" : null,
+  ].filter(Boolean);
+  if (parts.length) return parts.join(" · ");
+  const created = dmy(g.created_at);
+  return created ? `sin contacto · cargado el ${created}` : "sin contacto cargado";
+}
+
 function existingPick(g: Guest): GuestPick {
   return {
     kind: "existing",
@@ -447,11 +504,7 @@ export async function resolveGuestForBooking(input: {
     Boolean((phone && g.phone && last8(g.phone) !== last8(phone)) || (email && g.email && normalizeEmail(g.email) !== email));
 
   const options = (gs: Guest[]): ChoiceOption[] => [
-    ...gs.slice(0, 7).map((g) => ({
-      id: g.id,
-      label: g.full_name,
-      detail: [g.phone, g.email, g.blacklisted ? "en lista negra" : null].filter(Boolean).join(" · ") || "sin contacto cargado",
-    })),
+    ...gs.slice(0, 7).map((g) => ({ id: g.id, label: g.full_name, detail: guestDetail(g) })),
     { id: NEW_GUEST_OPTION_ID, label: `Es otra persona: cargar a «${name}» como huésped nuevo` },
   ];
 
@@ -479,4 +532,163 @@ export async function resolveGuestForBooking(input: {
     };
   }
   return asNew();
+}
+
+// ── Cuentas de Caja ─────────────────────────────────────────────────────────
+
+/**
+ * La cuenta donde entra (o sale) la plata: activa, de la org y en la moneda
+ * EXACTA (las actions comparan con `!==`). Sin nombre: la única en esa moneda,
+ * o se pregunta. `what` es para el mensaje: "el cobro", "la seña"…
+ */
+export async function pickAccount(
+  query: string | undefined,
+  currency: string,
+  what = "el cobro",
+): Promise<Resolved<CashAccount>> {
+  const acc = await resolveAccount(query, { currency });
+  if (acc.ok === false && query?.trim()) {
+    // "No hay una cuenta «Dólares»" confunde si existe, pero en otra moneda.
+    const all = await attempt(() => listAccounts());
+    const q = fold(query);
+    const other = all.ok
+      ? (all.value as CashAccount[]).find((a) => a.active && fold(a.name) === q && a.currency !== currency)
+      : undefined;
+    if (other) {
+      return {
+        ok: false,
+        error: `La cuenta «${other.name}» es en ${other.currency} y ${what} es en ${currency}. Tiene que ser una cuenta en ${currency}.`,
+      };
+    }
+  }
+  if (acc.ok !== true) return acc;
+  if (acc.value.currency !== currency) {
+    return {
+      ok: false,
+      error: `La cuenta «${acc.value.name}» es en ${acc.value.currency} y ${what} es en ${currency}. Tiene que ser una cuenta en ${currency}.`,
+    };
+  }
+  return acc;
+}
+
+/** Al confirmar: la cuenta sigue activa, es de la org y está en la misma moneda. */
+export async function recheckAccount(
+  accountId: string,
+  currency: string,
+): Promise<{ ok: true; value: CashAccount } | { ok: false; error: string }> {
+  const r = await attempt(() => listAccounts());
+  if (!r.ok) return r;
+  const acc = (r.value as CashAccount[]).find((a) => a.id === accountId && a.active);
+  if (!acc) return { ok: false, error: "La cuenta de Caja elegida ya no existe o la desactivaron. No registré nada." };
+  if (acc.currency !== currency) {
+    return { ok: false, error: `La cuenta «${acc.name}» ahora es en ${acc.currency} y esto es en ${currency}. No registré nada.` };
+  }
+  return { ok: true, value: acc };
+}
+
+// ── La reserva entera (para editarla sin pisar nada) ────────────────────────
+
+export type FullBooking = Booking & {
+  unit: { id: string; code: string; name: string } | null;
+  guest: { id: string; full_name: string; phone: string | null; email: string | null } | null;
+};
+
+export async function loadFullBooking(
+  id: string,
+): Promise<{ ok: true; value: FullBooking } | { ok: false; error: string }> {
+  const r = await attempt(() => getBooking(id));
+  if (!r.ok) return r;
+  const b = r.value as unknown as FullBooking | null;
+  if (!b) return { ok: false, error: "No encontré esa reserva (o ya no está)." };
+  return { ok: true, value: b };
+}
+
+const numOrNull = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number(v));
+
+/**
+ * `updateBooking` REEMPLAZA la fila: corre el esquema completo con defaults, así
+ * que un campo que no viaja vuelve al default (el estado a "confirmada", los
+ * horarios a 14:00/10:00, la moneda a ARS…). Esto arma el input COMPLETO con lo
+ * que la reserva tiene hoy; quien edita pisa sólo lo que cambia.
+ */
+export function bookingInputFrom(b: Booking): BookingInput {
+  return {
+    unit_id: b.unit_id,
+    guest_id: b.guest_id ?? null,
+    source: b.source ?? "directo",
+    external_id: b.external_id ?? null,
+    status: b.status,
+    mode: b.mode ?? "temporario",
+    check_in_date: b.check_in_date,
+    check_in_time: b.check_in_time ?? "14:00",
+    check_out_date: b.check_out_date,
+    check_out_time: b.check_out_time ?? "10:00",
+    guests_count: Math.max(1, Number(b.guests_count) || 1),
+    currency: b.currency || "ARS",
+    total_amount: Number(b.total_amount ?? 0),
+    paid_amount: Number(b.paid_amount ?? 0),
+    commission_pct: numOrNull(b.commission_pct),
+    channel_commission_pct: numOrNull(b.channel_commission_pct),
+    cleaning_fee: numOrNull(b.cleaning_fee),
+    monthly_rent: numOrNull(b.monthly_rent),
+    monthly_expenses: numOrNull(b.monthly_expenses),
+    security_deposit: numOrNull(b.security_deposit),
+    monthly_inflation_adjustment_pct: numOrNull(b.monthly_inflation_adjustment_pct),
+    rent_billing_day: numOrNull(b.rent_billing_day),
+    notes: b.notes ?? null,
+    internal_notes: b.internal_notes ?? null,
+  };
+}
+
+/** Huella de todo lo que `updateBooking` reescribe: si cambió entre proponer y confirmar, no se pisa. */
+export function bookingFingerprint(b: Booking): string {
+  const i = bookingInputFrom(b) as Record<string, unknown>;
+  // TODAS las claves del input, ordenadas: una columna nueva del esquema entra
+  // sola (bookingInputFrom no compila sin ella) y nunca queda afuera de la huella.
+  const s = JSON.stringify(
+    Object.keys(i)
+      .sort()
+      .map((k) => [k, i[k] ?? null]),
+  );
+  let h = 0x811c9dc5; // FNV-1a 32 bits
+  for (let k = 0; k < s.length; k++) {
+    h ^= s.charCodeAt(k);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${h.toString(16).padStart(8, "0")}-${s.length.toString(16)}`;
+}
+
+// ── Personas del equipo ─────────────────────────────────────────────────────
+
+export type TeamPerson = { user_id: string; full_name: string; role?: string };
+
+/**
+ * "María" → la única María del equipo; con dos Marías, se pregunta; "Mari"
+ * (parcial) siempre se pregunta. Mismo criterio que los huéspedes.
+ */
+export function matchPerson(people: TeamPerson[], query: string): Resolved<TeamPerson> {
+  const raw = query.trim();
+  if (UUID_RE.test(raw)) {
+    const p = people.find((x) => x.user_id === raw);
+    return p ? { ok: true, value: p } : { ok: false, error: "Esa persona no está en el equipo (o no puede tener esta tarea)." };
+  }
+  const ws = words(raw);
+  const names = people.slice(0, 12).map((p) => p.full_name).join(", ");
+  if (ws.length === 0) return { ok: false, error: `¿A quién? Están: ${names}.` };
+  const options = (ps: TeamPerson[]): ChoiceOption[] =>
+    ps.slice(0, 8).map((p) => ({
+      id: p.user_id,
+      label: p.full_name,
+      detail: p.role ? (ROLE_META[p.role as UserRole]?.label ?? undefined) : undefined,
+    }));
+  const exact = people.filter((p) => sameName(p.full_name, raw));
+  if (exact.length === 1) return { ok: true, value: exact[0] };
+  const strong = exact.length > 1 ? exact : people.filter((p) => ws.every((w) => words(p.full_name).includes(w)));
+  if (strong.length === 1) return { ok: true, value: strong[0] };
+  if (strong.length > 1) return { ok: "choose", question: `Hay ${strong.length} personas que coinciden con «${raw}». ¿Cuál?`, options: options(strong) };
+  const partial = people.filter((p) => ws.some((w) => w.length >= 3 && fold(p.full_name).includes(w)));
+  if (partial.length > 0) {
+    return { ok: "choose", question: `No hay nadie que se llame exactamente «${raw}». ¿Es alguna de estas personas?`, options: options(partial) };
+  }
+  return { ok: false, error: `No hay nadie que se llame «${raw}» en el equipo. Están: ${names}.` };
 }

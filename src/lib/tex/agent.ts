@@ -33,6 +33,7 @@ import { TEX_SYSTEM } from "./prompt";
 import type { ReadResult, TexTool, ToolContext } from "./tool";
 import type { ProposalView, TexCard, TexEvent, TexPart } from "./types";
 import { addUsage, callCostUsd, ZERO_USAGE, type TokenUsage } from "./usage";
+import { choiceButtons, cleanReplies } from "./replies";
 
 export const TEX_MODEL = process.env.TEX_MODEL || "claude-haiku-5-5";
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -166,23 +167,68 @@ async function runTool(
         opts.emit({ t: "navigate", href: r.navigate.href, label: r.navigate.label });
         parts.push({ type: "navigate", href: r.navigate.href, label: r.navigate.label });
       }
+      const replies = cleanReplies(r.replies);
+      if (replies.length) {
+        opts.emit({ t: "replies", items: replies });
+        parts.push({ type: "replies", items: replies });
+      }
       opts.emit({ t: "tool", id: use.id, name: tool.name, label: tool.label, state: "done" });
       parts.unshift({ type: "tool", id: use.id, name: tool.name, label: tool.label, state: "done" });
       return { result: { type: "tool_result", tool_use_id: use.id, content: clipJson(r.data) }, parts };
     }
 
     const r = await withTimeout(tool.propose(parsed.data, opts.ctx), toolBudget(opts), "La preparación");
+    if (r.ok === "ask") {
+      opts.emit({ t: "tool", id: use.id, name: tool.name, label: tool.label, state: "done", note: "Falta un dato" });
+      parts.push({ type: "tool", id: use.id, name: tool.name, label: tool.label, state: "done", note: "Falta un dato" });
+      const replies = cleanReplies(r.replies);
+      if (replies.length) {
+        opts.emit({ t: "replies", items: replies });
+        parts.push({ type: "replies", items: replies });
+      }
+      return {
+        result: {
+          type: "tool_result",
+          tool_use_id: use.id,
+          content: clipJson({
+            falta_confirmar: r.question,
+            respuestas_sugeridas: replies,
+            nota:
+              "Todavía NO armé nada. Preguntale esto en una línea (podés mejorar la redacción, sin agregar datos ni " +
+              "suponer la respuesta). Las respuestas sugeridas ya se muestran como botones. Con la respuesta, volvé a " +
+              "llamar la herramienta con el dato.",
+          }),
+        },
+        parts,
+      };
+    }
     if (r.ok === "choose") {
       opts.emit({ t: "tool", id: use.id, name: tool.name, label: tool.label, state: "done", note: "Falta elegir" });
       parts.push({ type: "tool", id: use.id, name: tool.name, label: tool.label, state: "done", note: "Falta elegir" });
+      // Un botón por opción, cada uno con un texto distinto (o ninguno): tocar
+      // uno manda su texto, y dos «Juan Pérez» iguales dejarían al modelo adivinando.
+      const buttons = choiceButtons(r.options);
+      if (buttons.length) {
+        opts.emit({ t: "replies", items: buttons });
+        parts.push({ type: "replies", items: buttons });
+      }
       return {
         result: {
           type: "tool_result",
           tool_use_id: use.id,
           content: clipJson({
             necesito_que_elija: r.question,
-            opciones: r.options.map((o) => ({ id: o.id, opcion: o.label, detalle: o.detail })),
-            nota: "Preguntale cuál con una lista corta. Después volvé a llamar la herramienta con el id elegido.",
+            opciones: r.options.map((o, i) => ({
+              id: o.id,
+              opcion: o.label,
+              detalle: o.detail,
+              ...(buttons.length ? { boton: buttons[i] } : {}),
+            })),
+            nota: buttons.length
+              ? "Preguntale cuál con una lista corta: las opciones ya se ven como botones. Si contesta con el texto de un " +
+                "botón, es la opción que tiene ese «boton». Después volvé a llamar la herramienta con el id elegido."
+              : "Preguntale cuál con una lista corta, con el detalle que distingue a cada una. Si la respuesta no " +
+                "señala una sola opción, volvé a preguntar. Después volvé a llamar la herramienta con el id elegido.",
           }),
         },
         parts,

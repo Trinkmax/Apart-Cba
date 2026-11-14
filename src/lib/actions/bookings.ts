@@ -1601,6 +1601,15 @@ export async function updateBooking(
       `Elegí a qué cuenta de caja imputar el cobro de ${delta.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${validated.currency}. Sin cuenta, el cobro no queda registrado en Caja.`,
     );
   }
+  // Y al revés: lo cobrado no baja sin un movimiento que lo respalde. Pasa
+  // cuando la reserva se abrió antes de que entrara un cobro (el formulario o
+  // Tex mandan el cobrado viejo): sin esto se pisaba en silencio y Caja seguía
+  // con el ingreso. Para devolver plata está el reintegro; para corregir, Caja.
+  if (delta <= -0.01 && !accountId) {
+    throw new Error(
+      "La reserva cambió mientras la editabas (entró un cobro). Cerrala y volvé a abrirla para no pisarlo.",
+    );
+  }
 
   const { data, error } = await admin
     .from("bookings")
@@ -1953,6 +1962,11 @@ export async function changeBookingStatus(
 
   const update: Record<string, unknown> = { status: newStatus };
   if (newStatus === "cancelada" && reason) update.cancelled_reason = reason;
+  // Rastro de la 053: una persona la canceló desde el sistema (pantalla o Tex).
+  if (newStatus === "cancelada") {
+    update.cancelled_by = session.userId;
+    update.cancelled_source = "manual";
+  }
 
   // Las marcas de tiempo tienen que quedar consistentes con el estado, no sólo
   // avanzar. Si no se limpian, una reserva devuelta a "confirmada" sigue
@@ -1969,6 +1983,8 @@ export async function changeBookingStatus(
   if (!(newStatus === "cancelada" || newStatus === "no_show")) {
     update.cancelled_at = null;
     update.cancelled_reason = null;
+    update.cancelled_by = null;
+    update.cancelled_source = null;
   }
 
   // Reactivar deja rastro: es un override manual sobre un estado que alguien
@@ -3110,7 +3126,7 @@ export async function completeChannelPrice(input: {
   const { data: booking, error: bookingErr } = await admin
     .from("bookings")
     .select(
-      "id, unit_id, source, mode, is_block, status, total_amount, currency, commission_pct, channel_commission_pct, cleaning_fee"
+      "id, unit_id, source, mode, is_block, status, total_amount, paid_amount, currency, commission_pct, channel_commission_pct, cleaning_fee"
     )
     .eq("id", validated.booking_id)
     .eq("organization_id", organization.id)
@@ -3144,6 +3160,16 @@ export async function completeChannelPrice(input: {
 
   const total = round2(validated.total_amount);
   const currency = validated.currency ?? booking.currency ?? organization.default_currency ?? "ARS";
+  // Con plata ya cobrada (un "pago en el alojamiento" registrado antes del
+  // precio), cambiar la moneda deja lo cobrado en pesos contado como dólares:
+  // saldo negativo, check-out destrabado y un movimiento de Caja que no cierra.
+  const currencyChanges = Boolean(booking.currency) && currency !== booking.currency;
+  if (currencyChanges && Number(booking.paid_amount ?? 0) > 0.004) {
+    return {
+      ok: false,
+      error: `La reserva ya tiene ${booking.currency} cobrados: el precio va en ${booking.currency}. Si de verdad es en ${currency}, primero anulá ese cobro.`,
+    };
+  }
 
   // Limpieza: sólo se completa si la reserva no la tenía y la unidad sí; nunca
   // por encima del total (una limpieza mayor al total tipeado es un error de
@@ -3190,7 +3216,7 @@ export async function completeChannelPrice(input: {
   });
   const channelAmount = channelCommissionAmount(total, channelPct);
 
-  const { data: updated, error: updateErr } = await admin
+  let priceUpdate = admin
     .from("bookings")
     .update({
       total_amount: total,
@@ -3204,14 +3230,22 @@ export async function completeChannelPrice(input: {
     .eq("id", booking.id)
     .eq("organization_id", organization.id)
     // CAS: si otra pestaña (o el form completo) ya cargó el precio, no se pisa.
-    .lte("total_amount", 0)
+    .lte("total_amount", 0);
+  // Y si cambia la moneda, tampoco si entró un cobro mientras tanto.
+  if (currencyChanges) priceUpdate = priceUpdate.lte("paid_amount", 0);
+  const { data: updated, error: updateErr } = await priceUpdate
     .select(
       "id, total_amount, currency, commission_pct, commission_amount, channel_commission_pct, channel_commission_amount"
     )
     .maybeSingle();
   if (updateErr) return { ok: false, error: updateErr.message };
   if (!updated) {
-    return { ok: false, error: "La reserva ya tiene precio (se cargó por otro lado)" };
+    return {
+      ok: false,
+      error: currencyChanges
+        ? "La reserva cambió mientras tanto (se cargó el precio o un cobro). Volvé a abrirla."
+        : "La reserva ya tiene precio (se cargó por otro lado)",
+    };
   }
 
   revalidatePath("/dashboard/reservas");

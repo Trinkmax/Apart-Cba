@@ -40,6 +40,8 @@ export type ReadResult =
       cards?: TexCard[];
       /** `abrir_pantalla`: la app muestra el botón para ir. */
       navigate?: { href: string; label: string };
+      /** Respuestas tocables para la pregunta que Tex está por hacer. */
+      replies?: string[];
     }
   | { ok: false; error: string };
 
@@ -50,7 +52,14 @@ export type ProposeResult<P> =
   /** Algo no cierra: el modelo tiene que corregir o preguntarle a la persona. */
   | { ok: false; error: string }
   /** Hay más de un candidato: NUNCA se elige solo ("Zulma Pereyra" ≠ "Camila Ferreyra"). */
-  | { ok: "choose"; question: string; options: ChoiceOption[] };
+  | { ok: "choose"; question: string; options: ChoiceOption[] }
+  /**
+   * Falta un dato o hay que confirmar una suposición antes de proponer: Tex lo
+   * pregunta (de a una cosa, con la sugerencia si la hay: "¿La seña sería de
+   * $ 50.000?") y la app muestra `replies` como botones. Nunca se inventa: lo
+   * que no dijeron y no sale del sistema, se pregunta.
+   */
+  | { ok: "ask"; question: string; replies?: string[] };
 
 export type ExecuteResult =
   | { ok: true; message: string; href?: string; data?: unknown }

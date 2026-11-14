@@ -4,9 +4,10 @@
  * renombrar invalida la caché. Una nueva se suma AL FINAL.
  */
 import type { TexTool } from "../../tool";
-import { registrarCobro, registrarIngreso } from "./cobros";
+import { cargoExtra, registrarCobro, registrarIngreso, transferirEntreCuentas } from "./cobros";
 import { cambiarEstadoReserva, crearReserva, extenderReserva } from "./reservas";
-import { cambiarEstadoTicket, completarTarea, crearTarea, crearTicket, marcarLimpieza } from "./operacion";
+import { cancelarReserva, completarPrecio, modificarReserva, moverReserva } from "./reservas-cambios";
+import { asignarLimpieza, cambiarEstadoTicket, completarTarea, crearTarea, crearTicket, marcarLimpieza } from "./operacion";
 import { responderSolicitud } from "./solicitudes";
 
 export const WRITE_TOOLS: readonly TexTool[] = [
@@ -21,4 +22,12 @@ export const WRITE_TOOLS: readonly TexTool[] = [
   crearTarea,
   completarTarea,
   responderSolicitud,
+  // Ronda 2 (nov-2026)
+  modificarReserva,
+  moverReserva,
+  completarPrecio,
+  cargoExtra,
+  cancelarReserva,
+  asignarLimpieza,
+  transferirEntreCuentas,
 ];

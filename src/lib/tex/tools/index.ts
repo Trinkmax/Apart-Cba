@@ -10,12 +10,14 @@ import type { TexTool } from "../tool";
 import { parteDelDia } from "./parte";
 import { registrarGasto } from "./gastos";
 import { READ_TOOLS } from "./read";
+import { ofrecerOpciones } from "./opciones";
 import { WRITE_TOOLS } from "./write";
 
 export const TEX_TOOLS: readonly TexTool[] = [
   // Lectura: el día primero (lo más preguntado), después el resto.
   parteDelDia,
   ...READ_TOOLS,
+  ofrecerOpciones,
   // Acciones (proponen; la persona confirma).
   registrarGasto,
   ...WRITE_TOOLS,

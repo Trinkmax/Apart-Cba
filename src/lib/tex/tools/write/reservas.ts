@@ -1,73 +1,123 @@
 /**
- * Reservas (nov-2026): crear una temporaria directa, cambiar su estado
- * operativo y extender la estadía.
+ * Reservas (nov-2026): crear una temporaria directa (con la seña que dejó el
+ * huésped), cambiar su estado operativo y extender la estadía.
  *
- * Lo que NO hacen, a propósito:
- * - Cancelar / no-show / reactivar: lo decide una persona desde la ficha
- *   (migración 053). `cambiar_estado_reserva` devuelve el link.
+ * Reglas:
+ * - Nada se inventa. Lo que la persona no dijo y no sale del sistema se
+ *   pregunta (`ask`), de a una cosa y en orden: unidad → fechas → huésped →
+ *   total → seña. Si el sistema sugiere un valor (el total con la tarifa base),
+ *   va en la pregunta, nunca directo a la tarjeta.
+ * - La seña que el huésped YA dejó es plata cobrada: entra a Caja con
+ *   `addBookingPayment` en la misma confirmación, DESPUÉS de crear la reserva
+ *   con `paid_amount: 0` (con cobro, `createBooking` inserta antes de validar la
+ *   cuenta). Es lo mismo que hace el formulario con «Cobrado»: no se toca
+ *   `deposit_amount`, que es la seña A INFORMAR en el mensaje al huésped (y
+ *   ese mensaje, sin una explícita, ya toma lo cobrado).
+ * - Cancelar va por `cancelar_reserva` (tarjeta roja, con motivo); el no-show y
+ *   las reactivaciones, por la ficha (migración 053).
  * - Check-out con saldo: nunca se fuerza (`force_checkout`); primero el cobro.
- * - Contratos mensuales y estadías de más de 30 noches: van por el formulario
- *   (renta, cuotas, división en períodos).
- * - Cobrar al crear: `createBooking` con `paid_amount > 0` inserta la reserva
- *   antes de validar la cuenta. El cobro va aparte con `registrar_cobro`.
+ * - Contratos mensuales y estadías de más de 30 noches: van por el formulario.
  */
 import { z } from "zod/v4";
 import { can } from "@/lib/permissions";
 import {
+  addBookingPayment,
   changeBookingStatus,
   createBooking,
   extendBooking,
   previewBookingChange,
 } from "@/lib/actions/bookings";
 import { createGuest, getGuest } from "@/lib/actions/guests";
+import { getWebSettingsForCurrentOrg } from "@/lib/actions/web-settings";
+import { computeSena } from "@/lib/marketplace/sena";
 import { getAvailabilitySnapshot, type AvailabilitySnapshot } from "@/lib/actions/pms-availability";
-import { listUnitsForBookingForm } from "@/lib/actions/units";
+import { getUnit, listUnitsForBookingForm, type UnitForBookingForm } from "@/lib/actions/units";
 import { MAX_BOOKING_NIGHTS } from "@/lib/booking-split";
-import { BOOKING_SOURCE_META } from "@/lib/constants";
+import { addDaysYmd } from "@/lib/dates";
 import { computeUnitAvailability, rangesOverlap, statusOccupies } from "@/lib/units/availability";
-import type { BookingSource, BookingStatus, Guest } from "@/lib/types/database";
+import type { BookingStatus, Guest } from "@/lib/types/database";
 import { attempt, defineWrite, hrefs } from "../../tool";
 import { clip, dateRange, isYmd, money, nightsBetween, shortDate } from "../../format";
 import { resolveUnit } from "../_resolve";
 import {
+  ask,
   candidateFromDetail,
   describeBooking,
   findBooking,
   idSchema,
+  isOta,
   joinNotes,
   loadBooking,
+  nightsText,
+  pickAccount,
+  recheckAccount,
   resolveGuestForBooking,
   round2,
+  sourceLabel,
   statusLabel,
   unitLabel,
   ymdSchema,
   type BookingCandidate,
 } from "./_shared";
 
-const SOURCES = ["directo", "airbnb", "booking", "expedia", "vrbo", "whatsapp", "instagram", "otro"] as const;
-const OTA_SOURCES = new Set<string>(["airbnb", "booking", "expedia", "vrbo"]);
-const ALL_STATUSES = ["pendiente", "confirmada", "check_in", "check_out", "cancelada", "no_show"] as const;
+export const SOURCES = ["directo", "airbnb", "booking", "expedia", "vrbo", "whatsapp", "instagram", "otro"] as const;
+export const ALL_STATUSES = ["pendiente", "confirmada", "check_in", "check_out", "cancelada", "no_show"] as const;
 const CHECK_IN_TIME = "14:00";
 const CHECK_OUT_TIME = "10:00";
+export const ASK_RESERVA = "¿De qué reserva? Decime el huésped o la unidad.";
 
-const sourceLabel = (s: string) => BOOKING_SOURCE_META[s as BookingSource]?.label ?? s;
-const nightsText = (n: number) => `${n} ${n === 1 ? "noche" : "noches"}`;
+/** En mensual las cuotas salen de las fechas: el arrastre y Tex no las rearman, el formulario sí. */
+export const monthlyByForm = (bookingId: string) =>
+  `Es un alquiler mensual: las fechas se cambian desde la ficha de la reserva (${hrefs.booking(bookingId)}), que rearma las cuotas.`;
 
 type Busy = { busy: boolean; tentative: boolean; reason: string | null; tentativeChannel: string | null };
 
-/** ¿La unidad está libre en [desde, hasta)? La misma foto autoritativa que «Buscar disp» del PMS. */
-async function unitAvailability(
+/**
+ * La seña que corresponde según la regla de la organización (Configuración →
+ * Web y cobros: una noche, un % o ninguna), para preguntar «¿te dejó seña? La
+ * que tenés configurada sería de $ X» en vez de que el modelo invente un monto.
+ * null = sin regla o no se pudo leer (se pregunta sin sugerencia).
+ */
+async function suggestedSena(params: {
+  nights: number;
+  total: number;
+  cleaningFee: number | null;
+  currency: string;
+}): Promise<{ amount: number; basis: string } | null> {
+  const ws = await attempt(() => getWebSettingsForCurrentOrg());
+  if (!ws.ok) return null;
+  const policy = ws.value.resolved.deposit;
+  const amount = computeSena({
+    policy,
+    nights: params.nights,
+    subtotal: params.total - (params.cleaningFee ?? 0),
+    total: params.total,
+    currency: params.currency,
+  });
+  if (!amount) return null;
+  const basis = policy.rule === "percent" ? `el ${policy.percent} % del total` : "una noche";
+  return { amount, basis };
+}
+
+/**
+ * ¿La unidad está libre en [desde, hasta)? La misma foto autoritativa que
+ * «Buscar disp» del PMS (reservas + solicitudes de canal que retienen la venta).
+ * `excludeBookingId`: al mover una reserva, ella misma no cuenta.
+ */
+export async function unitAvailability(
   unitId: string,
   unitCode: string,
   from: string,
   to: string,
+  excludeBookingId?: string,
 ): Promise<{ ok: true; value: Busy } | { ok: false; error: string }> {
   const r = await attempt(() => getAvailabilitySnapshot(from, to));
   if (!r.ok) return r;
   const snap: AvailabilitySnapshot = r.value;
   if (!snap.ok) return { ok: false, error: snap.error };
-  const av = computeUnitAvailability({ from, to, bookings: snap.bookings, requests: snap.requests });
-  const clash = snap.bookings.find(
+  const bookings = excludeBookingId ? snap.bookings.filter((b) => b.id !== excludeBookingId) : snap.bookings;
+  const av = computeUnitAvailability({ from, to, bookings, requests: snap.requests });
+  const clash = bookings.find(
     (b) => b.unit_id === unitId && statusOccupies(b.status) && rangesOverlap(b.check_in_date, b.check_out_date, from, to),
   );
   const held = snap.requests.find(
@@ -88,6 +138,20 @@ async function unitAvailability(
       tentativeChannel: held && !held.holds_availability ? sourceLabel(held.channel) : null,
     },
   };
+}
+
+/** Las unidades temporarias libres en [desde, hasta), para sugerirlas cuando falta la unidad. */
+async function freeUnits(
+  units: UnitForBookingForm[],
+  from: string,
+  to: string,
+): Promise<{ ok: true; value: UnitForBookingForm[] } | { ok: false; error: string }> {
+  const r = await attempt(() => getAvailabilitySnapshot(from, to));
+  if (!r.ok) return r;
+  const snap: AvailabilitySnapshot = r.value;
+  if (!snap.ok) return { ok: false, error: snap.error };
+  const av = computeUnitAvailability({ from, to, bookings: snap.bookings, requests: snap.requests });
+  return { ok: true, value: units.filter((u) => u.default_mode !== "mensual" && !av.busy.has(u.id)) };
 }
 
 // ── crear_reserva ───────────────────────────────────────────────────────────
@@ -111,6 +175,8 @@ const crearPayload = z.object({
   cleaning_fee: z.number().min(0).nullable(),
   source: z.enum(SOURCES),
   notes: z.string().max(1000).nullable(),
+  /** La seña que el huésped YA dejó: entra a Caja al confirmar. */
+  deposit: z.object({ amount: z.number().positive(), account_id: idSchema }).nullable(),
 });
 
 export const crearReserva = defineWrite({
@@ -118,54 +184,66 @@ export const crearReserva = defineWrite({
   label: "Preparando la reserva…",
   description:
     "Prepara una RESERVA temporaria nueva (por noches) para que la persona la confirme con un botón: no se crea hasta que confirma. " +
-    "Verifica que la unidad esté libre, busca al huésped (si hay parecidos, pregunta) y, si no dicen el total, lo estima con la tarifa base. " +
-    "Queda confirmada y sin cobros: lo cobrado se registra después con registrar_cobro. " +
-    "No sirve para alquileres mensuales ni estadías de más de 30 noches (van por el formulario de Reservas).",
+    "Llamala apenas te pidan una reserva, aunque falten datos: te dice qué preguntar, de a uno (unidad, fechas, huésped, total, seña), con la " +
+    "sugerencia del sistema cuando la hay. Verifica que la unidad esté libre y busca al huésped (si hay parecidos, pregunta). " +
+    "Si el huésped dejó seña, entra a Caja en la misma confirmación. No sirve para alquileres mensuales ni estadías de más de 30 noches (van por el formulario).",
   input: z.object({
-    unidad: z.string().describe("Código o nombre de la unidad, o el id que la persona eligió de una lista."),
-    huesped: z.string().describe("Nombre y apellido del huésped."),
+    unidad: z.string().describe("Código o nombre de la unidad, o el id que la persona eligió de una lista.").optional(),
+    desde: z.string().describe("Día de llegada (check-in), YYYY-MM-DD.").optional(),
+    hasta: z.string().describe("Día de salida (check-out), YYYY-MM-DD: el día que se va (3 noches desde el 14 → hasta el 17).").optional(),
+    huesped: z.string().describe("Nombre y apellido del huésped.").optional(),
     huesped_id: z
       .string()
       .describe("Sólo si la persona eligió un huésped de una lista que le mostraste: su id, o «nuevo» si dijo que es otra persona.")
       .optional(),
     telefono: z.string().describe("Teléfono del huésped, si lo dieron.").optional(),
     email: z.string().describe("Mail del huésped, si lo dieron.").optional(),
-    desde: z.string().describe("Día de llegada (check-in), YYYY-MM-DD."),
-    hasta: z.string().describe("Día de salida (check-out), YYYY-MM-DD: el día que se va (3 noches desde el 14 → hasta el 17)."),
     huespedes: z.number().int().min(1).max(50).describe("Cuántas personas. Si no lo dijeron, omitir (queda 1).").optional(),
+    confirma_capacidad: z
+      .boolean()
+      .describe("true sólo si la persona confirmó que son más personas que la capacidad de la unidad.")
+      .optional(),
     total: z
       .number()
       .min(0)
-      .describe("Total que paga el huésped, con la limpieza incluida. Si no lo dijeron, omitir: se estima con la tarifa base.")
+      .describe("Total que paga el huésped, con la limpieza incluida, tal como lo dijo o confirmó la persona. Si no, omitir.")
       .optional(),
     moneda: z.string().describe("ARS, USD… sólo si la dijeron; si no, la de la tarifa de la unidad.").optional(),
-    canal: z.enum(SOURCES).describe("Por dónde llegó la reserva. Si no lo dijeron, directo.").optional(),
+    canal: z.enum(SOURCES).describe("Por dónde llegó la reserva. Si no nombraron una plataforma, directo.").optional(),
+    sena: z
+      .number()
+      .min(0)
+      .describe("Seña que el huésped YA dejó (plata que entró). 0 = sin seña. Si no lo dijeron, omitir (se pregunta).")
+      .optional(),
+    cuenta: z.string().describe("Cuenta de Caja donde entró la seña, si la dijeron (o su id).").optional(),
     notas: z.string().max(1000).describe("Notas para la reserva, si las dieron.").optional(),
   }),
   payload: crearPayload,
   resource: "bookings",
   action: "create",
   async propose(input, ctx) {
-    const desde = input.desde.trim();
-    const hasta = input.hasta.trim();
-    if (!isYmd(desde) || !isYmd(hasta)) {
-      return { ok: false, error: "Necesito las fechas de llegada y salida en formato YYYY-MM-DD." };
-    }
-    if (+desde.slice(0, 4) < 2020 || +hasta.slice(0, 4) > 2100) return { ok: false, error: "Revisá el año de las fechas." };
-    if (hasta <= desde) return { ok: false, error: "La salida tiene que ser después de la llegada." };
-    const nights = nightsBetween(desde, hasta);
-    if (nights > MAX_BOOKING_NIGHTS) {
-      return {
-        ok: false,
-        error: `Son ${nights} noches: una estadía de más de ${MAX_BOOKING_NIGHTS} noches se carga desde el formulario de Reservas (${hrefs.bookings()}), que pregunta si dividirla en períodos.`,
-      };
-    }
+    const units = await attempt(() => listUnitsForBookingForm());
+    if (!units.ok) return units;
+    const desde = input.desde?.trim() || undefined;
+    const hasta = input.hasta?.trim() || undefined;
 
+    // 1) Unidad (con las libres como sugerencia si ya hay fechas).
+    if (!input.unidad?.trim()) {
+      if (desde && hasta && isYmd(desde) && isYmd(hasta) && hasta > desde) {
+        const free = await freeUnits(units.value, desde, hasta);
+        if (!free.ok) return free;
+        if (free.value.length === 0) return { ok: false, error: `No hay unidades libres del ${dateRange(desde, hasta)}.` };
+        const codes = free.value.slice(0, 8).map((x) => x.code).join(", ");
+        return ask(
+          `¿En qué unidad? Libres del ${dateRange(desde, hasta)}: ${codes}${free.value.length > 8 ? "…" : ""}.`,
+          free.value.slice(0, 4).map((x) => `${x.code} · ${x.name}`),
+        );
+      }
+      return ask("¿En qué unidad es la reserva?");
+    }
     const u = await resolveUnit(input.unidad);
     if (u.ok !== true) return u;
     const unit = u.value;
-    const units = await attempt(() => listUnitsForBookingForm());
-    if (!units.ok) return units;
     const info = units.value.find((x) => x.id === unit.id);
     if (!info) return { ok: false, error: `No encontré la tarifa de ${unit.code}.` };
     if (info.default_mode === "mensual") {
@@ -175,7 +253,49 @@ export const crearReserva = defineWrite({
       };
     }
 
-    // Moneda y precio: los mismos que arma el formulario (tarifa × noches + limpieza, en la moneda de la tarifa).
+    // 2) Fechas.
+    if (!desde && !hasta) return ask(`¿Qué fechas en ${unit.code}? Decime el día que llega y el día que se va.`);
+    if (!desde) {
+      if (!hasta || !isYmd(hasta)) return { ok: false, error: "La fecha de salida va en formato YYYY-MM-DD." };
+      return ask(`¿Qué día llega? Se va el ${shortDate(hasta, ctx.today)}.`);
+    }
+    if (!isYmd(desde)) return { ok: false, error: "La fecha de llegada va en formato YYYY-MM-DD." };
+    if (!hasta) {
+      return ask(
+        `¿Hasta qué día se queda? Llega el ${shortDate(desde, ctx.today)}.`,
+        [1, 2, 3].map((n) => `${nightsText(n)} (sale ${shortDate(addDaysYmd(desde, n), ctx.today)})`),
+      );
+    }
+    if (!isYmd(hasta)) return { ok: false, error: "La fecha de salida va en formato YYYY-MM-DD." };
+    if (+desde.slice(0, 4) < 2020 || +hasta.slice(0, 4) > 2100) return { ok: false, error: "Revisá el año de las fechas." };
+    if (hasta <= desde) return { ok: false, error: "La salida tiene que ser después de la llegada." };
+    const nights = nightsBetween(desde, hasta);
+    if (nights > MAX_BOOKING_NIGHTS) {
+      return {
+        ok: false,
+        error: `Son ${nights} noches: una estadía de más de ${MAX_BOOKING_NIGHTS} noches se carga desde el formulario de Reservas (${hrefs.bookings()}), que pregunta si dividirla en períodos.`,
+      };
+    }
+    const av = await unitAvailability(unit.id, unit.code, desde, hasta);
+    if (!av.ok) return av;
+    if (av.value.busy) return { ok: false, error: av.value.reason ?? `${unit.code} no está libre en esas fechas.` };
+
+    // 3) Huésped.
+    if (!input.huesped?.trim() && !input.huesped_id?.trim()) return ask("¿A nombre de quién es la reserva? Nombre y apellido.");
+    const g = await resolveGuestForBooking({
+      name: input.huesped ?? "",
+      phone: input.telefono,
+      email: input.email,
+      guestId: input.huesped_id,
+    });
+    if (g.ok !== true) return g;
+    const guest = g.value;
+    if (guest.kind === "new" && !can(ctx.role, "guests", "create")) {
+      return { ok: false, error: "Tu rol no puede dar de alta huéspedes: elegí uno que ya exista." };
+    }
+    const contact = [guest.phone, guest.email].filter(Boolean).join(" · ");
+
+    // 4) Total: si no lo dijeron, se pregunta con la tarifa base como sugerencia.
     const unitCurrency = info.base_price_currency || ctx.org.currency || "ARS";
     const moneda = input.moneda?.trim().toUpperCase();
     if (moneda && !/^[A-Z]{3}$/.test(moneda)) return { ok: false, error: `No reconozco la moneda «${input.moneda}». Usá el código: ARS, USD…` };
@@ -183,45 +303,65 @@ export const crearReserva = defineWrite({
     const basePrice = Number(info.base_price ?? 0);
     const unitFee = Number(info.cleaning_fee ?? 0);
     const feeApplies = unitFee > 0 && currency === unitCurrency;
-    let total: number;
-    let cleaningFee: number | null = null;
-    let estimated = false;
-    if (input.total !== undefined) {
-      total = round2(input.total);
-      if (feeApplies && unitFee <= total) cleaningFee = unitFee;
-    } else {
-      if (!(basePrice > 0)) {
-        return { ok: false, error: `${unit.code} no tiene tarifa base cargada: preguntale a la persona el total que paga el huésped.` };
+    if (input.total === undefined) {
+      if (basePrice > 0 && currency === unitCurrency) {
+        const fee = feeApplies ? unitFee : 0;
+        const estimate = round2(basePrice * nights + fee);
+        return ask(
+          `¿El total sería ${money(estimate, currency)} (${nightsText(nights)} a tarifa base${fee ? ` + limpieza ${money(fee, currency)}` : ""})?`,
+          [`Sí, ${money(estimate, currency)}`, "Otro monto"],
+        );
       }
-      if (currency !== unitCurrency) {
-        return { ok: false, error: `La tarifa de ${unit.code} es en ${unitCurrency}: para cobrarla en ${currency} necesito el total.` };
-      }
-      cleaningFee = feeApplies ? unitFee : null;
-      total = round2(basePrice * nights + (cleaningFee ?? 0));
-      estimated = true;
+      return ask(`¿Cuál es el total que paga ${guest.name}, con la limpieza incluida${currency !== unitCurrency ? ` (en ${currency})` : ""}?`);
     }
+    const total = round2(input.total);
+    const cleaningFee = feeApplies && unitFee <= total ? unitFee : null;
 
-    const av = await unitAvailability(unit.id, unit.code, desde, hasta);
-    if (!av.ok) return av;
-    if (av.value.busy) return { ok: false, error: av.value.reason ?? `${unit.code} no está libre en esas fechas.` };
-
-    const g = await resolveGuestForBooking({
-      name: input.huesped,
-      phone: input.telefono,
-      email: input.email,
-      guestId: input.huesped_id,
-    });
-    if (g.ok !== true) return g;
-    const guest = g.value;
-    const contact = [guest.phone, guest.email].filter(Boolean).join(" · ");
-
-    const source = input.canal ?? "directo";
+    // 5) Personas: 1 si no lo dijeron; si superan la capacidad, se confirma.
     const guestsCount = input.huespedes ?? 1;
-    const notes = clip(input.notas, 1000) ?? null;
-
-    if (guest.kind === "new" && !can(ctx.role, "guests", "create")) {
-      return { ok: false, error: "Tu rol no puede dar de alta huéspedes: elegí uno que ya exista." };
+    if (guestsCount > 1 && !input.confirma_capacidad) {
+      const full = await attempt(() => getUnit(unit.id));
+      const max = full.ok ? Number((full.value as { max_guests?: number | null } | null)?.max_guests ?? 0) : 0;
+      if (max > 0 && guestsCount > max) {
+        return ask(`¿Son ${guestsCount} personas? ${unit.code} es para ${max}.`, [`Sí, son ${guestsCount}`, "Corregir la cantidad"]);
+      }
     }
+
+    // 6) Seña: las plataformas cobran ellas; en el resto, se pregunta.
+    const source = input.canal ?? "directo";
+    const ota = isOta(source);
+    if (ota && (input.sena ?? 0) > 0) {
+      return {
+        ok: false,
+        error: `En las reservas de ${sourceLabel(source)} el pago lo cobra la plataforma: no hay seña para registrar. Si te pagaron algo aparte, registralo después como cargo extra.`,
+      };
+    }
+    if (!ota && input.sena === undefined) {
+      // La sugerencia sale de la regla configurada, nunca del modelo. Y la
+      // pregunta es por plata que YA entró: lo que se toque acá va a Caja.
+      const hint = total > 0 ? await suggestedSena({ nights, total, cleaningFee, currency }) : null;
+      if (hint) {
+        return ask(`¿Te dejó seña? La que tenés configurada (${hint.basis}) sería de ${money(hint.amount, currency)}.`, [
+          `Sí, ${money(hint.amount, currency)}`,
+          "Sí, otro monto",
+          "Sin seña",
+        ]);
+      }
+      return ask("¿Te dejó seña? ¿De cuánto?", ["Sin seña", "Sí, dejó seña"]);
+    }
+    const sena = ota ? 0 : round2(input.sena ?? 0);
+    if (sena > total + 0.004) {
+      return { ok: false, error: `La seña (${money(sena, currency)}) es más que el total (${money(total, currency)}). Revisá los montos.` };
+    }
+    let account: { id: string; name: string; currency: string } | null = null;
+    if (sena > 0) {
+      const acc = await pickAccount(input.cuenta, currency, "la seña");
+      if (acc.ok !== true) return acc;
+      account = acc.value;
+    }
+
+    const notes = clip(input.notas, 1000) ?? null;
+    const saldo = round2(total - sena);
     return {
       ok: true,
       payload: {
@@ -239,6 +379,7 @@ export const crearReserva = defineWrite({
         cleaning_fee: cleaningFee,
         source,
         notes,
+        deposit: account ? { amount: sena, account_id: account.id } : null,
       },
       summary: {
         title: "Crear una reserva",
@@ -256,24 +397,31 @@ export const crearReserva = defineWrite({
           { label: "Noches", value: String(nights) },
           { label: "Personas", value: String(guestsCount) },
           {
-            label: estimated ? "Total (tarifa base)" : "Total",
+            label: "Total",
             value: `${money(total, currency)}${cleaningFee ? ` (incluye limpieza ${money(cleaningFee, currency)})` : ""}`,
           },
+          {
+            label: ota ? "Seña" : "Seña que dejó",
+            value: ota
+              ? `La cobra ${sourceLabel(source)}`
+              : account
+                ? `${money(sena, currency)} · entra en ${account.name} (${account.currency})`
+                : "Sin seña",
+          },
+          ...(ota ? [] : [{ label: "Saldo", value: saldo > 0.01 ? money(saldo, currency) : "Sin saldo" }]),
           { label: "Canal", value: sourceLabel(source) },
-          { label: "Estado", value: "Confirmada, sin cobros" },
+          { label: "Estado", value: "Confirmada" },
           ...(notes ? [{ label: "Notas", value: notes }] : []),
         ],
         note: joinNotes([
           guest.kind === "existing" &&
             guest.blacklisted &&
             `Ojo: ${guest.name} está en la lista negra${guest.blacklistReason ? ` (${guest.blacklistReason})` : ""}.`,
-          estimated &&
-            `El total es la tarifa base × ${nightsText(nights)}${cleaningFee ? " + limpieza" : ""}: no tiene en cuenta precios especiales. Si acordaron otro, decime el total.`,
-          input.total !== undefined && total === 0 && "La reserva queda en $ 0.",
+          total === 0 && "La reserva queda en $ 0.",
           av.value.tentative &&
             `Hay una solicitud de ${av.value.tentativeChannel ?? "una plataforma"} sin confirmar en esas fechas: si la aceptan, se superponen.`,
           desde < ctx.today && "La llegada ya pasó: queda cargada como una reserva atrasada.",
-          OTA_SOURCES.has(source) &&
+          ota &&
             `Las reservas de ${sourceLabel(source)} suelen entrar solas por el canal: si entra también por ahí, puede quedar duplicada.`,
           "Puede disparar los mensajes automáticos de reservas nuevas, si los tenés configurados.",
         ]),
@@ -285,11 +433,20 @@ export const crearReserva = defineWrite({
     const u = await resolveUnit(p.unit_id);
     if (u.ok !== true) return { ok: false, error: "La unidad ya no existe o está archivada. No creé nada." };
     if ((p.guest_id === null) === (p.new_guest === null)) return { ok: false, error: "Falta el huésped. No creé nada." };
+    if (p.deposit && p.deposit.amount > p.total_amount + 0.004) return { ok: false, error: "La seña supera el total. No creé nada." };
 
     // Otra vez: el constraint de la base no ve las solicitudes de canal que retienen la venta.
     const av = await unitAvailability(p.unit_id, u.value.code, p.check_in_date, p.check_out_date);
     if (!av.ok) return av;
     if (av.value.busy) return { ok: false, error: `Mientras confirmabas se ocupó: ${av.value.reason ?? "la unidad ya no está libre."} No creé nada.` };
+
+    // La cuenta de la seña, ANTES de crear nada: si no sirve, que no quede una reserva a medias.
+    let accountName: string | null = null;
+    if (p.deposit) {
+      const acc = await recheckAccount(p.deposit.account_id, p.currency);
+      if (!acc.ok) return acc;
+      accountName = acc.value.name;
+    }
 
     let guestId: string;
     let guestName: string;
@@ -330,7 +487,7 @@ export const crearReserva = defineWrite({
         guests_count: p.guests_count,
         currency: p.currency,
         total_amount: p.total_amount,
-        // Siempre 0: con cobro, createBooking inserta antes de validar la cuenta.
+        // Siempre 0: con cobro, createBooking inserta antes de validar la cuenta. La seña va abajo.
         paid_amount: 0,
         // null = los resuelve el servidor con la misma cascada que el formulario.
         commission_pct: null,
@@ -340,13 +497,42 @@ export const crearReserva = defineWrite({
         internal_notes: `Cargada con Tex por ${ctx.user.name}.`,
       }),
     );
-    if (!r.ok) return r;
-    return {
-      ok: true,
-      message: `Reserva creada: ${guestName} en ${u.value.code}, ${dateRange(p.check_in_date, p.check_out_date)}.`,
-      href: hrefs.booking(r.value.id),
-      data: { reserva_id: r.value.id, huesped_id: guestId },
-    };
+    if (!r.ok) {
+      // El huésped nuevo ya se dio de alta: que nadie lo cargue dos veces.
+      return ng
+        ? {
+            ok: false,
+            error: `${r.error} La reserva no se creó, pero ${guestName} quedó cargado como huésped: si lo intentás de nuevo, usá ese mismo huésped.`,
+          }
+        : r;
+    }
+    const bookingId = r.value.id;
+    const created = `Reserva creada: ${guestName} en ${u.value.code}, ${dateRange(p.check_in_date, p.check_out_date)}.`;
+
+    if (p.deposit) {
+      const dep = p.deposit;
+      const paid = await attempt(() => addBookingPayment(bookingId, dep.amount, dep.account_id));
+      if (!paid.ok) {
+        // La reserva ya existe: se informa lo que quedó, para que nadie la vuelva a crear.
+        const after = await loadBooking(bookingId);
+        const half = after.ok && after.value.paid_amount > 0.004;
+        return {
+          ok: true,
+          message: half
+            ? `${created} Pero la seña quedó a medias: la reserva la sumó y el movimiento de Caja no se creó (${paid.error}). Revisalo en la ficha.`
+            : `${created} Pero la seña no se registró: ${paid.error}. Cargala desde la ficha.`,
+          href: hrefs.booking(bookingId),
+          data: { reserva_id: bookingId, huesped_id: guestId, sena_registrada: false },
+        };
+      }
+      return {
+        ok: true,
+        message: `${created} Seña de ${money(dep.amount, p.currency)} en ${accountName ?? "Caja"}.`,
+        href: hrefs.booking(bookingId),
+        data: { reserva_id: bookingId, huesped_id: guestId, sena_registrada: true },
+      };
+    }
+    return { ok: true, message: created, href: hrefs.booking(bookingId), data: { reserva_id: bookingId, huesped_id: guestId } };
   },
 });
 
@@ -358,7 +544,7 @@ type AnyTarget = OpTarget | "cancelada" | "no_show";
 /** Por qué una reserva no sirve para pasar a `target` (null = sirve). */
 function eligibleFor(target: AnyTarget, today: string) {
   return (c: BookingCandidate): string | null => {
-    if (target === "cancelada" || target === "no_show") return null; // sólo se busca para dar el link
+    if (target === "cancelada" || target === "no_show") return null; // sólo se busca para derivar
     const d = describeBooking(c);
     if (c.status === "cancelada" || c.status === "no_show") {
       return `La reserva de ${d} está ${statusLabel(c.status).toLowerCase()}: reactivarla se decide desde su ficha (${hrefs.booking(c.id)}).`;
@@ -395,14 +581,18 @@ export const cambiarEstadoReserva = defineWrite({
   label: "Preparando el cambio de estado…",
   description:
     "Prepara el cambio de estado operativo de una reserva para que la persona lo confirme: confirmar una pendiente, marcar el check-in (el día que llega) " +
-    "o el check-out (sólo sin saldo: si debe, primero registrar_cobro). CANCELAR o marcar NO-SHOW no se hace desde acá: lo decide una persona " +
-    "desde la ficha de la reserva; si te lo piden, llamala igual con ese estado y te devuelve el link para pasarle.",
+    "o el check-out (sólo sin saldo: si debe, primero registrar_cobro). Para CANCELAR usá cancelar_reserva. El NO-SHOW no se hace desde acá: " +
+    "si te lo piden, llamala igual con ese estado y te devuelve el link de la ficha para pasarle.",
   input: z.object({
     reserva: z
       .string()
-      .describe("De quién es la reserva: nombre y apellido del huésped, código de la unidad o de la reserva, o el id que la persona eligió de una lista."),
+      .describe("De quién es la reserva: nombre y apellido del huésped, código de la unidad o de la reserva, o el id que la persona eligió de una lista.")
+      .optional(),
     unidad: z.string().describe("Código o nombre de la unidad, si hace falta para distinguir.").optional(),
-    estado: z.enum(["confirmada", "check_in", "check_out", "cancelada", "no_show"]).describe("Estado al que pasa."),
+    estado: z
+      .enum(["confirmada", "check_in", "check_out", "cancelada", "no_show"])
+      .describe("Estado al que pasa. Si no lo dijeron, omitir (se pregunta).")
+      .optional(),
   }),
   payload: z.object({
     booking_id: idSchema,
@@ -412,6 +602,16 @@ export const cambiarEstadoReserva = defineWrite({
   resource: "bookings",
   action: "update",
   async propose(input, ctx) {
+    if (!input.reserva?.trim()) return ask(ASK_RESERVA);
+    if (!input.estado) {
+      const f = await findBooking(input.reserva, { unidad: input.unidad, today: ctx.today });
+      if (f.ok !== true) return f;
+      const c = f.value;
+      const next: string[] =
+        c.status === "pendiente" ? ["Confirmada", "Check-in"] : c.status === "confirmada" ? ["Check-in", "Check-out"] : c.status === "check_in" ? ["Check-out"] : [];
+      if (next.length === 0) return { ok: false, error: `La reserva de ${describeBooking(c)} ya está ${statusLabel(c.status).toLowerCase()}.` };
+      return ask(`¿Qué le marco a la reserva de ${describeBooking(c)}? Hoy está ${statusLabel(c.status).toLowerCase()}.`, next);
+    }
     const estado: AnyTarget = input.estado;
     const found = await findBooking(input.reserva, {
       unidad: input.unidad,
@@ -419,10 +619,16 @@ export const cambiarEstadoReserva = defineWrite({
       eligible: eligibleFor(estado, ctx.today),
     });
     if (found.ok !== true) return found;
-    if (estado === "cancelada" || estado === "no_show") {
+    if (estado === "cancelada") {
       return {
         ok: false,
-        error: `${estado === "cancelada" ? "Cancelar una reserva" : "Marcar un no-show"} lo decide una persona desde la ficha de la reserva, no desde acá. Pasale el link: ${hrefs.booking(found.value.id)}`,
+        error: `Para cancelar usá cancelar_reserva con esta reserva (id ${found.value.id}): pide el motivo y la persona lo confirma en una tarjeta roja.`,
+      };
+    }
+    if (estado === "no_show") {
+      return {
+        ok: false,
+        error: `Marcar un no-show lo decide una persona desde la ficha de la reserva, no desde acá. Pasale el link: ${hrefs.booking(found.value.id)}`,
       };
     }
     const bk = await loadBooking(found.value.id);
@@ -491,27 +697,51 @@ export const cambiarEstadoReserva = defineWrite({
 
 // ── extender_reserva ────────────────────────────────────────────────────────
 
-const EXTENDABLE = new Set<BookingStatus>(["pendiente", "confirmada", "check_in"]);
+export const MOVABLE = new Set<BookingStatus>(["pendiente", "confirmada", "check_in"]);
 
 const notExtendable = (c: BookingCandidate) =>
-  EXTENDABLE.has(c.status) ? null : `La reserva de ${describeBooking(c)} está ${statusLabel(c.status).toLowerCase()}: no se puede extender.`;
+  MOVABLE.has(c.status) ? null : `La reserva de ${describeBooking(c)} está ${statusLabel(c.status).toLowerCase()}: no se puede cambiar.`;
+
+/** "choca con la reserva de X (25 al 28 nov); …" a partir del preview. */
+export function previewBlockers(preview: {
+  warnings: Array<{ kind: string; message: string }>;
+  conflicts: Array<{ guest_name: string | null; range: string }>;
+  in_closed_settlement_period: boolean;
+}): string | null {
+  const blocking = preview.warnings.filter((w) => w.kind === "blocking").map((w) => w.message);
+  if (blocking.length === 0 && preview.conflicts.length === 0 && !preview.in_closed_settlement_period) return null;
+  // El rango viene "2026-11-25 → 2026-11-28"; el aviso "Se solapa con N reservas" ya lo cuentan los choques.
+  const clash = preview.conflicts
+    .slice(0, 3)
+    .map((c) => {
+      const [from, to] = c.range.split(" → ");
+      const when = isYmd(from) && isYmd(to) ? dateRange(from, to) : c.range;
+      return `${c.guest_name ? `la reserva de ${c.guest_name}` : "otra reserva"} (${when})`;
+    })
+    .join(", ");
+  const others = blocking.filter((m) => !/^Se solapa con/i.test(m)).map((m) => m.charAt(0).toLowerCase() + m.slice(1));
+  const parts = [clash && `choca con ${clash}`, ...others].filter(Boolean);
+  return parts.join("; ") || "el cambio no pasa las validaciones";
+}
 
 export const extenderReserva = defineWrite({
   name: "extender_reserva",
   label: "Preparando la extensión…",
   description:
     "Prepara la EXTENSIÓN de una estadía (una salida más tarde, en la misma unidad) para que la persona la confirme. Revisa que no choque con otra " +
-    "reserva ni con una liquidación cerrada y propone el total nuevo con la misma tarifa por noche (o el que digan). No sirve para acortar ni para mover de unidad.",
+    "reserva ni con una liquidación cerrada; si el total cambia, pregunta si pasa al de la misma tarifa por noche o queda igual. " +
+    "Para acortar, mover fechas o cambiar de unidad usá mover_reserva.",
   input: z.object({
     reserva: z
       .string()
-      .describe("De quién es la reserva: nombre y apellido del huésped, código de la unidad o de la reserva, o el id que la persona eligió de una lista."),
+      .describe("De quién es la reserva: nombre y apellido del huésped, código de la unidad o de la reserva, o el id que la persona eligió de una lista.")
+      .optional(),
     unidad: z.string().describe("Código o nombre de la unidad, si hace falta para distinguir.").optional(),
-    hasta: z.string().describe("Nueva fecha de salida (check-out), YYYY-MM-DD."),
+    hasta: z.string().describe("Nueva fecha de salida (check-out), YYYY-MM-DD. Si no la dijeron, omitir (se pregunta).").optional(),
     total: z
       .number()
       .min(0)
-      .describe("Nuevo total de TODA la estadía, sólo si lo dijeron. Si no, omitir: se calcula con la misma tarifa por noche.")
+      .describe("Nuevo total de TODA la estadía, tal como lo dijo o eligió la persona. Si no, omitir.")
       .optional(),
     motivo: z.string().max(500).describe("Por qué se extiende, si lo dijeron (obligatorio si suma más de 30 noches).").optional(),
   }),
@@ -527,8 +757,7 @@ export const extenderReserva = defineWrite({
   resource: "bookings",
   action: "update",
   async propose(input, ctx) {
-    const hasta = input.hasta.trim();
-    if (!isYmd(hasta) || +hasta.slice(0, 4) > 2100) return { ok: false, error: "Necesito la nueva fecha de salida en formato YYYY-MM-DD." };
+    if (!input.reserva?.trim()) return ask(ASK_RESERVA);
     const found = await findBooking(input.reserva, { unidad: input.unidad, today: ctx.today, eligible: notExtendable });
     if (found.ok !== true) return found;
     const bk = await loadBooking(found.value.id);
@@ -537,55 +766,47 @@ export const extenderReserva = defineWrite({
     if (b.is_block) return { ok: false, error: "Eso es un cierre de calendario, no una reserva." };
     const why = notExtendable(candidateFromDetail(b));
     if (why) return { ok: false, error: why };
+    if (b.mode === "mensual") return { ok: false, error: monthlyByForm(b.id) };
     const who = b.guest?.full_name ?? "Sin huésped";
+    const hasta = input.hasta?.trim();
+    if (!hasta) {
+      return ask(
+        `¿Hasta qué día se queda ${who}? Hoy sale el ${shortDate(b.check_out_date, ctx.today)}.`,
+        [1, 2, 3].map((n) => `${n === 1 ? "1 noche más" : `${n} noches más`} (sale ${shortDate(addDaysYmd(b.check_out_date, n), ctx.today)})`),
+      );
+    }
+    if (!isYmd(hasta) || +hasta.slice(0, 4) > 2100) return { ok: false, error: "Necesito la nueva fecha de salida en formato YYYY-MM-DD." };
     if (hasta === b.check_out_date) return { ok: false, error: `${who} ya sale el ${shortDate(hasta, ctx.today)}.` };
     if (hasta < b.check_out_date) {
       return {
         ok: false,
-        error: `Eso acorta la estadía (hoy sale el ${shortDate(b.check_out_date, ctx.today)}). Para acortar, usá la ficha de la reserva: ${hrefs.booking(b.id)}`,
+        error: `Eso acorta la estadía (hoy sale el ${shortDate(b.check_out_date, ctx.today)}): para acortar usá mover_reserva.`,
       };
     }
     const oldNights = nightsBetween(b.check_in_date, b.check_out_date);
     const newNights = nightsBetween(b.check_in_date, hasta);
     const reason = clip(input.motivo, 500) ?? null;
-    if (newNights - oldNights > 30 && !reason) {
-      return { ok: false, error: "Suma más de 30 noches: decime el motivo de la extensión (queda registrado)." };
-    }
+    if (newNights - oldNights > 30 && !reason) return ask("Suma más de 30 noches: ¿por qué se extiende? Queda registrado en la reserva.");
 
     const pv = await attempt(() =>
       previewBookingChange({ id: b.id, unit_id: b.unit_id, check_in_date: b.check_in_date, check_out_date: hasta }),
     );
     if (!pv.ok) return pv;
     const preview = pv.value;
-    const blocking = preview.warnings.filter((w) => w.kind === "blocking").map((w) => w.message);
-    if (blocking.length > 0 || preview.conflicts.length > 0 || preview.in_closed_settlement_period) {
-      // El rango viene "2026-11-25 → 2026-11-28"; el aviso "Se solapa con N reservas" ya lo cuentan los choques.
-      const clash = preview.conflicts
-        .slice(0, 3)
-        .map((c) => {
-          const [from, to] = c.range.split(" → ");
-          const when = isYmd(from) && isYmd(to) ? dateRange(from, to) : c.range;
-          return `${c.guest_name ? `la reserva de ${c.guest_name}` : "otra reserva"} (${when})`;
-        })
-        .join(", ");
-      const others = blocking.filter((m) => !/^Se solapa con/i.test(m)).map((m) => m.charAt(0).toLowerCase() + m.slice(1));
-      const parts = [clash && `choca con ${clash}`, ...others].filter(Boolean);
-      return {
-        ok: false,
-        error: `No se puede extender hasta el ${shortDate(hasta, ctx.today)}: ${parts.join("; ") || "el cambio no pasa las validaciones"}.`,
-      };
-    }
+    const blockers = previewBlockers(preview);
+    if (blockers) return { ok: false, error: `No se puede extender hasta el ${shortDate(hasta, ctx.today)}: ${blockers}.` };
 
     const pd = preview.price_diff;
     const previous = round2(pd.previous_total);
+    const suggested = round2(pd.suggested_total);
+    const basisLabel = pd.basis === "nightly" ? "misma tarifa por noche" : "renta mensual prorrateada";
     let newTotal = previous;
-    let basis: string | null = null;
-    if (input.total !== undefined) {
-      newTotal = round2(input.total);
-      basis = "el que dijeron";
-    } else if (pd.basis !== "unchanged") {
-      newTotal = round2(pd.suggested_total);
-      basis = pd.basis === "nightly" ? "misma tarifa por noche" : "renta mensual prorrateada";
+    if (input.total !== undefined) newTotal = round2(input.total);
+    else if (pd.basis !== "unchanged" && Math.abs(suggested - previous) >= 0.01) {
+      return ask(
+        `¿El total pasa a ${money(suggested, b.currency)} (${basisLabel}) o queda en ${money(previous, b.currency)}?`,
+        [`Pasa a ${money(suggested, b.currency)}`, `Queda en ${money(previous, b.currency)}`, "Otro monto"],
+      );
     }
     const totalToSend = Math.abs(newTotal - previous) >= 0.01 ? newTotal : null;
     const saldo = round2(newTotal - b.paid_amount);
@@ -608,10 +829,7 @@ export const extenderReserva = defineWrite({
           { label: "Unidad", value: unitLabel(b.unit) },
           { label: "Salida", value: `${shortDate(b.check_out_date, ctx.today)} → ${shortDate(hasta, ctx.today)}` },
           { label: "Noches", value: `${oldNights} → ${newNights}` },
-          {
-            label: "Total",
-            value: `${money(previous, b.currency)} → ${money(newTotal, b.currency)}${basis ? ` (${basis})` : ""}`,
-          },
+          { label: "Total", value: totalToSend === null ? `${money(previous, b.currency)} (no cambia)` : `${money(previous, b.currency)} → ${money(newTotal, b.currency)}` },
           { label: "Saldo después", value: saldo > 0.01 ? money(saldo, b.currency) : "Sin saldo" },
           ...(reason ? [{ label: "Motivo", value: reason }] : []),
         ],
@@ -620,8 +838,9 @@ export const extenderReserva = defineWrite({
           ...preview.warnings.filter((w) => w.kind === "info").map((w) => `${w.message}.`),
           preview.cleaning_tasks_affected.length > 0 && "La limpieza de salida se mueve a la nueva fecha.",
           newNights > MAX_BOOKING_NIGHTS &&
+            b.lease_group_id &&
             `Pasa de ${MAX_BOOKING_NIGHTS} noches: el sistema la divide en períodos de ${MAX_BOOKING_NIGHTS}.`,
-          OTA_SOURCES.has(b.source) &&
+          isOta(b.source) &&
             `Es una reserva de ${sourceLabel(b.source)}: hacé el cambio también en la plataforma, si no va a quedar con fechas distintas.`,
         ]),
         confirmLabel: "Extender estadía",
@@ -632,9 +851,11 @@ export const extenderReserva = defineWrite({
     const bk = await loadBooking(p.booking_id);
     if (!bk.ok) return bk;
     const b = bk.value;
-    if (!EXTENDABLE.has(b.status)) {
+    if (!MOVABLE.has(b.status)) {
       return { ok: false, error: `La reserva pasó a ${statusLabel(b.status).toLowerCase()} mientras tanto. No toqué nada.` };
     }
+    if (b.is_block) return { ok: false, error: "Eso es un cierre de calendario, no una reserva. No toqué nada." };
+    if (b.mode === "mensual") return { ok: false, error: `${monthlyByForm(b.id)} No toqué nada.` };
     if (b.check_in_date !== p.check_in_date || b.check_out_date !== p.from_check_out) {
       return { ok: false, error: "Las fechas de la reserva cambiaron mientras tanto. No toqué nada: pedímelo de nuevo." };
     }
@@ -645,7 +866,7 @@ export const extenderReserva = defineWrite({
       previewBookingChange({ id: b.id, unit_id: b.unit_id, check_in_date: b.check_in_date, check_out_date: p.new_check_out }),
     );
     if (!pv.ok) return pv;
-    if (pv.value.conflicts.length > 0 || pv.value.warnings.some((w) => w.kind === "blocking")) {
+    if (previewBlockers(pv.value)) {
       return { ok: false, error: "Mientras confirmabas apareció un choque con otra reserva o una liquidación cerrada. No toqué nada." };
     }
     const r = await attempt(() =>

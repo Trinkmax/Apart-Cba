@@ -25,7 +25,7 @@ import { clampSena } from "@/lib/marketplace/staff-helpers";
 import type { BookingRequestStatus, BookingRequestWithRelations } from "@/lib/types/database";
 import { attempt, defineWrite, hrefs, type ToolContext } from "../../tool";
 import { clip, dateRange, fold, money, shortDate } from "../../format";
-import { attemptResult, idSchema, joinNotes, UUID_RE } from "./_shared";
+import { ask, attemptResult, idSchema, joinNotes, UUID_RE } from "./_shared";
 
 const STATUS_TEXT: Record<BookingRequestStatus, string> = {
   pendiente: "sigue pendiente",
@@ -93,18 +93,20 @@ export const responderSolicitud = defineWrite({
   label: "Preparando la respuesta al pedido…",
   description:
     "Prepara la respuesta a un PEDIDO DE RESERVA de la web propia (los de «Reservas pendientes») para que la persona la confirme: " +
-    "aprobar (crea la reserva con la seña sugerida o la que digan) o rechazar (con un motivo). En los dos casos al huésped le llega un mail. " +
+    "aprobar (crea la reserva con la seña que se le pide al huésped) o rechazar (con un motivo). En los dos casos al huésped le llega un mail. " +
+    "Pregunta lo que falte (qué pedido, si se aprueba o rechaza, la seña —con la sugerida—, el motivo). " +
     "Si las fechas ya están ocupadas, no se puede aprobar. No sirve para solicitudes de Airbnb o Booking.",
   input: z.object({
     solicitud: z
       .string()
-      .describe("De quién es el pedido: nombre y apellido del huésped, su mail, la unidad, o el id que la persona eligió de una lista."),
+      .describe("De quién es el pedido: nombre y apellido del huésped, su mail, la unidad, o el id que la persona eligió de una lista.")
+      .optional(),
     unidad: z.string().describe("Código o nombre de la unidad, si hace falta para distinguir.").optional(),
-    decision: z.enum(["aprobar", "rechazar"]),
+    decision: z.enum(["aprobar", "rechazar"]).describe("Si no lo dijeron, omitir (se pregunta).").optional(),
     sena: z
       .number()
       .min(0)
-      .describe("Sólo al aprobar: la seña que tiene que transferir el huésped, si la dijeron (0 = sin seña). Si no, va la sugerida.")
+      .describe("Sólo al aprobar: la seña a pedirle al huésped, tal como la dijo o confirmó la persona (0 = sin seña). Si no, omitir (se pregunta).")
       .optional(),
     nota_interna: z.string().max(500).describe("Sólo al aprobar: nota interna para la reserva (el huésped no la ve).").optional(),
     motivo: z
@@ -117,11 +119,27 @@ export const responderSolicitud = defineWrite({
   resource: "bookings",
   action: "create",
   async propose(input, ctx) {
-    const q = input.solicitud.trim();
+    const q = input.solicitud?.trim() ?? "";
     const l = await attempt(() => listBookingRequestsForOrg({ status: "pendiente" }));
     if (!l.ok) return l;
     let pool = l.value;
     let partial = false;
+    if (!q) {
+      const live = pool.filter((r) => !isExpired(r));
+      if (live.length === 0) return { ok: false, error: "No hay pedidos de la web esperando respuesta." };
+      if (live.length > 1) {
+        return {
+          ok: "choose",
+          question: `Hay ${live.length} pedidos esperando respuesta. ¿Cuál?`,
+          options: live.slice(0, 8).map((r) => ({
+            id: r.id,
+            label: `${r.guest_full_name} · ${r.unit?.code ?? "—"}`,
+            detail: `${dateRange(r.check_in_date, r.check_out_date)} · ${money(r.total_amount, r.currency)}`,
+          })),
+        };
+      }
+      pool = live;
+    }
 
     if (UUID_RE.test(q)) {
       const hit = pool.find((r) => r.id === q);
@@ -132,7 +150,7 @@ export const responderSolicitud = defineWrite({
         return { ok: false, error: `Ese pedido ${STATUS_TEXT[g.value.status] ?? "ya no está pendiente"}: no hay nada para responder.` };
       }
       pool = [hit];
-    } else {
+    } else if (q) {
       const unidad = input.unidad?.trim();
       if (unidad) {
         const u = fold(unidad);
@@ -173,6 +191,12 @@ export const responderSolicitud = defineWrite({
         error: `El pedido de ${r.guest_full_name} venció el ${localWhen(r.expires_at, ctx)} sin respuesta: ya no se puede responder (el sistema le avisa al huésped). Si sigue interesado, cargá la reserva a mano.`,
       };
     }
+    if (!input.decision) {
+      return ask(
+        `¿El pedido de ${r.guest_full_name} (${r.unit?.code ?? "sin unidad"}, ${dateRange(r.check_in_date, r.check_out_date)}) lo confirmo o lo rechazo?`,
+        ["Confirmarlo", "Rechazarlo"],
+      );
+    }
     const total = Number(r.total_amount ?? 0);
     const contact = [r.guest_email, r.guest_phone].filter(Boolean).join(" · ");
     const baseLines = [
@@ -189,10 +213,10 @@ export const responderSolicitud = defineWrite({
       if (!can(ctx.role, "bookings", "update")) return { ok: false, error: "Tu rol no puede rechazar solicitudes." };
       const motivo = clip(input.motivo, 1000);
       if (!motivo || motivo.length < 5) {
-        return {
-          ok: false,
-          error: "Para rechazar necesito el motivo para el huésped (le llega por mail). Por ejemplo: «Esas fechas ya no están disponibles».",
-        };
+        return ask(`¿Qué motivo le ponemos a ${r.guest_full_name}? Le llega por mail.`, [
+          "Esas fechas ya no están disponibles",
+          "Otro motivo",
+        ]);
       }
       return {
         ok: true,
@@ -221,14 +245,20 @@ export const responderSolicitud = defineWrite({
         error: `Esas fechas ya están ocupadas en ${r.unit?.code ?? "la unidad"} por ${clash}: no se puede confirmar. Se puede rechazar («Esas fechas ya no están disponibles») o escribirle al huésped para ofrecerle otras.`,
       };
     }
-    let deposit: number;
-    if (input.sena !== undefined) {
-      const c = clampSena(input.sena, total, r.currency);
-      if (c == null) return { ok: false, error: "Revisá el monto de la seña." };
-      deposit = c;
-    } else {
-      deposit = defaults.senaSuggested ?? 0;
+    // La seña nunca se asume: la sugerida va en la pregunta ("¿La seña sería de $ X?").
+    if (input.sena === undefined) {
+      const s = defaults.senaSuggested ?? 0;
+      return s > 0
+        ? ask(`¿La seña sería de ${money(s, r.currency)}? Es la que sugiere la configuración de la web.`, [
+            `Sí, ${money(s, r.currency)}`,
+            "Sin seña",
+            "Otro monto",
+          ])
+        : ask(`¿Le pedís seña a ${r.guest_full_name}? ¿De cuánto?`, ["Sin seña", "Sí, le pido seña"]);
     }
+    const c = clampSena(input.sena, total, r.currency);
+    if (c == null) return { ok: false, error: "Revisá el monto de la seña." };
+    const deposit = c;
     const note = clip(input.nota_interna, 500) ?? null;
     const otaRequests = defaults.requestConflicts;
     return {

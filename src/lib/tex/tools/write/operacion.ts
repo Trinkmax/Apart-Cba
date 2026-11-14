@@ -6,15 +6,28 @@
  * - `changeCleaningStatus` no mira a quién está asignada la tarea → para el rol
  *   limpieza se resuelve SÓLO entre las suyas (`listCleaningTasks` filtra por
  *   `assigned_to` para quien no es admin) y se vuelve a verificar al confirmar.
+ * - `assignCleaning` no valida que la persona sea del equipo → sale siempre de
+ *   `listAssignableCleaners` (miembros activos de la org con rol de limpieza).
  * - `createTicket` / `createConciergeRequest` no validan que la unidad sea de la
  *   organización → la unidad sale siempre de `resolveUnit` (lista org-scoped).
  * - `changeTicketStatus` no mira la asignación → mantenimiento resuelve sólo
  *   entre sus tickets (`listTickets` ya los filtra) y se re-verifica.
+ *
+ * Lo que falta (qué unidad, qué arreglo, a quién) se pregunta (`ask`), con las
+ * opciones que el sistema conoce como respuestas.
  */
 import { z } from "zod/v4";
-import { changeCleaningStatus, listCleaningTasks, listUnitCleanliness, setUnitCleanliness } from "@/lib/actions/cleaning";
+import {
+  assignCleaning,
+  changeCleaningStatus,
+  listCleaningTasks,
+  listUnitCleanliness,
+  setUnitCleanliness,
+} from "@/lib/actions/cleaning";
 import { changeConciergeStatus, createConciergeRequest, listConciergeRequests } from "@/lib/actions/concierge";
+import { listAssignableCleaners } from "@/lib/actions/parte-diario";
 import { changeTicketStatus, createTicket, listTickets } from "@/lib/actions/tickets";
+import { listUnitRefs } from "@/lib/actions/units";
 import type { UnitCleanliness } from "@/lib/cleaning/cleanliness";
 import { CLEANING_STATUS_META, TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { DEFAULT_ORG_TIMEZONE, ymdInTz, zonedTimeToUtc } from "@/lib/dates";
@@ -23,7 +36,17 @@ import type { CleaningStatus, ConciergePriority, ConciergeStatus, TicketPriority
 import { attempt, defineWrite, hrefs, type ChoiceOption, type ToolContext } from "../../tool";
 import { clip, dateRange, fold, isYmd, shortDate } from "../../format";
 import { resolveUnit, type UnitRef } from "../_resolve";
-import { attemptResult, findBooking, idSchema, joinNotes, loadBooking, UUID_RE } from "./_shared";
+import {
+  ask,
+  attemptResult,
+  findBooking,
+  idSchema,
+  joinNotes,
+  loadBooking,
+  matchPerson,
+  UUID_RE,
+  type TeamPerson,
+} from "./_shared";
 
 type UnitJoin = { id: string; code: string; name: string } | null;
 
@@ -66,6 +89,8 @@ function matchWords<T>(rows: T[], query: string, text: (r: T) => string): T[] {
 }
 
 const unitText = (u: UnitJoin) => (u ? `${u.code} · ${u.name}` : "Sin unidad");
+const uniqueCodes = (rows: Array<{ unit: UnitJoin }>, n = 4) =>
+  [...new Set(rows.map((r) => r.unit?.code).filter((c): c is string => Boolean(c)))].slice(0, n);
 
 // ── marcar_limpieza ─────────────────────────────────────────────────────────
 
@@ -92,10 +117,11 @@ export const marcarLimpieza = defineWrite({
   label: "Preparando la limpieza…",
   description:
     "Prepara el cambio de limpieza de una unidad para que la persona lo confirme. Administración y recepción: marcar una unidad limpia " +
-    "(cierra lo pendiente de hoy y mañana) o sucia (le aparece a limpieza). Personal de limpieza: marcar terminada SU limpieza de esa unidad.",
+    "(cierra lo pendiente de hoy y mañana) o sucia (le aparece a limpieza). Personal de limpieza: marcar terminada SU limpieza de esa unidad. " +
+    "Si falta la unidad o qué marcar, te dice qué preguntar.",
   input: z.object({
-    unidad: z.string().describe("Código o nombre de la unidad, o el id que la persona eligió de una lista."),
-    estado: z.enum(["limpio", "sucio"]).describe("limpio = ya quedó limpia / terminé; sucio = hay que limpiarla."),
+    unidad: z.string().describe("Código o nombre de la unidad, o el id que la persona eligió de una lista.").optional(),
+    estado: z.enum(["limpio", "sucio"]).describe("limpio = ya quedó limpia / terminé; sucio = hay que limpiarla.").optional(),
   }),
   payload: z.discriminatedUnion("mode", [
     z.object({ mode: z.literal("unidad"), unit_id: idSchema, target: z.enum(["limpio", "sucio"]) }),
@@ -105,12 +131,23 @@ export const marcarLimpieza = defineWrite({
   action: "update",
   async propose(input, ctx) {
     if (isAdminLevel(ctx.role)) {
+      if (!input.unidad?.trim()) {
+        // Sugerencia: las que hoy figuran para limpiar.
+        const [cl, refs] = await Promise.all([attempt(() => listUnitCleanliness()), attempt(() => listUnitRefs())]);
+        const dirtyIds = cl.ok ? Object.entries(cl.value).filter(([, c]) => c.due === "now" || c.due === "today").map(([id]) => id) : [];
+        const codes = refs.ok ? refs.value.filter((u) => dirtyIds.includes(u.id)).map((u) => u.code).slice(0, 4) : [];
+        if (input.estado === "sucio") return ask("¿Qué unidad quedó sucia?");
+        return ask(codes.length ? `¿Qué unidad? Para limpiar ahora: ${codes.join(", ")}.` : "¿Qué unidad?", codes);
+      }
       const u = await resolveUnit(input.unidad);
       if (u.ok !== true) return u;
       const unit = u.value;
       const cl = await attempt(() => listUnitCleanliness());
       if (!cl.ok) return cl;
       const now = cl.value[unit.id] ?? null;
+      if (!input.estado) {
+        return ask(`¿${unit.code} la marco limpia o sucia? Ahora figura: ${cleanlinessLabel(now, ctx.today).toLowerCase()}.`, ["Limpia", "Sucia"]);
+      }
       if (input.estado === "limpio" && !now) return { ok: false, error: `${unit.code} ya figura limpia: no hay nada pendiente para cerrar.` };
       if (input.estado === "sucio" && now?.due === "now") {
         return { ok: false, error: `${unit.code} ya figura ${cleanlinessLabel(now, ctx.today).toLowerCase()}.` };
@@ -134,7 +171,7 @@ export const marcarLimpieza = defineWrite({
       };
     }
 
-    // Personal de limpieza: sólo cierra una limpieza propia.
+    // Personal de limpieza: sólo cierra una limpieza propia (lo único que puede marcar es "terminé").
     if (input.estado === "sucio") {
       return { ok: false, error: "Desde acá sólo podés marcar terminada una limpieza tuya. Si una unidad quedó sucia, avisale a recepción." };
     }
@@ -142,10 +179,13 @@ export const marcarLimpieza = defineWrite({
     if (!t.ok) return t;
     const mine = (t.value as CleaningRow[]).filter((r) => r.assigned_to === ctx.user.id && OPEN_CLEANING.has(r.status));
     if (mine.length === 0) return { ok: false, error: "No tenés limpiezas pendientes asignadas." };
+    if (!input.unidad?.trim()) {
+      const codes = uniqueCodes([...mine].sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for)));
+      return ask("¿Qué limpieza terminaste?", codes);
+    }
     const byUnit = matchByUnit(mine, input.unidad);
     if (byUnit.length === 0) {
-      const units = [...new Set(mine.map((r) => r.unit?.code).filter(Boolean))].slice(0, 10).join(", ");
-      return { ok: false, error: `No tenés una limpieza pendiente en «${input.unidad}». Las tuyas: ${units}.` };
+      return { ok: false, error: `No tenés una limpieza pendiente en «${input.unidad}». Las tuyas: ${uniqueCodes(mine, 10).join(", ")}.` };
     }
     const day = (r: CleaningRow) => ymdInTz(new Date(r.scheduled_for), tzOf(ctx));
     let pick: CleaningRow | null = byUnit.length === 1 ? byUnit[0] : null;
@@ -157,7 +197,7 @@ export const marcarLimpieza = defineWrite({
       const options: ChoiceOption[] = [...byUnit]
         .sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for))
         .slice(0, 8)
-        .map((r) => ({ id: r.id, label: unitText(r.unit), detail: `${shortDate(day(r), ctx.today)} · ${CLEANING_STATUS_META[r.status].label}` }));
+        .map((r) => ({ id: r.id, label: `${r.unit?.code ?? "—"} · ${shortDate(day(r), ctx.today)}`, detail: CLEANING_STATUS_META[r.status].label }));
       return { ok: "choose", question: `Tenés ${byUnit.length} limpiezas pendientes que coinciden. ¿Cuál terminaste?`, options };
     }
     return {
@@ -216,10 +256,11 @@ export const crearTicket = defineWrite({
   label: "Preparando el arreglo…",
   description:
     "Prepara un ARREGLO (ticket de mantenimiento) en una unidad para que la persona lo confirme: algo roto o que hay que reparar " +
-    "(pérdida, enchufe, electrodoméstico, pintura). Para encargos o recordatorios que no son reparaciones usá crear_tarea.",
+    "(pérdida, enchufe, electrodoméstico, pintura). Si falta la unidad o qué hay que arreglar, te dice qué preguntar. " +
+    "Para encargos o recordatorios que no son reparaciones usá crear_tarea.",
   input: z.object({
-    unidad: z.string().describe("Código o nombre de la unidad, o el id que la persona eligió de una lista."),
-    titulo: z.string().min(2).max(120).describe("Qué hay que arreglar, corto (ej. «Pérdida en la canilla del baño»)."),
+    unidad: z.string().describe("Código o nombre de la unidad, o el id que la persona eligió de una lista.").optional(),
+    titulo: z.string().max(120).describe("Qué hay que arreglar, corto (ej. «Pérdida en la canilla del baño»).").optional(),
     detalle: z.string().max(1000).describe("Más detalle si lo dieron.").optional(),
     prioridad: z.enum(TICKET_PRIORITIES).describe("Si no la dijeron, media. urgente = deja la unidad inutilizable o hay daño en curso.").optional(),
     categoria: z.enum(TICKET_CATEGORIES).describe("Si es claro: plomeria, electricidad, electrodomestico, pintura u otro.").optional(),
@@ -234,10 +275,11 @@ export const crearTicket = defineWrite({
   resource: "tickets",
   action: "create",
   async propose(input, ctx) {
+    if (!input.unidad?.trim()) return ask("¿En qué unidad es el arreglo?");
     const u = await resolveUnit(input.unidad);
     if (u.ok !== true) return u;
     const title = clip(input.titulo, 120);
-    if (!title || title.length < 2) return { ok: false, error: "Decime qué hay que arreglar." };
+    if (!title || title.length < 2) return ask(`¿Qué hay que arreglar en ${u.value.code}?`);
     const description = clip(input.detalle, 1000) ?? null;
     const priority = input.prioridad ?? "media";
     const category = input.categoria ?? null;
@@ -314,14 +356,14 @@ export const cambiarEstadoTicket = defineWrite({
   label: "Preparando el cambio del arreglo…",
   description:
     "Prepara el cambio de estado de un ARREGLO (ticket de mantenimiento) para que la persona lo confirme: en progreso, esperando repuesto, " +
-    "resuelto, cerrado o reabrirlo. Lo encuentra por la unidad y/o palabras del título; si hay varios, pregunta.",
+    "resuelto, cerrado o reabrirlo. Lo encuentra por la unidad y/o palabras del título; si hay varios, pregunta. Si falta el estado, lo pregunta.",
   input: z.object({
     arreglo: z
       .string()
       .describe("Palabras del título del arreglo (ej. «canilla», «aire acondicionado»), o el id que la persona eligió de una lista.")
       .optional(),
     unidad: z.string().describe("Código o nombre de la unidad del arreglo.").optional(),
-    estado: z.enum(TICKET_STATUSES).describe("Estado al que pasa."),
+    estado: z.enum(TICKET_STATUSES).describe("Estado al que pasa. Si no lo dijeron, omitir (se pregunta).").optional(),
   }),
   payload: z.object({
     ticket_id: idSchema,
@@ -333,11 +375,10 @@ export const cambiarEstadoTicket = defineWrite({
   async propose(input) {
     const arreglo = input.arreglo?.trim() ?? "";
     const unidad = input.unidad?.trim() ?? "";
-    if (!arreglo && !unidad) return { ok: false, error: "Decime qué arreglo es (unas palabras del título) o de qué unidad." };
+    if (!arreglo && !unidad) return ask("¿Qué arreglo es? Decime la unidad o unas palabras del título.");
     const t = await attempt(() => listTickets({}));
     if (!t.ok) return t;
     const all = t.value as TicketRow[];
-    const target = input.estado;
 
     let pool: TicketRow[];
     if (UUID_RE.test(arreglo)) {
@@ -348,6 +389,31 @@ export const cambiarEstadoTicket = defineWrite({
       if (unidad) pool = matchByUnit(pool, unidad);
       if (arreglo) pool = matchWords(pool, arreglo, (r) => `${r.title} ${r.description ?? ""} ${r.unit?.code ?? ""} ${r.unit?.name ?? ""}`);
     }
+
+    const target = input.estado;
+    if (!target) {
+      // Primero cuál; después, a qué estado (con el estado actual a la vista).
+      const live = pool.filter((r) => r.status !== "cerrado");
+      if (live.length === 0) return { ok: false, error: "No encontré un arreglo abierto que coincida. Decime la unidad o unas palabras del título." };
+      if (live.length > 1) {
+        return {
+          ok: "choose",
+          question: `Hay ${live.length} arreglos que coinciden. ¿Cuál es?`,
+          options: live.slice(0, 8).map((r) => ({
+            id: r.id,
+            label: r.title,
+            detail: `${r.unit?.code ?? "Sin unidad"} · ${TICKET_STATUS_META[r.status].label}`,
+          })),
+        };
+      }
+      const r = live[0];
+      const next = (["en_progreso", "esperando_repuesto", "resuelto", "cerrado"] as const).filter((s) => canMoveTo(r.status, s));
+      return ask(
+        `¿Cómo queda «${r.title}» (${r.unit?.code ?? "sin unidad"})? Ahora está ${TICKET_STATUS_META[r.status].label.toLowerCase()}.`,
+        next.map((s) => TICKET_STATUS_META[s].label),
+      );
+    }
+
     const movable = pool.filter((r) => canMoveTo(r.status, target));
     if (movable.length === 0) {
       if (pool.length > 0) {
@@ -425,9 +491,10 @@ export const crearTarea = defineWrite({
   label: "Preparando la tarea…",
   description:
     "Prepara una TAREA (conserjería: un encargo, recordatorio o pedido de un huésped, como llevar toallas, entregar llaves o comprar algo) " +
-    "para que la persona la confirme. Puede ir atada a una unidad o a una reserva y tener día y hora. Para reparaciones usá crear_ticket.",
+    "para que la persona la confirme. Puede ir atada a una unidad o a una reserva y tener día y hora. Si falta qué hay que hacer, lo pregunta. " +
+    "Para reparaciones usá crear_ticket.",
   input: z.object({
-    descripcion: z.string().min(2).max(500).describe("Qué hay que hacer (ej. «Llevar juego de toallas extra»)."),
+    descripcion: z.string().max(500).describe("Qué hay que hacer (ej. «Llevar juego de toallas extra»).").optional(),
     unidad: z.string().describe("Código o nombre de la unidad, si es de un depto.").optional(),
     reserva: z.string().describe("Si es para un huésped: su nombre y apellido o el código de la reserva (o el id elegido de una lista).").optional(),
     fecha: z.string().describe("Día en que hay que hacerla, YYYY-MM-DD. Si no la dijeron, omitir.").optional(),
@@ -446,7 +513,7 @@ export const crearTarea = defineWrite({
   action: "create",
   async propose(input, ctx) {
     const description = clip(input.descripcion, 500);
-    if (!description || description.length < 2) return { ok: false, error: "Decime qué hay que hacer." };
+    if (!description || description.length < 2) return ask("¿Qué hay que hacer?");
 
     let unit: UnitRef | null = null;
     let booking: { id: string; guestId: string | null; guest: string | null; checkIn: string; checkOut: string } | null = null;
@@ -561,7 +628,8 @@ export const completarTarea = defineWrite({
   input: z.object({
     tarea: z
       .string()
-      .describe("Palabras de la tarea (ej. «toallas», «llaves»), el huésped, o el id que la persona eligió de una lista."),
+      .describe("Palabras de la tarea (ej. «toallas», «llaves»), el huésped, o el id que la persona eligió de una lista.")
+      .optional(),
     unidad: z.string().describe("Código o nombre de la unidad, si hace falta para distinguir.").optional(),
   }),
   payload: z.object({
@@ -574,7 +642,8 @@ export const completarTarea = defineWrite({
     const l = await attempt(() => listConciergeRequests({}));
     if (!l.ok) return l;
     const all = l.value as unknown as ConciergeRow[];
-    const q = input.tarea.trim();
+    const q = input.tarea?.trim() ?? "";
+    const when = (r: ConciergeRow) => (r.scheduled_for ? localWhen(r.scheduled_for, ctx) : "sin fecha");
     let pool: ConciergeRow[];
     if (UUID_RE.test(q)) {
       const hit = all.find((r) => r.id === q);
@@ -584,10 +653,24 @@ export const completarTarea = defineWrite({
     } else {
       pool = all.filter((r) => OPEN_TASK.has(r.status));
       if (input.unidad?.trim()) pool = matchByUnit(pool, input.unidad);
-      pool = matchWords(pool, q, (r) => `${r.description} ${r.unit?.code ?? ""} ${r.unit?.name ?? ""} ${r.guest?.full_name ?? ""}`);
+      if (!q) {
+        if (pool.length === 0) return { ok: false, error: "No hay tareas pendientes." };
+        if (pool.length > 1) {
+          return {
+            ok: "choose",
+            question: "¿Qué tarea se completó?",
+            options: pool.slice(0, 8).map((r) => ({
+              id: r.id,
+              label: clip(r.description, 50) ?? "Tarea",
+              detail: `${r.unit?.code ?? "Sin unidad"} · ${when(r)}`,
+            })),
+          };
+        }
+      } else {
+        pool = matchWords(pool, q, (r) => `${r.description} ${r.unit?.code ?? ""} ${r.unit?.name ?? ""} ${r.guest?.full_name ?? ""}`);
+      }
     }
     if (pool.length === 0) return { ok: false, error: `No encontré una tarea pendiente que coincida con «${q}».` };
-    const when = (r: ConciergeRow) => (r.scheduled_for ? localWhen(r.scheduled_for, ctx) : "sin fecha");
     if (pool.length > 1) {
       return {
         ok: "choose",
@@ -628,5 +711,124 @@ export const completarTarea = defineWrite({
     const res = await attempt(() => changeConciergeStatus(p.request_id, "completada"));
     if (!res.ok) return res;
     return { ok: true, message: `Tarea completada: «${clip(r.description, 80)}».`, href: hrefs.tasks() };
+  },
+});
+
+// ── asignar_limpieza ────────────────────────────────────────────────────────
+
+const NOBODY = new Set(["nadie", "ninguno", "ninguna", "sin asignar", "desasignar", "sacar", "sacarla"]);
+
+export const asignarLimpieza = defineWrite({
+  name: "asignar_limpieza",
+  label: "Preparando la asignación…",
+  description:
+    "Prepara la ASIGNACIÓN de una limpieza pendiente a una persona del equipo (o sacársela a quien la tiene) para que se confirme. " +
+    "La limpieza se busca por unidad y, si hace falta, el día; la persona, por nombre. Pregunta lo que falte.",
+  input: z.object({
+    unidad: z.string().describe("Código o nombre de la unidad de la limpieza, o el id elegido de una lista.").optional(),
+    fecha: z.string().describe("Día de la limpieza, YYYY-MM-DD, si hace falta para distinguir.").optional(),
+    persona: z
+      .string()
+      .describe("Nombre de quien la va a hacer (o su id de una lista). «nadie» para dejarla sin asignar.")
+      .optional(),
+  }),
+  payload: z.object({
+    task_id: idSchema,
+    unit_id: idSchema,
+    user_id: idSchema.nullable(),
+    from_user_id: idSchema.nullable(),
+  }),
+  resource: "cleaning",
+  action: "update",
+  adminLevel: true,
+  async propose(input, ctx) {
+    const t = await attempt(() => listCleaningTasks({}));
+    if (!t.ok) return t;
+    const open = (t.value as CleaningRow[]).filter((r) => OPEN_CLEANING.has(r.status));
+    const day = (r: CleaningRow) => ymdInTz(new Date(r.scheduled_for), tzOf(ctx));
+    if (open.length === 0) return { ok: false, error: "No hay limpiezas pendientes para asignar." };
+    if (!input.unidad?.trim()) {
+      const soon = open
+        .filter((r) => !r.assigned_to && day(r) <= ctx.tomorrow)
+        .sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for));
+      const codes = uniqueCodes(soon);
+      return ask(codes.length ? `¿Qué limpieza asigno? Sin asignar para hoy y mañana: ${codes.join(", ")}.` : "¿Qué limpieza asigno? Decime la unidad.", codes);
+    }
+    let pool = matchByUnit(open, input.unidad);
+    if (pool.length === 0) return { ok: false, error: `No hay una limpieza pendiente en «${input.unidad}».` };
+    if (input.fecha?.trim()) {
+      if (!isYmd(input.fecha.trim())) return { ok: false, error: "El día va en formato YYYY-MM-DD." };
+      pool = pool.filter((r) => day(r) === input.fecha?.trim());
+      if (pool.length === 0) return { ok: false, error: `No hay una limpieza pendiente en «${input.unidad}» para el ${shortDate(input.fecha.trim(), ctx.today)}.` };
+    }
+
+    const people = await attempt(() => listAssignableCleaners());
+    if (!people.ok) return people;
+    const team = people.value as TeamPerson[];
+    const nameOf = (id: string | null) => (id ? (team.find((p) => p.user_id === id)?.full_name ?? "otra persona") : "Sin asignar");
+
+    if (pool.length > 1) {
+      return {
+        ok: "choose",
+        question: `Hay ${pool.length} limpiezas pendientes en esa unidad. ¿Cuál?`,
+        options: [...pool]
+          .sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for))
+          .slice(0, 8)
+          .map((r) => ({ id: r.id, label: `${r.unit?.code ?? "—"} · ${shortDate(day(r), ctx.today)}`, detail: nameOf(r.assigned_to) })),
+      };
+    }
+    const task = pool[0];
+    if (!input.persona?.trim()) {
+      const names = [...team].sort((a, b) => (a.role === "limpieza" ? 0 : 1) - (b.role === "limpieza" ? 0 : 1)).slice(0, 4).map((p) => p.full_name);
+      return ask(`¿A quién le asigno la limpieza de ${task.unit?.code ?? "la unidad"} del ${shortDate(day(task), ctx.today)}?`, names);
+    }
+    let person: TeamPerson | null = null;
+    if (!NOBODY.has(input.persona.trim().toLowerCase())) {
+      const m = matchPerson(team, input.persona);
+      if (m.ok !== true) return m;
+      person = m.value;
+    }
+    const target = person?.user_id ?? null;
+    if (target === task.assigned_to) {
+      return { ok: false, error: target ? `Esa limpieza ya está asignada a ${nameOf(target)}.` : "Esa limpieza ya está sin asignar." };
+    }
+    return {
+      ok: true,
+      payload: { task_id: task.id, unit_id: task.unit_id, user_id: target, from_user_id: task.assigned_to },
+      summary: {
+        title: target ? "Asignar una limpieza" : "Dejar una limpieza sin asignar",
+        lines: [
+          { label: "Unidad", value: unitText(task.unit) },
+          { label: "Día", value: shortDate(day(task), ctx.today) },
+          { label: "Asignada a", value: `${nameOf(task.assigned_to)} → ${target ? (person?.full_name ?? "—") : "Sin asignar"}` },
+        ],
+        note: task.assigned_to && target ? `Deja de figurarle a ${nameOf(task.assigned_to)}.` : undefined,
+        confirmLabel: target ? "Asignar" : "Sacar asignación",
+      },
+    };
+  },
+  async execute(p) {
+    const t = await attempt(() => listCleaningTasks({}));
+    if (!t.ok) return t;
+    const task = (t.value as CleaningRow[]).find((r) => r.id === p.task_id);
+    if (!task || !OPEN_CLEANING.has(task.status)) return { ok: false, error: "Esa limpieza ya no está pendiente. No toqué nada." };
+    if ((task.assigned_to ?? null) !== p.from_user_id) {
+      return { ok: false, error: "La limpieza cambió de manos mientras tanto. No toqué nada: pedímelo de nuevo." };
+    }
+    let name = "Sin asignar";
+    if (p.user_id) {
+      const people = await attempt(() => listAssignableCleaners());
+      if (!people.ok) return people;
+      const person = (people.value as TeamPerson[]).find((x) => x.user_id === p.user_id);
+      if (!person) return { ok: false, error: "Esa persona ya no está en el equipo de limpieza. No toqué nada." };
+      name = person.full_name;
+    }
+    const r = await attempt(() => assignCleaning(p.task_id, p.user_id));
+    if (!r.ok) return r;
+    return {
+      ok: true,
+      message: p.user_id ? `Limpieza de ${unitText(task.unit)} asignada a ${name}.` : `Limpieza de ${unitText(task.unit)} sin asignar.`,
+      href: hrefs.cleaning(),
+    };
   },
 });

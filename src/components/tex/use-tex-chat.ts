@@ -134,6 +134,9 @@ export function useTexChat() {
       case "navigate":
         patchLast((parts) => [...parts, { type: "navigate", href: ev.href, label: ev.label }]);
         break;
+      case "replies":
+        patchLast((parts) => [...parts, { type: "replies", items: ev.items }]);
+        break;
       case "error":
         patchLast((parts) => [...parts, { type: "error", message: ev.message, code: ev.code }]);
         break;

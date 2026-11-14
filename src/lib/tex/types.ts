@@ -114,6 +114,8 @@ export type TexEvent =
   | { t: "card"; id: string; card: TexCard }
   | { t: "proposal"; action: ProposalView }
   | { t: "navigate"; href: string; label: string }
+  /** Respuestas que la persona puede tocar en vez de escribir ("Sí, $ 180.000", "Sin seña"). */
+  | { t: "replies"; items: string[] }
   /** Retirar los últimos `chars` caracteres mostrados (un intento que se repite). */
   | { t: "rewind"; chars: number }
   | { t: "done"; usage?: TexUsage; stop?: string }
@@ -138,7 +140,8 @@ export type TexPart =
   | { type: "tool"; id: string; name: string; label: string; state: "done" | "error"; note?: string }
   | { type: "card"; id: string; card: TexCard }
   | { type: "proposal"; actionId: string }
-  | { type: "navigate"; href: string; label: string };
+  | { type: "navigate"; href: string; label: string }
+  | { type: "replies"; items: string[] };
 
 export type TexHistoryMessage =
   | { id: string; role: "user"; text: string; createdAt: string }
