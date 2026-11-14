@@ -18,8 +18,9 @@ import { UnitsNowCard } from "@/components/dashboard/home/units-now";
 import { MoneyCard } from "@/components/dashboard/home/money";
 import { MonthResultCard, MonthResultSkeleton } from "@/components/dashboard/home/month-result";
 import { UpcomingCard } from "@/components/dashboard/home/upcoming";
+import { GreetingLineSlot } from "@/components/dashboard/home/greeting-line";
 import { loadToday } from "@/lib/dashboard/today-data";
-import { getDaypart, getFirstName } from "@/lib/contextual-messages";
+import { firstNameOf, greetingFor, localClock, type Audience } from "@/lib/greeting/lines";
 import { formatDate } from "@/lib/format";
 import { todayYmdInTz, DEFAULT_ORG_TIMEZONE } from "@/lib/dates";
 
@@ -50,7 +51,9 @@ export default async function DashboardHome() {
   const texOn = organization.tex_enabled && !isOwner;
 
   // "Hoy" es el de la org, no el del proceso (Vercel corre en UTC).
-  const today = todayYmdInTz(organization.timezone || DEFAULT_ORG_TIMEZONE);
+  const timeZone = organization.timezone || DEFAULT_ORG_TIMEZONE;
+  const today = todayYmdInTz(timeZone);
+  const clock = localClock(new Date(), timeZone);
   const year = Number(today.slice(0, 4));
   const month = Number(today.slice(5, 7));
 
@@ -63,8 +66,9 @@ export default async function DashboardHome() {
   const [expenseAccounts, expenseUnits] = expense ?? [[], []];
   const expenseDefaultId = expenseAccounts.find((a) => a.is_expense_default)?.id ?? null;
 
-  const firstName = getFirstName(session?.profile.full_name, organization.name);
-  const { greeting } = getDaypart();
+  const firstName = firstNameOf(session?.profile.full_name);
+  const greeting = greetingFor(clock.hour);
+  const audience: Audience = isOwner ? "owner" : role === "limpieza" || role === "mantenimiento" ? "field" : "office";
   const dateLabel = capitalize(formatDate(today, "EEEE d 'de' MMMM"));
 
   const attention = isOwner
@@ -101,8 +105,22 @@ export default async function DashboardHome() {
         <div className="min-w-0">
           <p className="text-[13px] font-medium text-muted-foreground">{dateLabel}</p>
           <h1 className="mt-0.5 text-[26px] leading-tight font-semibold tracking-[-0.02em] sm:text-[30px]">
-            {greeting}, <span className="brand-text-gradient">{firstName}</span>
+            {greeting}, <span className="brand-text-gradient">{firstName ?? organization.name}</span>
           </h1>
+          {/* La frase del día: clima, consejos, el momento de la semana. Un detalle que se queda. */}
+          <GreetingLineSlot
+            className="mt-1.5"
+            seed={session?.userId ?? organization.id}
+            context={{
+              firstName,
+              clock,
+              audience,
+              arrivalsToday: day?.parte ? day.parte.check_ins.length : null,
+              texEnabled: texOn,
+              canSeeMoney: canViewMoney,
+              canSettle: can(role, "settlements", "create"),
+            }}
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2 max-md:hidden">
           {expenseButton(
