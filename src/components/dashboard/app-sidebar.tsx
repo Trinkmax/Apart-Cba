@@ -15,7 +15,6 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import { OrgBrand } from "@/components/brand/org-brand";
 import { cn } from "@/lib/utils";
 import { can } from "@/lib/permissions";
 import type { Organization, OrganizationMember, UserProfile, UserRole } from "@/lib/types/database";
@@ -23,6 +22,7 @@ import { PendingRequestsBadge } from "@/components/dashboard/pending-requests-ba
 import { SCREEN_ICONS } from "@/components/mobile/icons";
 import { desktopNav, routeMeta, type ShellContext } from "@/components/mobile/routes";
 import { useShellPathname } from "@/components/mobile/shell-store";
+import { SidebarOrgHeader } from "./sidebar-org-header";
 import { SidebarTexCard } from "./sidebar-tex-card";
 
 /*
@@ -47,7 +47,7 @@ interface AppSidebarProps {
   pendingRequests?: number;
 }
 
-export function AppSidebar({ currentOrg, currentRole, pendingRequests = 0 }: AppSidebarProps) {
+export function AppSidebar({ currentOrg, currentRole, memberships, pendingRequests = 0 }: AppSidebarProps) {
   const pathname = useShellPathname();
   const ctx = React.useMemo<ShellContext>(
     () => ({ role: currentRole, rentalsEnabled: currentOrg.rentals_enabled }),
@@ -60,10 +60,12 @@ export function AppSidebar({ currentOrg, currentRole, pendingRequests = 0 }: App
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b border-sidebar-border h-14 md:h-16 flex items-center px-3 md:px-4 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
-        <Link href={nav.sections[0]?.href ?? "/dashboard"} className="flex items-center gap-2 group">
-          <OrgBrand organization={currentOrg} />
-        </Link>
+      <SidebarHeader className="border-b border-sidebar-border h-14 md:h-16 flex flex-row items-center px-2 md:px-2.5 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+        <SidebarOrgHeader
+          currentOrg={currentOrg}
+          memberships={memberships}
+          homeHref={nav.sections[0]?.href ?? "/dashboard"}
+        />
       </SidebarHeader>
 
       <SidebarContent>

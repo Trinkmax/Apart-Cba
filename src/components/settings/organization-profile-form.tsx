@@ -1,8 +1,8 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { OrgBrand } from "@/components/brand/org-brand";
 import { Loader2, Save, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -146,30 +146,25 @@ export function OrganizationProfileForm({
         <div>
           <h3 className="text-sm font-semibold">Logo</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Aparece en el sidebar y en los comprobantes/PDF. Usá un{" "}
-            <strong>PNG con fondo transparente</strong> (preferentemente
-            claro/blanco, para que se vea sobre fondo oscuro). Hasta 4 MB.
+            Aparece arriba del sidebar y en los comprobantes/PDF. Un{" "}
+            <strong>PNG con fondo transparente</strong> se muestra del color del
+            texto (oscuro en modo claro, blanco en modo oscuro). Un{" "}
+            <strong>JPG</strong> va en sus colores sobre un recuadro blanco:
+            recortale los márgenes para que se vea grande. Hasta 4 MB.
           </p>
         </div>
 
         <div className="flex items-center gap-4 flex-wrap">
-          <div
-            className="size-20 rounded-lg border bg-neutral-900 flex items-center justify-center overflow-hidden shrink-0"
-            aria-label="Vista previa del logo (fondo oscuro, igual que en sidebar y PDF)"
-          >
-            {logoUrl ? (
-              <Image
-                src={logoUrl}
-                alt="Logo"
-                width={80}
-                height={80}
-                className="size-full object-contain"
-              />
-            ) : (
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Sin logo
-              </span>
-            )}
+          {/* Cómo queda arriba del sidebar, en los dos temas. */}
+          <div className="flex gap-2" aria-label="Vista previa del logo en el sidebar">
+            {(["light", "dark"] as const).map((theme) => (
+              <div
+                key={theme}
+                className={`${theme} flex h-16 w-44 items-center rounded-lg border border-sidebar-border bg-sidebar px-2.5 text-sidebar-foreground`}
+              >
+                <OrgBrand organization={{ name, logo_url: logoUrl, brand_show_name: showName }} />
+              </div>
+            ))}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">

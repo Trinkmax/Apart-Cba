@@ -12,8 +12,6 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getSession } from "./auth";
 import { getCurrentOrg } from "./org";
-import { countPendingRequestsForOrg } from "./booking-requests";
-import { getParteDiario } from "./parte-diario";
 import { createAdminClient } from "@/lib/supabase/server";
 import { can } from "@/lib/permissions";
 import { DEFAULT_ORG_TIMEZONE, todayYmdInTz } from "@/lib/dates";
@@ -24,6 +22,8 @@ import { appendMessages, conversationView, createConversation, latestConversatio
 import { findTool } from "@/lib/tex/tools";
 import type { ProposalSummary, ProposalView, TexConversationView } from "@/lib/tex/types";
 import type { TexActionRow } from "@/lib/types/database";
+import { briefLines, briefTone, cleaningState, headlineText } from "@/lib/dashboard/today";
+import { loadToday } from "@/lib/dashboard/today-data";
 
 type Fail = { ok: false; error: string };
 
@@ -238,8 +238,6 @@ export type TexBrief = {
   counts: { checkIns: number; checkOuts: number; dirtyWithArrival: number; dirty: number; requests: number };
 };
 
-const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
 /**
  * Lo que Tex tiene para contar hoy: llegadas, salidas, sucios con llegada y
  * solicitudes sin responder. Determinista y barato (nada de LLM): lo usan la
@@ -253,32 +251,24 @@ export async function getTexBrief(): Promise<TexBrief | null> {
   if (!can(role, "parte_diario", "view") || !can(role, "bookings", "view") || role === "owner_view") return null;
   const tz = organization.timezone || DEFAULT_ORG_TIMEZONE;
   const today = todayYmdInTz(tz);
-  const [parte, requests] = await Promise.all([
-    getParteDiario(today).catch(() => null),
-    countPendingRequestsForOrg().catch(() => 0),
-  ]);
+  // Misma lectura que el tablero del Resumen (una sola por request).
+  const { parte, requests } = await loadToday(today);
   if (!parte) return null;
   const arriving = new Set(parte.check_ins.map((b) => b.unit_id));
-  const dirtyWithArrival = parte.sucios.filter((s) => arriving.has(s.unit_id)).length;
+  // Una limpieza ya hecha (completada o verificada) no es una unidad sucia.
+  const dirty = parte.sucios.filter((s) => cleaningState(s) !== "lista");
   const counts = {
     checkIns: parte.check_ins.length,
     checkOuts: parte.check_outs.length,
-    dirtyWithArrival,
-    dirty: parte.sucios.length,
+    dirtyWithArrival: dirty.filter((s) => arriving.has(s.unit_id)).length,
+    dirty: dirty.length,
     requests,
   };
 
-  const headline =
-    counts.checkIns === 0 && counts.checkOuts === 0
-      ? "Hoy no entra ni sale nadie."
-      : `Hoy ${counts.checkIns ? `${counts.checkIns === 1 ? "entra" : "entran"} ${counts.checkIns}` : "no entra nadie"}${
-          counts.checkOuts ? ` y ${counts.checkOuts === 1 ? "sale" : "salen"} ${counts.checkOuts}` : ""
-        }.`;
-  const lines: string[] = [];
-  if (dirtyWithArrival > 0) lines.push(`${plural(dirtyWithArrival, "unidad sigue sucia", "unidades siguen sucias")} y tienen llegada hoy.`);
-  else if (counts.dirty > 0) lines.push(`${plural(counts.dirty, "unidad para limpiar", "unidades para limpiar")}.`);
-  if (requests > 0) lines.push(`${plural(requests, "solicitud espera", "solicitudes esperan")} respuesta.`);
-  const tone: TexBrief["tone"] = dirtyWithArrival > 0 || requests > 0 ? "alert" : counts.checkIns + counts.checkOuts > 0 ? "busy" : "calm";
+  // La misma frase que el Resumen de la compu (src/lib/dashboard/today.ts).
+  const headline = headlineText(counts);
+  const lines = briefLines(counts);
+  const tone: TexBrief["tone"] = briefTone(counts);
 
   return {
     day: today,

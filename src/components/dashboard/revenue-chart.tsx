@@ -64,8 +64,9 @@ export function RevenueChart({
           tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
           axisLine={false}
           tickLine={false}
-          tickFormatter={(v) => formatMoneyShort(v, currency)}
-          width={50}
+          // Sin espacio común: recharts partía "$ 26.0M" en dos renglones.
+          tickFormatter={(v) => formatMoneyShort(v, currency).replace(" ", " ")}
+          width={60}
         />
         <Tooltip
           contentStyle={{

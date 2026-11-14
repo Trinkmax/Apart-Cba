@@ -89,7 +89,6 @@ export default async function DashboardLayout({
             <TopBar
               currentOrg={organization}
               currentRole={role}
-              memberships={session.memberships}
               profile={session.profile}
               notifications={notifications}
               unreadCount={unreadCount}
