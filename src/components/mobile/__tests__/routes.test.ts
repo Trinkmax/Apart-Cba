@@ -4,6 +4,7 @@ import { isPathAllowedForOwner } from "@/lib/auth/route-access";
 import type { UserRole } from "@/lib/types/database";
 import {
   cleanPath,
+  desktopNav,
   isAllowed,
   mobileTabs,
   moreGroups,
@@ -142,5 +143,24 @@ describe("routeMeta", () => {
   it("limpia query, hash y barra final", () => {
     expect(cleanPath("/dashboard/reservas/?q=1#x")).toBe("/dashboard/reservas");
     expect(cleanPath("/")).toBe("/");
+  });
+});
+
+describe("navegación de la compu", () => {
+  it("admin: las mismas 3 secciones y «Tu negocio», sin pantallas de /m", () => {
+    const nav = desktopNav(ctx("admin"));
+    expect(nav.sections.map((s) => s.label)).toEqual(["Hoy", "Reservas", "Caja"]);
+    const rows = nav.groups.flatMap((g) => g.rows);
+    expect(rows.map((r) => r.id)).toEqual(["unidades", "tradicionales", "canales", "avisos", "configuracion"]);
+    expect(rows.every((r) => !r.href.startsWith("/m"))).toBe(true);
+  });
+  it("limpieza sigue viendo lo suyo de /m", () => {
+    const nav = desktopNav(ctx("limpieza"));
+    expect(nav.sections.map((s) => s.href)).toEqual(["/m", "/m/limpieza", "/m/parte-diario"]);
+    expect(nav.groups.flatMap((g) => g.rows.map((r) => r.href))).toEqual(["/m/consejos"]);
+  });
+  it("routeMeta dice a qué link pertenece cada pantalla", () => {
+    expect(routeMeta("/dashboard/unidades/abc", ctx("admin")).link).toBe("unidades");
+    expect(routeMeta("/dashboard/caja", ctx("admin")).link).toBe("caja");
   });
 });

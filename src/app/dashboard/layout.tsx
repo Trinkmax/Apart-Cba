@@ -93,6 +93,7 @@ export default async function DashboardLayout({
               profile={session.profile}
               notifications={notifications}
               unreadCount={unreadCount}
+              pendingRequests={pendingRequests}
             />
           </div>
           {/* La barra de arriba del celular (hermana anterior del <main>: el CSS

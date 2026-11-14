@@ -27,6 +27,9 @@ import { LiveIndicator } from "@/components/realtime/live-indicator";
 import { InstallAppListener } from "@/components/pwa/install-app-prompt";
 import { InstallAppMenuItem } from "@/components/pwa/install-app-menu-item";
 import { TexLauncher } from "@/components/tex/tex-launcher";
+import { can } from "@/lib/permissions";
+import { DesktopSectionNav } from "./desktop-section-nav";
+import { CommandPalette } from "./command-palette";
 import type {
   Notification,
   Organization,
@@ -42,6 +45,8 @@ interface TopBarProps {
   profile: UserProfile;
   notifications?: Notification[];
   unreadCount?: number;
+  /** Solicitudes del marketplace esperando respuesta (badge de la pestaña Solicitudes). */
+  pendingRequests?: number;
 }
 
 export function TopBar({
@@ -51,6 +56,7 @@ export function TopBar({
   profile,
   notifications = [],
   unreadCount = 0,
+  pendingRequests = 0,
 }: TopBarProps) {
   const { theme, setTheme } = useTheme();
   const [isPending, startTransition] = useTransition();
@@ -82,8 +88,10 @@ export function TopBar({
             >
               {currentOrg.name.slice(0, 2).toUpperCase()}
             </div>
-            <span className="hidden sm:inline max-w-[120px] md:max-w-[180px] truncate">{currentOrg.name}</span>
-            <ChevronsUpDown size={14} className="text-muted-foreground hidden sm:inline" />
+            {/* El nombre ya está arriba del sidebar: acá sólo con pantalla ancha,
+                para dejarle lugar a las pestañas de la sección. */}
+            <span className="hidden 2xl:inline max-w-[160px] truncate">{currentOrg.name}</span>
+            <ChevronsUpDown size={14} className="text-muted-foreground hidden 2xl:inline" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-64">
@@ -119,14 +127,30 @@ export function TopBar({
 
       <Badge
         variant="secondary"
-        className="hidden md:inline-flex gap-1.5 font-normal text-xs"
+        className="hidden 2xl:inline-flex gap-1.5 font-normal text-xs"
         style={{ color: roleMeta.color, borderColor: roleMeta.color + "40" }}
       >
         <span className="status-dot" style={{ backgroundColor: roleMeta.color }} />
         {roleMeta.label}
       </Badge>
 
-      <div className="flex-1" />
+      <Separator orientation="vertical" className="h-6 mx-0.5 hidden md:block" />
+
+      {/* Dónde estás: las pestañas de la sección (o el camino en una ficha).
+          Mismo mapa que el celular (`routes.ts`). Ocupa el lugar del espacio. */}
+      <DesktopSectionNav
+        role={currentRole}
+        rentalsEnabled={currentOrg.rentals_enabled}
+        pendingRequests={pendingRequests}
+        canViewChannels={can(currentRole, "channels", "view")}
+      />
+
+      {/* ⌘K: ir a cualquier pantalla o encontrar cualquier cosa. */}
+      <CommandPalette
+        role={currentRole}
+        rentalsEnabled={currentOrg.rentals_enabled}
+        texEnabled={currentOrg.tex_enabled}
+      />
 
       {/* Estado de la conexión en vivo. Único en toda la app: si esto no está
           en verde, lo que se ve en pantalla puede estar viejo. */}
@@ -163,7 +187,7 @@ export function TopBar({
                 {getInitials(profile.full_name)}
               </AvatarFallback>
             </Avatar>
-            <span className={cn("text-sm font-medium hidden md:block max-w-[120px] truncate")}>
+            <span className={cn("text-sm font-medium hidden 2xl:block max-w-[120px] truncate")}>
               {profile.full_name.split(" ")[0]}
             </span>
           </Button>

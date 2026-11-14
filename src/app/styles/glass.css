@@ -589,3 +589,41 @@ html[data-glass="lite"] .lg-overlay {
     backdrop-filter: none;
   }
 }
+
+/* ============================================================================ */
+/* La compu (nov-2026): la pastilla del sidebar. Una sola, que viaja de un ítem */
+/* a otro con el mismo resorte de la barra del celular.                         */
+/* ============================================================================ */
+/* Una tarjeta casi blanca sobre el gris del sidebar (un verde sobre verde no
+   se distinguía), con el canto apenas salvia. */
+.lg-sidebar-pill {
+  background: oklch(0.997 0.003 150);
+  box-shadow:
+    inset 0 0 0 1px oklch(0.5 0.09 152 / 0.14),
+    0 1px 2px rgba(22, 46, 36, 0.08),
+    0 8px 18px -12px rgba(22, 46, 36, 0.45);
+}
+.dark .lg-sidebar-pill {
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 18px -12px rgba(0, 0, 0, 0.6);
+}
+.lg-sidebar-pill-animate {
+  transition:
+    transform 0.46s cubic-bezier(0.3, 1.2, 0.45, 1),
+    width 0.46s cubic-bezier(0.3, 1.2, 0.45, 1),
+    height 0.46s cubic-bezier(0.3, 1.2, 0.45, 1);
+}
+@supports (transition-timing-function: linear(0, 1)) {
+  .lg-sidebar-pill-animate {
+    transition-timing-function: linear(0, 0.035, 0.123, 0.239, 0.366, 0.492, 0.61, 0.714, 0.801, 0.873, 0.929, 0.97, 1,
+        1.02, 1.031, 1.037, 1.038, 1.037, 1.033, 1.029, 1.024, 1.019, 1.015, 1.011, 1.007, 1.005, 1.003, 1.001, 1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lg-sidebar-pill-animate {
+    transition: none;
+  }
+}

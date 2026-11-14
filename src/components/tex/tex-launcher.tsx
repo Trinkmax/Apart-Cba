@@ -24,10 +24,11 @@ export function TexLauncher() {
       type="button"
       onClick={() => openTex({ origin: originOf(ref.current) })}
       title="Tex, tu asistente (⌘J)"
-      className="group hidden h-9 items-center gap-1.5 rounded-full border border-black/[0.08] bg-[#eef6ff] pr-3 pl-1 text-[13px] font-semibold text-[#0b3d68] transition-colors hover:bg-[#dcefff] md:flex dark:border-white/10 dark:bg-[#123250] dark:text-[#cfe7ff]"
+      aria-label="Tex, tu asistente (⌘J)"
+      className="group hidden h-9 items-center gap-1.5 rounded-full border border-black/[0.08] bg-[#eef6ff] px-1 text-[13px] font-semibold text-[#0b3d68] transition-colors hover:bg-[#dcefff] md:flex 2xl:pr-3 dark:border-white/10 dark:bg-[#123250] dark:text-[#cfe7ff]"
     >
       <TexAvatar mood="face" className="size-7 transition-transform group-hover:scale-110" />
-      Tex
+      <span className="hidden 2xl:inline">Tex</span>
     </button>
   );
 }

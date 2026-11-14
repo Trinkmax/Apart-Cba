@@ -37,7 +37,7 @@ export function OrgBrand({ organization, size = "sm" }: OrgBrandProps) {
           height={dim}
           unoptimized
           className={cn(
-            "w-auto object-contain group-data-[collapsible=icon]:h-8",
+            "w-auto object-contain group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:max-w-[40px]",
             "brightness-0 dark:invert",
             showName ? "h-9 max-w-[120px]" : "h-12 max-w-[180px]",
           )}
@@ -51,14 +51,18 @@ export function OrgBrand({ organization, size = "sm" }: OrgBrandProps) {
     );
   }
 
+  // La visibilidad va en un envoltorio y no en el Logo: adentro, el Logo
+  // alterna su versión clara/oscura con `hidden dark:block`, y ese `dark:block`
+  // le ganaba al `hidden` del ícono chico (en modo oscuro se veían los dos).
   return (
     <>
-      <Logo size={size} className="group-data-[collapsible=icon]:hidden" />
-      <Logo
-        size={size}
-        showWordmark={false}
-        className="hidden group-data-[collapsible=icon]:block"
-      />
+      <span className="flex group-data-[collapsible=icon]:hidden">
+        <Logo size={size} />
+      </span>
+      <span className="hidden group-data-[collapsible=icon]:flex">
+        {/* 18 px de alto → 40 de ancho: entra en el sidebar colapsado (48 px). */}
+        <Logo size={size} showWordmark={false} className="h-[18px] w-auto" />
+      </span>
     </>
   );
 }

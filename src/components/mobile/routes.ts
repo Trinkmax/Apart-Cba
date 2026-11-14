@@ -91,6 +91,8 @@ export type ShellContext = {
 export type RouteMeta = {
   /** La pestaña a la que pertenece la pantalla ("mas" si vive en «Más»). */
   tab: TabId | null;
+  /** El link (pestaña, sub-pestaña o mosaico) al que pertenece la pantalla. */
+  link: string | null;
   /** La sub-pestaña elegida, si la sección tiene. */
   subtab: string | null;
   /** Las sub-pestañas de la sección (ya filtradas por rol). Vacío en sub-pantallas. */
@@ -401,6 +403,20 @@ export function moreGroups(ctx: ShellContext): MoreGroup[] {
     .filter((g) => g.rows.length > 0);
 }
 
+/**
+ * La navegación de la compu (nov-2026): las mismas secciones que el celular
+ * (el sidebar deja de tener 17 ítems) y los mismos mosaicos de «Más», sin las
+ * pantallas de la versión de campo (/m) para quien opera desde el panel.
+ */
+export function desktopNav(ctx: ShellContext): { sections: MobileTab[]; groups: MoreGroup[] } {
+  const field = ctx.role === "limpieza" || ctx.role === "mantenimiento";
+  const sections = mobileTabs(ctx).filter((t) => t.id !== "mas");
+  const groups = moreGroups(ctx)
+    .map((g) => ({ ...g, rows: field ? g.rows : g.rows.filter((r) => !r.href.startsWith("/m")) }))
+    .filter((g) => g.rows.length > 0);
+  return { sections, groups };
+}
+
 /** Mi perfil: el de /m para limpieza y mantenimiento; el del panel para el resto. */
 export function profileHref(role: UserRole): string {
   return role === "limpieza" || role === "mantenimiento" ? S.perfilM.href : S.perfilDashboard.href;
@@ -525,11 +541,21 @@ export function routeMeta(pathname: string, ctx: ShellContext): RouteMeta {
 
   const hit = found.best;
   if (!hit) {
-    return { tab: null, subtab: null, subtabs: [], kind: "sub", title: subTitle ?? "Apart", parent: null, fullHeight };
+    return {
+      tab: null,
+      link: null,
+      subtab: null,
+      subtabs: [],
+      kind: "sub",
+      title: subTitle ?? "Apart",
+      parent: null,
+      fullHeight,
+    };
   }
   const isRoot = hit.root;
   return {
     tab: hit.tab,
+    link: hit.link.id,
     subtab: hit.section ? hit.link.id : null,
     subtabs: isRoot && hit.section ? hit.section.subtabs : [],
     kind: isRoot ? "root" : "sub",
