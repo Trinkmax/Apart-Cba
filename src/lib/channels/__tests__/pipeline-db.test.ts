@@ -34,6 +34,7 @@ async function cleanup() {
   if (!admin) return;
   for (const org of [orgId, org2Id].filter(Boolean)) {
     await admin.from("channel_issues").delete().eq("organization_id", org);
+    await admin.from("channel_cancellation_requests").delete().eq("organization_id", org);
     await admin.from("channel_events").delete().eq("organization_id", org);
     await admin.from("booking_external_refs").delete().eq("organization_id", org);
     await admin.from("channel_reservations").delete().eq("organization_id", org);
@@ -799,5 +800,169 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       const { data } = await admin.from("bookings").select("status").eq("id", id).single();
       expect(data!.status).toBe("confirmada");
     }
+  }, 60_000);
+
+  // Booking arma el UID con habitación + llegada: lo que "vuelve" después de
+  // una cancelación es otra persona que reservó desde el mismo día (Habitana,
+  // Pampa Mora, 14/11/2026).
+  const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
+  const slotEvent = (uid: string, checkIn: string, checkOut: string, key: string) => ({
+    transport: "ical" as const,
+    channel: "booking" as const,
+    eventType: "reservation_upsert" as const,
+    organizationId: orgId,
+    linkId: link1,
+    unitId: unit1,
+    icalUid: uid,
+    checkIn,
+    checkOut,
+    isBlock: false,
+    dedupeKey: key,
+  });
+
+  it("el UID de una cancelada vuelve con otra estadía: entra como reserva NUEVA y la cancelada queda intacta", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const uid = "zzt-bkg-slot-1@booking.com";
+
+    const r1 = await ingestEvent(admin, slotEvent(uid, inDays(200), inDays(204), "test:slot1:a"));
+    expect(r1.outcome).toBe("created");
+    const oldBooking = r1.bookingId!;
+    const oldRes = r1.reservationId!;
+
+    // Una persona confirmó la cancelación (lo mismo que hace decideCancellation)
+    // y quedaba una propuesta pendiente sobre esa fila.
+    await admin
+      .from("bookings")
+      .update({ status: "cancelada", cancelled_at: new Date().toISOString(), cancelled_source: "channel_decision" })
+      .eq("id", oldBooking);
+    await admin.from("channel_reservations").update({ external_status: "cancelled" }).eq("id", oldRes);
+    await admin.from("channel_cancellation_requests").insert({
+      organization_id: orgId,
+      link_id: link1,
+      reservation_id: oldRes,
+      booking_id: oldBooking,
+      channel: "booking",
+      reason_code: "missing_from_feed",
+      detail: "test",
+      status: "pending",
+    });
+
+    // Otra persona reserva desde el mismo día: mismo UID, otra salida.
+    const r2 = await ingestEvent(admin, slotEvent(uid, inDays(200), inDays(202), "test:slot1:b"));
+    expect(r2.outcome).toBe("created");
+    expect(r2.bookingId).toBeTruthy();
+    expect(r2.bookingId).not.toBe(oldBooking);
+
+    const { data: nueva } = await admin
+      .from("bookings")
+      .select("status, check_in_date, check_out_date")
+      .eq("id", r2.bookingId!)
+      .single();
+    expect(nueva).toMatchObject({ status: "confirmada", check_in_date: inDays(200), check_out_date: inDays(202) });
+
+    const { data: vieja } = await admin.from("bookings").select("status, check_out_date").eq("id", oldBooking).single();
+    expect(vieja).toMatchObject({ status: "cancelada", check_out_date: inDays(204) });
+
+    const { data: archivada } = await admin
+      .from("channel_reservations")
+      .select("ical_uid, external_status, booking_id, check_out")
+      .eq("id", oldRes)
+      .single();
+    expect(archivada!.ical_uid).not.toBe(uid);
+    expect(archivada).toMatchObject({ external_status: "cancelled", booking_id: oldBooking, check_out: inDays(204) });
+
+    const { data: viva } = await admin
+      .from("channel_reservations")
+      .select("external_status, booking_id")
+      .eq("link_id", link1)
+      .eq("ical_uid", uid)
+      .single();
+    expect(viva).toMatchObject({ external_status: "active", booking_id: r2.bookingId });
+
+    const { data: ref } = await admin
+      .from("booking_external_refs")
+      .select("booking_id")
+      .eq("organization_id", orgId)
+      .eq("ref_type", "ical_uid")
+      .eq("ref_value", uid)
+      .single();
+    expect(ref!.booking_id).toBe(r2.bookingId);
+
+    const { data: req } = await admin
+      .from("channel_cancellation_requests")
+      .select("status")
+      .eq("reservation_id", oldRes)
+      .single();
+    expect(req!.status).toBe("stale");
+
+    // La lectura siguiente no vuelve a archivar ni duplica nada.
+    const r3 = await ingestEvent(admin, slotEvent(uid, inDays(200), inDays(202), "test:slot1:c"));
+    expect(r3.outcome).toBe("duplicate");
+    expect(r3.bookingId).toBe(r2.bookingId);
+  }, 60_000);
+
+  it("la persona la canceló desde la ficha y el feed trae el UID con otras fechas: también entra como nueva", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const uid = "zzt-bkg-slot-2@booking.com";
+
+    const r1 = await ingestEvent(admin, slotEvent(uid, inDays(220), inDays(224), "test:slot2:a"));
+    expect(r1.outcome).toBe("created");
+    // Sólo la reserva local: la fila externa sigue `active`.
+    await admin.from("bookings").update({ status: "cancelada" }).eq("id", r1.bookingId!);
+
+    const r2 = await ingestEvent(admin, slotEvent(uid, inDays(220), inDays(222), "test:slot2:b"));
+    expect(r2.outcome).toBe("created");
+    expect(r2.bookingId).not.toBe(r1.bookingId);
+
+    const { data: vieja } = await admin.from("bookings").select("status, check_out_date").eq("id", r1.bookingId!).single();
+    expect(vieja).toMatchObject({ status: "cancelada", check_out_date: inDays(224) });
+    const { data: archivada } = await admin
+      .from("channel_reservations")
+      .select("external_status, check_out")
+      .eq("id", r1.reservationId!)
+      .single();
+    expect(archivada).toMatchObject({ external_status: "cancelled", check_out: inDays(224) });
+  }, 60_000);
+
+  it("si ya la cargaron a mano con las mismas fechas, la vincula en vez de duplicarla", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const uid = "zzt-bkg-slot-3@booking.com";
+
+    const r1 = await ingestEvent(admin, slotEvent(uid, inDays(240), inDays(244), "test:slot3:a"));
+    await admin.from("bookings").update({ status: "cancelada" }).eq("id", r1.bookingId!);
+    await admin.from("channel_reservations").update({ external_status: "cancelled" }).eq("id", r1.reservationId!);
+
+    // Como Cecilia con Gabriel Sosa: la reserva nueva cargada a mano.
+    const { data: aMano, error } = await admin
+      .from("bookings")
+      .insert({
+        organization_id: orgId,
+        unit_id: unit1,
+        source: "booking",
+        status: "confirmada",
+        mode: "temporario",
+        check_in_date: inDays(240),
+        check_in_time: "14:00",
+        check_out_date: inDays(242),
+        check_out_time: "10:00",
+        currency: "ARS",
+        total_amount: 170000,
+        guests_count: 2,
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+
+    const r2 = await ingestEvent(admin, slotEvent(uid, inDays(240), inDays(242), "test:slot3:b"));
+    expect(r2.bookingId).toBe(aMano!.id);
+
+    const { data: enEsasFechas } = await admin
+      .from("bookings")
+      .select("id")
+      .eq("organization_id", orgId)
+      .eq("unit_id", unit1)
+      .eq("check_in_date", inDays(240))
+      .neq("status", "cancelada");
+    expect(enEsasFechas!.map((b) => b.id)).toEqual([aMano!.id]);
   }, 60_000);
 });

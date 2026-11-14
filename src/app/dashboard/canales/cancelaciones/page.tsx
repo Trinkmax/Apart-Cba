@@ -65,10 +65,16 @@ export default async function CancelacionesPage() {
                   className={
                     h.status === "kept"
                       ? "border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
-                      : "border-destructive/40 text-destructive"
+                      : h.status === "stale"
+                        ? "text-muted-foreground"
+                        : "border-destructive/40 text-destructive"
                   }
                 >
-                  {h.status === "kept" ? "Se mantuvo" : "Se canceló"}
+                  {h.status === "kept"
+                    ? "Se mantuvo"
+                    : h.status === "stale"
+                      ? "Ya no hizo falta"
+                      : "Se canceló"}
                 </Badge>
                 <span className="font-medium">
                   {h.snapshot?.huesped ?? h.snapshot?.unidad ?? "Reserva"}

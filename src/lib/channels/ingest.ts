@@ -7,6 +7,7 @@ import { openCancellationRequest } from "./cancellation-requests";
 import { reservationEventFromRow } from "./event-row";
 import { normalizePhoneE164, resolveGuest } from "./guest";
 import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
+import { archivedIcalUid, isNewStayInSameSlot } from "./same-slot";
 import type {
   Channel,
   ChannelReservationRow,
@@ -366,8 +367,18 @@ async function processUpsert(
     if (ev.isBlock === true) {
       return { outcome: "duplicate", reservationId: reservation.id };
     }
-    // reapareció en el feed después de cancelada → reactivar es riesgoso;
-    // lo dejamos a revisión manual
+    // Booking reusa el UID (habitación + llegada): lo que "vuelve" después de
+    // una cancelación es otra persona que reservó desde el mismo día. La
+    // cancelada queda como historia y la nueva entra como cualquier reserva.
+    // Reactivar la vieja sí sería riesgoso: le pondría el huésped y la plata de
+    // otra persona a esta estadía.
+    if (isNewStayInSameSlot(reservation, slotEventOf(ev))) {
+      if (await archiveForNewStay(admin, reservation)) {
+        return processUpsert(admin, eventId, ev);
+      }
+    }
+    // La misma reserva (mismo número) que la OTA volvió a activar: la mira
+    // una persona.
     await openIssue(admin, {
       organizationId: ev.organizationId,
       linkId,
@@ -414,6 +425,27 @@ async function processUpsert(
   if (reservation.external_status === "pending") {
     if (isNew) await notifyRequestPending(admin, ev, reservation);
     return { outcome: "requested", reservationId: reservation.id };
+  }
+
+  // ── 5b. El hueco se volvió a ocupar ───────────────────────────────────────
+  // Mismo caso que el de la fila cancelada, cuando la persona canceló la
+  // reserva desde su ficha (la fila sigue `active`): el feed trae el UID con
+  // otras fechas y la reserva local está cancelada. Antes quedaba una
+  // incidencia "modificó una reserva cancelada" y las fechas, libres.
+  if (patch.check_in !== undefined && reservation.booking_id && ev.transport === "ical") {
+    const { data: local } = await admin
+      .from("bookings")
+      .select("status")
+      .eq("id", reservation.booking_id)
+      .eq("organization_id", ev.organizationId)
+      .maybeSingle();
+    if (
+      local?.status === "cancelada" &&
+      isNewStayInSameSlot(reservation, slotEventOf(ev)) &&
+      (await archiveForNewStay(admin, reservation))
+    ) {
+      return processUpsert(admin, eventId, ev);
+    }
   }
 
   // ── 6. Proyección al booking (único punto que escribe bookings) ───────────
@@ -1785,11 +1817,108 @@ async function findLegacyBooking(
       .eq("organization_id", ev.organizationId)
       .eq("source", ev.channel)
       .eq("external_id", ref)
+      // Una referencia vieja no ata un evento vivo a una reserva cancelada: con
+      // el UID de Booking (habitación + llegada) esa cancelada es de OTRA
+      // persona, y vincularla dejaba las fechas libres.
+      .neq("status", "cancelada")
       .limit(1)
       .maybeSingle();
     if (data) return data.id;
   }
   return null;
+}
+
+function slotEventOf(ev: ReservationEvent) {
+  return {
+    channel: ev.channel,
+    transport: ev.transport,
+    isBlock: ev.isBlock,
+    confirmationCode: ev.confirmationCode ? normalizeRef(ev.channel, ev.confirmationCode) : null,
+  };
+}
+
+/**
+ * Archiva la reserva externa terminada para que el mismo UID entre como una
+ * reserva NUEVA (ver `same-slot.ts`). No toca la reserva local cancelada:
+ * conserva su huésped, su plata y su historia. Devuelve false si no pudo (o si
+ * otro procesador ya la movió), y entonces el que llama sigue como antes.
+ */
+async function archiveForNewStay(
+  admin: AdminClient,
+  reservation: ChannelReservationRow,
+): Promise<boolean> {
+  const uid = reservation.ical_uid;
+  if (!uid) return false;
+  const archived = archivedIcalUid(uid, reservation.id);
+  const orgId = reservation.organization_id;
+
+  // La fila vuelve a contar la estadía que se canceló, no la nueva.
+  const restore: { check_in?: string; check_out?: string } = {};
+  if (reservation.booking_id) {
+    const { data: old } = await admin
+      .from("bookings")
+      .select("check_in_date, check_out_date")
+      .eq("id", reservation.booking_id)
+      .eq("organization_id", orgId)
+      .maybeSingle();
+    if (old) {
+      restore.check_in = old.check_in_date as string;
+      restore.check_out = old.check_out_date as string;
+    }
+  }
+
+  const { data: moved, error } = await admin
+    .from("channel_reservations")
+    .update({
+      ical_uid: archived,
+      external_status: "cancelled",
+      missing_since: null,
+      missing_runs: 0,
+      ...restore,
+    })
+    .eq("id", reservation.id)
+    .eq("ical_uid", uid)
+    .select("id");
+  if (error || !moved || moved.length === 0) {
+    if (error) console.error("[channels/ingest] no se pudo archivar la reserva externa", error.message);
+    return false;
+  }
+
+  // La referencia del UID acompaña a la fila archivada: el UID real queda para
+  // la reserva nueva (`uniq_booking_external_refs`).
+  if (reservation.booking_id) {
+    await admin
+      .from("booking_external_refs")
+      .update({ ref_value: archived })
+      .eq("organization_id", orgId)
+      .eq("booking_id", reservation.booking_id)
+      .eq("ref_type", "ical_uid")
+      .eq("ref_value", uid);
+  }
+
+  // Lo que quedaba pendiente sobre la reserva vieja ya está contestado.
+  const why = `${channelLabel(reservation.channel)} volvió a ocupar estas fechas con otra estadía: entró como una reserva nueva.`;
+  for (const key of [
+    `reappeared:${reservation.id}`,
+    `modified_cancelled:${reservation.id}`,
+    `missing:${reservation.id}`,
+  ]) {
+    await resolveIssuesByDedupe(admin, orgId, key, why);
+  }
+  const now = new Date().toISOString();
+  await admin
+    .from("channel_cancellation_requests")
+    .update({ status: "stale", decided_at: now, decision_note: why, updated_at: now })
+    .eq("organization_id", orgId)
+    .eq("reservation_id", reservation.id)
+    .eq("status", "pending");
+  await admin
+    .from("notifications")
+    .update({ read_at: now })
+    .eq("organization_id", orgId)
+    .eq("dedup_key", `cancel_request:${reservation.id}`)
+    .is("read_at", null);
+  return true;
 }
 
 async function addExternalRefs(
