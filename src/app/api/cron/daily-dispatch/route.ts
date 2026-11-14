@@ -448,6 +448,16 @@ export async function GET(req: Request) {
     results.rentals = { error: (err as Error).message };
   }
 
+  // 10. Avisos: cerrar lo que dejó de ser verdad (src/lib/alerts/policy.ts).
+  //     Va al final a propósito: corre después de que los pasos de arriba
+  //     crearon lo de hoy y cobraron/archivaron lo de ayer.
+  try {
+    const { sweepAlerts } = await import("@/lib/alerts/sweep");
+    results.alerts_sweep = await sweepAlerts(createAdminClient());
+  } catch (err) {
+    results.alerts_sweep = { error: (err as Error).message };
+  }
+
   const duration_ms = Date.now() - startedAt;
   console.log(`[cron/daily-dispatch] completed in ${duration_ms}ms`, results);
   return NextResponse.json({ ok: true, duration_ms, ...results });

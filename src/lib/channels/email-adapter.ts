@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { airbnbParser } from "@/lib/inbound/parsers/airbnb";
 import { bookingParser } from "@/lib/inbound/parsers/booking";
 import type { InboundEmailParser, ResendInboundEmail } from "@/lib/inbound/types";
+import { unwrapForwardedEmail } from "./email-forward";
 import type { ReservationEvent } from "./types";
 
 /**
@@ -26,11 +27,14 @@ export function normalizeInboundEmail(input: {
   const raw = input.email.html || input.email.text || "";
   const contentHash = crypto.createHash("sha256").update(raw).digest("hex");
 
+  // Un mail de la OTA reenviado a mano se lee como el original.
+  const email = unwrapForwardedEmail(input.email);
+
   let parserUsed: string | null = null;
   let parsed: ReturnType<InboundEmailParser["parse"]> = null;
   for (const parser of PARSERS) {
-    if (parser.canParse(input.email.from, input.email.subject)) {
-      parsed = parser.parse(input.email);
+    if (parser.canParse(email.from, email.subject)) {
+      parsed = parser.parse(email);
       if (parsed) {
         parserUsed = parser.name;
         break;

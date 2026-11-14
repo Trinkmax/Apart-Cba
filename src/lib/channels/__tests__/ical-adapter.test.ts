@@ -112,6 +112,59 @@ describe("parseIcs — Booking.com", () => {
     expect(events[0].isBlock).toBe(false);
   });
 
+  // El borde de la ventana de Booking (~18 meses) llega como un VEVENT corto
+  // que se corre un día por día. Viaggiato, 12/11/2026: GAMA y SALGUERO
+  // recibían una "reserva" nueva para mayo de 2028 cada noche.
+  it("no importa la marca del borde de la ventana (a ~18 meses)", () => {
+    const events = parseIcs(
+      ics([
+        vevent("edge1@booking.com", "20280509", "20280510", "CLOSED - Not available"),
+        vevent("real1@booking.com", "20261113", "20261116", "CLOSED - Not available"),
+      ]),
+      "booking",
+      "2026-11-09",
+    );
+    expect(events.map((e) => e.uid)).toEqual(["real1@booking.com"]);
+  });
+
+  it("una reserva a un año sigue entrando", () => {
+    const events = parseIcs(
+      ics([vevent("far1@booking.com", "20271110", "20271114", "CLOSED - Not available")]),
+      "booking",
+      "2026-11-12",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].isBlock).toBe(false);
+  });
+
+  it("el cierre largo que empieza dentro de la ventana sigue entrando como cierre", () => {
+    // GAMA: 2027-04-01 → 2028-05-13 (408 noches). Empieza a 140 días.
+    const events = parseIcs(
+      ics([vevent("long1@booking.com", "20270401", "20280513", "CLOSED - Not available")]),
+      "booking",
+      "2026-11-12",
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].isBlock).toBe(true);
+  });
+
+  it("la marca del borde no aplica a Airbnb", () => {
+    const events = parseIcs(
+      ics([
+        vevent(
+          "abnb-far@airbnb.com",
+          "20280509",
+          "20280512",
+          "Reserved",
+          "Reservation URL: https://www.airbnb.com/hosting/reservations/details/HMFARAWAY1",
+        ),
+      ]),
+      "airbnb",
+      "2026-11-09",
+    );
+    expect(events).toHaveLength(1);
+  });
+
   it("el corte no aplica a Airbnb (su feed sí distingue bloqueo de reserva)", () => {
     const events = parseIcs(
       ics([

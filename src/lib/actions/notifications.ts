@@ -5,6 +5,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getCurrentOrg } from "./org";
 import { requireSession } from "./auth";
+import { ACTIONABLE_SEVERITIES } from "@/lib/alerts/tier";
 import type {
   Notification,
   UserRole,
@@ -49,6 +50,12 @@ export async function listNotifications(
   return (data as Notification[]) ?? [];
 }
 
+/**
+ * El número rojo de la campana: lo que pide acción (warning / critical) y nadie
+ * leyó. Las novedades (info / success) se listan pero no cuentan: un número
+ * que mezcla "Limpieza programada" con "Cuota vencida" llegaba a 99+ y dejaba
+ * de significar algo. Ver src/lib/alerts/tier.ts.
+ */
 export async function getUnreadCount(): Promise<number> {
   const session = await requireSession();
   const { organization, role } = await getCurrentOrg();
@@ -58,6 +65,7 @@ export async function getUnreadCount(): Promise<number> {
     .select("*", { count: "exact", head: true })
     .eq("organization_id", organization.id)
     .filter(...ownOnly(role, session.userId))
+    .in("severity", [...ACTIONABLE_SEVERITIES])
     .is("read_at", null)
     .is("dismissed_at", null);
   if (error) throw new Error(error.message);

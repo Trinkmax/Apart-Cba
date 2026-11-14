@@ -4,6 +4,7 @@ import {
   type ChannelCommissionMap,
 } from "@/lib/finance/booking-economics";
 import { openCancellationRequest } from "./cancellation-requests";
+import { reservationEventFromRow } from "./event-row";
 import { normalizePhoneE164, resolveGuest } from "./guest";
 import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
 import type {
@@ -357,6 +358,14 @@ async function processUpsert(
   }
 
   if (reservation.external_status === "cancelled" && ev.transport === "ical") {
+    // Un CIERRE de fechas (no una reserva) que una persona ya descartó: que la
+    // OTA lo siga publicando, o lo estire un día por día, no le cambia el
+    // riesgo a nadie — no hay huésped que pueda llegar. Preguntarlo era la misma
+    // incidencia todas las noches (Viaggiato, nov 2026: los cierres de GAMA y
+    // SALGUERO que Booking corre hasta el borde de su ventana).
+    if (ev.isBlock === true) {
+      return { outcome: "duplicate", reservationId: reservation.id };
+    }
     // reapareció en el feed después de cancelada → reactivar es riesgoso;
     // lo dejamos a revisión manual
     await openIssue(admin, {
@@ -423,7 +432,90 @@ async function processUpsert(
     }
   }
 
+  // ── 8. Confirmación por email que llegó antes y quedó sin unidad ──────────
+  if (ev.transport === "ical" && projected.outcome !== "error") {
+    try {
+      await replayOrphanConfirmations(admin, ev, reservation);
+    } catch (err) {
+      console.error("[channels/ingest] replayOrphanConfirmations falló", err);
+    }
+  }
+
   return projected;
+}
+
+/**
+ * El mail de confirmación suele ganarle al iCal por 3-5 minutos. Si cuando
+ * llegó no había cómo saber la unidad —Airbnb no manda el id del anuncio en el
+ * mail, y la reserva todavía no existía para cruzarla por fechas— quedó una
+ * incidencia "sin unidad identificada" y el evento en needs_review. Cuando el
+ * iCal trae el MISMO código la unidad ya se sabe: se reprocesa ese mail (aporta
+ * huésped e importe) y se cierra la incidencia, que es lo que hacía a mano el
+ * botón "Reintentar". Sin esto la incidencia quedaba abierta para siempre sobre
+ * una reserva que ya estaba en el calendario (Viaggiato, HMXSE3E8ES, 12/11/2026;
+ * Apart CBA tenía 6 iguales).
+ *
+ * No hay recursión: el mail reprocesado viaja como "email" y este paso sólo
+ * corre para eventos de iCal.
+ */
+async function replayOrphanConfirmations(
+  admin: AdminClient,
+  ev: ReservationEvent,
+  reservation: ChannelReservationRow,
+): Promise<void> {
+  const code = reservation.confirmation_code;
+  if (!code || !reservation.unit_id) return;
+  const keys = [...new Set([`unit:${ev.channel}:${code}`, `unit:${ev.channel}:${normalizeRef(ev.channel, code)}`])];
+  const { data: issues } = await admin
+    .from("channel_issues")
+    .select("id, event_id")
+    .eq("organization_id", ev.organizationId)
+    .eq("status", "open")
+    .in("issue_type", ["unmapped_unit", "ambiguous_unit"])
+    .in("dedupe_key", keys);
+
+  for (const issue of issues ?? []) {
+    if (!issue.event_id) continue;
+    const { data: row } = await admin
+      .from("channel_events")
+      .select("*")
+      .eq("id", issue.event_id)
+      .eq("organization_id", ev.organizationId)
+      .maybeSingle();
+    if (!row) continue;
+    const stored = reservationEventFromRow(row);
+    if (!stored || stored.transport !== "email") continue;
+
+    // Sin fechas: las manda el iCal. Un mail viejo reprocesado no puede volver
+    // atrás una estadía que se modificó después de la confirmación.
+    const result = await processStoredEvent(admin, row.id as string, withoutDates(stored));
+    if (
+      result.outcome === "error" ||
+      result.outcome === "needs_review" ||
+      result.outcome === "conflict"
+    ) {
+      continue;
+    }
+    const now = new Date().toISOString();
+    await admin
+      .from("channel_issues")
+      .update({
+        status: "resolved",
+        resolution: "Se identificó la unidad cuando llegó el calendario de la OTA.",
+        resolved_at: now,
+        updated_at: now,
+      })
+      .eq("id", issue.id)
+      .eq("status", "open");
+  }
+}
+
+/**
+ * Un mail de confirmación sin sus fechas, para reprocesarlo sobre una reserva
+ * que ya existe: aporta huésped, importe y número, pero no toca la estadía.
+ */
+export function withoutDates(ev: ReservationEvent): ReservationEvent {
+  return { ...ev, checkIn: undefined, checkOut: undefined };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -871,6 +963,9 @@ async function updateProjectedBooking(
       patch.check_out_date = reservation.check_out;
       outcome = "updated";
     } else if (booking.status === "cancelada") {
+      // Un cierre cancelado que la OTA estira: mismo criterio que en
+      // processUpsert, no hay huésped detrás.
+      if (ev.isBlock === true) return { outcome: "duplicate", bookingId: booking.id };
       // la OTA re-activó una reserva que localmente está cancelada → revisar
       const issueId = await openIssue(admin, {
         organizationId: orgId,

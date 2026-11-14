@@ -1,6 +1,12 @@
 import ICAL from "ical.js";
 import crypto from "crypto";
 import { safeFetchFeed, BlockedUrlError } from "./ssrf";
+import {
+  LONG_RANGE_BLOCK_NIGHTS,
+  daysBetweenYmd,
+  isLongRangeMarker,
+  isWindowEdgeMarker,
+} from "./booking-window";
 import type {
   Channel,
   IcalFetchOutcome,
@@ -111,7 +117,16 @@ function redactError(msg: string): string {
   return msg.replace(/https?:\/\/\S+/gi, "[url]").slice(0, 300);
 }
 
-export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent[] {
+/**
+ * @param today YYYY-MM-DD contra el que se mide cuán lejos está cada evento
+ *   (sólo para la puerta del calendario de Booking). Default: hoy en UTC — un
+ *   día de diferencia no cambia nada con el margen que tiene el corte.
+ */
+export function parseIcs(
+  icsText: string,
+  channel: Channel,
+  today: string = new Date().toISOString().slice(0, 10),
+): NormalizedIcalEvent[] {
   const jcal = ICAL.parse(icsText);
   const comp = new ICAL.Component(jcal);
   const vevents = comp.getAllSubcomponents("vevent");
@@ -154,6 +169,18 @@ export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent
         phoneLast4,
       });
     } else {
+      // La puerta del calendario de Booking. El feed publica hasta ~18 meses
+      // vista y el borde llega como un VEVENT corto (1-3 noches) que se corre
+      // un día por día con UID nuevo. Entrando como reserva, cada día era una
+      // "Nueva reserva de Booking" para 2028 y, al día siguiente, un "Confirmá
+      // si se cancela" que alguien tenía que contestar a mano. Visto en las tres
+      // orgs con Booking: BRASIL (Apart CBA, ago-sep), COF II (Habitana, sep),
+      // GAMA y SALGUERO (Viaggiato, nov) — siempre a 547-549 días de la lectura,
+      // ninguna con número de reserva ni huésped. No entra, igual que los
+      // "Not available" de Airbnb. Una reserva real así de lejana (si existiera)
+      // entra sola cuando cruza el corte, todavía con más de un año de margen.
+      if (isWindowEdgeMarker(checkIn, today)) continue;
+
       // Booking.com: todo VEVENT ocupa calendario y entra como RESERVA, sin
       // datos del huésped todavía (los trae el email de confirmación, si llega).
       // Ver la nota de arriba sobre por qué acá no se puede adivinar más.
@@ -170,27 +197,15 @@ export function parseIcs(icsText: string, channel: Channel): NormalizedIcalEvent
       // que completar, fuera de KPIs y liquidaciones, y sin pedir una
       // cancelación. Si alguna vez fuera una estadía real, el email de
       // confirmación la asciende (ingest.ts hace exactamente eso con is_block).
-      const isLongRange = nights(checkIn, checkOut) > LONG_RANGE_BLOCK_NIGHTS;
-      out.push({ uid, checkIn, checkOut, summary, isBlock: isLongRange });
+      out.push({ uid, checkIn, checkOut, summary, isBlock: isLongRangeMarker(checkIn, checkOut) });
     }
   }
   return out;
 }
 
-/**
- * Un VEVENT más largo que esto no es una estadía: es un marcador de ventana de
- * disponibilidad de la OTA. Sigue entrando al calendario (ocupa fechas), pero
- * entra como CIERRE y no como reserva, y no define hasta dónde el feed publica
- * información confiable.
- */
-const LONG_RANGE_BLOCK_NIGHTS = 120;
-
-function nights(checkIn: string, checkOut: string): number {
-  const a = Date.parse(`${checkIn}T00:00:00Z`);
-  const b = Date.parse(`${checkOut}T00:00:00Z`);
-  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
-  return Math.round((b - a) / 86_400_000);
-}
+// Los umbrales de las marcas de ventana viven en booking-window.ts: los usa
+// también la política de avisos para cerrar lo que ya había entrado mal.
+const nights = daysBetweenYmd;
 
 function toYmd(t: ICAL.Time): string {
   // Eventos de OTA son VALUE=DATE (all-day). toString() de una fecha pura da

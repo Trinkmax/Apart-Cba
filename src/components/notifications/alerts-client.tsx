@@ -39,6 +39,16 @@ import type {
   CashAccount,
   Notification,
 } from "@/lib/types/database";
+import { notificationTier } from "@/lib/alerts/tier";
+
+/**
+ * "Para atender" = pide acción (warning / critical) y nadie lo leyó. Las
+ * novedades se ven en "Activas" pero no cuentan como pendientes: se archivan
+ * solas (ver src/lib/alerts/policy.ts).
+ */
+function isPendingAction(n: Notification): boolean {
+  return !n.read_at && !n.dismissed_at && notificationTier(n.severity) === "accion";
+}
 
 interface AlertsClientProps {
   initialNotifications: Notification[];
@@ -70,8 +80,7 @@ export function AlertsClient({
   );
 
   const filteredItems = useMemo(() => {
-    if (tab === "unread")
-      return items.filter((n) => !n.read_at && !n.dismissed_at);
+    if (tab === "unread") return items.filter(isPendingAction);
     if (tab === "active") return items.filter((n) => !n.dismissed_at);
     return items;
   }, [items, tab]);
@@ -83,6 +92,7 @@ export function AlertsClient({
 
   function handleClickItem(n: Notification) {
     if (!n.read_at) {
+      const counted = isPendingAction(n);
       startTransition(async () => {
         await markNotificationAsRead(n.id);
         setItems((prev) =>
@@ -90,7 +100,7 @@ export function AlertsClient({
             x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x
           )
         );
-        setUnread((u) => Math.max(0, u - 1));
+        if (counted) setUnread((u) => Math.max(0, u - 1));
       });
     }
     if (n.action_url) router.push(n.action_url);
@@ -107,7 +117,7 @@ export function AlertsClient({
         )
       );
       const item = items.find((x) => x.id === id);
-      if (item && !item.read_at) setUnread((u) => Math.max(0, u - 1));
+      if (item && isPendingAction(item)) setUnread((u) => Math.max(0, u - 1));
     });
   }
 
@@ -236,7 +246,7 @@ export function AlertsClient({
             <Tabs value={tab} onValueChange={(v) => setTab(v as never)}>
               <TabsList className="h-8">
                 <TabsTrigger value="unread" className="text-xs">
-                  Sin leer
+                  Para atender
                   {unread > 0 && (
                     <span className="ml-1.5 inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] font-bold tabular-nums">
                       {unread}
@@ -304,16 +314,20 @@ interface TabsContentsProps {
   onDismiss: (id: string) => void;
 }
 
-function TabsContents({ items, onClick, onDismiss }: TabsContentsProps) {
+function TabsContents({ tab, items, onClick, onDismiss }: TabsContentsProps) {
   if (items.length === 0) {
     return (
       <div className="py-16 px-6 text-center">
         <div className="mx-auto size-14 rounded-full bg-muted flex items-center justify-center mb-3">
           <Bell size={22} className="text-muted-foreground" />
         </div>
-        <p className="text-sm font-medium">Sin notificaciones</p>
+        <p className="text-sm font-medium">
+          {tab === "unread" ? "Nada para atender" : "Sin notificaciones"}
+        </p>
         <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
-          Las alertas y recordatorios de cobros van a aparecer acá
+          {tab === "unread"
+            ? "Cuando algo necesite una decisión tuya, va a aparecer acá"
+            : "Las alertas y recordatorios de cobros van a aparecer acá"}
         </p>
       </div>
     );

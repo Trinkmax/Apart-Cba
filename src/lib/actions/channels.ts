@@ -14,6 +14,9 @@ import { runChannelDispatch } from "@/lib/channels/dispatch";
 import { computeLinkHealth } from "@/lib/channels/health";
 import { processStoredEvent, reprojectReservation } from "@/lib/channels/ingest";
 import { reservationEventFromRow } from "@/lib/channels/dispatch";
+import { isOwnExportFeedUrl } from "@/lib/channels/own-export-url";
+import { issueVisibility } from "@/lib/alerts/policy";
+import { OTA_EXPORT_PATH } from "@/lib/channels/ota-help";
 import { sha256Hex } from "@/lib/channels/token";
 import {
   emailChannelView,
@@ -96,7 +99,7 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
         .eq("status", "open")
         .order("severity", { ascending: true })
         .order("created_at", { ascending: false })
-        .limit(100),
+        .limit(300),
       admin
         .from("channel_settings")
         .select("email_ingest_enabled, email_verified_at, last_email_at")
@@ -137,17 +140,25 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
   const rawLinks = (linksRes.data ?? []) as (ChannelLinkRow & {
     unit: { id: string; code: string; name: string };
   })[];
-  const issues = (issuesRes.data ?? []).map(
-    (
-      i: ChannelIssueRow & {
-        link: { channel: Channel; unit: { id: string; code: string; name: string } } | null;
-      },
-    ) => ({
-      ...i,
-      unit: i.link?.unit ?? null,
-      channel: i.link?.channel ?? null,
-    }),
-  );
+  // "Para resolver" muestra sólo lo que pasa la política de avisos: ni el
+  // seguimiento ("si sigue ausente te vamos a pedir que decidas") ni lo que
+  // todavía está en su margen (un mail que le ganó al iCal, un feed que falla
+  // un rato). Si se resuelve solo en ese tiempo, nadie lo ve.
+  const now = new Date();
+  const issues = (issuesRes.data ?? [])
+    .filter((i: ChannelIssueRow) => issueVisibility(i, now) === "visible")
+    .slice(0, 100)
+    .map(
+      (
+        i: ChannelIssueRow & {
+          link: { channel: Channel; unit: { id: string; code: string; name: string } } | null;
+        },
+      ) => ({
+        ...i,
+        unit: i.link?.unit ?? null,
+        channel: i.link?.channel ?? null,
+      }),
+    );
 
   const issuesByLink = new Map<string, { open: number; critical: number }>();
   for (const i of issues) {
@@ -280,6 +291,17 @@ export async function saveLinkFeed(
   const admin = createAdminClient();
 
   const link = await getOwnLink(admin, organization.id, validated.link_id);
+
+  // El enlace de SALIDA de rentOS pegado como calendario de la OTA: nunca trae
+  // una reserva (ver own-export-url.ts). Se frena acá, antes de que la conexión
+  // quede "andando" sin leer nada.
+  if (isOwnExportFeedUrl(validated.feed_url, process.env.NEXT_PUBLIC_APP_URL)) {
+    const ota = link.channel === "airbnb" ? "Airbnb" : "Booking.com";
+    return {
+      ok: false,
+      error: `Ese es el enlace de rentOS, el que se pega en ${ota}. Acá va el inverso: el calendario que te da ${ota} (${OTA_EXPORT_PATH[link.channel]}).`,
+    };
+  }
 
   // Validación SSRF + fetch de prueba + parseo real antes de guardar
   try {
@@ -501,8 +523,7 @@ export async function resolveChannelIssue(
   }
 
   if (validated.action === "assign_unit") {
-    if (!validated.unit_id) throw new Error("Elegí una unidad");
-    if (!issue.reservation_id) throw new Error("La incidencia no tiene reserva asociada");
+    if (!validated.unit_id) return { ok: false, error: "Elegí una unidad" };
     // la unidad debe ser de la org
     const { data: unit } = await admin
       .from("units")
@@ -510,7 +531,49 @@ export async function resolveChannelIssue(
       .eq("id", validated.unit_id)
       .eq("organization_id", organization.id)
       .maybeSingle();
-    if (!unit) throw new Error("Unidad inválida");
+    if (!unit) return { ok: false, error: "Esa unidad no es de esta organización" };
+
+    // "Sin unidad" que vino de un MAIL: todavía no hay reserva externa (el
+    // mail no pudo crearla sin unidad). Se reprocesa el mail con la unidad
+    // elegida y eso la crea y la proyecta al calendario. Antes la incidencia
+    // no ofrecía "Asignar unidad" y era un callejón sin salida.
+    if (!issue.reservation_id) {
+      if (!issue.event_id) {
+        return { ok: false, error: "Esta incidencia no tiene una reserva para asignar" };
+      }
+      const { data: evRow } = await admin
+        .from("channel_events")
+        .select("*")
+        .eq("id", issue.event_id)
+        .eq("organization_id", organization.id)
+        .maybeSingle();
+      const ev = evRow ? reservationEventFromRow(evRow) : null;
+      if (!evRow || !ev) return { ok: false, error: "No encontramos el aviso original de la OTA" };
+      const result = await processStoredEvent(admin, evRow.id, { ...ev, unitId: validated.unit_id });
+      const solved =
+        result.outcome !== "error" &&
+        result.outcome !== "needs_review" &&
+        result.outcome !== "conflict";
+      if (solved) {
+        await admin
+          .from("channel_issues")
+          .update({
+            status: "resolved",
+            resolution: "Unidad asignada por el operador",
+            resolved_by: session.userId,
+            resolved_at: new Date().toISOString(),
+          })
+          .eq("id", issue.id);
+      }
+      revalidateCanales();
+      return {
+        ok: true,
+        resolved: solved,
+        outcome: result.outcome,
+        bookingId: result.bookingId,
+        detail: solved ? undefined : retryFailureDetail(result.outcome),
+      };
+    }
 
     await admin
       .from("channel_reservations")

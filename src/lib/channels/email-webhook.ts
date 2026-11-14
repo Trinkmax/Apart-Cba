@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { Resend } from "resend";
 import { normalizeInboundEmail } from "./email-adapter";
+import { classifyIgnorableEmail, looksLikeReservationEmail } from "./email-noise";
 import { ingestEvent, openIssue } from "./ingest";
 import {
   GMAIL_FORWARDING_LABEL,
@@ -176,11 +177,13 @@ export async function handleResendInbound(
   });
 
   if (!normalized.event) {
-    // Ruido conocido (reseñas, avisos de seguridad, consultas, facturación…):
-    // evento durable para auditoría pero SIN incidencia — el panel de Canales
-    // es para cosas accionables, no para el inbox completo de las OTAs.
-    const noise = classifyIgnorable(email.from, email.subject ?? "");
-    if (noise) {
+    // Lista blanca (email-noise.ts): sólo un mail que anuncia una reserva o una
+    // cancelación y no se pudo leer merece que alguien lo mire. Todo lo demás
+    // —mensajes, recordatorios, newsletters, cobros, modificaciones que el iCal
+    // ya trae— queda como evento para auditoría, sin incidencia: el panel de
+    // Canales es para cosas accionables, no el inbox completo de las OTAs.
+    if (!looksLikeReservationEmail(email.subject ?? "")) {
+      const reason = classifyIgnorableEmail(email.from, email.subject ?? "") ?? "no_es_reserva";
       const { error: evErr } = await admin.from("channel_events").insert({
         organization_id: orgId,
         transport: "email",
@@ -190,17 +193,18 @@ export async function handleResendInbound(
         payload: {
           subject: (email.subject || "").slice(0, 150),
           from_domain: email.from.split("@").pop()?.slice(0, 60) ?? null,
-          ignored: noise,
+          ignored: reason,
         },
         status: "processed",
       });
       if (evErr && evErr.code !== "23505") {
         console.error("[channels/email] event insert falló", evErr.message);
       }
-      return { ok: true, status: `ignored_${noise}`, httpStatus: 200 };
+      return { ok: true, status: `ignored_${reason}`, httpStatus: 200 };
     }
 
-    // email no interpretable: evento durable + incidencia con extracto redactado
+    // Anuncia una reserva o una cancelación y no se pudo leer: evento durable +
+    // incidencia con el asunto.
     const { error: evErr } = await admin.from("channel_events").insert({
       organization_id: orgId,
       transport: "email",
@@ -221,8 +225,8 @@ export async function handleResendInbound(
       organizationId: orgId,
       issueType: "parse_error",
       severity: "warning",
-      title: "Email de OTA no reconocido",
-      detail: `Llegó un email ("${(email.subject || "sin asunto").slice(0, 120)}") que no se pudo interpretar como reserva o cancelación. Si es una reserva, cargala manualmente y avisanos el formato.`,
+      title: "Aviso de reserva que no pudimos leer",
+      detail: `Llegó «${(email.subject || "sin asunto").slice(0, 120)}» y no pudimos leerlo. La ocupación igual entra sola por el calendario de la OTA en unos minutos: fijate que la reserva esté en el calendario y, si no aparece, cargala a mano.`,
       dedupeKey: `email_unparsed:${emailId}`,
     });
     return { ok: true, status: "unmatched", httpStatus: 200 };
@@ -292,49 +296,6 @@ async function recordForwardingConfirmation(
     console.error("[channels/email] aviso de confirmación de Gmail falló", notifyErr.message);
   }
   return { ok: true, status: "gmail_forwarding_confirmation", httpStatus: 200 };
-}
-
-/**
- * Emails de OTA que NO son eventos de reserva y no deben abrir incidencias.
- * Sólo corre cuando el parseo falló — un email que sí parsea como reserva o
- * cancelación jamás pasa por acá. Devuelve la razón (para auditoría) o null.
- */
-function classifyIgnorable(from: string, subject: string): string | null {
-  // Avisos de Google que llegan reenviados. La confirmación de reenvío de Gmail
-  // no pasa por acá: no es ruido, es un paso pendiente (gmail-forwarding.ts).
-  if (/@google\.com$|@google\.com>/i.test(from.trim())) {
-    return "google";
-  }
-  const s = subject;
-  if (/rese[ñn]a|review/i.test(s)) return "resena";
-  if (/sign.?in|inicio de sesi[oó]n|new device|nuevo dispositivo/i.test(s)) return "seguridad";
-  if (/c[oó]digo de verificaci[oó]n|verification code|c[oó]digo de acceso/i.test(s)) return "seguridad";
-  if (/consulta sobre/i.test(s)) return "consulta";
-  if (/recordatorio.*solicitud|solicitud de reservaci[oó]n|reservation request/i.test(s)) {
-    return "solicitud_pendiente";
-  }
-  if (/pregunta sobre tu alojamiento|nueva pregunta|new question/i.test(s)) return "pregunta";
-  if (/pagos pendientes|saldes los pagos|factura|invoice|comisi[oó]n|payout|extracto/i.test(s)) {
-    return "facturacion";
-  }
-  if (/te envi[oó] un mensaje|nuevo mensaje|new message|hemos recibido este mensaje/i.test(s)) {
-    return "mensaje";
-  }
-  // OJO: el aviso "¡Nueva reserva!" de Booking NO se descarta acá.
-  // Se descartaba porque no trae la estadía completa (falta el check-out) y la
-  // reserva igual entra por iCal — pero su subject lleva el número de reserva
-  // junto a la fecha de llegada, y ese es el ÚNICO punto donde la identidad del
-  // email se cruza con la del iCal. Tirándolo, la reserva proyectada quedaba
-  // para siempre sin número y la cancelación por email —que llega con número y
-  // sin fechas— no encontraba nada que cancelar. Hoy el parser lo convierte en
-  // un evento `reference`; si algún día dejara de parsear, cae abajo como
-  // "email no reconocido", que es visible, en vez de desaparecer en silencio.
-
-  // Marketing/engagement genérico de Airbnb
-  if (/est[áa]n esperando tu|completa tu|aumenta tus reservas|consejos para/i.test(s)) {
-    return "marketing";
-  }
-  return null;
 }
 
 interface ReceivedEmail {

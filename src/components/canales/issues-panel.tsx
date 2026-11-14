@@ -104,6 +104,8 @@ function IssueRow({
         }
         if (r.already) toast.success("Esta incidencia ya estaba resuelta");
         else if (action === "dismiss") toast.success("Incidencia descartada");
+        else if (action === "assign_unit" && r.resolved === false)
+          toast.warning(r.detail ?? "Asignamos la unidad pero la reserva no entró. La incidencia queda abierta.");
         else if (action === "assign_unit") toast.success("Unidad asignada y reserva proyectada");
         // Un reintento que corre no es un reintento que arregla: si la
         // incidencia sigue abierta hay que decirlo, o la operadora cree que
@@ -119,9 +121,11 @@ function IssueRow({
     });
   }
 
+  // Con reserva externa o con el aviso original (un mail que no supo a qué
+  // departamento iba): en los dos casos elegir la unidad la pone en el calendario.
   const canAssign =
     (issue.issue_type === "unmapped_unit" || issue.issue_type === "ambiguous_unit") &&
-    Boolean(issue.reservation_id);
+    (Boolean(issue.reservation_id) || Boolean(issue.event_id));
   // "Revisá el enlace del calendario" sin un lugar donde cambiarlo es un
   // callejón sin salida: la incidencia trae su propia salida.
   const canChangeFeed =

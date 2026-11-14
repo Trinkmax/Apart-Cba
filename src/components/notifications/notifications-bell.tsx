@@ -27,6 +27,12 @@ import {
   markNotificationAsRead,
 } from "@/lib/actions/notifications";
 import type { Notification } from "@/lib/types/database";
+import { notificationTier } from "@/lib/alerts/tier";
+
+/** Lo que pide acción y nadie leyó: lo único que pone rojo el número. */
+function isPendingAction(n: Notification): boolean {
+  return !n.read_at && !n.dismissed_at && notificationTier(n.severity) === "accion";
+}
 
 interface NotificationsBellProps {
   /** Datos iniciales (server-side) */
@@ -51,9 +57,7 @@ export function NotificationsBell({
     listNotifications("active", 30).then((data) => {
       if (cancelled) return;
       setItems(data);
-      setUnread(
-        data.filter((n) => !n.read_at && !n.dismissed_at).length
-      );
+      setUnread(data.filter(isPendingAction).length);
     });
     return () => {
       cancelled = true;
@@ -62,6 +66,7 @@ export function NotificationsBell({
 
   function handleClickItem(n: Notification) {
     if (!n.read_at) {
+      const counted = isPendingAction(n);
       startTransition(async () => {
         await markNotificationAsRead(n.id);
         setItems((prev) =>
@@ -69,7 +74,7 @@ export function NotificationsBell({
             x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x
           )
         );
-        setUnread((u) => Math.max(0, u - 1));
+        if (counted) setUnread((u) => Math.max(0, u - 1));
       });
     }
     if (n.action_url) {
@@ -81,10 +86,11 @@ export function NotificationsBell({
   function handleDismiss(e: React.MouseEvent, n: Notification) {
     e.preventDefault();
     e.stopPropagation();
+    const counted = isPendingAction(n);
     startTransition(async () => {
       await dismissNotification(n.id);
       setItems((prev) => prev.filter((x) => x.id !== n.id));
-      if (!n.read_at) setUnread((u) => Math.max(0, u - 1));
+      if (counted) setUnread((u) => Math.max(0, u - 1));
     });
   }
 
@@ -145,7 +151,7 @@ export function NotificationsBell({
                 Notificaciones
               </div>
               <div className="text-[11px] text-muted-foreground leading-tight mt-0.5">
-                {unread > 0 ? `${unread} sin leer` : "Todo al día"}
+                {unread > 0 ? `${unread} para atender` : "Todo al día"}
               </div>
             </div>
           </div>
@@ -180,7 +186,7 @@ export function NotificationsBell({
             </div>
           ) : (
             <ul className="divide-y divide-border/60">
-              {items.map((n) => (
+              {sortForAttention(items).map((n) => (
                 <NotificationRow
                   key={n.id}
                   notification={n}
@@ -222,11 +228,12 @@ function NotificationRow({
   onDismiss,
 }: NotificationRowProps) {
   const tone = SEVERITY_TONE[n.severity];
+  const pending = isPendingAction(n);
   return (
     <li
       className={cn(
         "relative group transition-colors hover:bg-muted/40",
-        !n.read_at && "bg-primary/[0.035]"
+        pending && "bg-primary/[0.035]"
       )}
     >
       <span
@@ -254,12 +261,12 @@ function NotificationRow({
             <span
               className={cn(
                 "text-[13px] leading-tight truncate",
-                !n.read_at ? "font-semibold text-foreground" : "font-medium text-foreground/90"
+                pending ? "font-semibold text-foreground" : "font-medium text-foreground/90"
               )}
             >
               {n.title}
             </span>
-            {!n.read_at && (
+            {pending && (
               <span className="size-1.5 rounded-full bg-primary shrink-0" aria-hidden />
             )}
           </div>
@@ -292,6 +299,15 @@ function NotificationRow({
         </button>
       </div>
     </li>
+  );
+}
+
+/** Lo que pide acción y nadie leyó, arriba; después, lo demás por fecha. */
+function sortForAttention(items: Notification[]): Notification[] {
+  return [...items].sort(
+    (a, b) =>
+      Number(isPendingAction(b)) - Number(isPendingAction(a)) ||
+      b.created_at.localeCompare(a.created_at)
   );
 }
 
