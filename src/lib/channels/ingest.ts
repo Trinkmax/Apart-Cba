@@ -1,10 +1,12 @@
 import { matchUnit } from "@/lib/inbound/matcher";
+import { todayYmdInTz } from "@/lib/dates";
 import {
   channelCommissionPctFor,
   type ChannelCommissionMap,
 } from "@/lib/finance/booking-economics";
 import { openCancellationRequest } from "./cancellation-requests";
 import { reservationEventFromRow } from "./event-row";
+import { canAdoptWithoutIdentity, decideInsertOverLocalStays } from "./finished-stay";
 import { normalizePhoneE164, resolveGuest } from "./guest";
 import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
 import { archivedIcalUid, isNewStayInSameSlot } from "./same-slot";
@@ -766,6 +768,9 @@ async function projectToBooking(
   if (!reservation.unit_id || !reservation.check_in || !reservation.check_out) {
     return { outcome: "needs_review", reservationId: reservation.id };
   }
+  // `reservation` se reasigna más abajo y TypeScript pierde lo que validamos acá.
+  const stay = { checkIn: reservation.check_in, checkOut: reservation.check_out };
+  const stayUnitId = reservation.unit_id;
 
   // ¿existe un booking legacy con la misma referencia externa? (pre-v2)
   const legacyBookingId = await findLegacyBooking(admin, ev, reservation);
@@ -834,7 +839,54 @@ async function projectToBooking(
       `conflict:${reservation.id}`,
       "Vinculada automáticamente a la reserva local existente (misma unidad y fechas exactas).",
     );
+    await resolveIssuesByDedupe(
+      admin,
+      orgId,
+      `adopt_review:${reservation.id}`,
+      "Era la misma estadía: quedó vinculada a la reserva cargada en el sistema.",
+    );
     return updateProjectedBooking(admin, eventId, ev, reservation, adoptable);
+  }
+
+  // Lo que la base no frena: `bookings_no_overlap` no cuenta las estadías con
+  // la salida hecha, así que nada impedía crear una segunda reserva sobre noches
+  // que alguien ya durmió (AT4B, ver finished-stay.ts).
+  const { data: localStays, error: localErr } = await admin
+    .from("bookings")
+    .select("id, status, check_in_date, check_out_date")
+    .eq("organization_id", orgId)
+    .eq("unit_id", stayUnitId)
+    .in("status", ["pendiente", "confirmada", "check_in", "check_out"])
+    .lt("check_in_date", stay.checkOut)
+    .gt("check_out_date", stay.checkIn);
+  if (localErr) return { outcome: "error", error: localErr.message };
+  const overLocal = decideInsertOverLocalStays(
+    stay,
+    (localStays ?? []).map((b) => ({
+      id: b.id as string,
+      status: b.status as string,
+      checkIn: b.check_in_date as string,
+      checkOut: b.check_out_date as string,
+    })),
+    todayYmdInTz(),
+  );
+  if (overLocal.action === "skip") {
+    return { outcome: "needs_review", reservationId: reservation.id };
+  }
+  if (overLocal.action === "conflict") {
+    const issueId = await openIssue(admin, {
+      organizationId: orgId,
+      linkId: reservation.link_id,
+      eventId,
+      reservationId: reservation.id,
+      bookingId: overLocal.with.id,
+      issueType: "conflict",
+      severity: "critical",
+      title: `Conflicto de disponibilidad con ${channelLabel(ev.channel)}`,
+      detail: `${channelLabel(ev.channel)} informa ${reservation.check_in} → ${reservation.check_out}, pero en esa unidad ya hay una estadía con la salida hecha en parte de esas noches. No cargamos nada: revisá si es la misma reserva o si hay que reubicarla.`,
+      dedupeKey: `conflict:${reservation.id}`,
+    });
+    return { outcome: "conflict", reservationId: reservation.id, issueId };
   }
 
   // insertar booking NUEVO — sin huésped todavía (se enlaza después, y así un
@@ -1762,7 +1814,10 @@ async function findAdoptableBooking(
     .eq("check_in_date", reservation.check_in)
     .eq("check_out_date", reservation.check_out)
     .eq("is_block", false)
-    .in("status", ["pendiente", "confirmada", "check_in"]);
+    // Con `check_out` también: una estadía ya vivida con las mismas fechas es la
+    // misma. Sin eso, cuando hacían la salida antes de contestar «¿Es la misma
+    // reserva?», el reconcile creaba una copia encima (AT4B, finished-stay.ts).
+    .in("status", ["pendiente", "confirmada", "check_in", "check_out"]);
   const list = (candidates ?? []) as AdoptableBooking[];
   if (list.length !== 1) return null;
   const candidate = list[0];
@@ -1789,6 +1844,18 @@ async function findAdoptableBooking(
       blocked: candidate,
       motivo: `${channelLabel(ev.channel)} cerró estas fechas en su calendario, pero acá hay una reserva con ${conHuesped ? "huésped asignado" : conPlata ? "dinero cobrado" : "confirmación ya enviada"}. Un cierre de fechas no se vincula solo a una reserva real.`,
     };
+  }
+
+  // Una estadía que ya terminó no tiene nada que la OTA pueda llevarse: la
+  // coincidencia exacta es la misma (ver canAdoptWithoutIdentity).
+  if (
+    canAdoptWithoutIdentity(
+      candidate.status,
+      { checkIn: reservation.check_in, checkOut: reservation.check_out },
+      todayYmdInTz(),
+    )
+  ) {
+    return candidate;
   }
 
   // Con dinero de por medio exigimos identidad explícita (código de la OTA o

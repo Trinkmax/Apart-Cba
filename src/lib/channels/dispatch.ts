@@ -1270,6 +1270,10 @@ async function runHousekeeping(admin: AdminClient): Promise<Record<string, numbe
     .eq("external_status", "active")
     .is("booking_id", null)
     .not("unit_id", "is", null)
+    // Lo próximo primero: una estadía ya terminada que choca con una del
+    // sistema queda sin proyectar para siempre (finished-stay.ts) y, sin orden,
+    // unas cuantas de ésas podían comerse el cupo de 50 de cada noche.
+    .order("check_out", { ascending: false })
     .limit(50);
   let reprojected = 0;
   const { reprojectReservation } = await import("./ingest");
