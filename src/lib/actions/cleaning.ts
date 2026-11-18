@@ -53,6 +53,38 @@ async function setLatestStatusReason(unitId: string, reason: string): Promise<vo
   await admin.from("unit_status_history").update({ reason }).eq("id", latest.id);
 }
 
+/**
+ * Qué dice el calendario de la unidad HOY, sin mirar la limpieza: «ocupado»
+ * (estadía en curso: check-in marcado, o entró antes de hoy sin marcarlo),
+ * «reservado» (llega alguien hoy) o «disponible». La regla vive en la base
+ * (`unit_occupancy_from_stays`, migración 082) para que el trigger de reservas,
+ * el barrido de la medianoche y esto no puedan contradecirse.
+ *
+ * Si el RPC falla (la 082 todavía no está aplicada), cae a la regla de antes
+ * (065): sólo un check_in que cubre hoy cuenta como ocupado.
+ */
+async function occupancyFromStays(
+  unitId: string,
+  organizationId: string,
+  today: string,
+): Promise<UnitStatus> {
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("unit_occupancy_from_stays", { p_unit_id: unitId });
+  if (!error && (data === "ocupado" || data === "reservado" || data === "disponible")) {
+    return data;
+  }
+  const { count } = await admin
+    .from("bookings")
+    .select("id", { count: "exact", head: true })
+    .eq("unit_id", unitId)
+    .eq("organization_id", organizationId)
+    .eq("status", "check_in")
+    .eq("is_block", false)
+    .lte("check_in_date", today)
+    .gt("check_out_date", today);
+  return (count ?? 0) > 0 ? "ocupado" : "disponible";
+}
+
 // Cuando una cleaning task se completa/verifica/cancela/borra, si la unidad
 // estaba en status='limpieza' y ya no le quedan tareas por hacer, la liberamos.
 // Esto evita el bug de "unidad bloqueada en el calendario aunque ya no haya
@@ -97,25 +129,9 @@ async function releaseUnitIfNoActiveCleaning(
   const { count } = await q;
   if ((count ?? 0) > 0) return;
 
-  // ¿Hay alguien adentro? El estado describe el AHORA: si otra reserva está en
-  // check_in, la unidad quedó ocupada, no libre (misma regla que el trigger de
-  // la migración 061). Sólo cuenta una estadía que cubre HOY: un check_in
-  // viejo que nadie cerró (Habitana no marca salidas) dejaba la unidad
-  // "ocupada" para siempre — migración 065.
-  const hoy = todayYmdInTz(tz);
-  const { count: conHuesped } = await admin
-    .from("bookings")
-    .select("id", { count: "exact", head: true })
-    .eq("unit_id", unitId)
-    .eq("organization_id", organizationId)
-    .eq("status", "check_in")
-    .eq("is_block", false)
-    .lte("check_in_date", hoy)
-    .gt("check_out_date", hoy);
-
   await admin
     .from("units")
-    .update({ status: (conHuesped ?? 0) > 0 ? "ocupado" : "disponible" })
+    .update({ status: await occupancyFromStays(unitId, organizationId, todayYmdInTz(tz)) })
     .eq("id", unitId)
     .eq("organization_id", organizationId);
 
@@ -612,18 +628,9 @@ async function markUnitClean(context: CleanlinessWriteContext): Promise<void> {
   // La unidad primero, con la persona: si se cierra antes la tarea, el trigger la
   // pasa a disponible sin autor y aunque haya un huésped adentro.
   if (unitStatus === "limpieza") {
-    const { count } = await admin
-      .from("bookings")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .eq("unit_id", unitId)
-      .eq("status", "check_in")
-      .eq("is_block", false)
-      .lte("check_in_date", today)
-      .gt("check_out_date", today);
     await setUnitStatusByHand(
       context,
-      (count ?? 0) > 0 ? "ocupado" : "disponible",
+      await occupancyFromStays(unitId, organizationId, today),
       "Marcado limpio a mano",
     );
   }
