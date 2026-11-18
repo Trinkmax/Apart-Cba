@@ -8,6 +8,7 @@
 import { useEffect } from "react";
 import { AlertTriangle, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { isStaleDeployError } from "@/lib/action-failure";
 
 export default function DashboardError({
   error,
@@ -19,6 +20,28 @@ export default function DashboardError({
   useEffect(() => {
     console.error("[dashboard:error-boundary]", error);
   }, [error]);
+
+  // Una acción de un deploy anterior: «Reintentar» volvería a fallar igual.
+  if (isStaleDeployError(error)) {
+    return (
+      <div className="min-h-[60vh] grid place-items-center px-4">
+        <div className="max-w-md w-full text-center rounded-2xl border border-border bg-card p-8 shadow-sm">
+          <div className="size-12 rounded-2xl bg-primary/10 text-primary grid place-items-center mx-auto mb-4">
+            <RotateCw size={22} />
+          </div>
+          <h2 className="text-lg font-semibold text-foreground">Se actualizó el sistema</h2>
+          <p className="text-sm text-muted-foreground mt-1.5">
+            Hubo una versión nueva mientras tenías esta pantalla abierta. Recargá
+            la página para seguir; lo último que hiciste no se guardó.
+          </p>
+          <Button onClick={() => window.location.reload()} className="mt-5">
+            <RotateCw size={14} />
+            Recargar
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-[60vh] grid place-items-center px-4">

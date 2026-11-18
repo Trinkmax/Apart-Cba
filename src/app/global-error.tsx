@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { isStaleDeployError } from "@/lib/action-failure";
 
 export default function GlobalError({
   error,
@@ -12,6 +13,9 @@ export default function GlobalError({
   useEffect(() => {
     console.error(error);
   }, [error]);
+
+  // Una acción de un deploy anterior: «Reintentar» volvería a fallar igual.
+  const stale = isStaleDeployError(error);
 
   return (
     <html lang="es-AR">
@@ -38,14 +42,15 @@ export default function GlobalError({
               margin: "0 0 12px",
             }}
           >
-            Algo salió mal
+            {stale ? "Se actualizó el sistema" : "Algo salió mal"}
           </h1>
           <p style={{ color: "#525252", lineHeight: 1.6, margin: "0 0 24px" }}>
-            Tuvimos un problema inesperado. Ya estamos al tanto. Probá de nuevo
-            en un momento.
+            {stale
+              ? "Hubo una versión nueva mientras tenías esta pantalla abierta. Recargá la página para seguir; lo último que hiciste no se guardó."
+              : "Tuvimos un problema inesperado. Ya estamos al tanto. Probá de nuevo en un momento."}
           </p>
           <button
-            onClick={() => reset()}
+            onClick={() => (stale ? window.location.reload() : reset())}
             style={{
               display: "inline-block",
               borderRadius: "9999px",
@@ -58,7 +63,7 @@ export default function GlobalError({
               cursor: "pointer",
             }}
           >
-            Reintentar
+            {stale ? "Recargar" : "Reintentar"}
           </button>
         </div>
       </body>

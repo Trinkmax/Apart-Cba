@@ -7,11 +7,17 @@ import {
   OctagonXIcon,
   TriangleAlertIcon,
 } from "lucide-react"
+import { useEffect } from "react"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
+import { installStaleDeployGuard } from "@/lib/action-failure"
 
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
+
+  // «Server Action … was not found on the server» → aviso en español con
+  // «Recargar», en todas las pantallas (ver action-failure.ts).
+  useEffect(() => installStaleDeployGuard(), [])
 
   return (
     <Sonner
