@@ -11,6 +11,7 @@ import { parteDelDia } from "./parte";
 import { registrarGasto } from "./gastos";
 import { READ_TOOLS } from "./read";
 import { ofrecerOpciones } from "./opciones";
+import { estadoCanales } from "./read/canales";
 import { WRITE_TOOLS } from "./write";
 
 export const TEX_TOOLS: readonly TexTool[] = [
@@ -21,6 +22,12 @@ export const TEX_TOOLS: readonly TexTool[] = [
   // Acciones (proponen; la persona confirma).
   registrarGasto,
   ...WRITE_TOOLS,
+  // Agregadas después (19/11/2026). Van AL FINAL aunque sean de lectura, para
+  // no mover el resto. Ojo: sumar o cambiar una herramienta invalida los
+  // bloques de thinking de las conversaciones que ya estaban abiertas (el
+  // juego de herramientas es parte de lo que se compara); `drop_block` hace que
+  // se descarten en vez de fallar, así que cuesta una vez por conversación.
+  estadoCanales,
 ];
 
 export function findTool(name: string): TexTool | undefined {
