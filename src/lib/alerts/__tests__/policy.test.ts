@@ -281,6 +281,30 @@ describe("issueResolution — se cierra sola cuando deja de ser verdad", () => {
     expect(issueResolution(issue("feed:l1"), { link: null }, opts)).toMatch(/ya no existe/);
   });
 
+  // «La OTA no lee tu calendario» (JARDINES, Viaggiato): que NOSOTROS leamos
+  // bien el de ella no lo cierra; sólo que ella vuelva a leer el nuestro.
+  it("la OTA que no leía se cierra cuando vuelve a leer, no porque la conexión esté sana", () => {
+    const link = {
+      status: "active",
+      consecutiveFailures: 0,
+      lastSuccessAt: hoursAgo(0.1),
+      anomalousEmpty: false,
+    };
+    expect(
+      issueResolution(issue("export_stale:l1"), { link: { ...link, lastExportAccessAt: hoursAgo(24 * 13) } }, opts),
+    ).toBeNull();
+    expect(
+      issueResolution(issue("export_stale:l1"), { link: { ...link, lastExportAccessAt: null } }, opts),
+    ).toBeNull();
+    expect(
+      issueResolution(issue("export_stale:l1"), { link: { ...link, lastExportAccessAt: hoursAgo(2) } }, opts),
+    ).toMatch(/volvió a leer/);
+    expect(
+      issueResolution(issue("export_stale:l1"), { link: { ...link, status: "paused" } }, opts),
+    ).toMatch(/pausada/);
+    expect(issueResolution(issue("export_stale:l1"), { link: null }, opts)).toMatch(/ya no existe/);
+  });
+
   it("el feed vacío se cierra si volvió a traer eventos o no queda nada que proteger", () => {
     const empty = { status: "active", consecutiveFailures: 0, lastSuccessAt: hoursAgo(0.1), anomalousEmpty: true };
     expect(

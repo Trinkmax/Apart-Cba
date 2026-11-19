@@ -136,7 +136,14 @@ export interface ChannelLinkRow {
   last_success_at: string | null;
   consecutive_failures: number;
   last_reservation_at: string | null;
+  /** Última lectura del calendario saliente atribuida a ESTA conexión. */
   last_export_access_at: string | null;
+  /** Por qué dirección lee la OTA (migración 083). Null = todavía no se sabe. */
+  export_via?: "link" | "unit" | null;
+  /** Cada cuántos minutos lee (mediana de sus últimas lecturas). */
+  export_interval_min?: number | null;
+  /** Lo que se le sirvió la última vez: estadías de ese día en adelante. */
+  export_served?: { at: string; etag: string; stays: [string, string][] } | null;
   health: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -248,7 +255,10 @@ export interface ChannelIssueRow {
  *   healthy   → último poll OK dentro de 10 min y sin incidencias críticas
  *   degraded  → 10-30 min sin éxito, o 1-2 errores consecutivos
  *   critical  → >30 min sin éxito, ≥3 errores consecutivos, o conflicto abierto
- *   verifying → el calendario saliente todavía no fue consultado por la OTA
+ *   unread    → traemos sus reservas, pero la OTA no lee nuestro calendario
+ *               (dejó de leerlo, o nunca lo leyó): lo que se reserva acá no se
+ *               cierra allá
+ *   verifying → conexión reciente: la OTA todavía no consultó el calendario
  *   paused    → desactivada explícitamente
  *   draft     → asistente sin terminar
  */
@@ -256,6 +266,7 @@ export type ChannelLinkHealth =
   | "healthy"
   | "degraded"
   | "critical"
+  | "unread"
   | "verifying"
   | "paused"
   | "draft";

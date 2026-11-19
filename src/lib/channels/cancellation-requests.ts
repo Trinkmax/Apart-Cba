@@ -66,7 +66,36 @@ export type OpenCancellationOutcome =
    * (había filas con 24 lecturas y subiendo).
    */
   | "booking_not_live"
+  /**
+   * La reserva local la cargó una persona con OTRO origen (una directa, o una
+   * de Airbnb cuando la que deja de listarla es Booking). Que la OTA deje de
+   * mostrar ocupadas esas noches no dice nada del huésped: no se propone nada y
+   * el que llama suelta la fila. Ver `isForeignHandLoadedBooking`.
+   */
+  | "not_channel_booking"
   | "failed";
+
+/**
+ * ¿La reserva es de ustedes y no del canal que dejó de listarla?
+ *
+ * BRASIL, Apart CBA (14/11/2026): Florencia tenía una reserva DIRECTA del 21 al
+ * 24/11, cargada a mano y con $300.000 cobrados. Un cierre de Booking con esas
+ * mismas fechas había quedado vinculado a ella; cuando Booking dejó de
+ * mostrarlo, el sistema avisó «se cayó una reserva con dinero cobrado en
+ * Booking» con un botón «Cancelar la reserva». Lo apretaron, y el departamento
+ * se vendió de nuevo para esas noches.
+ *
+ * Una reserva que cargó una persona y que no es de ese canal no la puede
+ * cancelar el calendario de ese canal: lo único que Booking sabía de ella es
+ * que las fechas estaban cerradas. Si la cargaron a mano CON el origen del
+ * canal (una de Booking anotada por recepción), la pregunta sí vale.
+ */
+export function isForeignHandLoadedBooking(
+  booking: { created_by: string | null; source: string | null },
+  channel: Channel | string,
+): boolean {
+  return Boolean(booking.created_by) && booking.source !== channel;
+}
 
 export async function openCancellationRequest(
   admin: AdminClient,
@@ -85,6 +114,11 @@ export async function openCancellationRequest(
     referencia_ota: r?.confirmation_code ?? r?.ical_uid ?? null,
   };
   let risk: "normal" | "alto" = "normal";
+
+  // Sin reserva local no hay nada que cancelar ni que decidir. Antes se abría
+  // igual la propuesta: «Confirmá si se cancela una reserva de Booking», sin
+  // unidad, sin huésped y sin reserva detrás (Cofico Ideal, 17 y 18/11/2026).
+  if (!bookingId) return "booking_not_live";
 
   if (bookingId) {
     const { data: booking, error: readErr } = await admin
@@ -115,6 +149,32 @@ export async function openCancellationRequest(
         ? admin.from("guests").select("full_name, phone").eq("id", booking.guest_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
+
+    // El calendario de un canal no decide sobre una reserva que no es suya.
+    // Sólo queda una novedad, sin botón de cancelar.
+    if (
+      input.reasonCode === "missing_from_feed" &&
+      isForeignHandLoadedBooking(booking, input.channel)
+    ) {
+      const quien = guest?.full_name?.trim();
+      const canal = channelName(input.channel);
+      const { error: noteErr } = await admin.from("notifications").insert({
+        organization_id: input.organizationId,
+        type: "other",
+        severity: "info",
+        title: `${canal} liberó fechas que acá son de una reserva tuya`,
+        body: `${quien ? `${quien} — ` : ""}${unit?.name?.trim() ?? "una unidad"}, ${booking.check_in_date} → ${booking.check_out_date}. ${canal} tenía esas noches cerradas y dejó de mostrarlas. Tu reserva sigue igual; si había entrado por ${canal}, fijate si la cancelaron.`,
+        ref_type: "booking",
+        ref_id: bookingId,
+        target_role: "admin",
+        action_url: `/dashboard/reservas/${bookingId}`,
+        dedup_key: `ota_released:${r?.id ?? bookingId}`,
+      });
+      if (noteErr && noteErr.code !== "23505") {
+        console.error("[channels/cancel-request] novedad falló", noteErr.message);
+      }
+      return "not_channel_booking";
+    }
 
     const paid = Number(booking.paid_amount ?? 0);
     const diasParaLlegada = Math.round(

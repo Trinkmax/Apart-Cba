@@ -26,6 +26,8 @@ import { SyncNowButton } from "@/components/canales/sync-now-button";
 import { formatDistanceToNow } from "date-fns";
 import { es } from "date-fns/locale";
 import { LiveRefresh } from "@/components/realtime/live-refresh";
+import { intervalLabel, stayLabel } from "@/lib/channels/export-reads";
+import { formatTimeInTz, OTA_REFRESH_HINT } from "@/lib/channels/publication-copy";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +55,8 @@ export default async function CanalesPage() {
   const bookingOk = booking.filter((l) => l.health_state === "healthy" || l.health_state === "verifying").length;
   const critical = links.filter((l) => l.health_state === "critical").length;
   const degraded = links.filter((l) => l.health_state === "degraded").length;
+  // Traemos sus reservas pero la OTA no lee las nuestras.
+  const unread = links.filter((l) => l.health_state === "unread").length;
   const conflicts = issues.filter((i) => i.issue_type === "conflict").length;
   const lastCheck = active.reduce<string | null>(
     (acc, l) => (l.last_success_at && (!acc || l.last_success_at > acc) ? l.last_success_at : acc),
@@ -69,8 +73,39 @@ export default async function CanalesPage() {
     null,
   );
 
+  // Cada cuánto viene a leer cada OTA (la mediana entre sus conexiones), para
+  // decirlo con el número medido y no «más o menos cada una hora».
+  const paceOf = (channel: "airbnb" | "booking") => {
+    const values = active
+      .filter((l) => l.channel === channel && typeof l.export_interval_min === "number")
+      .map((l) => l.export_interval_min as number)
+      .sort((a, b) => a - b);
+    return values.length > 0 ? intervalLabel(values[Math.floor(values.length / 2)]) : null;
+  };
+  const pace = [
+    paceOf("airbnb") ? `Airbnb ${paceOf("airbnb")}` : null,
+    paceOf("booking") ? `Booking ${paceOf("booking")}` : null,
+  ].filter(Boolean) as string[];
+
+  // Lo que está ocupado acá y la OTA todavía muestra libre: se puede vender
+  // dos veces hasta que vuelva a leer. Es lo único de la publicación que no
+  // puede esperar a que alguien abra la ficha.
+  const unseen = active
+    .filter((l) => l.publication?.kind === "pending" && l.publication.changes.toBlock.length > 0)
+    .map((l) => ({
+      id: l.id,
+      unit: l.unit.code,
+      ota: l.channel === "airbnb" ? "Airbnb" : "Booking",
+      stays: l.publication!.changes.toBlock,
+      nextReadAt: l.publication!.nextReadAt,
+    }));
+
   const overall =
-    critical > 0 || conflicts > 0 ? "critical" : degraded > 0 || issues.length > 0 ? "warning" : "ok";
+    critical > 0 || conflicts > 0
+      ? "critical"
+      : degraded > 0 || unread > 0 || issues.length > 0
+        ? "warning"
+        : "ok";
   const OverallIcon = overall === "ok" ? ShieldCheck : overall === "warning" ? ShieldAlert : ShieldX;
   const overallText =
     overall === "ok"
@@ -117,7 +152,11 @@ export default async function CanalesPage() {
               <span className="inline-flex items-center gap-1.5">
                 <Upload size={12} className="shrink-0" />
                 Ellas leen tu calendario solas
-                {lastPublished ? ` · última vez ${formatDistanceToNow(new Date(lastPublished), { addSuffix: true, locale: es })}` : ""}
+                {pace.length > 0
+                  ? ` · ${pace.join(" · ")}`
+                  : lastPublished
+                    ? ` · última vez ${formatDistanceToNow(new Date(lastPublished), { addSuffix: true, locale: es })}`
+                    : ""}
               </span>
             </div>
           )}
@@ -181,6 +220,61 @@ export default async function CanalesPage() {
         </Card>
       )}
 
+      {/* Lo cargado acá que la OTA todavía muestra libre. No es una falla: con
+          iCal la OTA viene a leer cuando quiere. Pero quien acaba de cerrar
+          unas fechas y las ve disponibles en Airbnb necesita leer esto, y no
+          «Conectada». */}
+      {unseen.length > 0 && (
+        <Card className="p-4 border border-amber-500/30 bg-amber-500/10">
+          <div className="flex items-start gap-3">
+            <Upload className="mt-0.5 size-5 shrink-0 text-amber-500" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div>
+                <p className="font-medium">
+                  {unseen.length === 1
+                    ? `${unseen[0].ota} todavía no leyó un cambio tuyo`
+                    : `Hay ${unseen.length} cambios tuyos que las OTAs todavía no leyeron`}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Las OTAs vienen solas a leer tu calendario
+                  {pace.length > 0 ? ` (${pace.join(", ")})` : ""}. Hasta que pasan, siguen
+                  mostrando estas noches como libres.
+                </p>
+              </div>
+              <ul className="space-y-1 text-sm">
+                {unseen.slice(0, 6).map((u) => (
+                  <li key={u.id} className="flex flex-wrap items-baseline gap-x-2">
+                    <Link
+                      href={`/dashboard/canales/${u.id}`}
+                      className="font-mono text-xs font-medium underline-offset-2 hover:underline"
+                    >
+                      {u.unit}
+                    </Link>
+                    <span className="tabular-nums">{u.stays.map(stayLabel).join(" · ")}</span>
+                    <span className="text-muted-foreground">
+                      {u.ota}
+                      {u.nextReadAt ? ` lo ve ~${formatTimeInTz(u.nextReadAt)}` : " lo ve en su próxima lectura"}
+                    </span>
+                  </li>
+                ))}
+                {unseen.length > 6 && (
+                  <li className="text-muted-foreground">y {unseen.length - 6} más, abajo en la tabla.</li>
+                )}
+              </ul>
+              <details className="text-sm">
+                <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                  ¿No puede esperar? Cómo hacer que lean ahora
+                </summary>
+                <div className="mt-2 space-y-1 text-muted-foreground">
+                  <p>{OTA_REFRESH_HINT.airbnb}</p>
+                  <p>{OTA_REFRESH_HINT.booking}</p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Estado general de protección */}
       <Card className={`p-4 border ${overallClass}`}>
         <div className="flex items-center gap-3 flex-wrap">
@@ -198,8 +292,8 @@ export default async function CanalesPage() {
           <Stat label="Booking conectadas" value={`${bookingOk}/${booking.length}`} />
           <Stat
             label="Requieren atención"
-            value={String(critical + degraded)}
-            tone={critical > 0 ? "critical" : degraded > 0 ? "warning" : undefined}
+            value={String(critical + degraded + unread)}
+            tone={critical > 0 ? "critical" : degraded + unread > 0 ? "warning" : undefined}
           />
           <Stat
             label="Esperando datos del huésped"
@@ -244,9 +338,9 @@ export default async function CanalesPage() {
             departamento (lecturas, reservas externas, incidencias) está en su ficha.
           </p>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Importante: que la OTA haya consultado nuestro calendario confirma el enlace, pero Airbnb
-            y Booking deciden cuándo vuelven a leerlo — la sincronización por calendario no es
-            instantánea.
+            Lo que cargás acá no viaja al instante: Airbnb y Booking vienen a leer tu calendario
+            cuando quieren{pace.length > 0 ? ` (${pace.join(", ")})` : ""}. En la columna Publicación
+            ves, por departamento, si ya leyeron o qué les falta leer.
           </p>
         </Card>
       </div>

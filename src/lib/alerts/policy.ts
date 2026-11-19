@@ -249,6 +249,8 @@ export interface IssueFacts {
     consecutiveFailures: number;
     lastSuccessAt: string | null;
     anomalousEmpty: boolean;
+    /** Última vez que la OTA leyó nuestro calendario por esta conexión. */
+    lastExportAccessAt?: string | null;
   } | null;
   /** Reservas activas con salida de hoy en adelante, para el feed vacío. */
   linkActiveFutureReservations?: number;
@@ -285,6 +287,18 @@ export function issueResolution(
     }
     if (facts.stayEndYmd && facts.stayEndYmd < opts.today) {
       return "Las fechas de la reserva ya pasaron.";
+    }
+    return null;
+  }
+
+  // «La OTA no lee tu calendario»: deja de ser verdad cuando vuelve a leer.
+  if (key.startsWith("export_stale:")) {
+    const link = facts.link;
+    if (link === undefined) return null;
+    if (link === null) return "La conexión ya no existe.";
+    if (link.status !== "active") return "La conexión está pausada.";
+    if (link.lastExportAccessAt && minutesSince(link.lastExportAccessAt, opts.now) <= 24 * 60) {
+      return "La OTA volvió a leer tu calendario.";
     }
     return null;
   }

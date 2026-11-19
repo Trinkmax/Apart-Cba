@@ -281,7 +281,9 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     expect(after!.check_out_date).toBe("2031-02-07");
   }, 30_000);
 
-  it("cancelación exacta por referencia externa (nunca guest_id IS NULL)", async () => {
+  // Desde la 053 ninguna señal de una OTA cancela sola: la referencia exacta
+  // encuentra la reserva (nunca por guest_id IS NULL) y abre una propuesta.
+  it("cancelación por referencia externa exacta: encuentra la reserva y PROPONE, no cancela", async () => {
     const { ingestEvent } = await import("@/lib/channels/ingest");
     const r = await ingestEvent(admin, {
       transport: "email",
@@ -291,14 +293,21 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       confirmationCode: "HMZZTEST02",
       dedupeKey: "test:email:cancel:2",
     });
-    expect(r.outcome).toBe("cancelled");
+    expect(r.outcome).toBe("needs_review");
     const { data: b } = await admin
       .from("bookings")
-      .select("status")
+      .select("id, status")
       .eq("organization_id", orgId)
       .eq("external_id", "HMZZTEST02")
       .single();
-    expect(b!.status).toBe("cancelada");
+    expect(r.bookingId).toBe(b!.id);
+    expect(b!.status).toBe("confirmada");
+    const { data: request } = await admin
+      .from("channel_cancellation_requests")
+      .select("status, reason_code")
+      .eq("booking_id", b!.id)
+      .single();
+    expect(request).toMatchObject({ status: "pending", reason_code: "ota_cancellation_email" });
   }, 30_000);
 
   it("conflicto externo: conserva la reserva externa, NO toca la local, crea incidencia crítica", async () => {
@@ -645,7 +654,7 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       eventType: "reservation_reference",
       organizationId: orgId,
       confirmationCode: "9911223344",
-      checkIn: "2031-06-10",
+      checkIn: "2031-09-10",
       dedupeKey: "test:booking:ref-early",
     });
     expect(pre.outcome).toBe("duplicate");
@@ -659,8 +668,8 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       linkId: link1,
       unitId: unit1,
       icalUid: "zzt-bkg-ref@booking.com",
-      checkIn: "2031-06-10",
-      checkOut: "2031-06-13",
+      checkIn: "2031-09-10",
+      checkOut: "2031-09-13",
       isBlock: false,
       dedupeKey: "test:booking:ical-ref",
     });
@@ -688,7 +697,7 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     expect(refs).toHaveLength(1);
   }, 60_000);
 
-  it("una cancelación de Booking por número cancela la reserva importada del iCal", async () => {
+  it("una cancelación de Booking por número encuentra la reserva importada del iCal y la propone", async () => {
     const { ingestEvent } = await import("@/lib/channels/ingest");
     const { data: before } = await admin
       .from("bookings")
@@ -703,17 +712,25 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       eventType: "reservation_cancelled",
       organizationId: orgId,
       confirmationCode: "9911223344",
-      checkIn: "2031-06-10",
+      checkIn: "2031-09-10",
       dedupeKey: "test:booking:cancel-ref",
     });
-    expect(c.outcome).toBe("cancelled");
+    expect(c.outcome).toBe("needs_review");
+    expect(c.bookingId).toBe(before!.id);
 
+    // La reserva sigue en pie hasta que una persona lo confirme.
     const { data: after } = await admin
       .from("bookings")
       .select("status")
       .eq("id", before!.id)
       .single();
-    expect(after!.status).toBe("cancelada");
+    expect(after!.status).toBe("confirmada");
+    const { data: request } = await admin
+      .from("channel_cancellation_requests")
+      .select("status, reason_code")
+      .eq("booking_id", before!.id)
+      .single();
+    expect(request).toMatchObject({ status: "pending", reason_code: "ota_cancellation_email" });
   }, 60_000);
 
   it("sin número previo, la cancelación encuentra la reserva por fecha de llegada", async () => {
@@ -743,7 +760,8 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       checkIn: "2031-07-05",
       dedupeKey: "test:booking:cancel-bydate",
     });
-    expect(c.outcome).toBe("cancelled");
+    // La encuentra (es la única sin número que llega ese día) y la PROPONE.
+    expect(c.outcome).toBe("needs_review");
     expect(c.bookingId).toBe(r.bookingId);
 
     const { data: after } = await admin
@@ -751,7 +769,20 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .select("status")
       .eq("id", r.bookingId!)
       .single();
-    expect(after!.status).toBe("cancelada");
+    expect(after!.status).toBe("confirmada");
+    const { data: request } = await admin
+      .from("channel_cancellation_requests")
+      .select("status")
+      .eq("booking_id", r.bookingId!)
+      .single();
+    expect(request!.status).toBe("pending");
+    // De paso queda el número puesto: la próxima vez el cruce es exacto.
+    const { data: row } = await admin
+      .from("channel_reservations")
+      .select("confirmation_code")
+      .eq("id", r.reservationId!)
+      .single();
+    expect(row!.confirmation_code).toBe("8877665544");
   }, 60_000);
 
   it("con dos reservas que llegan el mismo día no se cancela ninguna a ciegas", async () => {
@@ -965,4 +996,366 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .neq("status", "cancelada");
     expect(enEsasFechas!.map((b) => b.id)).toEqual([aMano!.id]);
   }, 60_000);
+
+  // ── 19/11/2026: los números de Booking y lo que se le pregunta a una persona ──
+
+  const liveBooking = async (unitId: string, checkIn: string, checkOut: string, extra: Record<string, unknown> = {}) => {
+    const { data, error } = await admin
+      .from("bookings")
+      .insert({
+        organization_id: orgId,
+        unit_id: unitId,
+        source: "booking",
+        status: "confirmada",
+        mode: "temporario",
+        check_in_date: checkIn,
+        check_in_time: "14:00",
+        check_out_date: checkOut,
+        check_out_time: "10:00",
+        currency: "ARS",
+        total_amount: 0,
+        guests_count: 1,
+        ...extra,
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    return data!.id as string;
+  };
+  const monthAgo = () => new Date(Date.now() - 30 * 86_400_000).toISOString();
+
+  // Apart CBA, 18/11/2026: el número de una reserva nueva de VEL727 fue a parar
+  // a una de DIVA cargada en septiembre con la misma fecha de llegada.
+  it("el número del aviso va a la reserva que nació con él, no a una vieja con la misma llegada", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const oldBooking = await liveBooking(unit2, "2033-03-04", "2033-03-07");
+    const { data: old } = await admin
+      .from("channel_reservations")
+      .insert({
+        organization_id: orgId,
+        link_id: link2,
+        unit_id: unit2,
+        channel: "booking",
+        booking_id: oldBooking,
+        external_status: "active",
+        check_in: "2033-03-04",
+        check_out: "2033-03-07",
+        ical_uid: "zzt-ref-old@booking.com",
+        last_seen_at: new Date().toISOString(),
+        created_at: monthAgo(),
+      })
+      .select("id")
+      .single();
+
+    const notice = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_reference",
+      organizationId: orgId,
+      confirmationCode: "5636700001",
+      checkIn: "2033-03-04",
+      dedupeKey: "test:refmatch:notice",
+    });
+    // Todavía no entró la reserva nueva: el número no se le pone a la vieja.
+    expect(notice.outcome).toBe("duplicate");
+    const codeOf = async (id: string) =>
+      (await admin.from("channel_reservations").select("confirmation_code").eq("id", id).single()).data!
+        .confirmation_code;
+    expect(await codeOf(old!.id)).toBeNull();
+
+    const fresh = await ingestEvent(admin, {
+      transport: "ical",
+      channel: "booking",
+      eventType: "reservation_upsert",
+      organizationId: orgId,
+      linkId: link1,
+      unitId: unit1,
+      icalUid: "zzt-ref-new@booking.com",
+      checkIn: "2033-03-04",
+      checkOut: "2033-03-06",
+      isBlock: false,
+      dedupeKey: "test:refmatch:ical",
+    });
+    expect(fresh.outcome).toBe("created");
+    expect(await codeOf(fresh.reservationId!)).toBe("5636700001");
+    expect(await codeOf(old!.id)).toBeNull();
+    const { data: b } = await admin.from("bookings").select("external_id").eq("id", fresh.bookingId!).single();
+    expect(b!.external_id).toBe("5636700001");
+  }, 60_000);
+
+  it("el aviso que llega DESPUÉS de la reserva también la encuentra, por cuándo nació", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const fresh = await ingestEvent(admin, {
+      transport: "ical",
+      channel: "booking",
+      eventType: "reservation_upsert",
+      organizationId: orgId,
+      linkId: link1,
+      unitId: unit1,
+      icalUid: "zzt-ref-late@booking.com",
+      checkIn: "2033-04-10",
+      checkOut: "2033-04-12",
+      isBlock: false,
+      dedupeKey: "test:reflate:ical",
+    });
+    expect(fresh.outcome).toBe("created");
+    const notice = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_reference",
+      organizationId: orgId,
+      confirmationCode: "5636700002",
+      checkIn: "2033-04-10",
+      dedupeKey: "test:reflate:notice",
+    });
+    expect(notice.outcome).toBe("updated");
+    expect(notice.reservationId).toBe(fresh.reservationId);
+  }, 60_000);
+
+  // DIVA, 19/11/2026: el mail de cancelación era de otra reserva.
+  it("una cancelación no señala a una reserva de otra época aunque llegue el mismo día", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    // El aviso de la reserva que después se cancela: nunca entró por calendario.
+    await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_reference",
+      organizationId: orgId,
+      confirmationCode: "5636700003",
+      checkIn: "2033-05-04",
+      dedupeKey: "test:cancelera:notice",
+    });
+    const oldBooking = await liveBooking(unit2, "2033-05-04", "2033-05-07");
+    await admin.from("channel_reservations").insert({
+      organization_id: orgId,
+      link_id: link2,
+      unit_id: unit2,
+      channel: "booking",
+      booking_id: oldBooking,
+      external_status: "active",
+      check_in: "2033-05-04",
+      check_out: "2033-05-07",
+      ical_uid: "zzt-cancelera-old@booking.com",
+      last_seen_at: new Date().toISOString(),
+      created_at: monthAgo(),
+    });
+
+    const c = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_cancelled",
+      organizationId: orgId,
+      confirmationCode: "5636700003",
+      checkIn: "2033-05-04",
+      dedupeKey: "test:cancelera:cancel",
+    });
+    expect(c.outcome).toBe("needs_review");
+    expect(c.bookingId).toBeUndefined();
+    const { count } = await admin
+      .from("channel_cancellation_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("booking_id", oldBooking);
+    expect(count).toBe(0);
+    const { data: still } = await admin.from("bookings").select("status").eq("id", oldBooking).single();
+    expect(still!.status).toBe("confirmada");
+  }, 60_000);
+
+  it("una cancelación no señala a una reserva que ya tiene OTRO número", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const numbered = await liveBooking(unit2, "2033-06-04", "2033-06-07");
+    await admin.from("channel_reservations").insert({
+      organization_id: orgId,
+      link_id: link2,
+      unit_id: unit2,
+      channel: "booking",
+      booking_id: numbered,
+      external_status: "active",
+      check_in: "2033-06-04",
+      check_out: "2033-06-07",
+      ical_uid: "zzt-othernum@booking.com",
+      confirmation_code: "5636700004",
+      last_seen_at: new Date().toISOString(),
+    });
+    const c = await ingestEvent(admin, {
+      transport: "email",
+      channel: "booking",
+      eventType: "reservation_cancelled",
+      organizationId: orgId,
+      confirmationCode: "5636700099",
+      checkIn: "2033-06-04",
+      dedupeKey: "test:othernum:cancel",
+    });
+    expect(c.outcome).toBe("needs_review");
+    const { count } = await admin
+      .from("channel_cancellation_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("booking_id", numbered);
+    expect(count).toBe(0);
+  }, 60_000);
+
+  const vanish = async (reservationId: string) => {
+    const { proposeDisappearances } = await import("@/lib/channels/dispatch");
+    const { data: linkRow } = await admin.from("channel_links").select("*").eq("id", link1).single();
+    const load = async () =>
+      (
+        await admin
+          .from("channel_reservations")
+          .select("*, local:bookings!channel_reservations_booking_id_fkey(status, cancelled_at)")
+          .eq("id", reservationId)
+          .single()
+      ).data!;
+    let proposed = 0;
+    for (let i = 0; i < 3; i++) {
+      proposed += await proposeDisappearances(admin, linkRow!, [await load()], new Set(), "2040-12-31");
+    }
+    await admin
+      .from("channel_reservations")
+      .update({ missing_since: new Date(Date.now() - 31 * 60_000).toISOString() })
+      .eq("id", reservationId);
+    proposed += await proposeDisappearances(admin, linkRow!, [await load()], new Set(), "2040-12-31");
+    return proposed;
+  };
+
+  // El barrido lee las reservas conocidas con su reserva local embebida: si ese
+  // select fallara, cada conexión vería [] y dejaría de seguir las ausencias.
+  it("la lectura de reservas conocidas trae la reserva local embebida", async () => {
+    const { data, error } = await admin
+      .from("channel_reservations")
+      .select("*, local:bookings!channel_reservations_booking_id_fkey(status, cancelled_at)")
+      .eq("organization_id", orgId)
+      .not("booking_id", "is", null)
+      .limit(1);
+    expect(error).toBeNull();
+    expect((data![0] as { local: { status: string } }).local.status).toBeTruthy();
+  }, 30_000);
+
+  // BRASIL, Apart CBA (14/11/2026): una reserva DIRECTA con $300.000 cobrados
+  // se canceló porque Booking dejó de mostrar cerradas esas fechas.
+  it("una reserva directa cargada a mano no recibe una propuesta de cancelación de la OTA", async () => {
+    const { data: someone } = await admin.from("user_profiles").select("user_id").limit(1).single();
+    const direct = await liveBooking(unit1, "2033-07-21", "2033-07-24", {
+      source: "directo",
+      created_by: someone!.user_id,
+      total_amount: 300000,
+    });
+    const { data: res } = await admin
+      .from("channel_reservations")
+      .insert({
+        organization_id: orgId,
+        link_id: link1,
+        unit_id: unit1,
+        channel: "airbnb",
+        booking_id: direct,
+        external_status: "active",
+        check_in: "2033-07-21",
+        check_out: "2033-07-24",
+        ical_uid: "zzt-foreign@airbnb.com",
+        last_seen_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    expect(await vanish(res!.id)).toBe(0);
+
+    const { data: booking } = await admin.from("bookings").select("status").eq("id", direct).single();
+    expect(booking!.status).toBe("confirmada");
+    const { count } = await admin
+      .from("channel_cancellation_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("booking_id", direct);
+    expect(count).toBe(0);
+    // La fila se suelta: si el evento vuelve, se vincula de nuevo.
+    const { data: row } = await admin
+      .from("channel_reservations")
+      .select("external_status, booking_id")
+      .eq("id", res!.id)
+      .single();
+    expect(row).toMatchObject({ external_status: "cancelled", booking_id: null });
+    // Queda una novedad, sin botón de cancelar.
+    const { data: note } = await admin
+      .from("notifications")
+      .select("severity, ref_id")
+      .eq("organization_id", orgId)
+      .eq("dedup_key", `ota_released:${res!.id}`)
+      .single();
+    expect(note).toMatchObject({ severity: "info", ref_id: direct });
+  }, 90_000);
+
+  it("la misma reserva cargada a mano CON el origen del canal sí se pregunta", async () => {
+    const { data: someone } = await admin.from("user_profiles").select("user_id").limit(1).single();
+    const own = await liveBooking(unit1, "2033-08-21", "2033-08-24", {
+      source: "airbnb",
+      created_by: someone!.user_id,
+    });
+    const { data: res } = await admin
+      .from("channel_reservations")
+      .insert({
+        organization_id: orgId,
+        link_id: link1,
+        unit_id: unit1,
+        channel: "airbnb",
+        booking_id: own,
+        external_status: "active",
+        check_in: "2033-08-21",
+        check_out: "2033-08-24",
+        ical_uid: "zzt-own-hand@airbnb.com",
+        last_seen_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+    expect(await vanish(res!.id)).toBe(1);
+    const { data: booking } = await admin.from("bookings").select("status").eq("id", own).single();
+    expect(booking!.status).toBe("confirmada");
+  }, 90_000);
+
+  // Cofico Ideal, Habitana (17 y 18/11/2026): «Confirmá si se cancela una
+  // reserva de Booking», sin unidad, sin huésped y sin reserva detrás.
+  it("una estadía de la OTA que nunca se cargó y deja de publicarse se cierra sola, con su conflicto", async () => {
+    const { data: res } = await admin
+      .from("channel_reservations")
+      .insert({
+        organization_id: orgId,
+        link_id: link1,
+        unit_id: unit1,
+        channel: "airbnb",
+        external_status: "active",
+        check_in: "2033-09-22",
+        check_out: "2033-09-25",
+        ical_uid: "zzt-unprojected@airbnb.com",
+        last_seen_at: new Date().toISOString(),
+        // una persona ya había contestado «mantener»: sin reserva, no aplica
+        cancellation_locked_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+    await admin.from("channel_issues").insert({
+      organization_id: orgId,
+      link_id: link1,
+      reservation_id: res!.id,
+      issue_type: "conflict",
+      severity: "critical",
+      title: "Conflicto de prueba",
+      dedupe_key: `conflict:${res!.id}`,
+    });
+
+    expect(await vanish(res!.id)).toBe(0);
+
+    const { data: row } = await admin
+      .from("channel_reservations")
+      .select("external_status")
+      .eq("id", res!.id)
+      .single();
+    expect(row!.external_status).toBe("cancelled");
+    const { count } = await admin
+      .from("channel_cancellation_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("reservation_id", res!.id);
+    expect(count).toBe(0);
+    const { data: issue } = await admin
+      .from("channel_issues")
+      .select("status")
+      .eq("dedupe_key", `conflict:${res!.id}`)
+      .single();
+    expect(issue!.status).toBe("resolved");
+  }, 90_000);
 });

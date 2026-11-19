@@ -4,12 +4,23 @@ import {
   channelCommissionPctFor,
   type ChannelCommissionMap,
 } from "@/lib/finance/booking-economics";
+import { isBookingWindowMarker } from "./booking-window";
 import { openCancellationRequest } from "./cancellation-requests";
 import { reservationEventFromRow } from "./event-row";
 import { canAdoptWithoutIdentity, decideInsertOverLocalStays } from "./finished-stay";
 import { normalizePhoneE164, resolveGuest } from "./guest";
+import { isSameSituation, type IssueSituation } from "./issue-dismissal";
+import {
+  bornNearNotice,
+  pickNoticeForReservation,
+  pickReservationForNotice,
+  ROW_AFTER_NOTICE_MS,
+  ROW_BEFORE_NOTICE_MS,
+  type NoticeCandidate,
+  type StoredNotice,
+} from "./reference-match";
 import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
-import { archivedIcalUid, isNewStayInSameSlot } from "./same-slot";
+import { archivedIcalUid, isNewStayInSameSlot, isRefilledAfterLocalCancel } from "./same-slot";
 import type {
   Channel,
   ChannelReservationRow,
@@ -162,13 +173,16 @@ export async function processStoredEvent(
   // leer-e-incrementar alcanza acá
   const { data: evRow } = await admin
     .from("channel_events")
-    .select("attempts")
+    .select("attempts, created_at")
     .eq("id", eventId)
     .single();
   await admin
     .from("channel_events")
     .update({ status: "processing", attempts: (evRow?.attempts ?? 0) + 1 })
     .eq("id", eventId);
+  // Cuándo LLEGÓ el aviso, no cuándo se lo procesa: un reintento de días
+  // después tiene que seguir cruzándose con la reserva que nació aquel día.
+  const receivedAt = (evRow?.created_at as string | undefined) ?? new Date().toISOString();
 
   let result: IngestResult;
   try {
@@ -176,7 +190,7 @@ export async function processStoredEvent(
       ev.eventType === "reservation_cancelled"
         ? await processCancellation(admin, eventId, ev)
         : ev.eventType === "reservation_reference"
-          ? await processReference(admin, ev)
+          ? await processReference(admin, ev, receivedAt)
           : await processUpsert(admin, eventId, ev);
   } catch (err) {
     result = { outcome: "error", error: (err as Error).message };
@@ -379,6 +393,22 @@ async function processUpsert(
         return processUpsert(admin, eventId, ev);
       }
     }
+    // Una marca del borde de la ventana de Booking que alguien ya descartó y que
+    // sigue publicada: con el paso de los días cruza el corte del lector
+    // (booking-window.ts) y "vuelve". No es una reserva y no hay nada que
+    // verificar. Se abría como aviso en cada lectura; el barrido de la noche lo
+    // cerraba y a los seis minutos estaba de nuevo (Cofico Ideal, marzo de 2028).
+    if (
+      ev.channel === "booking" &&
+      reservation.check_in &&
+      reservation.check_out &&
+      isBookingWindowMarker(
+        { checkIn: reservation.check_in, checkOut: reservation.check_out },
+        reservation.created_at.slice(0, 10),
+      )
+    ) {
+      return { outcome: "duplicate", reservationId: reservation.id };
+    }
     // La misma reserva (mismo número) que la OTA volvió a activar: la mira
     // una persona.
     await openIssue(admin, {
@@ -434,15 +464,25 @@ async function processUpsert(
   // reserva desde su ficha (la fila sigue `active`): el feed trae el UID con
   // otras fechas y la reserva local está cancelada. Antes quedaba una
   // incidencia "modificó una reserva cancelada" y las fechas, libres.
-  if (patch.check_in !== undefined && reservation.booking_id && ev.transport === "ical") {
+  // Con las MISMAS fechas el feed no cambia en nada (Pampa Mora, 18/11/2026):
+  // el barrido la manda igual cuando la reserva local la canceló una persona y
+  // la estadía sigue publicada (`isRefilledAfterLocalCancel`).
+  const datesChanged = patch.check_in !== undefined;
+  const today = todayYmdInTz();
+  const mayBeRefilled =
+    !datesChanged && reservation.channel === "booking" && !!reservation.check_in && reservation.check_in > today;
+  if (ev.transport === "ical" && reservation.booking_id && (datesChanged || mayBeRefilled)) {
     const { data: local } = await admin
       .from("bookings")
-      .select("status")
+      .select("status, cancelled_at")
       .eq("id", reservation.booking_id)
       .eq("organization_id", ev.organizationId)
       .maybeSingle();
+    const refilled = datesChanged
+      ? local?.status === "cancelada"
+      : isRefilledAfterLocalCancel(reservation, local, ev, today);
     if (
-      local?.status === "cancelada" &&
+      refilled &&
       isNewStayInSameSlot(reservation, slotEventOf(ev)) &&
       (await archiveForNewStay(admin, reservation))
     ) {
@@ -625,35 +665,92 @@ async function findStoredConfirmation(
 
   if (!ev.checkIn) return false;
 
-  const { data: refs } = await admin
+  // El aviso que llegó AHORA, cuando esta reserva está naciendo: uno de hace
+  // semanas con la misma llegada es de otra reserva (reference-match.ts).
+  const code = await findNoticeCode(admin, {
+    organizationId: ev.organizationId,
+    channel: ev.channel,
+    checkIn: ev.checkIn,
+    rowCreatedAt: new Date().toISOString(),
+    eventTypes: ["reservation_reference", "reservation_upsert"],
+  });
+  return code !== null;
+}
+
+/**
+ * El número de reserva que le toca a una fila, entre los avisos guardados para
+ * su fecha de llegada: el único que llegó cuando ella nació y que no está ya en
+ * otra reserva. `null` si no hay ninguno, o si hay más de uno.
+ */
+async function findNoticeCode(
+  admin: AdminClient,
+  input: {
+    organizationId: string;
+    channel: Channel;
+    checkIn: string;
+    rowCreatedAt: string;
+    eventTypes: string[];
+  },
+): Promise<string | null> {
+  const born = Date.parse(input.rowCreatedAt);
+  if (Number.isNaN(born)) return null;
+  const { data: events } = await admin
     .from("channel_events")
-    .select("payload")
-    .eq("organization_id", ev.organizationId)
+    .select("payload, created_at")
+    .eq("organization_id", input.organizationId)
     .eq("transport", "email")
-    .in("event_type", ["reservation_reference", "reservation_upsert"])
-    .eq("payload->>channel", ev.channel)
-    .eq("payload->>check_in", ev.checkIn)
+    .in("event_type", input.eventTypes)
+    .eq("payload->>channel", input.channel)
+    .eq("payload->>check_in", input.checkIn)
+    // La ventana de bornNearNotice vista desde la fila: el aviso llegó hasta
+    // ROW_AFTER antes de que naciera, o hasta ROW_BEFORE después.
+    .gte("created_at", new Date(born - ROW_AFTER_NOTICE_MS).toISOString())
+    .lte("created_at", new Date(born + ROW_BEFORE_NOTICE_MS).toISOString())
     .order("created_at", { ascending: false })
-    .limit(3);
+    .limit(20);
 
-  const codes = new Set(
-    (refs ?? [])
-      .map((e) => (e.payload as Record<string, unknown>)?.confirmation_code)
-      .filter((c): c is string => typeof c === "string" && c.length > 0),
-  );
-  // Dos avisos distintos para la misma llegada = ambiguo: no adivinamos cuál es.
-  if (codes.size !== 1) return false;
+  const notices: StoredNotice[] = [];
+  for (const e of (events ?? []) as { payload: Record<string, unknown> | null; created_at: string }[]) {
+    const raw = e.payload?.confirmation_code;
+    if (typeof raw === "string" && raw.length > 0) {
+      notices.push({ code: normalizeRef(input.channel, raw), receivedAt: e.created_at });
+    }
+  }
+  if (notices.length === 0) return null;
 
-  // …y sólo vale si ese número no está ya pegado a otra reserva.
-  const code = normalizeRef(ev.channel, [...codes][0]);
   const { data: taken } = await admin
     .from("channel_reservations")
-    .select("id")
-    .eq("organization_id", ev.organizationId)
-    .eq("channel", ev.channel)
-    .eq("confirmation_code", code)
-    .limit(1);
-  return (taken ?? []).length === 0;
+    .select("confirmation_code")
+    .eq("organization_id", input.organizationId)
+    .eq("channel", input.channel)
+    .in("confirmation_code", [...new Set(notices.map((n) => n.code))]);
+  const takenCodes = new Set(
+    ((taken ?? []) as { confirmation_code: string | null }[])
+      .map((r) => r.confirmation_code)
+      .filter((c): c is string => Boolean(c)),
+  );
+  return pickNoticeForReservation(notices, { created_at: input.rowCreatedAt }, takenCodes);
+}
+
+/** Cuándo llegó el aviso «¡Nueva reserva!» de un número, si lo guardamos. */
+async function findNoticeReceivedAt(
+  admin: AdminClient,
+  organizationId: string,
+  channel: Channel,
+  code: string,
+): Promise<string | null> {
+  const { data } = await admin
+    .from("channel_events")
+    .select("created_at")
+    .eq("organization_id", organizationId)
+    .eq("transport", "email")
+    .eq("event_type", "reservation_reference")
+    .eq("payload->>channel", channel)
+    .eq("payload->>confirmation_code", normalizeRef(channel, code))
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data?.created_at as string | undefined) ?? null;
 }
 
 /**
@@ -934,6 +1031,23 @@ async function projectToBooking(
     if (insertErr.message.includes("bookings_no_overlap")) {
       // Conflicto: conservamos evento + reserva externa, NO tocamos lo local,
       // NO debilitamos el constraint. Incidencia crítica accionable.
+      // Con quién choca, dicho con nombre: «ya están ocupadas localmente» no le
+      // alcanza a nadie para decidir. Y sin afirmar una venta: el calendario de
+      // la OTA sólo dice que esas noches no están disponibles (el de Booking
+      // publica igual una reserva y un cierre).
+      const canal = channelLabel(ev.channel);
+      // Consulta aparte (y no en el camino de toda reserva nueva): sólo se paga
+      // cuando hay un choque, y si falla el aviso sale igual, sin el nombre.
+      const { data: clashRows } = await admin
+        .from("bookings")
+        .select("status, check_in_date, check_out_date, source, guest:guests(full_name)")
+        .eq("organization_id", orgId)
+        .eq("unit_id", stayUnitId)
+        .in("status", ["pendiente", "confirmada", "check_in"])
+        .lt("check_in_date", stay.checkOut)
+        .gt("check_out_date", stay.checkIn)
+        .limit(5);
+      const clash = describeLocalClash((clashRows ?? []) as unknown as LocalClashRow[]);
       const issueId = await openIssue(admin, {
         organizationId: orgId,
         linkId: reservation.link_id,
@@ -941,16 +1055,16 @@ async function projectToBooking(
         reservationId: reservation.id,
         issueType: "conflict",
         severity: "critical",
-        title: `Conflicto de disponibilidad con ${channelLabel(ev.channel)}`,
-        detail: `${channelLabel(ev.channel)} vendió ${reservation.check_in} → ${reservation.check_out} pero esas fechas ya están ocupadas localmente en la unidad. La reserva local se mantiene; resolvé el conflicto (reubicar o cancelar en la OTA).`,
+        title: `${canal} tiene ocupadas fechas que acá son de otra reserva`,
+        detail: `${canal} informa ocupado ${reservation.check_in} → ${reservation.check_out}, y en el sistema esas noches ya son de ${clash}. Puede ser una venta doble, o un cierre cargado en ${canal}: miralo ahí antes de mover nada. La reserva del sistema no se toca.`,
         dedupeKey: `conflict:${reservation.id}`,
       });
       await notify(admin, {
         organization_id: orgId,
         type: "inbound_booking_conflict",
         severity: "critical",
-        title: `Conflicto de fechas con ${channelLabel(ev.channel)}`,
-        body: `Una reserva externa (${reservation.confirmation_code ?? reservation.ical_uid ?? "sin ref"}) se superpone con una reserva local. Revisá Canales de venta.`,
+        title: `${canal} tiene ocupadas fechas que acá son de otra reserva`,
+        body: `${reservation.check_in} → ${reservation.check_out}: en el sistema son de ${clash}. Revisá Canales de venta.`,
         action_url: "/dashboard/canales",
         dedup_key: `channel_conflict:${reservation.id}`,
       });
@@ -985,6 +1099,30 @@ async function projectToBooking(
 
   await touchLinkActivity(admin, reservation.link_id);
   return { outcome: "created", bookingId, reservationId: reservation.id };
+}
+
+interface LocalClashRow {
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+  source: string | null;
+  guest: { full_name: string | null } | { full_name: string | null }[] | null;
+}
+
+/** «Ana Pérez (22/11 → 26/11, directa)»: la reserva del sistema con la que choca. */
+export function describeLocalClash(rows: LocalClashRow[]): string {
+  if (rows.length === 0) return "otra reserva";
+  const dm = (ymd: string) => `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}`;
+  const one = (b: LocalClashRow) => {
+    const g = Array.isArray(b.guest) ? b.guest[0] : b.guest;
+    const name = g?.full_name?.trim() || "una reserva sin huésped";
+    const origin =
+      b.source === "directo" ? "directa" : b.source === "airbnb" ? "de Airbnb" : b.source === "booking" ? "de Booking" : null;
+    return `${name} (${dm(b.check_in_date)} → ${dm(b.check_out_date)}${origin ? `, ${origin}` : ""})`;
+  };
+  const sorted = [...rows].sort((a, b) => a.check_in_date.localeCompare(b.check_in_date));
+  if (sorted.length === 1) return one(sorted[0]);
+  return `${one(sorted[0])} y ${sorted.length - 1} más`;
 }
 
 async function updateProjectedBooking(
@@ -1167,18 +1305,16 @@ async function updateProjectedBooking(
  * incidencia, y la reserva seguía vigente en el PMS hasta que el barrido del
  * feed la diera por muerta (30 min a 6 h después, o nunca si ya había empezado).
  *
- * El cruce es `(número, fecha de llegada)`, que viajan juntos en el subject del
- * aviso. La aplicación es determinista, nunca por aproximación: sólo si existe
- * EXACTAMENTE UNA reserva vigente sin número que llegue ese día. Con dos
- * candidatas no se elige ninguna.
+ * A QUÉ reserva le toca el número lo decide `reference-match.ts` (la que nació
+ * cuando llegó el aviso). Esto sólo lo escribe, sobre una fila ya elegida.
  */
-async function stampConfirmationCode(
+async function stampCodeOnReservation(
   admin: AdminClient,
   input: {
     organizationId: string;
     channel: Channel;
     code: string;
-    checkIn: string;
+    reservationId: string;
     /**
      * Si la fila está `pending`, ¿el número de reserva cuenta como confirmación?
      *
@@ -1205,26 +1341,14 @@ async function stampConfirmationCode(
     .maybeSingle();
   if (taken) return null;
 
-  const { data: candidates } = await admin
+  // La fila al día: quien llama puede traerla de antes de proyectar.
+  const { data: target } = await admin
     .from("channel_reservations")
-    .select("id, booking_id, link_id, ical_uid, check_in, check_out, external_status")
+    .select("id, booking_id, link_id, ical_uid, external_status, confirmation_code")
+    .eq("id", input.reservationId)
     .eq("organization_id", input.organizationId)
-    .eq("channel", input.channel)
-    // `expired` incluido: el aviso "¡Nueva reserva!" es la ÚNICA evidencia de
-    // confirmación de Booking, y una venta instantánea no puede perderse porque
-    // el barrido hubiera descartado la solicitud mientras tanto.
-    .in("external_status", ["active", "pending", "expired"])
-    .eq("check_in", input.checkIn)
-    .is("confirmation_code", null);
-  // Con más de una candidata NO se adivina… salvo por estado: una descartada
-  // acumulada (los marcadores de Booking se apilan) no puede hacer que se
-  // pierda en silencio la confirmación de una solicitud viva con la misma
-  // llegada. Se prefiere lo vivo; si el empate persiste, se aborta.
-  const all = candidates ?? [];
-  const live = all.filter((r) => r.external_status !== "expired");
-  const list = live.length > 0 ? live : all;
-  if (list.length !== 1) return null;
-  const target = list[0];
+    .maybeSingle();
+  if (!target || target.confirmation_code) return null;
 
   // El número de reserva de la OTA ES la confirmación en Booking.com: sus
   // reservas son instantáneas y el aviso "¡Nueva reserva!" sólo sale cuando ya
@@ -1257,11 +1381,13 @@ async function stampConfirmationCode(
   if (error) return null;
 
   // Recién ahora existe la evidencia que habilita escribir en `bookings`.
+  let bookingId = (target.booking_id as string | null) ?? null;
   if (promoting) {
     let projected = false;
     try {
       const res = await reprojectReservation(admin, target.id as string);
       projected = res.outcome === "created" || res.outcome === "updated";
+      bookingId = res.bookingId ?? bookingId;
     } catch (err) {
       console.error("[channels/ingest] proyección tras confirmar solicitud falló", err);
     }
@@ -1285,10 +1411,10 @@ async function stampConfirmationCode(
     }
   }
 
-  if (target.booking_id) {
+  if (bookingId) {
     const { error: refErr } = await admin.from("booking_external_refs").insert({
       organization_id: input.organizationId,
-      booking_id: target.booking_id,
+      booking_id: bookingId,
       channel: input.channel,
       link_id: target.link_id,
       ref_type: input.channel === "booking" ? "reservation_number" : "confirmation_code",
@@ -1302,7 +1428,7 @@ async function stampConfirmationCode(
     const { data: booking } = await admin
       .from("bookings")
       .select("id, external_id")
-      .eq("id", target.booking_id)
+      .eq("id", bookingId)
       .maybeSingle();
     if (booking && (!booking.external_id || booking.external_id === target.ical_uid)) {
       await admin.from("bookings").update({ external_id: value }).eq("id", booking.id);
@@ -1312,31 +1438,59 @@ async function stampConfirmationCode(
   return target.id as string;
 }
 
+/**
+ * Llegó el aviso «¡Nueva reserva!»: si la reserva ya entró por el calendario,
+ * se le pone el número. Sólo a la que nació con el aviso (reference-match.ts):
+ * una reserva vieja que llega el mismo día es de otra persona.
+ */
 async function processReference(
   admin: AdminClient,
   ev: ReservationEvent,
+  receivedAt: string,
 ): Promise<IngestResult> {
   if (!ev.confirmationCode || !ev.checkIn) return { outcome: "needs_review" };
-  const reservationId = await stampConfirmationCode(admin, {
-    organizationId: ev.organizationId,
-    channel: ev.channel,
-    code: ev.confirmationCode,
+  const received = Date.parse(receivedAt);
+  const { data: candidates } = await admin
+    .from("channel_reservations")
+    .select("id, check_in, confirmation_code, external_status, created_at")
+    .eq("organization_id", ev.organizationId)
+    .eq("channel", ev.channel)
+    // `expired` incluido: el aviso "¡Nueva reserva!" es la ÚNICA evidencia de
+    // confirmación de Booking, y una venta instantánea no puede perderse porque
+    // el barrido hubiera descartado la solicitud mientras tanto.
+    .in("external_status", ["active", "pending", "expired"])
+    .eq("check_in", ev.checkIn)
+    .is("confirmation_code", null)
+    .gte(
+      "created_at",
+      new Date((Number.isNaN(received) ? Date.now() : received) - ROW_BEFORE_NOTICE_MS).toISOString(),
+    );
+  const target = pickReservationForNotice((candidates ?? []) as NoticeCandidate[], {
     checkIn: ev.checkIn,
-    // El aviso "¡Nueva reserva!" ES la confirmación en Booking.com.
-    allowPromotion: true,
+    receivedAt,
   });
-  // El aviso llega ~5 min ANTES de que el iCal proyecte la reserva, así que
+  // El aviso llega unos minutos ANTES de que el iCal traiga la reserva, así que
   // "todavía no hay a quién ponerle el número" es el caso normal, no un fallo.
   // El evento queda guardado y `processUpsert` lo levanta al crear la reserva
   // (ver applyPendingReference). Sin incidencia: no hay nada que revisar.
+  if (!target) return { outcome: "duplicate" };
+
+  const reservationId = await stampCodeOnReservation(admin, {
+    organizationId: ev.organizationId,
+    channel: ev.channel,
+    code: ev.confirmationCode,
+    reservationId: target.id,
+    // El aviso "¡Nueva reserva!" ES la confirmación en Booking.com.
+    allowPromotion: true,
+  });
   return reservationId ? { outcome: "updated", reservationId } : { outcome: "duplicate" };
 }
 
 /**
- * El lado iCal del cruce: al proyectar una reserva nueva sin número, busca un
- * aviso ya recibido para esa misma llegada y se lo aplica. Es la mitad que hace
- * que el orden de llegada no importe — y en la práctica es la que se usa, porque
- * el email de Booking gana la carrera por unos minutos casi siempre.
+ * El lado iCal del cruce: al proyectar una reserva nueva sin número, busca el
+ * aviso que llegó cuando ella nació y se lo aplica a ESTA reserva. Es la mitad
+ * que hace que el orden de llegada no importe — y en la práctica es la que se
+ * usa, porque el email de Booking gana la carrera por unos minutos casi siempre.
  */
 async function applyPendingReference(
   admin: AdminClient,
@@ -1344,27 +1498,19 @@ async function applyPendingReference(
   reservation: ChannelReservationRow,
 ): Promise<void> {
   if (reservation.confirmation_code || !reservation.check_in) return;
-  const { data: events } = await admin
-    .from("channel_events")
-    .select("payload")
-    .eq("organization_id", ev.organizationId)
-    .eq("event_type", "reservation_reference")
-    .eq("payload->>channel", ev.channel)
-    .eq("payload->>check_in", reservation.check_in)
-    .order("created_at", { ascending: false })
-    .limit(2);
-  const codes = new Set(
-    (events ?? [])
-      .map((e) => (e.payload as Record<string, unknown>)?.confirmation_code)
-      .filter((c): c is string => typeof c === "string" && c.length > 0),
-  );
-  // Dos avisos distintos para la misma llegada = ambiguo: no adivinamos.
-  if (codes.size !== 1) return;
-  await stampConfirmationCode(admin, {
+  const code = await findNoticeCode(admin, {
     organizationId: ev.organizationId,
     channel: ev.channel,
-    code: [...codes][0],
     checkIn: reservation.check_in,
+    rowCreatedAt: reservation.created_at,
+    eventTypes: ["reservation_reference"],
+  });
+  if (!code) return;
+  await stampCodeOnReservation(admin, {
+    organizationId: ev.organizationId,
+    channel: ev.channel,
+    code,
+    reservationId: reservation.id,
     allowPromotion: true,
   });
 }
@@ -1428,17 +1574,26 @@ async function processCancellation(
       .eq("channel", ev.channel)
       .in("external_status", ["active", "pending", "expired"])
       .eq("check_in", ev.checkIn);
-    const list = (candidates ?? []) as ChannelReservationRow[];
+    // Dos filtros antes de señalar una reserva (reference-match.ts):
+    //   · una que ya tiene OTRO número no es la que se canceló;
+    //   · si guardamos el aviso «¡Nueva reserva!» de este número, la reserva
+    //     nació cuando llegó ese aviso — una de otra época es de otra persona.
+    const noticeAt = ev.confirmationCode
+      ? await findNoticeReceivedAt(admin, orgId, ev.channel, ev.confirmationCode)
+      : null;
+    const list = ((candidates ?? []) as ChannelReservationRow[]).filter(
+      (r) => !r.confirmation_code && (!noticeAt || bornNearNotice(r.created_at, noticeAt)),
+    );
     if (list.length === 1) {
       reservation = list[0];
       bookingId = reservation.booking_id;
       // De paso queda el número puesto: la próxima vez el match es exacto.
-      if (!reservation.confirmation_code && ev.confirmationCode) {
-        await stampConfirmationCode(admin, {
+      if (ev.confirmationCode) {
+        await stampCodeOnReservation(admin, {
           organizationId: orgId,
           channel: ev.channel,
           code: ev.confirmationCode,
-          checkIn: ev.checkIn,
+          reservationId: reservation.id,
           allowPromotion: false, // una cancelación no confirma nada
         });
       }
@@ -2072,6 +2227,27 @@ export async function openIssue(
     dedupeKey?: string;
   },
 ): Promise<string | undefined> {
+  // Una persona ya descartó este mismo aviso: no vuelve por el mismo motivo
+  // (issue-dismissal.ts). Vale para lo que apunta a una reserva y para «la OTA
+  // no lee tu calendario» (un anuncio pausado no lee, y está bien). Los demás
+  // avisos de una conexión —el calendario que no se puede leer— sí vuelven:
+  // una caída nueva es un hecho nuevo aunque el texto sea el mismo.
+  const stickyLinkNotice = !!input.linkId && !!input.dedupeKey?.startsWith("export_stale:");
+  if ((input.reservationId || stickyLinkNotice) && input.dedupeKey) {
+    let query = admin
+      .from("channel_issues")
+      .select("booking_id, title, detail")
+      .eq("organization_id", input.organizationId)
+      .eq("dedupe_key", input.dedupeKey)
+      .eq("status", "dismissed");
+    query = input.reservationId
+      ? query.eq("reservation_id", input.reservationId)
+      : query.eq("link_id", input.linkId as string);
+    const { data: dismissed } = await query.limit(20);
+    const next = { booking_id: input.bookingId ?? null, title: input.title, detail: input.detail ?? null };
+    if (((dismissed ?? []) as IssueSituation[]).some((d) => isSameSituation(d, next))) return undefined;
+  }
+
   const { data, error } = await admin
     .from("channel_issues")
     .insert({

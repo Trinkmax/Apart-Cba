@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { BOOKING_STATUS_META } from "@/lib/constants";
 import { changeBookingStatus } from "@/lib/actions/bookings";
+import { getOtaStillPublishing, type OtaStillPublishing } from "@/lib/actions/channel-booking-check";
 import type { BookingStatus } from "@/lib/types/database";
 import { cn } from "@/lib/utils";
 
@@ -75,6 +76,9 @@ export function BookingStatusMenu({
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState<BookingStatus | null>(null);
+  // La OTA sigue publicando la reserva que están por cancelar: cancelarla acá
+  // no la cancela allá (ver still-published.ts). `undefined` = consultando.
+  const [stillPublished, setStillPublished] = useState<OtaStillPublishing | null | undefined>(null);
   const meta = BOOKING_STATUS_META[status];
   const wasInactive = DESTRUCTIVE.includes(status);
 
@@ -82,6 +86,14 @@ export function BookingStatusMenu({
     if (next === status) return;
     if (DESTRUCTIVE.includes(next)) {
       setConfirming(next); // segundo paso dentro del mismo menú
+      if (next === "cancelada") {
+        setStillPublished(undefined);
+        getOtaStillPublishing(bookingId)
+          .then((r) => setStillPublished(r))
+          .catch(() => setStillPublished(null));
+      } else {
+        setStillPublished(null);
+      }
       return;
     }
     run(next);
@@ -175,6 +187,18 @@ export function BookingStatusMenu({
                 puede reactivar desde este mismo menú.
               </p>
             </div>
+            {confirming === "cancelada" && stillPublished && (
+              <p className="rounded-md border border-rose-500/30 bg-rose-500/10 p-2 text-[11px] leading-relaxed">
+                <span className="font-semibold">
+                  {stillPublished.channel === "airbnb" ? "Airbnb" : "Booking"} la sigue
+                  publicando
+                </span>{" "}
+                en su calendario. Cancelarla acá no la cancela allá: si sigue en pie, estas
+                noches quedan libres en el sistema y en las otras OTAs, y se pueden vender dos
+                veces. Cancelala primero en{" "}
+                {stillPublished.channel === "airbnb" ? "Airbnb" : "Booking"}.
+              </p>
+            )}
             <div className="flex items-center gap-2">
               <Button
                 size="sm"
@@ -189,11 +213,13 @@ export function BookingStatusMenu({
                 size="sm"
                 variant="destructive"
                 className="h-7 flex-1 gap-1.5 text-xs"
-                disabled={pending}
+                // Mientras se consulta a la OTA (menos de un segundo) no se puede
+                // confirmar: el aviso tiene que llegar antes que el clic.
+                disabled={pending || (confirming === "cancelada" && stillPublished === undefined)}
                 onClick={() => run(confirming)}
               >
                 {pending && <Loader2 size={12} className="animate-spin" />}
-                Confirmar
+                {confirming === "cancelada" && stillPublished ? "Cancelar igual" : "Confirmar"}
               </Button>
             </div>
           </div>

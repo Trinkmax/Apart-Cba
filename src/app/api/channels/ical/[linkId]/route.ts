@@ -1,14 +1,13 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { tokenMatchesHash } from "@/lib/channels/token";
 import { buildUnitCalendar } from "@/lib/channels/outbound-ics";
+import { recordExportRead } from "@/lib/channels/export-read-log";
+import type { Channel } from "@/lib/channels/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
-/** No re-escribir last_export_access_at si ya se registró hace menos de esto. */
-const EXPORT_ACCESS_MIN_INTERVAL_MS = 10 * 60 * 1000;
 
 /**
  * Calendario iCal SALIENTE por conexión — Airbnb/Booking lo importan para
@@ -19,7 +18,8 @@ const EXPORT_ACCESS_MIN_INTERVAL_MS = 10 * 60 * 1000;
  *   - el token se compara contra su hash SHA-256 en tiempo constante
  *   - ETag determinista + If-None-Match → 304
  *   - contenido generado del estado actual; sin caché compartida entre unidades
- *   - el token nunca se loguea; solo se registra el acceso (salud)
+ *   - el token nunca se loguea; se anota la lectura (quién, cuándo y qué se le
+ *     sirvió) después de responder: ver export-read-log.ts
  */
 export async function GET(req: Request, ctx: { params: Promise<{ linkId: string }> }) {
   const { linkId: rawLinkId } = await ctx.params;
@@ -32,7 +32,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ linkId: string 
   const { data: link } = await admin
     .from("channel_links")
     .select(
-      "id, organization_id, unit_id, channel, status, export_token_hash, last_export_access_at, unit:units(id, code, name, organization_id)",
+      "id, organization_id, unit_id, channel, status, export_token_hash, unit:units(id, code, name, organization_id)",
     )
     .eq("id", linkId)
     .maybeSingle();
@@ -51,20 +51,25 @@ export async function GET(req: Request, ctx: { params: Promise<{ linkId: string 
     return new NextResponse("Not found", { status: 404 });
   }
 
-  // registrar acceso (salud del lado saliente) — nunca el token. Las OTAs
-  // consultan ~cada hora; si el último acceso es de hace <10 min el UPDATE no
-  // aporta nada al health y sólo cuesta un round trip (~220 ms) a Supabase.
-  const lastAccess = link.last_export_access_at ? Date.parse(link.last_export_access_at) : NaN;
-  if (Number.isNaN(lastAccess) || Date.now() - lastAccess > EXPORT_ACCESS_MIN_INTERVAL_MS) {
-    await admin
-      .from("channel_links")
-      .update({ last_export_access_at: new Date().toISOString() })
-      .eq("id", link.id);
-  }
+  const { ics, etag, stays } = await buildUnitCalendar(admin, unit, { excludeChannelLinkId: linkId });
+  const notModified = req.headers.get("if-none-match") === etag;
 
-  const { ics, etag } = await buildUnitCalendar(admin, unit, { excludeChannelLinkId: linkId });
+  // La lectura se anota con la respuesta ya enviada: la OTA no espera por esto,
+  // y si falla el calendario se sirvió igual.
+  const userAgent = req.headers.get("user-agent");
+  after(() =>
+    recordExportRead(admin, {
+      via: "link",
+      unit,
+      link: { id: link.id as string, channel: link.channel as Channel },
+      userAgent,
+      httpStatus: notModified ? 304 : 200,
+      etag,
+      stays,
+    }),
+  );
 
-  if (req.headers.get("if-none-match") === etag) {
+  if (notModified) {
     return new NextResponse(null, { status: 304, headers: { ETag: etag } });
   }
 

@@ -5,6 +5,7 @@ import {
   CircleDashed,
   CirclePause,
   CircleEllipsis,
+  EyeOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChannelLinkHealth } from "@/lib/channels/types";
@@ -29,6 +30,13 @@ const META: Record<
   critical: {
     label: "Crítica",
     icon: CircleX,
+    className: "text-rose-700 dark:text-rose-400 bg-rose-500/10 border-rose-500/30",
+  },
+  // Traemos sus reservas, pero ella no lee las nuestras: es un riesgo, no un
+  // dato técnico, así que va en el color de lo que hay que mirar.
+  unread: {
+    label: "La OTA no lee",
+    icon: EyeOff,
     className: "text-rose-700 dark:text-rose-400 bg-rose-500/10 border-rose-500/30",
   },
   verifying: {
@@ -68,7 +76,7 @@ export function HealthBadge({
       )}
     >
       <Icon size={12} className="shrink-0" />
-      {compact ? m.label.split(" ")[0] : m.label}
+      {compact && health !== "unread" ? m.label.split(" ")[0] : m.label}
     </span>
   );
 }

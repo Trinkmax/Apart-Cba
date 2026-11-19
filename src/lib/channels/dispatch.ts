@@ -1,5 +1,5 @@
 import { getSecret } from "@/lib/crm/encryption";
-import { todayYmdInTz } from "@/lib/dates";
+import { DEFAULT_ORG_TIMEZONE, todayYmdInTz, ymdInTz } from "@/lib/dates";
 import { openCancellationRequest } from "./cancellation-requests";
 import { fetchIcalFeed, toReservationEvent } from "./ical-adapter";
 import {
@@ -12,7 +12,15 @@ import {
   resolveIssuesByDedupe,
 } from "./ingest";
 import { reservationEventFromRow } from "./event-row";
-import { dedupeKeyOverCancelled } from "./same-slot";
+import { publicationState } from "./export-reads";
+import { OTA_IMPORT_PATH } from "./ota-help";
+import {
+  dedupeKeyOverCancelled,
+  isRefilledAfterLocalCancel,
+  refilledSlots,
+  slotKey,
+  type LocalStay,
+} from "./same-slot";
 import { appliesToLink, readChannelRequestPolicies, ttlHoursFor } from "./request-policy";
 import type {
   Channel,
@@ -99,6 +107,9 @@ const UNPROJECTED_RETRY_MS = 60 * 60 * 1000;
 // Retención de la auditoría de corridas. Nadie la lee desde la UI; a 1 fila
 // por minuto crecía 31 MB en seis semanas.
 const SYNC_RUNS_RETENTION_DAYS = 14;
+// Lecturas del calendario saliente (083): alcanza un mes para ver el ritmo de
+// cada OTA y reconstruir un reclamo.
+const EXPORT_READS_RETENTION_DAYS = 30;
 const SYNC_RUNS_PURGE_BATCH = 5000;
 const SYNC_RUNS_PURGE_MAX_BATCHES = 4;
 // Si el RPC v2 no está (PGRST202), cada cuántas corridas volvemos a probarlo.
@@ -391,21 +402,26 @@ function unwrapClaimedRow(raw: unknown): ClaimedChannelLink {
  * cuando fallaba su GET individual (todo parece nuevo → la ingesta lo
  * deduplica; no se propone ninguna desaparición).
  */
+/** Una reserva externa conocida, con el estado de su reserva local. */
+type KnownReservation = ChannelReservationRow & { local?: LocalStay | null };
+
 async function loadKnownReservations(
   admin: AdminClient,
   linkIds: string[],
-): Promise<Map<string, ChannelReservationRow[]>> {
-  const byLink = new Map<string, ChannelReservationRow[]>();
+): Promise<Map<string, KnownReservation[]>> {
+  const byLink = new Map<string, KnownReservation[]>();
   const { data, error } = await admin
     .from("channel_reservations")
-    .select("*")
+    // La reserva local viaja con la fila: una que canceló una persona con la
+    // estadía todavía publicada puede ser otra persona en el mismo hueco.
+    .select("*, local:bookings!channel_reservations_booking_id_fkey(status, cancelled_at)")
     .in("link_id", linkIds)
     .not("ical_uid", "is", null);
   if (error) {
     console.error("[channels/dispatch] lectura de channel_reservations falló", error.message);
     return byLink;
   }
-  for (const row of (data ?? []) as ChannelReservationRow[]) {
+  for (const row of (data ?? []) as KnownReservation[]) {
     if (!row.link_id) continue;
     const list = byLink.get(row.link_id);
     if (list) list.push(row);
@@ -458,7 +474,7 @@ interface LinkSyncResult {
 async function syncLink(
   admin: AdminClient,
   link: ClaimedChannelLink,
-  knownPromise: Promise<Map<string, ChannelReservationRow[]>>,
+  knownPromise: Promise<Map<string, KnownReservation[]>>,
   touches: BatchTouches,
   stats: RunStats,
 ): Promise<LinkSyncResult> {
@@ -521,9 +537,18 @@ async function syncLink(
   const knownByUid = new Map(known.map((r) => [r.ical_uid as string, r]));
 
   const seenUids = new Set<string>();
+  const todayYmd = todayYmdInTz();
+  const alreadyRefilled = refilledSlots(known);
   for (const ev of events) {
     seenUids.add(ev.uid);
     const existing = knownByUid.get(ev.uid);
+    // Una persona canceló la reserva local y la OTA sigue publicando la misma
+    // estadía: puede ser otra persona en el mismo hueco (same-slot.ts). Una
+    // sola vez por hueco: si también cancela la que entró sola, decide ella.
+    const refilled =
+      !!existing &&
+      !alreadyRefilled.has(slotKey(ev.uid, ev.checkIn, ev.checkOut)) &&
+      isRefilledAfterLocalCancel(existing, existing.local, { checkIn: ev.checkIn, checkOut: ev.checkOut }, todayYmd);
     const changed =
       !existing ||
       existing.check_in !== ev.checkIn ||
@@ -536,7 +561,8 @@ async function syncLink(
       // pero como mucho una vez por hora (ver UNPROJECTED_RETRY_MS)
       (existing.external_status === "active" &&
         !existing.booking_id &&
-        shouldRetryUnprojected(existing));
+        shouldRetryUnprojected(existing)) ||
+      refilled;
 
     if (changed) {
       const base = toReservationEvent({
@@ -548,7 +574,7 @@ async function syncLink(
       });
       // Sobre una fila cancelada, el mismo contenido puede ser OTRA reserva
       // (Booking reusa el UID): ver same-slot.ts.
-      const rev = { ...base, dedupeKey: dedupeKeyOverCancelled(base.dedupeKey, existing) };
+      const rev = { ...base, dedupeKey: dedupeKeyOverCancelled(base.dedupeKey, existing, refilled) };
       const r = await ingestEvent(admin, rev);
       switch (r.outcome) {
         case "created":
@@ -585,6 +611,34 @@ async function syncLink(
         `missing:${r.id}`,
         "La reserva volvió a aparecer en el calendario de la OTA.",
       );
+    }
+    // La pregunta «¿se cancela?» que se había abierto por esa ausencia ya está
+    // contestada: quedaba esperando con el botón «Cancelar la reserva» a mano,
+    // sobre una reserva que la OTA volvía a publicar.
+    const why = "Volvió a aparecer en el calendario de la OTA.";
+    const now = new Date().toISOString();
+    const ids = reappeared.map((r) => r.id);
+    const { data: withdrawn } = await admin
+      .from("channel_cancellation_requests")
+      .update({ status: "stale", decided_at: now, decision_note: why, updated_at: now })
+      .eq("organization_id", link.organization_id)
+      .eq("status", "pending")
+      .eq("reason_code", "missing_from_feed")
+      .in("reservation_id", ids)
+      .select("reservation_id");
+    const answered = ((withdrawn ?? []) as { reservation_id: string | null }[])
+      .map((w) => w.reservation_id)
+      .filter((id): id is string => Boolean(id));
+    if (answered.length > 0) {
+      await admin
+        .from("notifications")
+        .update({ read_at: now })
+        .eq("organization_id", link.organization_id)
+        .in(
+          "dedup_key",
+          answered.map((id) => `cancel_request:${id}`),
+        )
+        .is("read_at", null);
     }
   }
 
@@ -955,7 +1009,7 @@ async function notifyAutoConfirmed(
 export async function proposeDisappearances(
   admin: AdminClient,
   link: ChannelLinkRow,
-  known: ChannelReservationRow[],
+  known: KnownReservation[],
   seenUids: Set<string>,
   horizon: string | null,
   feedEmpty = false,
@@ -966,43 +1020,56 @@ export async function proposeDisappearances(
   const today = todayYmdInTz();
   let proposed = 0;
 
-  const candidates = known.filter(
-    (r) =>
-      r.external_status === "active" &&
-      r.ical_uid &&
-      !seenUids.has(r.ical_uid) &&
-      r.last_seen_at !== null && // observada previamente
-      r.check_in !== null &&
-      r.check_out !== null &&
+  const candidates = known.filter((r) => {
+    if (
+      r.external_status !== "active" ||
+      !r.ical_uid ||
+      seenUids.has(r.ical_uid) ||
+      r.last_seen_at === null || // nunca observada: no hay ausencia que medir
+      r.check_in === null ||
+      r.check_out === null
+    ) {
+      return false;
+    }
+    // Sin reserva viva detrás (no se pudo cargar, o la cancelaron a mano) no
+    // hay nada que proteger ni que decidir: cuando la OTA deja de publicarla la
+    // fila se cierra sola. El candado de «mantener» no aplica —protege una
+    // reserva, y acá no hay— y tampoco la fecha de llegada: una fila así, ya
+    // empezada, quedaba `active` para siempre (CORRO, Apart CBA: su aviso
+    // «el calendario viene vacío» llevaba abierto desde el 29/08).
+    if (hasNoLiveBooking(r)) return r.check_out >= today;
+    return (
       // Una persona ya miró esta ausencia y dijo "la reserva va". No se vuelve
       // a preguntar por el mismo motivo.
       !r.cancellation_locked_at &&
-      (r.check_in >= today || (r.is_block && r.check_out > today)),
-  );
+      (r.check_in >= today || (r.is_block && r.check_out > today))
+    );
+  });
 
-  // Un feed que devuelve CERO eventos teniendo reservas activas conocidas no es
-  // una lectura: es una lectura fallida disfrazada de éxito (una URL que venció,
-  // un token rotado, la OTA respondiendo 200 con un calendario vacío). Hoy 43 de
-  // las 70 conexiones activas devuelven cero eventos y el sistema las da por
-  // sanas. Tratar ese silencio como evidencia es exactamente cómo se cancelan
-  // todas las reservas de una unidad de una sola vez, así que no avanza nada:
-  // ni contadores ni propuestas. Queda una incidencia para que se revise el feed.
-  if (feedEmpty && candidates.length > 0) {
+  // Un feed que devuelve CERO eventos teniendo reservas activas conocidas es
+  // sospechoso: puede ser una lectura fallida disfrazada de éxito (una URL que
+  // venció, un token rotado, la OTA respondiendo 200 con un calendario vacío).
+  // Se avisa, y esa ausencia cuenta por la vía LENTA (12 lecturas y 6 h, abajo):
+  // nada se cancela solo, así que lo peor que puede pasar es una pregunta de más.
+  // No contarla nunca era peor: cuando la única reserva de un anuncio se cancela
+  // de verdad, el calendario queda vacío por definición y la reserva seguía
+  // ocupando fechas sin que nadie se enterara.
+  if (feedEmpty && candidates.some((r) => !hasNoLiveBooking(r))) {
     // Sólo en la TRANSICIÓN a vacío: el health de la conexión guarda si la
     // lectura anterior ya venía vacía. Insistir en cada lectura era un POST
     // que terminaba en 23505 cada 5 min por conexión (~1,2k/día).
     if (!link.health?.anomalous_empty) {
+      const vivas = candidates.filter((r) => !hasNoLiveBooking(r)).length;
       await openIssue(admin, {
         organizationId: link.organization_id,
         linkId: link.id,
         issueType: "feed_error",
         severity: "critical",
         title: `El calendario de ${channelLabel(link.channel)} está viniendo vacío`,
-        detail: `La última lectura no trajo ningún evento, pero hay ${candidates.length} ${candidates.length === 1 ? "reserva activa" : "reservas activas"} de esta conexión. No tocamos nada: revisá que el enlace del calendario siga siendo válido.`,
+        detail: `La última lectura no trajo ningún evento, pero hay ${vivas} ${vivas === 1 ? "reserva activa" : "reservas activas"} de esta conexión. No tocamos nada: revisá que el enlace del calendario siga siendo válido. Si sigue vacío varias horas te vamos a preguntar por cada una.`,
         dedupeKey: `empty_feed:${link.id}`,
       });
     }
-    return 0;
   }
 
   // Primero decidimos qué haría cada candidata; las que ya juntaron evidencia
@@ -1065,6 +1132,11 @@ export async function proposeDisappearances(
 
   for (const { r, beyondHorizon, runsNeeded, runs, missingSince, ready } of decisions) {
     if (ready) {
+      // Nada que decidir: no hay reserva viva detrás de esta fila.
+      if (hasNoLiveBooking(r)) {
+        await closeReservationGoneFromOta(admin, link, r, "La OTA ya no informa esa estadía.");
+        continue;
+      }
       // La propuesta ya está abierta y esperando: el contador queda congelado
       // y no se escribe nada hasta que una persona decida.
       if (alreadyPending.has(r.id)) continue;
@@ -1087,21 +1159,27 @@ export async function proposeDisappearances(
         },
       });
 
-      // La reserva local ya no está viva: alguien la canceló a mano y no hay
-      // nada que proponer. Se cierra la fila externa en vez de seguir contando
-      // lecturas para siempre (había filas con missing_runs 24 y subiendo, 720
-      // escrituras por día que nunca podían llegar a ningún lado).
+      // No hay reserva viva detrás: nunca se cargó (chocaba con otra), o
+      // alguien la canceló a mano. No hay nada que proponer. Se cierra la fila
+      // externa en vez de seguir contando lecturas para siempre (había filas
+      // con missing_runs 24 y subiendo, 720 escrituras por día que nunca podían
+      // llegar a ningún lado) y, con ella, lo que colgaba: el conflicto que
+      // volvía cada noche con el reconcile y la pregunta «¿es la misma?».
       if (outcome === "booking_not_live") {
-        await admin
-          .from("channel_reservations")
-          .update({ external_status: "cancelled", missing_since: null, missing_runs: 0 })
-          .eq("id", r.id)
-          .eq("external_status", "active");
-        await resolveIssuesByDedupe(
+        await closeReservationGoneFromOta(admin, link, r, "La OTA ya no informa esa estadía.");
+        continue;
+      }
+
+      // La reserva es de ustedes, no de este canal (cancellation-requests.ts):
+      // se suelta la fila y la reserva queda como estaba. Si el evento vuelve,
+      // entra de nuevo y se vincula como la primera vez.
+      if (outcome === "not_channel_booking") {
+        await closeReservationGoneFromOta(
           admin,
-          link.organization_id,
-          `missing:${r.id}`,
-          "La reserva local ya estaba cancelada.",
+          link,
+          r,
+          `${channelLabel(link.channel)} dejó de mostrar esas fechas. La reserva del sistema no es de ese canal y sigue igual.`,
+          { detach: true },
         );
         continue;
       }
@@ -1121,7 +1199,8 @@ export async function proposeDisappearances(
         .from("channel_reservations")
         .update({ missing_since: missingSince, missing_runs: runs })
         .eq("id", r.id);
-      if (!r.missing_since) {
+      // A nadie se le va a preguntar por una fila sin reserva viva detrás.
+      if (!r.missing_since && !hasNoLiveBooking(r)) {
         await openIssue(admin, {
           organizationId: link.organization_id,
           linkId: link.id,
@@ -1137,6 +1216,52 @@ export async function proposeDisappearances(
     }
   }
   return proposed;
+}
+
+/** La fila no tiene una reserva viva detrás: nunca se cargó, o la cancelaron. */
+function hasNoLiveBooking(r: KnownReservation): boolean {
+  if (!r.booking_id) return true;
+  const status = r.local?.status;
+  return status === "cancelada" || status === "no_show";
+}
+
+/**
+ * La OTA dejó de publicar una estadía que no tiene una reserva que cuidar:
+ * la fila pasa a `cancelled` y se cierra lo que quedaba abierto sobre ella.
+ * Nunca toca `bookings`.
+ */
+async function closeReservationGoneFromOta(
+  admin: AdminClient,
+  link: ChannelLinkRow,
+  r: ChannelReservationRow,
+  why: string,
+  opts: { detach?: boolean } = {},
+): Promise<void> {
+  await admin
+    .from("channel_reservations")
+    .update({
+      external_status: "cancelled",
+      missing_since: null,
+      missing_runs: 0,
+      ...(opts.detach ? { booking_id: null } : {}),
+    })
+    .eq("id", r.id)
+    .eq("external_status", "active");
+  for (const key of [
+    `missing:${r.id}`,
+    `conflict:${r.id}`,
+    `conflict_update:${r.id}`,
+    `adopt_review:${r.id}`,
+  ]) {
+    await resolveIssuesByDedupe(admin, link.organization_id, key, why);
+  }
+  const now = new Date().toISOString();
+  await admin
+    .from("channel_cancellation_requests")
+    .update({ status: "stale", decided_at: now, decision_note: why, updated_at: now })
+    .eq("organization_id", link.organization_id)
+    .eq("reservation_id", r.id)
+    .eq("status", "pending");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1324,10 +1449,80 @@ async function runHousekeeping(admin: AdminClient): Promise<Record<string, numbe
     );
   }
 
+  // OTAs que no leen NUESTRO calendario: dejaron de leerlo, o nunca lo leyeron.
+  // Es el lado que no se veía: traemos sus reservas, la conexión figura sana, y
+  // lo que se reserva acá no se cierra allá (Viaggiato, 18/11/2026: JARDINES
+  // sin lecturas de Airbnb desde el 06/11; CARLUCCI y FRIAS, nunca).
+  counts.export_unread = await flagUnreadExports(admin);
+
   // retención de la auditoría de corridas
   counts.sync_runs_purged = await purgeOldSyncRuns(admin);
 
+  // retención de las lecturas del calendario saliente
+  try {
+    const { count } = await admin
+      .from("channel_export_reads")
+      .delete({ count: "exact" })
+      .lt("read_at", new Date(Date.now() - EXPORT_READS_RETENTION_DAYS * 86_400_000).toISOString());
+    counts.export_reads_purged = count ?? 0;
+  } catch (err) {
+    console.warn("[channels/dispatch] purga de channel_export_reads falló", (err as Error).message);
+  }
+
   return counts;
+}
+
+/**
+ * Abre el aviso de «la OTA no lee tu calendario» para cada conexión activa que
+ * lo necesite. Se cierra solo cuando la OTA vuelve a leer (export-read-log.ts,
+ * y el barrido de avisos), y si una persona lo descarta —un anuncio pausado no
+ * lee, y está bien— no vuelve por el mismo motivo (`openIssue`).
+ */
+async function flagUnreadExports(admin: AdminClient): Promise<number> {
+  const { data: links, error } = await admin
+    .from("channel_links")
+    .select("id, organization_id, channel, last_export_access_at, created_at")
+    .eq("status", "active");
+  if (error) return 0;
+  const none = { toBlock: [], toRelease: [] };
+  const dm = (iso: string) => {
+    const ymd = ymdInTz(new Date(iso), DEFAULT_ORG_TIMEZONE);
+    return `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}`;
+  };
+  let flagged = 0;
+  for (const l of (links ?? []) as Array<{
+    id: string;
+    organization_id: string;
+    channel: Channel;
+    last_export_access_at: string | null;
+    created_at: string;
+  }>) {
+    const { kind } = publicationState({
+      lastReadAt: l.last_export_access_at,
+      intervalMin: null,
+      activeSince: l.created_at,
+      changes: none,
+    });
+    if (kind !== "never" && kind !== "stale") continue;
+    const ota = channelLabel(l.channel);
+    await openIssue(admin, {
+      organizationId: l.organization_id,
+      linkId: l.id,
+      issueType: "stale_link",
+      severity: "warning",
+      title:
+        kind === "never"
+          ? `${ota} nunca leyó el calendario de este departamento`
+          : `${ota} dejó de leer el calendario de este departamento`,
+      detail:
+        kind === "never"
+          ? `Está conectado desde el ${dm(l.created_at)} y ${ota} todavía no lo leyó ni una vez: lo que se reserve acá no se cierra en ${ota}. Falta pegar el enlace de rentOS en ${OTA_IMPORT_PATH[l.channel]} (está en la ficha de la conexión). Si el anuncio está pausado, descartá este aviso.`
+          : `La última lectura fue el ${dm(l.last_export_access_at as string)}. Desde entonces, lo que se reserve acá no se cierra en ${ota}. Si el anuncio está publicado, volvé a pegar el enlace de rentOS en ${OTA_IMPORT_PATH[l.channel]} (está en la ficha de la conexión). Si está pausado, descartá este aviso.`,
+      dedupeKey: `export_stale:${l.id}`,
+    });
+    flagged++;
+  }
+  return flagged;
 }
 
 /**

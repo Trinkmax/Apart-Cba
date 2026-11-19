@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/table";
 import { Card } from "@/components/ui/card";
 import { HealthBadge } from "./health-badge";
+import { PublicationStatus } from "./publication-status";
 import { deleteLink, pauseLink, resumeLink, syncChannelsNow } from "@/lib/actions/channels";
 import type { ChannelLinkOverview } from "@/lib/actions/channels";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
@@ -127,6 +128,7 @@ export function ConnectionsTable({ links }: { links: ChannelLinkOverview[] }) {
             <SelectItem value="healthy">Conectadas</SelectItem>
             <SelectItem value="degraded">Degradadas</SelectItem>
             <SelectItem value="critical">Críticas</SelectItem>
+            <SelectItem value="unread">La OTA no lee</SelectItem>
             <SelectItem value="verifying">Esperando verificación</SelectItem>
             <SelectItem value="paused">Pausadas</SelectItem>
             <SelectItem value="draft">Borradores</SelectItem>
@@ -367,10 +369,16 @@ function ReceptionCell({ link }: { link: ChannelLinkOverview }) {
 }
 
 function PublicationCell({ link }: { link: ChannelLinkOverview }) {
-  if (link.last_export_access_at) {
-    return <span>La OTA lo consultó {timeAgo(link.last_export_access_at)}</span>;
-  }
-  return <span className="text-sky-700 dark:text-sky-400">Aún no consultado por la OTA</span>;
+  if (link.status === "paused") return <span>En pausa</span>;
+  if (link.status === "draft") return <span>—</span>;
+  return (
+    <PublicationStatus
+      channel={link.channel}
+      lastReadAt={link.last_export_access_at}
+      intervalMin={link.export_interval_min ?? null}
+      publication={link.publication}
+    />
+  );
 }
 
 function RecommendedAction({
@@ -402,6 +410,15 @@ function RecommendedAction({
     return (
       <Button size="sm" variant="secondary" className="mr-1" onClick={onSync} disabled={pending}>
         <RefreshCw size={13} className={pending ? "animate-spin" : ""} /> Reintentar
+      </Button>
+    );
+  }
+  // Traer reservas no arregla esto: lo que falta es que la OTA lea. La ficha
+  // dice cómo.
+  if (link.health_state === "unread") {
+    return (
+      <Button asChild size="sm" variant="secondary" className="mr-1">
+        <Link href={`/dashboard/canales/${link.id}`}>Cómo se arregla</Link>
       </Button>
     );
   }

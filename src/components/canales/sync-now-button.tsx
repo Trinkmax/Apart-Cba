@@ -26,7 +26,7 @@ export function SyncNowButton({ disabled }: { disabled?: boolean }) {
           // mande a la OTA, y este botón sólo TRAE.
           toast.success("No había reservas nuevas en las OTAs", {
             description:
-              "Tus reservas viajan solas hacia las OTAs: ellas leen tu calendario cada alrededor de una hora.",
+              "Lo que cargás vos no viaja con este botón: Airbnb y Booking vienen a leer tu calendario cada 2 o 3 horas. En la columna Publicación ves qué les falta leer.",
           });
         } else {
           toast.success(

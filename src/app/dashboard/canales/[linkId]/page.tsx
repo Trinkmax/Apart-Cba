@@ -11,6 +11,10 @@ import { HealthBadge } from "@/components/canales/health-badge";
 import { LinkActions } from "@/components/canales/link-actions";
 import { IssuesPanel } from "@/components/canales/issues-panel";
 import { ExportUrlCopy } from "@/components/canales/export-url-copy";
+import { PublicationStatus } from "@/components/canales/publication-status";
+import { intervalLabel } from "@/lib/channels/export-reads";
+import { OTA_REFRESH_HINT, otaRefreshUrl } from "@/lib/channels/publication-copy";
+import { OTA_IMPORT_PATH } from "@/lib/channels/ota-help";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDistanceToNow, format } from "date-fns";
 import { es } from "date-fns/locale";
@@ -33,7 +37,11 @@ export default async function LinkDetailPage({
   } catch {
     notFound();
   }
-  const { link, health_state, reservations, issues } = detail;
+  const { link, health_state, reservations, issues, publication } = detail;
+  const ota = link.channel === "airbnb" ? "Airbnb" : "Booking";
+  const refreshUrl = otaRefreshUrl(link.channel, link.external_listing_id);
+  const pace = intervalLabel(link.export_interval_min ?? null);
+  const notReading = publication?.kind === "never" || publication?.kind === "stale";
   const overview = await getChannelsOverview();
   const src = BOOKING_SOURCE_META[link.channel];
   const openIssues = issues
@@ -98,19 +106,51 @@ export default async function LinkDetailPage({
           <h2 className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
             <Upload size={12} /> Publicación de disponibilidad
           </h2>
+          {link.status === "active" && (
+            <div className="text-xs leading-relaxed">
+              <PublicationStatus
+                channel={link.channel}
+                lastReadAt={link.last_export_access_at}
+                intervalMin={link.export_interval_min ?? null}
+                publication={publication}
+                detailed
+              />
+            </div>
+          )}
           <dl className="text-sm space-y-1.5">
             <Row
-              k="Consultado por la OTA"
-              v={timeAgoOr(link.last_export_access_at, "Aún no consultado")}
-              tone={link.last_export_access_at ? undefined : "info"}
+              k={`Última lectura de ${ota}`}
+              v={timeAgoOr(link.last_export_access_at, "Todavía no leyó")}
+              tone={
+                notReading ? "critical" : link.last_export_access_at ? undefined : "info"
+              }
             />
+            {pace && <Row k="Viene a leer" v={pace} />}
           </dl>
+          {/* Cuando la OTA no lee, lo que sirve es el paso que falta, no un dato. */}
+          {notReading && link.status === "active" && (
+            <p className="rounded-md border border-rose-500/30 bg-rose-500/10 p-2.5 text-xs leading-relaxed">
+              Lo que se reserve acá no se cierra en {ota}. Si el anuncio está publicado, copiá el
+              enlace de abajo y pegalo en {OTA_IMPORT_PATH[link.channel]}. Si está pausado, no hay
+              nada que hacer.
+            </p>
+          )}
           <div className="pt-1">
             <ExportUrlCopy linkId={link.id} />
           </div>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            La consulta demuestra que la OTA accede al enlace; cuándo aplica los cambios lo decide la
-            plataforma.
+            {ota} viene a leer este calendario cuando quiere{pace ? ` (${pace})` : ""}; no se le
+            puede avisar desde acá. Si un cambio no puede esperar: {OTA_REFRESH_HINT[link.channel]}{" "}
+            {refreshUrl && (
+              <a
+                href={refreshUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Abrir ese calendario en Airbnb
+              </a>
+            )}
           </p>
         </Card>
       </div>

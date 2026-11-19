@@ -38,6 +38,9 @@ import { decideCancellation, type PendingCancellation } from "@/lib/actions/chan
  */
 export function CancellationDecisionDialog({ pending }: { pending: PendingCancellation[] }) {
   const [dismissed, setDismissed] = useState(false);
+  // La propuesta sobre la que ya se apretó una vez «Cancelar»: con algo que
+  // contradice el aviso, cancelar pide dos pasos.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const queue = pending.filter((p) => !!p);
@@ -49,6 +52,12 @@ export function CancellationDecisionDialog({ pending }: { pending: PendingCancel
   const total = Number(s.total ?? 0);
   const esBloqueo = Boolean(s.es_bloqueo);
   const canal = current.channel === "airbnb" ? "Airbnb" : "Booking";
+  const doubts = current.doubts ?? [];
+  const needsSecondStep = doubts.length > 0 || cobrado > 0;
+  const confirming = confirmingId === current.id;
+  // El número con el que se la busca en la OTA (no el UID del calendario).
+  const referencia =
+    typeof s.referencia_ota === "string" && !s.referencia_ota.includes("@") ? s.referencia_ota : null;
 
   const decidir = (decision: "cancel" | "keep") => {
     startTransition(async () => {
@@ -78,7 +87,9 @@ export function CancellationDecisionDialog({ pending }: { pending: PendingCancel
             <DialogTitle>
               {esBloqueo
                 ? `${canal} sacó un cierre de fechas`
-                : `${canal} dejó de mostrar esta reserva`}
+                : current.reason_code === "ota_cancellation_email"
+                  ? `${canal} avisó que se canceló una reserva`
+                  : `${canal} dejó de mostrar esta reserva`}
             </DialogTitle>
           </div>
           <DialogDescription>
@@ -118,6 +129,18 @@ export function CancellationDecisionDialog({ pending }: { pending: PendingCancel
           )}
         </div>
 
+        {/* Lo que contradice el aviso va antes que cualquier otra cosa */}
+        {doubts.length > 0 && (
+          <ul className="space-y-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm">
+            {doubts.map((d) => (
+              <li key={d} className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-rose-500" />
+                <span>{d}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
         {/* Lo que hace grave a esta decisión, dicho sin vueltas */}
         {(cobrado > 0 || s.confirmacion_enviada) && (
           <ul className="space-y-1.5 text-sm">
@@ -139,7 +162,9 @@ export function CancellationDecisionDialog({ pending }: { pending: PendingCancel
         )}
 
         <p className="text-xs text-muted-foreground">
-          Si la mantenés, las fechas siguen ocupadas y no te volvemos a preguntar por esto.
+          {esBloqueo
+            ? "Si lo mantenés, las fechas siguen ocupadas y no te volvemos a preguntar por esto."
+            : `Antes de cancelar, mirá en ${canal} que ${referencia ? `la reserva ${referencia}` : "la reserva"} figure cancelada. Si la mantenés, las fechas siguen ocupadas y no te volvemos a preguntar por esto.`}
         </p>
 
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
@@ -152,8 +177,15 @@ export function CancellationDecisionDialog({ pending }: { pending: PendingCancel
             Después
           </Button>
           <div className="flex flex-col-reverse gap-2 sm:flex-row">
-            <Button variant="outline" disabled={isPending} onClick={() => decidir("cancel")}>
-              Cancelar la reserva
+            <Button
+              variant="outline"
+              disabled={isPending}
+              onClick={() => {
+                if (needsSecondStep && !confirming) setConfirmingId(current.id);
+                else decidir("cancel");
+              }}
+            >
+              {confirming ? "Sí, cancelar igual" : "Cancelar la reserva"}
             </Button>
             <Button disabled={isPending} onClick={() => decidir("keep")}>
               <ShieldCheck className="size-4" />

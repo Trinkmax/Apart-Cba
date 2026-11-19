@@ -95,8 +95,9 @@ async function sweepChannelIssues(
 
   const keyOf = (i: OpenIssueRow) => i.dedupe_key ?? "";
   const linkIdOf = (i: OpenIssueRow) =>
-    i.link_id ?? keyOf(i).match(/^(?:feed|stale|empty_feed):(.+)$/)?.[1] ?? null;
-  const isLinkIssue = (i: OpenIssueRow) => /^(?:feed|stale|empty_feed):/.test(keyOf(i));
+    i.link_id ?? keyOf(i).match(/^(?:feed|stale|empty_feed|export_stale):(.+)$/)?.[1] ?? null;
+  const isLinkIssue = (i: OpenIssueRow) =>
+    /^(?:feed|stale|empty_feed|export_stale):/.test(keyOf(i));
 
   // Reservas y bookings a los que apuntan.
   const reservations = await loadById(
@@ -120,7 +121,7 @@ async function sweepChannelIssues(
   const links = await loadById(
     admin,
     "channel_links",
-    "id, status, consecutive_failures, last_success_at, health",
+    "id, status, consecutive_failures, last_success_at, last_export_access_at, health",
     linkIds,
   );
   const activeFutureByLink = new Map<string, number>();
@@ -230,6 +231,7 @@ async function sweepChannelIssues(
             consecutiveFailures: Number(l.consecutive_failures ?? 0),
             lastSuccessAt: (l.last_success_at as string | null) ?? null,
             anomalousEmpty: Boolean((l.health as { anomalous_empty?: boolean } | null)?.anomalous_empty),
+            lastExportAccessAt: (l.last_export_access_at as string | null) ?? null,
           }
         : linkId
           ? null

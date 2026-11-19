@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import { todayYmdInTz } from "@/lib/dates";
+import type { ExportVia, Stay } from "./export-reads";
 import { channelsExportedAsHolds, readChannelRequestPolicies } from "./request-policy";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -23,6 +25,8 @@ type AdminClient = import("@supabase/supabase-js").SupabaseClient<any, any, any>
  */
 
 const HISTORY_DAYS = 30;
+/** Los estados de una reserva que retienen disponibilidad hacia las OTAs. */
+export const EXPORT_BOOKING_STATUSES = ["pendiente", "confirmada", "check_in"] as const;
 const MAX_EVENTS = 500;
 const MAX_CHANNEL_REQUESTS = 100;
 /**
@@ -34,6 +38,8 @@ const REQUEST_HOLD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export interface UnitCalendar {
   ics: string;
   etag: string;
+  /** Las estadías que bloquea este calendario, para anotar qué se le sirvió a la OTA. */
+  stays: Stay[];
 }
 
 interface ChannelRequestRow {
@@ -80,7 +86,7 @@ export async function buildUnitCalendar(
       .select("id, source, check_in_date, check_out_date, is_block, updated_at")
       .eq("unit_id", unit.id)
       .eq("organization_id", unit.organization_id)
-      .in("status", ["pendiente", "confirmada", "check_in"])
+      .in("status", [...EXPORT_BOOKING_STATUSES])
       .gte("check_out_date", since)
       .order("check_in_date", { ascending: true })
       .limit(MAX_EVENTS),
@@ -193,7 +199,117 @@ export async function buildUnitCalendar(
   lines.push("END:VCALENDAR");
   const ics = lines.map(foldLine).join("\r\n") + "\r\n";
   const etag = `"${crypto.createHash("sha256").update(ics).digest("hex").slice(0, 32)}"`;
-  return { ics, etag };
+  const stays: Stay[] = [
+    ...bookings.map((b): Stay => [b.check_in_date as string, b.check_out_date as string]),
+    ...requests.map((r): Stay => [r.check_in_date as string, r.check_out_date as string]),
+    ...channelRequests.map((r): Stay => [r.check_in, r.check_out]),
+  ];
+  return { ics, etag, stays };
+}
+
+/**
+ * Lo que HOY bloquearía el calendario saliente de cada conexión, de hoy en
+ * adelante, para muchas conexiones de una organización en tres consultas.
+ *
+ * Es el otro lado de `export_served` (lo que se le sirvió a la OTA la última
+ * vez): la diferencia son los cambios que la OTA todavía no vio. Usa los mismos
+ * filtros que `buildUnitCalendar`; si cambia uno, cambia el otro.
+ *
+ * Sólo para MOSTRAR. Si algo falla devuelve `null` para esa lectura entera: es
+ * mejor no decir nada que inventar cambios pendientes.
+ */
+export async function loadCurrentExportStays(
+  admin: AdminClient,
+  organizationId: string,
+  links: Array<{ id: string; unit_id: string; export_via?: ExportVia | null }>,
+): Promise<Map<string, Stay[]> | null> {
+  const unitIds = [...new Set(links.map((l) => l.unit_id))];
+  const out = new Map<string, Stay[]>();
+  if (unitIds.length === 0) return out;
+  const today = todayYmdInTz();
+  const nowIso = new Date().toISOString();
+
+  const { policies, failed } = await readChannelRequestPolicies(admin, organizationId);
+  if (failed) return null;
+  const holdChannels = channelsExportedAsHolds(policies);
+
+  const byUnit = new Map<string, Stay[]>();
+  const push = (unitId: string, stay: Stay) => {
+    const list = byUnit.get(unitId);
+    if (list) list.push(stay);
+    else byUnit.set(unitId, [stay]);
+  };
+
+  // Reservas: de a páginas (Supabase corta en 1000 filas sin avisar).
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await admin
+      .from("bookings")
+      .select("id, unit_id, check_in_date, check_out_date")
+      .eq("organization_id", organizationId)
+      .in("unit_id", unitIds)
+      .in("status", [...EXPORT_BOOKING_STATUSES])
+      .gt("check_out_date", today)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) return null;
+    for (const b of data ?? []) {
+      push(b.unit_id as string, [b.check_in_date as string, b.check_out_date as string]);
+    }
+    if ((data ?? []).length < PAGE) break;
+  }
+
+  const { data: requests, error: requestsErr } = await admin
+    .from("booking_requests")
+    .select("unit_id, check_in_date, check_out_date")
+    .eq("organization_id", organizationId)
+    .in("unit_id", unitIds)
+    .eq("status", "pendiente")
+    .gt("expires_at", nowIso)
+    .gt("check_out_date", today)
+    .limit(1000);
+  if (requestsErr) return null;
+  for (const r of requests ?? []) {
+    push(r.unit_id as string, [r.check_in_date as string, r.check_out_date as string]);
+  }
+
+  // Las solicitudes de canal dependen de quién lee: por su dirección propia,
+  // una conexión no ve las suyas (`excludeChannelLinkId`).
+  const ownRequests = new Map<string, Array<{ linkId: string | null; stay: Stay }>>();
+  if (holdChannels.length > 0) {
+    const { data: channelRequests, error: channelErr } = await admin
+      .from("channel_reservations")
+      .select("unit_id, link_id, check_in, check_out, last_seen_at")
+      .eq("organization_id", organizationId)
+      .in("unit_id", unitIds)
+      .eq("external_status", "pending")
+      .in("channel", holdChannels)
+      .gt("check_out", today)
+      .limit(1000);
+    if (channelErr) return null;
+    for (const r of (channelRequests ?? []) as Array<{
+      unit_id: string;
+      link_id: string | null;
+      check_in: string | null;
+      check_out: string | null;
+      last_seen_at: string | null;
+    }>) {
+      if (!r.check_in || !r.check_out || !isFresh(r.last_seen_at)) continue;
+      const list = ownRequests.get(r.unit_id) ?? [];
+      list.push({ linkId: r.link_id, stay: [r.check_in, r.check_out] });
+      ownRequests.set(r.unit_id, list);
+    }
+  }
+
+  for (const link of links) {
+    const stays = [...(byUnit.get(link.unit_id) ?? [])];
+    for (const r of ownRequests.get(link.unit_id) ?? []) {
+      if (link.export_via === "link" && r.linkId === link.id) continue;
+      stays.push(r.stay);
+    }
+    out.set(link.id, stays);
+  }
+  return out;
 }
 
 function pushEvent(

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, CircleDollarSign, MessageSquareCheck, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,13 @@ import { decideCancellation, type PendingCancellation } from "@/lib/actions/chan
 /** La misma decisión que el diálogo, en formato lista para la bandeja. */
 export function CancellationRequestCard({ request }: { request: PendingCancellation }) {
   const [isPending, startTransition] = useTransition();
+  const [confirming, setConfirming] = useState(false);
   const s = request.snapshot ?? {};
   const cobrado = Number(s.cobrado ?? 0);
   const canal = request.channel === "airbnb" ? "Airbnb" : "Booking";
+  const doubts = request.doubts ?? [];
+  // Con algo que contradice el aviso, cancelar pide dos pasos.
+  const needsSecondStep = doubts.length > 0 || cobrado > 0;
 
   const decidir = (decision: "cancel" | "keep") => {
     startTransition(async () => {
@@ -63,6 +67,17 @@ export function CancellationRequestCard({ request }: { request: PendingCancellat
           : `${canal} dejó de mostrarla en su calendario. Puede ser una cancelación real o un problema de lectura del feed.`}
       </p>
 
+      {doubts.length > 0 && (
+        <ul className="space-y-1 rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm">
+          {doubts.map((d) => (
+            <li key={d} className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-rose-500" />
+              <span>{d}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
       {(cobrado > 0 || s.confirmacion_enviada) && (
         <ul className="space-y-1 text-sm">
           {cobrado > 0 && (
@@ -81,8 +96,16 @@ export function CancellationRequestCard({ request }: { request: PendingCancellat
       )}
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-        <Button variant="outline" size="sm" disabled={isPending} onClick={() => decidir("cancel")}>
-          Cancelar la reserva
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isPending}
+          onClick={() => {
+            if (needsSecondStep && !confirming) setConfirming(true);
+            else decidir("cancel");
+          }}
+        >
+          {confirming ? "Sí, cancelar igual" : "Cancelar la reserva"}
         </Button>
         <Button size="sm" disabled={isPending} onClick={() => decidir("keep")}>
           <ShieldCheck className="size-4" />

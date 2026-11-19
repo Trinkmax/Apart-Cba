@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { can } from "@/lib/permissions";
+import { cancellationDoubts } from "@/lib/channels/cancellation-doubts";
 import { resolveIssuesByDedupe } from "@/lib/channels/ingest";
 import { requireSession } from "./auth";
 import { getCurrentOrg } from "./org";
@@ -59,6 +60,11 @@ export interface PendingCancellation {
     dias_para_llegada?: number;
     referencia_ota?: string | null;
   };
+  /**
+   * Lo que contradice el aviso (cancellation-doubts.ts): la OTA la sigue
+   * publicando, o la reserva no es de ese canal. Vacío = nada que objetar.
+   */
+  doubts?: string[];
 }
 
 /**
@@ -86,7 +92,41 @@ export async function listPendingCancellations(): Promise<PendingCancellation[]>
       .order("created_at", { ascending: true })
       .limit(50);
 
-    return (data ?? []) as PendingCancellation[];
+    const rows = (data ?? []) as PendingCancellation[];
+    if (rows.length === 0) return rows;
+
+    // Lo que el calendario de la OTA dice HOY de cada reserva: la propuesta se
+    // abrió con lo que se sabía entonces, y puede haber quedado vieja.
+    const reservationIds = rows.map((r) => r.reservation_id).filter((id): id is string => Boolean(id));
+    const seen = new Map<string, { last_seen_at: string | null; missing_since: string | null }>();
+    if (reservationIds.length > 0) {
+      const { data: reservations } = await admin
+        .from("channel_reservations")
+        .select("id, last_seen_at, missing_since")
+        .eq("organization_id", organization.id)
+        .in("id", reservationIds);
+      for (const r of reservations ?? []) {
+        seen.set(r.id as string, {
+          last_seen_at: (r.last_seen_at as string | null) ?? null,
+          missing_since: (r.missing_since as string | null) ?? null,
+        });
+      }
+    }
+    const now = new Date();
+    return rows.map((r) => ({
+      ...r,
+      doubts: cancellationDoubts(
+        {
+          channel: r.channel,
+          reasonCode: r.reason_code,
+          requestedAt: r.created_at,
+          bookingSource: r.snapshot?.origen ?? null,
+          handLoaded: Boolean(r.snapshot?.cargada_a_mano),
+          reservation: r.reservation_id ? (seen.get(r.reservation_id) ?? null) : null,
+        },
+        now,
+      ),
+    }));
   } catch {
     return [];
   }

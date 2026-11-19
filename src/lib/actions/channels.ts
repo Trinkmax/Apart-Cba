@@ -12,6 +12,14 @@ import { assertSafeFeedUrl, safeFetchFeed, BlockedUrlError } from "@/lib/channel
 import { parseIcs } from "@/lib/channels/ical-adapter";
 import { runChannelDispatch } from "@/lib/channels/dispatch";
 import { computeLinkHealth } from "@/lib/channels/health";
+import { loadCurrentExportStays } from "@/lib/channels/outbound-ics";
+import {
+  pendingChanges,
+  publicationState,
+  type PublicationState,
+  type Stay,
+} from "@/lib/channels/export-reads";
+import { todayYmdInTz } from "@/lib/dates";
 import { processStoredEvent, reprojectReservation } from "@/lib/channels/ingest";
 import { reservationEventFromRow } from "@/lib/channels/dispatch";
 import { isOwnExportFeedUrl } from "@/lib/channels/own-export-url";
@@ -61,6 +69,50 @@ export interface ChannelLinkOverview extends ChannelLinkRow {
   health_state: ChannelLinkHealth;
   open_issues: number;
   critical_issues: number;
+  /**
+   * El lado saliente de una conexión activa: si la OTA lee nuestro calendario,
+   * cada cuánto, y qué cambios todavía no vio. Null si no está activa.
+   */
+  publication: PublicationState | null;
+}
+
+/**
+ * El lado saliente de varias conexiones de una organización (export-reads.ts):
+ * lo que se le sirvió a cada OTA la última vez contra lo que el calendario
+ * bloquea hoy. Si no se puede leer el calendario de hoy no inventa cambios.
+ */
+async function loadPublication(
+  admin: ReturnType<typeof createAdminClient>,
+  organizationId: string,
+  links: ChannelLinkRow[],
+): Promise<Map<string, PublicationState>> {
+  const out = new Map<string, PublicationState>();
+  const active = links.filter((l) => l.status === "active");
+  if (active.length === 0) return out;
+  const today = todayYmdInTz();
+  const now = Date.now();
+  let current: Map<string, Stay[]> | null = null;
+  try {
+    current = await loadCurrentExportStays(admin, organizationId, active);
+  } catch (err) {
+    console.error("[channels] no se pudo leer el calendario saliente", (err as Error).message);
+  }
+  for (const l of active) {
+    const served = current ? (l.export_served?.stays ?? null) : null;
+    out.set(
+      l.id,
+      publicationState(
+        {
+          lastReadAt: l.last_export_access_at,
+          intervalMin: l.export_interval_min ?? null,
+          activeSince: l.created_at,
+          changes: pendingChanges(current?.get(l.id) ?? [], served, today),
+        },
+        now,
+      ),
+    );
+  }
+  return out;
 }
 
 export interface ChannelsOverview {
@@ -169,6 +221,7 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
     issuesByLink.set(i.link_id, cur);
   }
 
+  const publication = await loadPublication(admin, organization.id, rawLinks);
   const links: ChannelLinkOverview[] = rawLinks.map((l) => {
     const iss = issuesByLink.get(l.id) ?? { open: 0, critical: 0 };
     return {
@@ -176,6 +229,7 @@ export async function getChannelsOverview(): Promise<ChannelsOverview> {
       health_state: computeLinkHealth(l, { hasCriticalIssue: iss.critical > 0 }),
       open_issues: iss.open,
       critical_issues: iss.critical,
+      publication: publication.get(l.id) ?? null,
     };
   });
 
@@ -730,6 +784,7 @@ export interface LinkDetail {
   reservations: ChannelReservationRow[];
   issues: ChannelIssueRow[];
   hasFeed: boolean;
+  publication: PublicationState | null;
 }
 
 export async function getLinkDetail(linkId: string): Promise<LinkDetail> {
@@ -764,6 +819,7 @@ export async function getLinkDetail(linkId: string): Promise<LinkDetail> {
   const openCritical = (issuesRes.data ?? []).some(
     (i: ChannelIssueRow) => i.status === "open" && i.severity === "critical",
   );
+  const publication = await loadPublication(admin, organization.id, [link as ChannelLinkRow]);
 
   return {
     link: link as LinkDetail["link"],
@@ -771,6 +827,7 @@ export async function getLinkDetail(linkId: string): Promise<LinkDetail> {
     reservations: (reservationsRes.data ?? []) as ChannelReservationRow[],
     issues: (issuesRes.data ?? []) as ChannelIssueRow[],
     hasFeed: Boolean(link.feed_secret_id),
+    publication: publication.get(link.id as string) ?? null,
   };
 }
 

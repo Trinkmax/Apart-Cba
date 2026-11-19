@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { archivedIcalUid, dedupeKeyOverCancelled, isNewStayInSameSlot } from "../same-slot";
+import {
+  REFILL_GRACE_MS,
+  archivedIcalUid,
+  dedupeKeyOverCancelled,
+  isNewStayInSameSlot,
+  isRefilledAfterLocalCancel,
+  refilledSlots,
+  slotKey,
+} from "../same-slot";
 
 const cancelled = {
   is_block: false,
@@ -62,6 +70,80 @@ describe("dedupeKeyOverCancelled", () => {
   it("en cualquier otro estado, la clave de siempre", () => {
     expect(dedupeKeyOverCancelled(key, { id: "res-1", external_status: "active" })).toBe(key);
     expect(dedupeKeyOverCancelled(key, null)).toBe(key);
+  });
+
+  it("sobre una fila activa cuya reserva local canceló una persona, también aparte", () => {
+    const k = dedupeKeyOverCancelled(key, { id: "res-1", external_status: "active" }, true);
+    expect(k).toBe(dedupeKeyOverCancelled(key, { id: "res-1", external_status: "cancelled" }));
+    expect(dedupeKeyOverCancelled(key, null, true)).toBe(key);
+  });
+});
+
+describe("isRefilledAfterLocalCancel", () => {
+  // Pampa Mora (Habitana): Rodolfo 4→6/12 por Booking, Cecilia la canceló a
+  // mano el 18/11 a las 15:35 y Booking sigue publicando las mismas noches.
+  const today = "2026-11-18";
+  const now = Date.parse("2026-11-18T19:30:00Z");
+  const row = {
+    channel: "booking" as const,
+    external_status: "active" as const,
+    booking_id: "b-rodolfo",
+    is_block: false,
+    check_in: "2026-12-04",
+    check_out: "2026-12-06",
+  };
+  const local = { status: "cancelada", cancelled_at: "2026-11-18T18:35:00Z" };
+  const ev = { checkIn: "2026-12-04", checkOut: "2026-12-06" };
+
+  it("mismas fechas, reserva local cancelada hace más de media hora: es otra persona en el hueco", () => {
+    expect(isRefilledAfterLocalCancel(row, local, ev, today, now)).toBe(true);
+  });
+
+  it("recién cancelada no: si la OTA también la canceló, su feed todavía no la sacó", () => {
+    const recent = { ...local, cancelled_at: new Date(now - REFILL_GRACE_MS + 60_000).toISOString() };
+    expect(isRefilledAfterLocalCancel(row, recent, ev, today, now)).toBe(false);
+  });
+
+  it("con la reserva local viva, o sin saber cuándo se canceló, no", () => {
+    expect(isRefilledAfterLocalCancel(row, { status: "confirmada", cancelled_at: null }, ev, today, now)).toBe(false);
+    expect(isRefilledAfterLocalCancel(row, { status: "cancelada", cancelled_at: null }, ev, today, now)).toBe(false);
+    expect(isRefilledAfterLocalCancel(row, null, ev, today, now)).toBe(false);
+  });
+
+  it("llegada hoy o pasada no: es un no-show o una salida anticipada", () => {
+    const hoy = { ...row, check_in: today, check_out: "2026-11-20" };
+    expect(isRefilledAfterLocalCancel(hoy, local, { checkIn: today, checkOut: "2026-11-20" }, today, now)).toBe(false);
+  });
+
+  it("con otras fechas no: eso lo resuelve el paso 5b de la ingesta", () => {
+    expect(isRefilledAfterLocalCancel(row, local, { checkIn: "2026-12-04", checkOut: "2026-12-07" }, today, now)).toBe(false);
+  });
+
+  it("sólo Booking reusa el UID; un cierre o una fila no activa no", () => {
+    expect(isRefilledAfterLocalCancel({ ...row, channel: "airbnb" as const }, local, ev, today, now)).toBe(false);
+    expect(isRefilledAfterLocalCancel({ ...row, is_block: true }, local, ev, today, now)).toBe(false);
+    expect(isRefilledAfterLocalCancel(row, local, { ...ev, isBlock: true }, today, now)).toBe(false);
+    expect(isRefilledAfterLocalCancel({ ...row, external_status: "cancelled" as const }, local, ev, today, now)).toBe(false);
+    expect(isRefilledAfterLocalCancel({ ...row, booking_id: null }, local, ev, today, now)).toBe(false);
+  });
+});
+
+describe("refilledSlots", () => {
+  const uid = "7069d1937654cc12f8785b20345ff559@booking.com";
+
+  it("un hueco que ya entró solo una vez queda anotado con sus fechas", () => {
+    const archived = { ical_uid: archivedIcalUid(uid, "res-rodolfo"), check_in: "2026-12-04", check_out: "2026-12-06" };
+    const live = { ical_uid: uid, check_in: "2026-12-04", check_out: "2026-12-06" };
+    const slots = refilledSlots([archived, live]);
+    expect(slots.has(slotKey(uid, "2026-12-04", "2026-12-06"))).toBe(true);
+    // Otras fechas en el mismo UID son otra estadía.
+    expect(slots.has(slotKey(uid, "2026-12-04", "2026-12-07"))).toBe(false);
+    expect(slots.size).toBe(1);
+  });
+
+  it("sin filas archivadas, nada", () => {
+    expect(refilledSlots([{ ical_uid: uid, check_in: "2026-12-04", check_out: "2026-12-06" }]).size).toBe(0);
+    expect(refilledSlots([{ ical_uid: null, check_in: null, check_out: null }]).size).toBe(0);
   });
 });
 
