@@ -13,7 +13,8 @@ import {
 } from "./ingest";
 import { reservationEventFromRow } from "./event-row";
 import { publicationState } from "./export-reads";
-import { OTA_IMPORT_PATH } from "./ota-help";
+import { OTA_EXPORT_PATH, OTA_IMPORT_PATH } from "./ota-help";
+import { isOwnExportFeedUrl } from "./own-export-url";
 import {
   dedupeKeyOverCancelled,
   isRefilledAfterLocalCancel,
@@ -494,6 +495,16 @@ async function syncLink(
   if (!feedUrl) {
     await markLinkFailure(admin, link, "La conexión no tiene feed configurado", true);
     result.error = "sin feed";
+    return result;
+  }
+
+  // En el lugar del calendario de la OTA está pegado el de rentOS (el que va
+  // EN la OTA): nunca trae una reserva. `saveLinkFeed` lo frena desde el
+  // 12/11/2026, pero una conexión guardada antes seguía leyéndolo y figuraba
+  // «con errores de lectura», sin decir cuál era el error de verdad.
+  if (isOwnExportFeedUrl(feedUrl, process.env.NEXT_PUBLIC_APP_URL)) {
+    await flagOwnExportAsFeed(admin, link);
+    result.error = "enlace propio";
     return result;
   }
 
@@ -1311,6 +1322,14 @@ async function markLinkSuccess(
       "El feed volvió a responder correctamente.",
     );
   }
+  if (link.consecutive_failures >= 1) {
+    await resolveIssuesByDedupe(
+      admin,
+      link.organization_id,
+      `own_feed:${link.id}`,
+      "Ya está cargado el calendario de la OTA.",
+    );
+  }
   // si estaba marcada como estancada (>10 min sin éxito), este éxito la resuelve
   const wasStale =
     !link.last_success_at || Date.now() - Date.parse(link.last_success_at) > 10 * 60 * 1000;
@@ -1320,6 +1339,48 @@ async function markLinkSuccess(
       link.organization_id,
       `stale:${link.id}`,
       "La conexión volvió a revisarse correctamente.",
+    );
+  }
+}
+
+/**
+ * La conexión tiene cargado el enlace de rentOS como si fuera el de la OTA.
+ * No es un calendario que no responde: es el enlace equivocado, y mientras
+ * tanto no entra ninguna reserva de esa OTA para el departamento. Se dice así,
+ * con el paso para corregirlo, en vez de «no se puede leer el calendario».
+ */
+const OWN_FEED_ERROR = "Está cargado el enlace de rentOS";
+
+async function flagOwnExportAsFeed(admin: AdminClient, link: ChannelLinkRow): Promise<void> {
+  const ota = channelLabel(link.channel);
+  const message = `${OWN_FEED_ERROR}, no el calendario de ${ota}`;
+  await admin
+    .from("channel_links")
+    .update({
+      claimed_until: null,
+      consecutive_failures: link.consecutive_failures + 1,
+      // No tiene sentido insistir: lo destraba una persona cambiando el enlace.
+      next_poll_at: new Date(Date.now() + MAX_BACKOFF_MIN * 60 * 1000).toISOString(),
+      health: { ...(link.health ?? {}), last_error: message },
+    })
+    .eq("id", link.id);
+  await openIssue(admin, {
+    organizationId: link.organization_id,
+    linkId: link.id,
+    issueType: "feed_error",
+    severity: "critical",
+    title: `En esta conexión de ${ota} está cargado el enlace de rentOS`,
+    detail: `Donde va el calendario que da ${ota} se pegó el enlace de rentOS (el que se pega EN ${ota}). Por eso no entra ninguna reserva de ${ota} de este departamento y se puede vender dos veces. Cambiá el enlace por el de ${OTA_EXPORT_PATH[link.channel]}.`,
+    dedupeKey: `own_feed:${link.id}`,
+  });
+  // Los avisos genéricos («no se puede leer», «sin revisión reciente») decían
+  // lo mismo, peor: queda uno solo por conexión, el que dice qué hacer.
+  for (const key of [`feed:${link.id}`, `stale:${link.id}`]) {
+    await resolveIssuesByDedupe(
+      admin,
+      link.organization_id,
+      key,
+      "El enlace cargado era el de rentOS: ver el aviso de esta conexión.",
     );
   }
 }
@@ -1414,12 +1475,15 @@ async function runHousekeeping(admin: AdminClient): Promise<Record<string, numbe
   const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const { data: staleLinks } = await admin
     .from("channel_links")
-    .select("id, organization_id, channel, last_success_at, created_at")
+    .select("id, organization_id, channel, last_success_at, created_at, health")
     .eq("status", "active")
     .or(`last_success_at.lt.${cutoff},last_success_at.is.null`);
   let stale = 0;
   for (const l of staleLinks ?? []) {
     if (!l.last_success_at && Date.parse(l.created_at) > Date.now() - 30 * 60 * 1000) continue;
+    // Ya tiene su aviso, que dice qué hacer (flagOwnExportAsFeed).
+    const lastError = (l.health as { last_error?: unknown } | null)?.last_error;
+    if (typeof lastError === "string" && lastError.startsWith(OWN_FEED_ERROR)) continue;
     await openIssue(admin, {
       organizationId: l.organization_id,
       linkId: l.id,

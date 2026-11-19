@@ -95,9 +95,9 @@ async function sweepChannelIssues(
 
   const keyOf = (i: OpenIssueRow) => i.dedupe_key ?? "";
   const linkIdOf = (i: OpenIssueRow) =>
-    i.link_id ?? keyOf(i).match(/^(?:feed|stale|empty_feed|export_stale):(.+)$/)?.[1] ?? null;
+    i.link_id ?? keyOf(i).match(/^(?:feed|own_feed|stale|empty_feed|export_stale):(.+)$/)?.[1] ?? null;
   const isLinkIssue = (i: OpenIssueRow) =>
-    /^(?:feed|stale|empty_feed|export_stale):/.test(keyOf(i));
+    /^(?:feed|own_feed|stale|empty_feed|export_stale):/.test(keyOf(i));
 
   // Reservas y bookings a los que apuntan.
   const reservations = await loadById(

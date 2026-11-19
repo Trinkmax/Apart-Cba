@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const lookupMock = vi.hoisted(() => vi.fn());
 vi.mock("dns/promises", () => ({ lookup: lookupMock }));
 
-import { assertSafeFeedUrl, BlockedUrlError } from "@/lib/channels/ssrf";
+import { afterEach } from "vitest";
+import { assertSafeFeedUrl, BlockedUrlError, safeFetchFeed } from "@/lib/channels/ssrf";
 
 describe("assertSafeFeedUrl (guard SSRF)", () => {
   beforeEach(() => {
@@ -66,5 +67,53 @@ describe("assertSafeFeedUrl (guard SSRF)", () => {
     await expect(assertSafeFeedUrl("https://noexiste.example/x")).rejects.toThrow(
       /No se pudo resolver/,
     );
+  });
+});
+
+describe("safeFetchFeed", () => {
+  beforeEach(() => {
+    lookupMock.mockReset();
+    lookupMock.mockResolvedValue([{ address: "34.120.10.10", family: 4 }]);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // VILLASOL (Viaggiato), 18-19/11/2026: «Redirect sin destino» 43 veces seguidas.
+  it("un 304 es «sin cambios», no un redirect roto", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 304 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await safeFetchFeed("https://www.airbnb.com/calendar/ical/123.ics?s=abc", {
+      etag: '"abc"',
+    });
+    expect(res).toEqual({ status: 304 });
+    expect(fetchMock.mock.calls[0][1].headers["if-none-match"]).toBe('"abc"');
+  });
+
+  it("un redirect de verdad sin Location sigue siendo un error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 302 })));
+    await expect(safeFetchFeed("https://www.airbnb.com/calendar/ical/123.ics")).rejects.toThrow(
+      /Redirect sin destino/,
+    );
+  });
+
+  it("sigue un redirect con destino y devuelve el calendario", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 301, headers: { location: "https://ical.booking.com/v1/export?t=x" } }),
+      )
+      .mockResolvedValueOnce(
+        new Response("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", {
+          status: 200,
+          headers: { "content-type": "text/calendar; charset=utf-8", etag: '"v2"' },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const res = await safeFetchFeed("https://www.booking.com/ical");
+    expect(res.status).toBe(200);
+    expect(res.body).toContain("BEGIN:VCALENDAR");
+    expect(res.etag).toBe('"v2"');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

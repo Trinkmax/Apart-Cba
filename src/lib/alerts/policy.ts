@@ -303,7 +303,12 @@ export function issueResolution(
     return null;
   }
 
-  if (key.startsWith("feed:") || key.startsWith("stale:") || key.startsWith("empty_feed:")) {
+  if (
+    key.startsWith("feed:") ||
+    key.startsWith("own_feed:") ||
+    key.startsWith("stale:") ||
+    key.startsWith("empty_feed:")
+  ) {
     const link = facts.link;
     if (link === undefined) return null;
     if (link === null) return "La conexión ya no existe.";

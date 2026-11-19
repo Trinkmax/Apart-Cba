@@ -161,6 +161,16 @@ export async function safeFetchFeed(
       cache: "no-store",
     });
 
+    // 304 «sin cambios» va ANTES que los redirects: también es un 3xx, y no
+    // trae Location. Con el orden al revés se leía como «Redirect sin destino»
+    // y la conexión fallaba en cada lectura mientras el calendario no cambiara
+    // (VILLASOL de Viaggiato: 43 fallos seguidos, 18-19/11/2026). Ninguna OTA
+    // manda validadores hoy; el día que una empiece, este era el modo de caerse.
+    if (res.status === 304) {
+      res.body?.cancel().catch(() => {});
+      return { status: 304 };
+    }
+
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
       res.body?.cancel().catch(() => {});
@@ -168,11 +178,6 @@ export async function safeFetchFeed(
       if (hop === MAX_REDIRECTS) throw new BlockedUrlError("Demasiados redirects");
       current = new URL(location, url).toString();
       continue;
-    }
-
-    if (res.status === 304) {
-      res.body?.cancel().catch(() => {});
-      return { status: 304 };
     }
 
     if (!res.ok) {

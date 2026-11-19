@@ -279,6 +279,11 @@ describe("issueResolution — se cierra sola cuando deja de ser verdad", () => {
       /pausada/,
     );
     expect(issueResolution(issue("feed:l1"), { link: null }, opts)).toMatch(/ya no existe/);
+    // «Está cargado el enlace de rentOS»: se cierra cuando la conexión lee bien.
+    expect(issueResolution(issue("own_feed:l1"), { link: healthy }, opts)).toMatch(/volvió a funcionar/);
+    expect(
+      issueResolution(issue("own_feed:l1"), { link: { ...healthy, consecutiveFailures: 44 } }, opts),
+    ).toBeNull();
   });
 
   // «La OTA no lee tu calendario» (JARDINES, Viaggiato): que NOSOTROS leamos
