@@ -183,6 +183,11 @@ import {
   searchPms,
   type SearchEmphasis,
 } from "./pms-search";
+import {
+  EMPTY_BOARD_UNIT_COUNTS,
+  boardEmptyState,
+  filterBoardUnits,
+} from "./pms-unit-filter";
 import { PmsBookingPopoverContent } from "./pms-booking-popover";
 import { ChannelBlockPanel } from "@/components/bookings/channel-block-panel";
 import { PmsUnitPopoverContent } from "./pms-unit-popover";
@@ -731,6 +736,20 @@ export function PmsBoard({
   }
   function clearAvailabilityDates() {
     setUnitFilters((f) => ({ ...f, availableFrom: "", availableTo: "" }));
+  }
+  // Cargar entrada y salida es preguntar qué se puede vender: se mira toda la
+  // cartera. «Sucios» prendido de antes dejaba la búsqueda sólo entre las
+  // sucias, que esa noche casi siempre tienen huésped (Viaggiato, 19/11/2026:
+  // «0 / 21 libres» con seis libres). Se apaga al completar el rango; si
+  // después se prende a propósito, se respeta y el estado vacío lo dice.
+  function setAvailabilityDate(field: "availableFrom" | "availableTo", value: string) {
+    const from = field === "availableFrom" ? value : unitFilters.availableFrom;
+    const to = field === "availableTo" ? value : unitFilters.availableTo;
+    const wasComplete = Boolean(unitFilters.availableFrom && unitFilters.availableTo);
+    if (!wasComplete && from && to) setOnlyDirtyRequested(false);
+    setUnitFilters((f) =>
+      field === "availableFrom" ? { ...f, availableFrom: value } : { ...f, availableTo: value },
+    );
   }
 
   // ── Disponibilidad por rango ("Buscar disp") ───────────────────────────────
@@ -1566,10 +1585,11 @@ export function PmsBoard({
   // Además de las filas, cuenta POR QUÉ quedó afuera cada unidad que coincide
   // con la búsqueda: buscar "QUIROS1" con un rango en que está ocupada no es
   // "nada coincide" (eso sugiere un typo), es "coincide, pero está ocupada".
+  // Y si las esconde «Sucios», cuántas se verían sin él (pms-unit-filter.ts).
   const unitFilterResult = useMemo(() => {
     // Rango sin verificar: ninguna fila, para no afirmar disponibilidad.
     if (availabilityPending) {
-      return { units: [] as UnitWithRelations[], searchMatches: 0, attrMisses: 0, busyMatches: 0 };
+      return { units: [] as UnitWithRelations[], counts: EMPTY_BOARD_UNIT_COUNTS };
     }
     const f = unitFilters;
     const minGuests = f.minGuests ? Number(f.minGuests) : null;
@@ -1605,29 +1625,18 @@ export function PmsBoard({
       return true;
     };
 
-    const shown: UnitWithRelations[] = [];
-    let searchMatches = 0;
-    let attrMisses = 0;
-    let busyMatches = 0;
-    for (const u of units) {
+    return filterBoardUnits({
+      units,
       // Búsqueda libre: coincide la unidad (código, nombre, barrio, dirección)
       // o alguna de sus reservas. La fila se muestra con TODA su ocupación.
-      if (search.active && !search.shownUnitIds.has(u.id)) continue;
-      searchMatches += 1;
-      if (onlyDirty && !cleanlinessByUnit[u.id]) continue;
-      if (!passesAttributes(u)) {
-        attrMisses += 1;
-        continue;
-      }
+      searchShown: search.active ? search.shownUnitIds : null,
+      passesAttributes,
       // Disponible = ninguna reserva activa, cierre ni solicitud que retenga la
       // venta se pisa con el rango (veredicto autoritativo, no la ventana cargada).
-      if (busy?.has(u.id)) {
-        busyMatches += 1;
-        continue;
-      }
-      shown.push(u);
-    }
-    return { units: shown, searchMatches, attrMisses, busyMatches };
+      busy,
+      onlyDirty,
+      isDirty: (unitId) => Boolean(cleanlinessByUnit[unitId]),
+    });
   }, [
     units,
     unitFilters,
@@ -1641,67 +1650,19 @@ export function PmsBoard({
 
   // Estado vacío: decir la verdad de por qué no hay filas. "Nada coincide"
   // sólo cuando de verdad nada coincide; si la unidad buscada está ocupada en
-  // el rango (lo más común al combinar búsqueda + "Buscar disp"), decirlo.
-  const emptyStateCopy = (() => {
-    const q = query.trim();
-    const { searchMatches, attrMisses, busyMatches } = unitFilterResult;
-    const countUnits = (n: number) => `${n} ${n === 1 ? "unidad" : "unidades"}`;
-    const onDates = availabilityRangeLabel ? `del ${availabilityRangeLabel}` : "en esas fechas";
-    const otherFilters = "los otros filtros de búsqueda (huéspedes, precio, dormitorios, baños, barrio, modo)";
-    if (search.active && searchMatches === 0) {
-      return {
-        title: "Ninguna unidad coincide con la búsqueda",
-        body:
-          `Nada coincide con “${q}” en unidades (código, nombre, barrio, dirección) ni en las reservas cargadas.` +
-          // La búsqueda global (todas las fechas) es el popover del buscador
-          // de escritorio: en el celular no existe.
-          (isMobile ? "" : " La búsqueda global del buscador mira todas las fechas."),
-        busy: false,
-      };
-    }
-    if (availabilityStatus.kind === "ready" && busyMatches > 0) {
-      const busyVerb = busyMatches === 1 ? "está ocupada" : "están ocupadas";
-      const missVerb = attrMisses === 1 ? "no cumple" : "no cumplen";
-      if (search.active) {
-        return {
-          title:
-            attrMisses > 0
-              ? "Lo que buscás no está disponible en esas fechas"
-              : searchMatches === 1
-                ? "La unidad que buscás está ocupada en esas fechas"
-                : "Las unidades que buscás están ocupadas en esas fechas",
-          body:
-            attrMisses > 0
-              ? `“${q}” coincide con ${countUnits(searchMatches)}: ${busyMatches} ${busyVerb} ${onDates} y ${attrMisses} ${missVerb} ${otherFilters}.`
-              : `“${q}” coincide con ${countUnits(searchMatches)}, pero ${busyVerb} ${onDates}.`,
-          busy: true,
-        };
-      }
-      return {
-        title: "No hay unidades libres en esas fechas",
-        body:
-          attrMisses > 0
-            ? `${countUnits(busyMatches)} ${busyVerb} ${onDates} y ${attrMisses} ${missVerb} ${otherFilters}.`
-            : `${busyMatches === 1 ? "La única unidad está ocupada" : `Las ${busyMatches} unidades están ocupadas`} ${onDates}.`,
-        busy: true,
-      };
-    }
-    if (search.active) {
-      return {
-        title:
-          searchMatches === 1
-            ? "La unidad que buscás no cumple los filtros"
-            : "Las unidades que buscás no cumplen los filtros",
-        body: `“${q}” coincide con ${countUnits(searchMatches)}, pero ${searchMatches === 1 ? "no cumple" : "ninguna cumple"} ${otherFilters}.`,
-        busy: false,
-      };
-    }
-    return {
-      title: "Ninguna unidad coincide con los filtros",
-      body: "Probá relajar los criterios o limpiá los filtros para volver a ver todas las unidades.",
-      busy: false,
-    };
-  })();
+  // el rango (lo más común al combinar búsqueda + "Buscar disp"), decirlo; y si
+  // las esconde «Sucios», decir eso y cuántas hay sin él.
+  const emptyStateCopy = boardEmptyState({
+    query: query.trim(),
+    searchActive: search.active,
+    counts: unitFilterResult.counts,
+    availabilityReady: availabilityStatus.kind === "ready",
+    rangeLabel: availabilityRangeLabel,
+    onlyDirty,
+    attributeFiltersActive:
+      activeUnitFilterCount > (unitFilters.availableFrom && unitFilters.availableTo ? 1 : 0),
+    isMobile,
+  });
 
   // ── Contador del encabezado: lo que está EN PANTALLA (filas mostradas ×
   // ventana visible), no todo lo lazy-cargado. Con búsqueda, además, cuántas
@@ -3466,9 +3427,7 @@ export function PmsBoard({
                         <Input
                           type="date"
                           value={unitFilters.availableFrom}
-                          onChange={(e) =>
-                            setUnitFilters((f) => ({ ...f, availableFrom: e.target.value }))
-                          }
+                          onChange={(e) => setAvailabilityDate("availableFrom", e.target.value)}
                           className="h-8 text-xs"
                           placeholder="Desde"
                           aria-label="Entrada"
@@ -3476,9 +3435,7 @@ export function PmsBoard({
                         <Input
                           type="date"
                           value={unitFilters.availableTo}
-                          onChange={(e) =>
-                            setUnitFilters((f) => ({ ...f, availableTo: e.target.value }))
-                          }
+                          onChange={(e) => setAvailabilityDate("availableTo", e.target.value)}
                           className="h-8 text-xs"
                           placeholder="Hasta"
                           aria-label="Salida"
@@ -3626,6 +3583,31 @@ export function PmsBoard({
                           ? "Buscando disponibilidad…"
                           : "Disponibilidad sin verificar"}
                       </span>
+                    ) : onlyDirty ? (
+                      // Con «Sucios» se mira sólo una parte: el total es el de
+                      // las sucias, no el de la cartera («0 / 21 libres» con
+                      // seis libres fue el reclamo de Viaggiato, 19/11/2026).
+                      <>
+                        <span className="text-[11px] text-muted-foreground">
+                          <span className="font-semibold tabular-nums text-foreground">
+                            {filteredUnits.length}
+                          </span>{" "}
+                          / {dirtyCounts.total} {dirtyCounts.total === 1 ? "sucia" : "sucias"}
+                          {availabilityStatus.kind === "ready"
+                            ? dirtyCounts.total === 1
+                              ? " libre"
+                              : " libres"
+                            : ""}
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => setOnlyDirtyRequested(false)}
+                        >
+                          Ver todas
+                        </Button>
+                      </>
                     ) : (
                       <span className="text-[11px] text-muted-foreground">
                         <span className="font-semibold tabular-nums text-foreground">
@@ -4070,7 +4052,9 @@ export function PmsBoard({
                 className="sticky left-0 px-6 py-12 text-center"
                 style={{ width: "min(36rem, 100vw)" }}
               >
-                {emptyStateCopy.busy ? (
+                {emptyStateCopy.dirtyAction ? (
+                  <Sparkles className="size-10 mx-auto text-muted-foreground/40 mb-3" aria-hidden />
+                ) : emptyStateCopy.busy ? (
                   <CalendarRange className="size-10 mx-auto text-muted-foreground/40 mb-3" />
                 ) : (
                   <Hotel className="size-10 mx-auto text-muted-foreground/40 mb-3" />
@@ -4078,36 +4062,49 @@ export function PmsBoard({
                 <h3 className="font-semibold">{emptyStateCopy.title}</h3>
                 <p className="text-xs text-muted-foreground mt-1">{emptyStateCopy.body}</p>
                 <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
-                  {emptyStateCopy.busy && (
+                  {emptyStateCopy.dirtyAction ? (
+                    // Las filas las esconde «Sucios»: la única salida que hace falta.
                     <Button
                       size="sm"
                       className="h-8 text-xs"
-                      onClick={showAvailabilityRangeOnCalendar}
+                      onClick={() => setOnlyDirtyRequested(false)}
                     >
-                      Ver esas fechas en el calendario
+                      {emptyStateCopy.dirtyAction}
                     </Button>
-                  )}
-                  {search.active && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 text-xs"
-                      onClick={() => setQuery("")}
-                    >
-                      {/* Sin la búsqueda, el rango queda: muestra qué OTRAS
-                          unidades están libres en esas fechas. */}
-                      {emptyStateCopy.busy ? "Ver otras libres en esas fechas" : "Borrar búsqueda"}
-                    </Button>
-                  )}
-                  {activeUnitFilterCount > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-8 text-xs"
-                      onClick={clearUnitFilters}
-                    >
-                      Limpiar filtros
-                    </Button>
+                  ) : (
+                    <>
+                      {emptyStateCopy.busy && (
+                        <Button
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={showAvailabilityRangeOnCalendar}
+                        >
+                          Ver esas fechas en el calendario
+                        </Button>
+                      )}
+                      {search.active && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={() => setQuery("")}
+                        >
+                          {/* Sin la búsqueda, el rango queda: muestra qué OTRAS
+                              unidades están libres en esas fechas. */}
+                          {emptyStateCopy.busy ? "Ver otras libres en esas fechas" : "Borrar búsqueda"}
+                        </Button>
+                      )}
+                      {activeUnitFilterCount > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          onClick={clearUnitFilters}
+                        >
+                          Limpiar filtros
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
