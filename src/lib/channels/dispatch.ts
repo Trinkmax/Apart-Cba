@@ -12,7 +12,9 @@ import {
   resolveIssuesByDedupe,
 } from "./ingest";
 import { reservationEventFromRow } from "./event-row";
-import { publicationState } from "./export-reads";
+import { isAbsorbedByOurCalendar } from "./absorbed-closure";
+import { publicationState, stayLabel } from "./export-reads";
+import { formatTimeInTz } from "./publication-copy";
 import { OTA_EXPORT_PATH, OTA_IMPORT_PATH } from "./ota-help";
 import { isOwnExportFeedUrl } from "./own-export-url";
 import {
@@ -699,6 +701,102 @@ async function syncLink(
   return result;
 }
 
+/**
+ * Un cierre de Booking que dejó de publicarse porque ya lo tiene nuestro
+ * calendario (absorbed-closure.ts). La reserva queda como está, la fila deja de
+ * contarse como ausente (mismo candado que «mantener», sin autor) y queda una
+ * novedad que explica de qué dependen ahora esas fechas. `true` = no preguntar.
+ */
+async function keepClosureAbsorbedByOurCalendar(
+  admin: AdminClient,
+  link: ChannelLinkRow,
+  r: KnownReservation,
+  missingSince: string,
+): Promise<boolean> {
+  if (link.channel !== "booking" || !r.booking_id) return false;
+  const { data: booking } = await admin
+    .from("bookings")
+    .select("id, unit_id, created_at, created_by, check_in_date, check_out_date")
+    .eq("id", r.booking_id)
+    .eq("organization_id", link.organization_id)
+    .maybeSingle();
+  if (!booking?.created_at) return false;
+
+  // La primera vez que la OTA se bajó nuestro calendario con la reserva adentro.
+  const { data: read, error: readErr } = await admin
+    .from("channel_export_reads")
+    .select("read_at")
+    .eq("link_id", link.id)
+    .eq("http_status", 200)
+    .gt("read_at", booking.created_at as string)
+    .order("read_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  // Sin la 083 (o sin lecturas anotadas) no hay con qué saberlo: se pregunta.
+  if (readErr || !read?.read_at) return false;
+
+  if (
+    !isAbsorbedByOurCalendar({
+      channel: link.channel,
+      bookingCreatedAt: booking.created_at as string,
+      bookingLoadedByPerson: Boolean(booking.created_by),
+      hasReservationNumber: Boolean(r.confirmation_code),
+      firstReadAt: read.read_at as string,
+      missingSince,
+    })
+  ) {
+    return false;
+  }
+
+  const now = new Date().toISOString();
+  const { error: lockErr } = await admin
+    .from("channel_reservations")
+    .update({
+      cancellation_locked_at: now,
+      cancellation_locked_by: null,
+      missing_since: null,
+      missing_runs: 0,
+    })
+    .eq("id", r.id);
+  // Si no quedó anotado, mejor preguntar que perder la ausencia.
+  if (lockErr) return false;
+
+  const canal = channelLabel(link.channel);
+  const hora = formatTimeInTz(read.read_at as string);
+  await resolveIssuesByDedupe(
+    admin,
+    link.organization_id,
+    `missing:${r.id}`,
+    `${canal} dejó de mostrarla después de leer tu calendario (${hora}): esas fechas ahora dependen de este calendario. No se canceló nada.`,
+  );
+
+  const { data: unit } = booking.unit_id
+    ? await admin.from("units").select("code, name").eq("id", booking.unit_id).maybeSingle()
+    : { data: null };
+  const donde = [unit?.code, unit?.name].filter((x) => x && String(x).trim()).join(" · ") || "Una unidad";
+  const { error: noteErr } = await admin.from("notifications").insert({
+    organization_id: link.organization_id,
+    type: "other",
+    severity: "info",
+    title: `${canal} dejó de mostrar unas fechas que ya están cargadas acá`,
+    body:
+      `${donde}, ${stayLabel([booking.check_in_date as string, booking.check_out_date as string])}. ` +
+      `${canal} las publicó cerradas, leyó tu calendario a las ${hora} y dejó de mostrarlas. ` +
+      `No es una cancelación: pasa con fechas que se cerraron en ${canal} sin una reserva de ${canal} (por ejemplo, a mano). ` +
+      `Desde ahora siguen cerradas allá porque están cargadas acá: si querés volver a abrirlas, cancelá esta reserva. ` +
+      `Si no hay huésped, podés marcarla como cierre.`,
+    ref_type: "booking",
+    ref_id: booking.id,
+    target_role: "admin",
+    action_url: `/dashboard/reservas/${booking.id}`,
+    dedup_key: `ota_absorbed:${r.id}`,
+  });
+  if (noteErr && noteErr.code !== "23505") {
+    console.error("[channels/dispatch] novedad de cierre absorbido falló", noteErr.message);
+  }
+  return true;
+}
+
 function shouldRetryUnprojected(existing: ChannelReservationRow): boolean {
   // Sin unidad no hay nada que proyectar: la destraba una persona (no aplica a
   // iCal, cuya conexión siempre tiene unidad, pero la fila puede venir de email).
@@ -1151,6 +1249,11 @@ export async function proposeDisappearances(
       // La propuesta ya está abierta y esperando: el contador queda congelado
       // y no se escribe nada hasta que una persona decida.
       if (alreadyPending.has(r.id)) continue;
+
+      // Dejó de publicarse justo después de que la OTA se bajó nuestro
+      // calendario: no se canceló nada, esas fechas pasaron a depender de él
+      // (absorbed-closure.ts). No se pregunta.
+      if (await keepClosureAbsorbedByOurCalendar(admin, link, r, missingSince)) continue;
 
       // Evidencia suficiente para pedir una decisión humana.
       const outcome = await openCancellationRequest(admin, {

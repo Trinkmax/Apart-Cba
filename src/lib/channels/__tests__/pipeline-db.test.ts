@@ -37,6 +37,7 @@ async function cleanup() {
     await admin.from("channel_cancellation_requests").delete().eq("organization_id", org);
     await admin.from("channel_events").delete().eq("organization_id", org);
     await admin.from("booking_external_refs").delete().eq("organization_id", org);
+    await admin.from("channel_export_reads").delete().eq("organization_id", org);
     await admin.from("channel_reservations").delete().eq("organization_id", org);
     await admin.from("channel_links").delete().eq("organization_id", org);
     await admin.from("channel_settings").delete().eq("organization_id", org);
@@ -678,6 +679,9 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     const { data: res } = await admin
       .from("channel_reservations")
       .select("confirmation_code")
+      // por organización: si una corrida anterior se cortó sin limpiar, su
+      // fila con el mismo UID hacía fallar este `.single()`
+      .eq("organization_id", orgId)
       .eq("ical_uid", "zzt-bkg-ref@booking.com")
       .single();
     expect(res!.confirmation_code).toBe("9911223344");
@@ -702,6 +706,7 @@ d("pipeline canónico (integración DB, org descartable)", () => {
     const { data: before } = await admin
       .from("bookings")
       .select("id, status")
+      .eq("organization_id", orgId)
       .eq("external_id", "9911223344")
       .single();
     expect(before!.status).toBe("confirmada");
@@ -1358,4 +1363,198 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .single();
     expect(issue!.status).toBe("resolved");
   }, 90_000);
+
+  // ── Un calendario que vuelve a un estado anterior ─────────────────────────
+  // La clave de un VEVENT sale de su contenido, así que la tercera lectura de
+  // A → B → A trae la clave de la primera. Se descartaba por repetida y la fila
+  // quedaba en B para siempre. GAMA, Viaggiato (19/11/2026): 26→30/11, después
+  // 26→27 y de nuevo 26→30; acá figuraba 26→27 y Booking lo tenía cerrado
+  // hasta el 30.
+  const feedRead = async (uid: string, checkIn: string, checkOut: string) => {
+    const { toReservationEvent } = await import("@/lib/channels/ical-adapter");
+    return toReservationEvent({
+      event: { uid, checkIn, checkOut, summary: "CLOSED - Not available", isBlock: false },
+      organizationId: orgId,
+      linkId: link1,
+      unitId: unit1,
+      channel: "booking",
+    });
+  };
+  const eventsOf = async (uid: string) => {
+    const { count } = await admin
+      .from("channel_events")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", orgId)
+      .eq("payload->>ical_uid", uid);
+    return count ?? 0;
+  };
+  const checkOutOf = async (bookingId: string) => {
+    const { data } = await admin.from("bookings").select("check_out_date").eq("id", bookingId).single();
+    return data!.check_out_date as string;
+  };
+
+  it("A → B → A: el calendario vuelve a un estado anterior y la reserva lo sigue", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const uid = "zzt-bkg-flip-1@booking.com";
+    const A = [inDays(400), inDays(404)] as const;
+    const B = [inDays(400), inDays(401)] as const;
+
+    const r1 = await ingestEvent(admin, await feedRead(uid, ...A));
+    expect(r1.outcome).toBe("created");
+    const bookingId = r1.bookingId!;
+
+    expect((await ingestEvent(admin, await feedRead(uid, ...B))).outcome).toBe("updated");
+    expect(await checkOutOf(bookingId)).toBe(B[1]);
+    // la misma lectura otra vez sigue siendo un repetido
+    expect((await ingestEvent(admin, await feedRead(uid, ...B))).outcome).toBe("duplicate");
+
+    // vuelve a A: antes esto era «duplicate» y la reserva se quedaba en B
+    const back = await ingestEvent(admin, await feedRead(uid, ...A));
+    expect(back.outcome).toBe("updated");
+    expect(back.bookingId).toBe(bookingId);
+    expect(await checkOutOf(bookingId)).toBe(A[1]);
+    expect(await eventsOf(uid)).toBe(3);
+
+    // y deja de ser novedad en la lectura siguiente
+    expect((await ingestEvent(admin, await feedRead(uid, ...A))).outcome).toBe("duplicate");
+    expect(await eventsOf(uid)).toBe(3);
+
+    // ir y venir otra vez entre los mismos dos estados tampoco se traba
+    expect((await ingestEvent(admin, await feedRead(uid, ...B))).outcome).toBe("updated");
+    expect(await checkOutOf(bookingId)).toBe(B[1]);
+    expect((await ingestEvent(admin, await feedRead(uid, ...A))).outcome).toBe("updated");
+    expect(await checkOutOf(bookingId)).toBe(A[1]);
+    expect((await ingestEvent(admin, await feedRead(uid, ...A))).outcome).toBe("duplicate");
+    expect(await eventsOf(uid)).toBe(5);
+  }, 120_000);
+
+  it("vuelve al estado anterior sobre una reserva que una persona canceló: entra como estadía nueva", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const uid = "zzt-bkg-flip-2@booking.com";
+    const A = [inDays(420), inDays(424)] as const;
+    const B = [inDays(420), inDays(421)] as const;
+
+    const r1 = await ingestEvent(admin, await feedRead(uid, ...A));
+    expect(r1.outcome).toBe("created");
+    expect((await ingestEvent(admin, await feedRead(uid, ...B))).outcome).toBe("updated");
+    // la cancelan desde la ficha: la fila externa sigue `active`
+    await admin
+      .from("bookings")
+      .update({ status: "cancelada", cancelled_at: new Date().toISOString() })
+      .eq("id", r1.bookingId!);
+
+    const back = await ingestEvent(admin, await feedRead(uid, ...A));
+    expect(back.outcome).toBe("created");
+    expect(back.bookingId).not.toBe(r1.bookingId);
+
+    const { data: nueva } = await admin
+      .from("bookings")
+      .select("status, check_in_date, check_out_date")
+      .eq("id", back.bookingId!)
+      .single();
+    expect(nueva).toMatchObject({ status: "confirmada", check_in_date: A[0], check_out_date: A[1] });
+    // la cancelada queda como estaba, con sus fechas
+    const { data: vieja } = await admin
+      .from("bookings")
+      .select("status, check_out_date")
+      .eq("id", r1.bookingId!)
+      .single();
+    expect(vieja).toMatchObject({ status: "cancelada", check_out_date: B[1] });
+  }, 120_000);
+
+  // ── Un cierre que Booking deja de mostrar al leer nuestro calendario ───────
+  // Cofico Ideal, Habitana: cada entrada del calendario de Booking desaparecía
+  // minutos después de que Booking se bajara el nuestro. No es una cancelación
+  // (absorbed-closure.ts) y no se pregunta.
+  const vanishFromBooking = async (reservationId: string) => {
+    const { proposeDisappearances } = await import("@/lib/channels/dispatch");
+    const { data: linkRow } = await admin.from("channel_links").select("*").eq("id", link1).single();
+    // la conexión de prueba es de Airbnb; la regla sólo mira Booking
+    const bookingLink = { ...linkRow!, channel: "booking" as const };
+    const { data: row } = await admin
+      .from("channel_reservations")
+      .select("*, local:bookings!channel_reservations_booking_id_fkey(status, cancelled_at)")
+      .eq("id", reservationId)
+      .single();
+    return proposeDisappearances(admin, bookingLink, [row!], new Set(), "2040-12-31");
+  };
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+  const closedInBooking = async (uid: string, from: number, readMinutesAgo: number) => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const r = await ingestEvent(admin, await feedRead(uid, inDays(from), inDays(from + 3)));
+    expect(r.outcome).toBe("created");
+    // la reserva nació hace una hora y media; Booking leyó nuestro calendario
+    // después y la entrada falta desde hace 31 minutos
+    await admin.from("bookings").update({ created_at: minutesAgo(90) }).eq("id", r.bookingId!);
+    await admin.from("channel_export_reads").insert({
+      organization_id: orgId,
+      unit_id: unit1,
+      link_id: link1,
+      reader: "booking",
+      via: "link",
+      http_status: 200,
+      etag: "test",
+      read_at: minutesAgo(readMinutesAgo),
+    });
+    await admin
+      .from("channel_reservations")
+      .update({ missing_since: minutesAgo(31), missing_runs: 5 })
+      .eq("id", r.reservationId!);
+    return r;
+  };
+
+  it("deja de publicarse justo después de que Booking lee nuestro calendario: no se pregunta y la reserva queda", async () => {
+    await admin.from("channel_export_reads").delete().eq("organization_id", orgId);
+    const r = await closedInBooking("zzt-bkg-absorbed-1@booking.com", 440, 34);
+
+    expect(await vanishFromBooking(r.reservationId!)).toBe(0);
+
+    const { data: row } = await admin
+      .from("channel_reservations")
+      .select("external_status, cancellation_locked_at, cancellation_locked_by, missing_since, missing_runs")
+      .eq("id", r.reservationId!)
+      .single();
+    expect(row!.external_status).toBe("active");
+    expect(row!.cancellation_locked_at).not.toBeNull();
+    expect(row!.cancellation_locked_by).toBeNull();
+    expect(row).toMatchObject({ missing_since: null, missing_runs: 0 });
+    const { data: booking } = await admin.from("bookings").select("status").eq("id", r.bookingId!).single();
+    expect(booking!.status).toBe("confirmada");
+    const { count: asked } = await admin
+      .from("channel_cancellation_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("reservation_id", r.reservationId!);
+    expect(asked).toBe(0);
+    const { data: note } = await admin
+      .from("notifications")
+      .select("severity, title")
+      .eq("organization_id", orgId)
+      .eq("dedup_key", `ota_absorbed:${r.reservationId}`)
+      .single();
+    expect(note!.severity).toBe("info");
+    expect(note!.title).toContain("Booking");
+    // ya no se vuelve a mirar como ausente
+    expect(await vanishFromBooking(r.reservationId!)).toBe(0);
+  }, 120_000);
+
+  it("si falta horas después de esa lectura, se pregunta como siempre", async () => {
+    await admin.from("channel_export_reads").delete().eq("organization_id", orgId);
+    // Booking leyó hace 75 minutos y la entrada siguió publicada 44 minutos más
+    const r = await closedInBooking("zzt-bkg-absorbed-2@booking.com", 460, 75);
+
+    expect(await vanishFromBooking(r.reservationId!)).toBe(1);
+
+    const { data: req } = await admin
+      .from("channel_cancellation_requests")
+      .select("status, reason_code")
+      .eq("reservation_id", r.reservationId!)
+      .single();
+    expect(req).toMatchObject({ status: "pending", reason_code: "missing_from_feed" });
+    const { data: row } = await admin
+      .from("channel_reservations")
+      .select("cancellation_locked_at")
+      .eq("id", r.reservationId!)
+      .single();
+    expect(row!.cancellation_locked_at).toBeNull();
+  }, 120_000);
 });

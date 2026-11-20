@@ -21,6 +21,7 @@ import {
 } from "./reference-match";
 import { appliesToLink, getChannelRequestPolicy } from "./request-policy";
 import { archivedIcalUid, isNewStayInSameSlot, isRefilledAfterLocalCancel } from "./same-slot";
+import { isReturnToEarlierState, returnDedupeKey, type StoredEventRef } from "./event-dedupe";
 import type {
   Channel,
   ChannelReservationRow,
@@ -152,15 +153,87 @@ export async function ingestEvent(
       .eq("dedupe_key", ev.dedupeKey)
       .maybeSingle();
     if (!existing) return { outcome: "error", error: "evento duplicado no recuperable" };
-    if (existing.status === "processed" || existing.status === "processing") {
-      return { outcome: "duplicate" };
+    if (existing.status === "processing") return { outcome: "duplicate" };
+    if (existing.status === "processed") {
+      // «Repetido» es sólo lo que coincide con lo ÚLTIMO que se procesó de esa
+      // reserva: un calendario que vuelve a un estado anterior es una novedad
+      // (event-dedupe.ts).
+      const again = await storeReturnToEarlierState(admin, ev, existing.id);
+      if (!again) return { outcome: "duplicate" };
+      eventId = again;
+    } else {
+      eventId = existing.id;
     }
-    eventId = existing.id;
   } else {
     eventId = inserted.id;
   }
 
   return processStoredEvent(admin, eventId, ev);
+}
+
+/**
+ * El VEVENT choca con un evento ya procesado. Si después de ese se procesó otro
+ * con otro contenido para el mismo UID, el calendario volvió a un estado
+ * anterior: se guarda como evento nuevo y devuelve su id para procesarlo.
+ * `null` = repetido de verdad (o no se pudo saber: ante la duda no se reprocesa).
+ */
+async function storeReturnToEarlierState(
+  admin: AdminClient,
+  ev: ReservationEvent,
+  duplicateOfId: string,
+): Promise<string | null> {
+  if (ev.transport !== "ical" || ev.eventType !== "reservation_upsert" || !ev.linkId || !ev.icalUid) {
+    return null;
+  }
+  // Lo último que se PROCESÓ, no lo último que se creó: un evento que quedó
+  // «para revisar» se reprocesa cada hora con su id de siempre.
+  const { data: latest, error } = await admin
+    .from("channel_events")
+    .select("id, content_hash, processed_at")
+    .eq("organization_id", ev.organizationId)
+    .eq("link_id", ev.linkId)
+    .eq("transport", "ical")
+    .eq("payload->>ical_uid", ev.icalUid)
+    .not("processed_at", "is", null)
+    .order("processed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("[channels/ingest] no se pudo leer el último evento del UID", error.message);
+    return null;
+  }
+  const last = latest as StoredEventRef | null;
+  if (!last || !isReturnToEarlierState(ev.contentHash, duplicateOfId, last)) return null;
+
+  const dedupeKey = returnDedupeKey(ev.dedupeKey, last);
+  const { data: inserted, error: insertErr } = await admin
+    .from("channel_events")
+    .insert({
+      organization_id: ev.organizationId,
+      link_id: ev.linkId,
+      transport: ev.transport,
+      event_type: ev.eventType,
+      dedupe_key: dedupeKey,
+      payload: minimizePayload(ev),
+      content_hash: ev.contentHash ?? null,
+      status: "received",
+    })
+    .select("id")
+    .single();
+  if (!insertErr) return inserted.id as string;
+  if (insertErr.code !== "23505") {
+    console.error("[channels/ingest] no se pudo guardar la vuelta a un estado anterior", insertErr.message);
+    return null;
+  }
+  // Esta misma vuelta ya se guardó: se reintenta sólo si no terminó.
+  const { data: again } = await admin
+    .from("channel_events")
+    .select("id, status")
+    .eq("organization_id", ev.organizationId)
+    .eq("dedupe_key", dedupeKey)
+    .maybeSingle();
+  if (!again || again.status === "processed" || again.status === "processing") return null;
+  return again.id as string;
 }
 
 /** Reprocesa un channel_event ya persistido (retries del reconciliador). */
