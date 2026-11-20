@@ -1629,6 +1629,10 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .update({ health: { ...(other!.health ?? {}), feed_changed_at: new Date().toISOString() } })
       .eq("id", link2);
 
+    await admin
+      .from("channel_links")
+      .update({ last_success_at: new Date(Date.now() - 12 * 60_000).toISOString() })
+      .eq("id", link1);
     const { data: linkRow } = await admin.from("channel_links").select("*").eq("id", link1).single();
     await flagFeedLinkGone(admin, linkRow!);
 
@@ -1638,7 +1642,6 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .eq("id", link1)
       .single();
     expect(String(after!.health.last_error)).toContain(LINK_GONE_ERROR);
-    expect(after!.health.link_gone_at).toBeTruthy();
     expect(after!.consecutive_failures).toBe(linkRow!.consecutive_failures + 1);
 
     const { data: issue } = await admin
@@ -1649,6 +1652,8 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .single();
     expect(issue).toMatchObject({ status: "open", severity: "critical" });
     expect(issue!.detail).toContain("tampoco lee tu calendario");
+    // dice desde cuándo: la última lectura buena, no cuándo se detectó
+    expect(issue!.detail).toContain("Se leyó bien por última vez el");
     // nombra a la otra unidad, que es donde se cambió el enlace
     expect(issue!.detail).toContain("ZZT2");
     // se ve ya: no es un fallo pasajero

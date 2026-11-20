@@ -1417,7 +1417,6 @@ async function markLinkSuccess(
     health: {
       ...(link.health ?? {}),
       last_error: null,
-      link_gone_at: null,
       ...(extra.unchanged
         ? {}
         : {
@@ -1484,10 +1483,10 @@ async function markLinkSuccess(
 export async function flagFeedLinkGone(admin: AdminClient, link: ChannelLinkRow): Promise<void> {
   const ota = channelLabel(link.channel);
   const health = (link.health ?? {}) as Record<string, unknown>;
-  const goneAt =
-    typeof health.link_gone_at === "string" && health.link_gone_at
-      ? health.link_gone_at
-      : new Date().toISOString();
+  // Desde cuándo: la última vez que se leyó bien, no cuándo nos dimos cuenta
+  // (con el enlace anterior fallando, la lectura siguiente puede estar a una
+  // hora). No cambia mientras siga caído, así que el texto del aviso tampoco.
+  const goneAt = link.last_success_at ?? new Date().toISOString();
   await admin
     .from("channel_links")
     .update({
@@ -1496,7 +1495,7 @@ export async function flagFeedLinkGone(admin: AdminClient, link: ChannelLinkRow)
       // Insistir no lo revive: lo destraba una persona cargando el enlace nuevo
       // (que pone la próxima lectura para ya, ver saveLinkFeed).
       next_poll_at: new Date(Date.now() + MAX_BACKOFF_MIN * 60 * 1000).toISOString(),
-      health: { ...health, last_error: `${LINK_GONE_ERROR} en ${ota}`, link_gone_at: goneAt },
+      health: { ...health, last_error: `${LINK_GONE_ERROR} en ${ota}` },
     })
     .eq("id", link.id);
 
@@ -1537,7 +1536,7 @@ export async function flagFeedLinkGone(admin: AdminClient, link: ChannelLinkRow)
     title: `${ota} dio de baja el enlace del calendario de esta conexión`,
     detail:
       `${ota} responde que ese enlace ya no existe. Pasa cuando en ${ota} se borra la conexión del calendario o se crea una nueva: cada conexión tiene su propio enlace. ` +
-      `Desde el ${formatStampInTz(goneAt)} no entran las reservas de ${ota} de este departamento y, si la conexión se borró, ${ota} tampoco lee tu calendario: lo que se reserve acá no se cierra allá. ` +
+      `Se leyó bien por última vez el ${formatStampInTz(goneAt)}. Desde entonces no entran las reservas de ${ota} de este departamento y, si la conexión se borró, ${ota} tampoco lee tu calendario: lo que se reserve acá no se cierra allá. ` +
       `Volvé a conectar el calendario desde el anuncio de este departamento (${OTA_IMPORT_PATH[link.channel]}) y cargá acá el enlace nuevo.` +
       coincidence,
     dedupeKey: `feed_gone:${link.id}`,
