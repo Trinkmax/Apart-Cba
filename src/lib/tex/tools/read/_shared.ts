@@ -8,6 +8,7 @@
  */
 import { BOOKING_SOURCE_META, BOOKING_STATUS_META, TICKET_PRIORITY_META, TICKET_STATUS_META } from "@/lib/constants";
 import { dayRangeInTz, ymdInTz } from "@/lib/dates";
+import { unitDisplay } from "@/lib/channels/unit-label";
 import type { CardTone } from "../../types";
 import { dateRange } from "../../format";
 
@@ -61,7 +62,7 @@ export function sourceLabel(source: string | null | undefined): string {
 /** "SAL525 · Salta 525" (o lo que haya). */
 export function unitLabel(u: { code?: string | null; name?: string | null } | null | undefined): string {
   if (!u) return "Sin unidad";
-  return [u.code, u.name].filter((s) => s && String(s).trim()).join(" · ") || "Sin unidad";
+  return unitDisplay(u.code, u.name, "Sin unidad");
 }
 
 /** "14 al 18 nov", con el año si no es el de hoy. */

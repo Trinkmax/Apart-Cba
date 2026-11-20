@@ -2,6 +2,7 @@ import { HEALTH_LABEL } from "./health";
 import { intervalLabel, stayLabel, type PublicationState } from "./export-reads";
 import { formatTimeInTz, OTA_REFRESH_HINT } from "./publication-copy";
 import type { Channel, ChannelLinkHealth } from "./types";
+import { unitDisplay } from "./unit-label";
 
 /**
  * El estado de una conexión dicho en frases, para quien pregunta en vez de
@@ -107,7 +108,7 @@ export function summarizeLinkStatus(link: LinkStatusInput, now: Date = new Date(
   const unseen = toBlock.length + toRelease.length > 0;
   return {
     id: link.id,
-    unidad: [link.unit.code, link.unit.name].filter(Boolean).join(" · "),
+    unidad: unitDisplay(link.unit.code, link.unit.name),
     canal: ota,
     estado: HEALTH_LABEL[link.health_state],
     tone: unseen && link.health_state === "healthy" ? "warn" : TONE[link.health_state],

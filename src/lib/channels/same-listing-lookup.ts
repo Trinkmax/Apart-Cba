@@ -6,6 +6,7 @@ import {
   type SameListingClash,
 } from "./same-listing";
 import type { Channel } from "./types";
+import { unitDisplay } from "./unit-label";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AdminClient = import("@supabase/supabase-js").SupabaseClient<any, any, any>;
@@ -54,7 +55,6 @@ export async function findSameListingConnection(
     .eq("id", other.unit_id as string)
     .maybeSingle();
   const unitCode = (unit?.code as string | undefined) ?? "otro departamento";
-  const name = (unit?.name as string | undefined)?.trim();
-  const unitLabel = name && name.toLowerCase() !== unitCode.toLowerCase() ? `${unitCode} · ${name}` : unitCode;
+  const unitLabel = unitDisplay(unitCode, unit?.name as string | undefined);
   return { ...clash, unitCode, unitLabel };
 }

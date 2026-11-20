@@ -14,6 +14,7 @@ import {
 import { reservationEventFromRow } from "./event-row";
 import { isAbsorbedByOurCalendar } from "./absorbed-closure";
 import { LINK_GONE_ERROR, siblingChangedNearby } from "./link-gone";
+import { unitDisplay } from "./unit-label";
 import { publicationState, stayLabel } from "./export-reads";
 import { formatStampInTz } from "./publication-copy";
 import { OTA_EXPORT_PATH, OTA_IMPORT_PATH } from "./ota-help";
@@ -785,7 +786,7 @@ async function keepClosureAbsorbedByOurCalendar(
   const { data: unit } = booking.unit_id
     ? await admin.from("units").select("code, name").eq("id", booking.unit_id).maybeSingle()
     : { data: null };
-  const donde = [unit?.code, unit?.name].filter((x) => x && String(x).trim()).join(" · ") || "Una unidad";
+  const donde = unitDisplay(unit?.code as string | undefined, unit?.name as string | undefined);
   const { error: noteErr } = await admin.from("notifications").insert({
     organization_id: link.organization_id,
     type: "other",
