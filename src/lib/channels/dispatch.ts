@@ -716,7 +716,8 @@ async function syncLink(
  * Un cierre de Booking que dejó de publicarse porque ya lo tiene nuestro
  * calendario (absorbed-closure.ts). La reserva queda como está, la fila deja de
  * contarse como ausente (mismo candado que «mantener», sin autor) y queda una
- * novedad que explica de qué dependen ahora esas fechas. `true` = no preguntar.
+ * novedad que explica por qué dejó de verse y cómo se abren esas fechas.
+ * `true` = no preguntar.
  */
 async function keepClosureAbsorbedByOurCalendar(
   admin: AdminClient,
@@ -778,7 +779,7 @@ async function keepClosureAbsorbedByOurCalendar(
     admin,
     link.organization_id,
     `missing:${r.id}`,
-    `${canal} dejó de mostrarla después de leer tu calendario (${hora}): esas fechas ahora dependen de este calendario. No se canceló nada.`,
+    `${canal} dejó de mostrarla después de leer tu calendario (${hora}): es un cierre de ${canal}, que no lo publica mientras tu calendario tenga esas fechas. No se canceló nada.`,
   );
 
   const { data: unit } = booking.unit_id
@@ -793,8 +794,8 @@ async function keepClosureAbsorbedByOurCalendar(
     body:
       `${donde}, ${stayLabel([booking.check_in_date as string, booking.check_out_date as string])}. ` +
       `${canal} las publicó cerradas, leyó tu calendario (${hora}) y dejó de mostrarlas. ` +
-      `No es una cancelación: pasa con fechas que se cerraron en ${canal} sin una reserva de ${canal} (por ejemplo, a mano). ` +
-      `Desde ahora siguen cerradas allá porque están cargadas acá: si querés volver a abrirlas, cancelá esta reserva. ` +
+      `No es una cancelación: ${canal} deja de publicar un cierre suyo (por ejemplo, uno hecho a mano) mientras tu calendario tenga esas mismas fechas. ` +
+      `Para volver a abrirlas hay que abrirlas en ${canal} y cancelar esta reserva acá. ` +
       `Si no hay huésped, podés marcarla como cierre.`,
     ref_type: "booking",
     ref_id: booking.id,
@@ -1266,8 +1267,8 @@ export async function proposeDisappearances(
       if (alreadyPending.has(r.id)) continue;
 
       // Dejó de publicarse justo después de que la OTA se bajó nuestro
-      // calendario: no se canceló nada, esas fechas pasaron a depender de él
-      // (absorbed-closure.ts). No se pregunta.
+      // calendario: no se canceló nada, es un cierre suyo que no publica
+      // mientras nuestro calendario lo tenga (absorbed-closure.ts). No se pregunta.
       if (await keepClosureAbsorbedByOurCalendar(admin, link, r, missingSince)) continue;
 
       // Evidencia suficiente para pedir una decisión humana.

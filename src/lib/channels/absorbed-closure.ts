@@ -18,15 +18,22 @@
  * Booking lee nuestro calendario (lo hacen todas las demás conexiones, más de
  * 60 reservas publicadas a la vez). Lo que deja de publicarse son fechas
  * cerradas en Booking que no son una reserva suya —lo habitual es un cierre a
- * mano—: cuando nuestro calendario trae esas mismas fechas, Booking las pasa a
- * depender de él y las saca del suyo.
+ * mano—: mientras nuestro calendario tenga esas mismas fechas, Booking no las
+ * publica en el suyo.
+ *
+ * El cierre NO se borra en Booking. En GAMA (Viaggiato) cancelaron la reserva
+ * local el 17/11 y Booking volvió a publicar la entrada. El 20/11 se vio
+ * entero: entró a las 14:02, Booking leyó nuestro calendario a las 14:21:39 y
+ * a las 14:26:08 ya no la publicaba.
  *
  * No se canceló nada, y preguntarlo era peor que ruido: contestar «cancelar»
- * libera las fechas acá, Booking lo lee y las vuelve a abrir, sin que nadie
- * haya pedido abrirlas.
+ * liberaba acá fechas que en Booking siguen cerradas a propósito (quedaban a la
+ * venta en la web propia y en las otras OTAs), y la entrada volvía a aparecer
+ * en la lectura siguiente. Para abrirlas de verdad hay que abrirlas en Booking
+ * Y cancelar la reserva acá.
  *
  * Qué se hace: la reserva queda como está y no se pregunta. Se deja una
- * novedad que explica que esas fechas ahora dependen de este calendario.
+ * novedad que explica por qué Booking dejó de mostrarlas y cómo se abren.
  * Puro; la lectura de los datos está en dispatch.ts.
  */
 import type { Channel } from "./types";
