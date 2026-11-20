@@ -1557,4 +1557,119 @@ d("pipeline canónico (integración DB, org descartable)", () => {
       .single();
     expect(row!.cancellation_locked_at).toBeNull();
   }, 120_000);
+
+  // ── El calendario de un mismo anuncio en dos departamentos ────────────────
+  // Viaggiato (20/11/2026): el mismo anuncio de Booking fue y vino tres veces
+  // entre CENTRO y SALGUERO. El identificador de cada entrada es propio del
+  // anuncio, así que se puede saber al guardar (same-listing.ts).
+  it("un calendario que otra conexión está leyendo ahora es el de su anuncio", async () => {
+    const { ingestEvent } = await import("@/lib/channels/ingest");
+    const { findSameListingConnection } = await import("@/lib/channels/same-listing-lookup");
+    const uid = "zzt-bkg-shared-1@booking.com";
+    // el anuncio está cargado en la unidad 1 y se acaba de leer
+    const r = await ingestEvent(admin, await feedRead(uid, inDays(480), inDays(483)));
+    expect(r.outcome).toBe("created");
+    await admin
+      .from("channel_reservations")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("id", r.reservationId!);
+    const ask = (linkId: string, feedUids: string[]) =>
+      findSameListingConnection(admin, { organizationId: orgId, channel: "booking", linkId, feedUids });
+
+    // alguien pega ese mismo calendario en la unidad 2
+    const clash = await ask(link2, [uid, "otra-entrada@booking.com"]);
+    expect(clash).toMatchObject({ linkId: link1, unitCode: "ZZT1", checkIn: inDays(480), checkOut: inDays(483), shared: 1 });
+
+    // volver a guardar el enlace en su propia unidad no choca consigo mismo
+    expect(await ask(link1, [uid])).toBeNull();
+    // otro anuncio (otro identificador) tampoco
+    expect(await ask(link2, ["zzt-bkg-otro-anuncio@booking.com"])).toBeNull();
+    // otra organización no ve estas filas
+    expect(
+      await findSameListingConnection(admin, { organizationId: org2Id, channel: "booking", linkId: link2, feedUids: [uid] }),
+    ).toBeNull();
+
+    // una fila que la otra conexión dejó de ver hace días (un error ya corregido) no frena
+    await admin
+      .from("channel_reservations")
+      .update({ last_seen_at: new Date(Date.now() - 5 * 86_400_000).toISOString() })
+      .eq("id", r.reservationId!);
+    expect(await ask(link2, [uid])).toBeNull();
+
+    // y si la otra conexión está en pausa, tampoco: pausarla es la salida
+    await admin
+      .from("channel_reservations")
+      .update({ last_seen_at: new Date().toISOString() })
+      .eq("id", r.reservationId!);
+    await admin.from("channel_links").update({ status: "paused" }).eq("id", link1);
+    try {
+      expect(await ask(link2, [uid])).toBeNull();
+    } finally {
+      await admin.from("channel_links").update({ status: "active" }).eq("id", link1);
+    }
+  }, 120_000);
+
+  // ── La OTA dio de baja el enlace ──────────────────────────────────────────
+  it("enlace dado de baja: aviso propio, en el momento, que nombra el cambio de enlace de la otra conexión", async () => {
+    const { flagFeedLinkGone } = await import("@/lib/channels/dispatch");
+    const { LINK_GONE_ERROR } = await import("@/lib/channels/link-gone");
+    const { issueVisibility } = await import("@/lib/alerts/policy");
+    // ya había un aviso genérico abierto, y en la otra conexión acaban de cargar un enlace
+    await admin.from("channel_issues").insert({
+      organization_id: orgId,
+      link_id: link1,
+      issue_type: "feed_error",
+      severity: "critical",
+      title: "No se puede leer el calendario de Airbnb",
+      dedupe_key: `feed:${link1}`,
+    });
+    const { data: other } = await admin.from("channel_links").select("health").eq("id", link2).single();
+    await admin
+      .from("channel_links")
+      .update({ health: { ...(other!.health ?? {}), feed_changed_at: new Date().toISOString() } })
+      .eq("id", link2);
+
+    const { data: linkRow } = await admin.from("channel_links").select("*").eq("id", link1).single();
+    await flagFeedLinkGone(admin, linkRow!);
+
+    const { data: after } = await admin
+      .from("channel_links")
+      .select("health, consecutive_failures")
+      .eq("id", link1)
+      .single();
+    expect(String(after!.health.last_error)).toContain(LINK_GONE_ERROR);
+    expect(after!.health.link_gone_at).toBeTruthy();
+    expect(after!.consecutive_failures).toBe(linkRow!.consecutive_failures + 1);
+
+    const { data: issue } = await admin
+      .from("channel_issues")
+      .select("status, severity, title, detail, dedupe_key, issue_type, created_at")
+      .eq("organization_id", orgId)
+      .eq("dedupe_key", `feed_gone:${link1}`)
+      .single();
+    expect(issue).toMatchObject({ status: "open", severity: "critical" });
+    expect(issue!.detail).toContain("tampoco lee tu calendario");
+    // nombra a la otra unidad, que es donde se cambió el enlace
+    expect(issue!.detail).toContain("ZZT2");
+    // se ve ya: no es un fallo pasajero
+    expect(issueVisibility(issue!, new Date())).toBe("visible");
+    // el genérico se cierra: queda un solo aviso, el que dice qué hacer
+    const { data: generic } = await admin
+      .from("channel_issues")
+      .select("status")
+      .eq("organization_id", orgId)
+      .eq("dedupe_key", `feed:${link1}`)
+      .single();
+    expect(generic!.status).toBe("resolved");
+
+    // otra lectura fallida de la MISMA caída no cambia el texto (se deduplica)
+    const { data: again } = await admin.from("channel_links").select("*").eq("id", link1).single();
+    await flagFeedLinkGone(admin, again!);
+    const { count } = await admin
+      .from("channel_issues")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", orgId)
+      .eq("dedupe_key", `feed_gone:${link1}`);
+    expect(count).toBe(1);
+  }, 120_000);
 });

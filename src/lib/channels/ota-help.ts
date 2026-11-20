@@ -25,3 +25,16 @@ export const OTA_FEED_PLACEHOLDER: Record<Channel, string> = {
   airbnb: "https://www.airbnb.com/calendar/ical/…ics?s=…",
   booking: "https://ical.booking.com/v1/export?t=…",
 };
+
+/**
+ * El nombre que conviene escribir cuando la OTA pide uno para el calendario que
+ * se le conecta. Es lo que después muestra encima de cada fecha bloqueada.
+ *
+ * Viaggiato (20/11/2026) los llamó a todos «Rentos»: en el anuncio que creían
+ * de CENTRO vieron un bloque «Rentos» del 20 al 23 y nada decía que venía del
+ * calendario de SALGUERO. Con el código del departamento en el nombre, el
+ * bloque mismo lo dice. Booking muestra unos 20 caracteres: va corto.
+ */
+export function otaCalendarName(unitCode: string): string {
+  return `rentOS ${unitCode.trim()}`.slice(0, 30);
+}

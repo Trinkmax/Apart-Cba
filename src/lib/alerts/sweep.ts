@@ -95,9 +95,9 @@ async function sweepChannelIssues(
 
   const keyOf = (i: OpenIssueRow) => i.dedupe_key ?? "";
   const linkIdOf = (i: OpenIssueRow) =>
-    i.link_id ?? keyOf(i).match(/^(?:feed|own_feed|stale|empty_feed|export_stale):(.+)$/)?.[1] ?? null;
+    i.link_id ?? keyOf(i).match(/^(?:feed|feed_gone|own_feed|stale|empty_feed|export_stale):(.+)$/)?.[1] ?? null;
   const isLinkIssue = (i: OpenIssueRow) =>
-    /^(?:feed|own_feed|stale|empty_feed|export_stale):/.test(keyOf(i));
+    /^(?:feed|feed_gone|own_feed|stale|empty_feed|export_stale):/.test(keyOf(i));
 
   // Reservas y bookings a los que apuntan.
   const reservations = await loadById(
@@ -136,6 +136,9 @@ async function sweepChannelIssues(
         .select("link_id")
         .in("link_id", chunk)
         .eq("external_status", "active")
+        // Lo que una persona decidió mantener (o un cierre que ya depende de
+        // este calendario) no está esperando nada del calendario de la OTA.
+        .is("cancellation_locked_at", null)
         .gte("check_out", today)
         .order("id", { ascending: true })
         .range(from, to),

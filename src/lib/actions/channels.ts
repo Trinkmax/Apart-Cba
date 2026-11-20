@@ -16,6 +16,7 @@ import { loadCurrentExportStays } from "@/lib/channels/outbound-ics";
 import {
   pendingChanges,
   publicationState,
+  stayLabel,
   type PublicationState,
   type Stay,
 } from "@/lib/channels/export-reads";
@@ -25,6 +26,9 @@ import { reservationEventFromRow } from "@/lib/channels/dispatch";
 import { isOwnExportFeedUrl } from "@/lib/channels/own-export-url";
 import { issueVisibility } from "@/lib/alerts/policy";
 import { OTA_EXPORT_PATH } from "@/lib/channels/ota-help";
+import { isFeedLinkGone, siblingsThatJustDied } from "@/lib/channels/link-gone";
+import { findSameListingConnection } from "@/lib/channels/same-listing-lookup";
+import { formatStampInTz } from "@/lib/channels/publication-copy";
 import { sha256Hex } from "@/lib/channels/token";
 import {
   emailChannelView,
@@ -329,7 +333,12 @@ const feedSchema = z.object({
  * OTA dejó de funcionar, así que el motivo tiene que llegar entero.
  */
 export type LinkFeedResult =
-  | { ok: true; events: number }
+  | {
+      ok: true;
+      events: number;
+      /** Algo que la persona tiene que mirar ya, aunque el enlace se haya guardado. */
+      warning?: string;
+    }
   | { ok: false; error: string };
 
 /** Carga/actualiza el calendario ENTRANTE de una conexión (URL → Vault). */
@@ -367,19 +376,45 @@ export async function saveLinkFeed(
         err instanceof BlockedUrlError ? `Enlace rechazado: ${err.message}` : "Enlace inválido",
     };
   }
+  const ota = link.channel === "airbnb" ? "Airbnb" : "Booking.com";
   let eventCount = 0;
+  let feedUids: string[] = [];
   try {
     const res = await safeFetchFeed(validated.feed_url, { timeoutMs: 10_000 });
     if (res.status !== 200 || res.body === undefined) {
       return {
         ok: false,
-        error: `El calendario respondió HTTP ${res.status}. Volvé a copiar el enlace desde la OTA.`,
+        error: isFeedLinkGone(link.channel, res.status, res.errorBody)
+          ? `${ota} dice que ese enlace ya no existe: es de una conexión que se borró. Copiá el enlace de la conexión que está armada ahora en el anuncio (${OTA_EXPORT_PATH[link.channel]}).`
+          : `El calendario respondió HTTP ${res.status}. Volvé a copiar el enlace desde la OTA.`,
       };
     }
-    eventCount = parseIcs(res.body, link.channel).length;
+    const events = parseIcs(res.body, link.channel);
+    eventCount = events.length;
+    feedUids = [...new Set(events.map((e) => e.uid))];
   } catch (err) {
     const msg = err instanceof Error ? err.message.replace(/https?:\/\/\S+/gi, "[url]") : "error";
     return { ok: false, error: `No se pudo leer el calendario: ${msg}` };
+  }
+
+  // ¿Es el calendario de un anuncio que YA está cargado en otro departamento?
+  // El identificador de cada entrada es propio del anuncio (same-listing.ts).
+  const clash = await findSameListingConnection(admin, {
+    organizationId: organization.id,
+    channel: link.channel,
+    linkId: link.id,
+    feedUids,
+  });
+  if (clash) {
+    const fechas = clash.checkIn && clash.checkOut ? stayLabel([clash.checkIn, clash.checkOut]) : null;
+    return {
+      ok: false,
+      error:
+        `Ese calendario es del mismo anuncio de ${ota} que hoy está cargado en ${clash.unitLabel}` +
+        (fechas ? ` (los dos traen la entrada ${fechas}${clash.shared > 1 ? ` y ${clash.shared - 1} más` : ""})` : "") +
+        `. Un anuncio no puede ser dos departamentos: fijate en ${ota} de qué propiedad lo copiaste. ` +
+        `Si el que está mal es el enlace de ${clash.unitCode}, pausá esa conexión y volvé a guardar ésta.`,
+    };
   }
 
   if (link.feed_secret_id) {
@@ -389,8 +424,70 @@ export async function saveLinkFeed(
     await admin.from("channel_links").update({ feed_secret_id: secretId }).eq("id", link.id);
   }
 
+  // Cuándo se cargó: si el enlace de OTRA conexión deja de existir por esta
+  // hora, el aviso lo dice (flagFeedLinkGone). Y que se lea ya: con el enlace
+  // anterior caído, la próxima lectura podía estar a una hora.
+  const nowIso = new Date().toISOString();
+  await admin
+    .from("channel_links")
+    .update({
+      health: { ...(link.health ?? {}), feed_changed_at: nowIso },
+      next_poll_at: nowIso,
+    })
+    .eq("id", link.id)
+    .eq("organization_id", organization.id);
+
+  const warning = await siblingDiedWarning(admin, {
+    organizationId: organization.id,
+    channel: link.channel,
+    linkId: link.id,
+    ota,
+  });
+
   revalidateCanales();
-  return { ok: true, events: eventCount };
+  return warning ? { ok: true, events: eventCount, warning } : { ok: true, events: eventCount };
+}
+
+/**
+ * Al cargar un enlace nuevo: ¿dejó de funcionar hace un rato el de otra
+ * conexión del mismo canal? Cuando en la OTA se borra o se vuelve a crear una
+ * conexión, el enlace de ESA conexión deja de existir. Si era la de otro
+ * departamento, hay que saberlo ahora y no dos horas después (link-gone.ts).
+ */
+async function siblingDiedWarning(
+  admin: ReturnType<typeof createAdminClient>,
+  input: { organizationId: string; channel: Channel; linkId: string; ota: string },
+): Promise<string | null> {
+  const { data } = await admin
+    .from("channel_links")
+    .select("consecutive_failures, last_success_at, health, unit:units(code)")
+    .eq("organization_id", input.organizationId)
+    .eq("channel", input.channel)
+    .eq("status", "active")
+    .neq("id", input.linkId)
+    .gte("consecutive_failures", 1);
+  const dead = siblingsThatJustDied(
+    ((data ?? []) as unknown as Array<{
+      consecutive_failures: number;
+      last_success_at: string | null;
+      health: { last_error?: string | null } | null;
+      unit: { code: string } | null;
+    }>).map((l) => ({
+      unitCode: l.unit?.code ?? "otro departamento",
+      consecutiveFailures: l.consecutive_failures,
+      lastSuccessAt: l.last_success_at,
+      lastError: l.health?.last_error ?? null,
+    })),
+    Date.now(),
+  );
+  if (dead.length === 0) return null;
+  const names = dead.map((d) => d.unitCode).join(" y ");
+  const since = formatStampInTz(dead[0].lastSuccessAt);
+  return (
+    `Ojo: el enlace de ${input.ota} de ${names} dejó de funcionar hace un rato (se leyó bien por última vez el ${since}). ` +
+    `Si recién borraste o volviste a crear una conexión en ${input.ota}, fijate que no haya sido la de ${names}: ` +
+    `cada conexión tiene su enlace y, al borrarla, ${input.ota} también deja de leer el calendario de ese departamento.`
+  );
 }
 
 /** Activa una conexión y dispara su primera sincronización inmediata. */

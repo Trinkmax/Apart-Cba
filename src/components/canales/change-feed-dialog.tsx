@@ -55,6 +55,7 @@ export function ChangeFeedDialog({
   const [open, setOpen] = useState(false);
   const [url, setUrl] = useState("");
   const [events, setEvents] = useState<number | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, startSaving] = useTransition();
 
@@ -72,6 +73,7 @@ export function ChangeFeedDialog({
     }
     startSaving(async () => {
       setError(null);
+      setWarning(null);
       try {
         const r = await saveLinkFeed({ link_id: linkId, feed_url: url.trim() });
         if (!r.ok) {
@@ -80,6 +82,7 @@ export function ChangeFeedDialog({
           return;
         }
         setEvents(r.events);
+        setWarning(r.warning ?? null);
         // el tablero muestra "sin calendario cargado" / última lectura
         router.refresh();
       } catch (err) {
@@ -96,6 +99,7 @@ export function ChangeFeedDialog({
     setUrl("");
     setEvents(null);
     setError(null);
+    setWarning(null);
     if (savedEvents > 0) onSaved?.(savedEvents);
   }
 
@@ -147,6 +151,12 @@ export function ChangeFeedDialog({
                   {meta.label} y probá de nuevo — lo guardamos igual, así que podés pegar otro
                   encima cuando lo tengas.
                 </p>
+              </div>
+            )}
+            {warning && (
+              <div className="flex items-start gap-2 rounded-lg border border-rose-500/25 bg-rose-500/10 p-3 text-xs text-rose-700 dark:text-rose-400">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
+                <p className="leading-relaxed">{warning}</p>
               </div>
             )}
             {ok && (

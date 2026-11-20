@@ -126,9 +126,38 @@ export async function assertSafeFeedUrl(rawUrl: string): Promise<URL> {
 export interface SafeFetchResult {
   status: number;
   body?: string;
+  /**
+   * El principio de la respuesta cuando NO es 200: ahí la OTA dice por qué.
+   * Booking contesta 400 «Invalid Token» cuando el enlace ya no existe, que no
+   * es lo mismo que un 400 pasajero (link-gone.ts).
+   */
+  errorBody?: string;
   etag?: string | null;
   lastModified?: string | null;
   contentType?: string | null;
+}
+
+const ERROR_SNIPPET_BYTES = 512;
+
+/** Los primeros bytes de una respuesta de error, sin leer más que eso. */
+async function readErrorSnippet(res: Response): Promise<string> {
+  const reader = res.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < ERROR_SNIPPET_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } catch {
+    // una respuesta de error cortada no cambia nada: se informa el status
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).toString("utf8").slice(0, ERROR_SNIPPET_BYTES);
 }
 
 /**
@@ -181,8 +210,7 @@ export async function safeFetchFeed(
     }
 
     if (!res.ok) {
-      res.body?.cancel().catch(() => {});
-      return { status: res.status };
+      return { status: res.status, errorBody: await readErrorSnippet(res) };
     }
 
     const contentType = res.headers.get("content-type");

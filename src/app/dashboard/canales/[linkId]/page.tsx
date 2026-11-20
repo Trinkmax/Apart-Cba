@@ -14,7 +14,7 @@ import { ExportUrlCopy } from "@/components/canales/export-url-copy";
 import { PublicationStatus } from "@/components/canales/publication-status";
 import { intervalLabel } from "@/lib/channels/export-reads";
 import { OTA_REFRESH_HINT, otaRefreshUrl } from "@/lib/channels/publication-copy";
-import { OTA_IMPORT_PATH } from "@/lib/channels/ota-help";
+import { OTA_IMPORT_PATH, otaCalendarName } from "@/lib/channels/ota-help";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
 import { formatDistanceToNow, format } from "date-fns";
 import { es } from "date-fns/locale";
@@ -138,6 +138,12 @@ export default async function LinkDetailPage({
           <div className="pt-1">
             <ExportUrlCopy linkId={link.id} />
           </div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            Al pegarlo en {ota}, de nombre poné{" "}
+            <span className="font-mono font-medium text-foreground">{otaCalendarName(link.unit.code)}</span>
+            : es lo que {ota} muestra sobre cada fecha bloqueada, y así se ve de qué departamento
+            viene.
+          </p>
           <p className="text-[11px] text-muted-foreground leading-relaxed">
             {ota} viene a leer este calendario cuando quiere{pace ? ` (${pace})` : ""}; no se le
             puede avisar desde acá. Si un cambio no puede esperar: {OTA_REFRESH_HINT[link.channel]}{" "}

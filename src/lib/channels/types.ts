@@ -288,6 +288,8 @@ export interface IcalFetchOutcome {
   status: "ok" | "not_modified" | "http_error" | "parse_error" | "blocked_url";
   httpStatus?: number;
   error?: string;
+  /** La OTA dice que ese enlace ya no existe (link-gone.ts): no es pasajero. */
+  linkGone?: boolean;
   etag?: string | null;
   lastModified?: string | null;
   /** Eventos normalizados (solo con status ok). */

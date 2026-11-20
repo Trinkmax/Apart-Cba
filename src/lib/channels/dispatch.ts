@@ -13,8 +13,9 @@ import {
 } from "./ingest";
 import { reservationEventFromRow } from "./event-row";
 import { isAbsorbedByOurCalendar } from "./absorbed-closure";
+import { LINK_GONE_ERROR, siblingChangedNearby } from "./link-gone";
 import { publicationState, stayLabel } from "./export-reads";
-import { formatTimeInTz } from "./publication-copy";
+import { formatStampInTz } from "./publication-copy";
 import { OTA_EXPORT_PATH, OTA_IMPORT_PATH } from "./ota-help";
 import { isOwnExportFeedUrl } from "./own-export-url";
 import {
@@ -531,6 +532,16 @@ async function syncLink(
     return result;
   }
 
+  // La OTA dice que el enlace ya no existe: no es un fallo pasajero ni se
+  // arregla esperando, y casi siempre quiere decir que tampoco está leyendo
+  // nuestro calendario (link-gone.ts). Se avisa ya, con su propio aviso.
+  if (outcome.status === "http_error" && "linkGone" in outcome && outcome.linkGone) {
+    stats.feedErrors++;
+    await flagFeedLinkGone(admin, link);
+    result.error = "enlace dado de baja";
+    return result;
+  }
+
   if (outcome.status !== "ok" || !outcome.events) {
     stats.feedErrors++;
     await markLinkFailure(
@@ -762,7 +773,7 @@ async function keepClosureAbsorbedByOurCalendar(
   if (lockErr) return false;
 
   const canal = channelLabel(link.channel);
-  const hora = formatTimeInTz(read.read_at as string);
+  const hora = formatStampInTz(read.read_at as string);
   await resolveIssuesByDedupe(
     admin,
     link.organization_id,
@@ -781,7 +792,7 @@ async function keepClosureAbsorbedByOurCalendar(
     title: `${canal} dejó de mostrar unas fechas que ya están cargadas acá`,
     body:
       `${donde}, ${stayLabel([booking.check_in_date as string, booking.check_out_date as string])}. ` +
-      `${canal} las publicó cerradas, leyó tu calendario a las ${hora} y dejó de mostrarlas. ` +
+      `${canal} las publicó cerradas, leyó tu calendario (${hora}) y dejó de mostrarlas. ` +
       `No es una cancelación: pasa con fechas que se cerraron en ${canal} sin una reserva de ${canal} (por ejemplo, a mano). ` +
       `Desde ahora siguen cerradas allá porque están cargadas acá: si querés volver a abrirlas, cancelá esta reserva. ` +
       `Si no hay huésped, podés marcarla como cierre.`,
@@ -1175,7 +1186,11 @@ export async function proposeDisappearances(
         issueType: "feed_error",
         severity: "critical",
         title: `El calendario de ${channelLabel(link.channel)} está viniendo vacío`,
-        detail: `La última lectura no trajo ningún evento, pero hay ${vivas} ${vivas === 1 ? "reserva activa" : "reservas activas"} de esta conexión. No tocamos nada: revisá que el enlace del calendario siga siendo válido. Si sigue vacío varias horas te vamos a preguntar por cada una.`,
+        // No pide «revisá el enlace»: el enlace se está leyendo bien (respondió,
+        // con un calendario sin fechas). En Viaggiato ese pedido llevó a pegar
+        // de nuevo un enlace que estaba bien, copiado del anuncio de otro
+        // departamento (16/11/2026), y de ahí salieron cinco días de cruces.
+        detail: `El calendario de ${channelLabel(link.channel)} de este departamento se lee bien, pero no trae ninguna fecha ocupada, y acá hay ${vivas} ${vivas === 1 ? "reserva" : "reservas"} de ese canal. No tocamos nada. Lo más común es que en ${channelLabel(link.channel)} ya no ${vivas === 1 ? "figure" : "figuren"} (se ${vivas === 1 ? "canceló o se pasó" : "cancelaron o se pasaron"} a otro anuncio): si sigue así unas horas te vamos a preguntar por cada una. No hace falta volver a cargar el enlace.`,
         dedupeKey: `empty_feed:${link.id}`,
       });
     }
@@ -1402,6 +1417,7 @@ async function markLinkSuccess(
     health: {
       ...(link.health ?? {}),
       last_error: null,
+      link_gone_at: null,
       ...(extra.unchanged
         ? {}
         : {
@@ -1432,6 +1448,12 @@ async function markLinkSuccess(
       `own_feed:${link.id}`,
       "Ya está cargado el calendario de la OTA.",
     );
+    await resolveIssuesByDedupe(
+      admin,
+      link.organization_id,
+      `feed_gone:${link.id}`,
+      "El enlace nuevo ya se está leyendo.",
+    );
   }
   // si estaba marcada como estancada (>10 min sin éxito), este éxito la resuelve
   const wasStale =
@@ -1452,6 +1474,85 @@ async function markLinkSuccess(
  * tanto no entra ninguna reserva de esa OTA para el departamento. Se dice así,
  * con el paso para corregirlo, en vez de «no se puede leer el calendario».
  */
+/**
+ * La OTA dio de baja el enlace del calendario de esta conexión (link-gone.ts).
+ * Un aviso propio, visible en el momento, que dice qué pasó y qué quedó sin
+ * proteger. Si coincide con el cambio de enlace de otra conexión del mismo
+ * canal, la nombra: casi siempre se borró o se reemplazó la conexión
+ * equivocada.
+ */
+export async function flagFeedLinkGone(admin: AdminClient, link: ChannelLinkRow): Promise<void> {
+  const ota = channelLabel(link.channel);
+  const health = (link.health ?? {}) as Record<string, unknown>;
+  const goneAt =
+    typeof health.link_gone_at === "string" && health.link_gone_at
+      ? health.link_gone_at
+      : new Date().toISOString();
+  await admin
+    .from("channel_links")
+    .update({
+      claimed_until: null,
+      consecutive_failures: link.consecutive_failures + 1,
+      // Insistir no lo revive: lo destraba una persona cargando el enlace nuevo
+      // (que pone la próxima lectura para ya, ver saveLinkFeed).
+      next_poll_at: new Date(Date.now() + MAX_BACKOFF_MIN * 60 * 1000).toISOString(),
+      health: { ...health, last_error: `${LINK_GONE_ERROR} en ${ota}`, link_gone_at: goneAt },
+    })
+    .eq("id", link.id);
+
+  // ¿Se cargó un enlace nuevo en OTRA conexión del mismo canal por esa hora?
+  let coincidence = "";
+  const { data: siblings } = await admin
+    .from("channel_links")
+    .select("id, unit_id, health")
+    .eq("organization_id", link.organization_id)
+    .eq("channel", link.channel)
+    .neq("id", link.id);
+  const changed = ((siblings ?? []) as Array<{ unit_id: string; health: Record<string, unknown> | null }>)
+    .map((s) => ({ unitId: s.unit_id, changedAt: s.health?.feed_changed_at }))
+    .filter((s): s is { unitId: string; changedAt: string } => typeof s.changedAt === "string");
+  if (changed.length > 0) {
+    const { data: units } = await admin
+      .from("units")
+      .select("id, code")
+      .in(
+        "id",
+        changed.map((c) => c.unitId),
+      );
+    const code = new Map(((units ?? []) as Array<{ id: string; code: string }>).map((u) => [u.id, u.code]));
+    const near = siblingChangedNearby(
+      changed.map((c) => ({ unitCode: code.get(c.unitId) ?? "otro departamento", changedAt: c.changedAt })),
+      Date.parse(goneAt),
+    );
+    if (near) {
+      coincidence = ` Coincide con el cambio de enlace de ${near.unitCode} (${formatStampInTz(near.changedAt)}): fijate que en ${ota} no se haya borrado o reemplazado la conexión de este departamento en lugar de la de ${near.unitCode}.`;
+    }
+  }
+
+  await openIssue(admin, {
+    organizationId: link.organization_id,
+    linkId: link.id,
+    issueType: "feed_error",
+    severity: "critical",
+    title: `${ota} dio de baja el enlace del calendario de esta conexión`,
+    detail:
+      `${ota} responde que ese enlace ya no existe. Pasa cuando en ${ota} se borra la conexión del calendario o se crea una nueva: cada conexión tiene su propio enlace. ` +
+      `Desde el ${formatStampInTz(goneAt)} no entran las reservas de ${ota} de este departamento y, si la conexión se borró, ${ota} tampoco lee tu calendario: lo que se reserve acá no se cierra allá. ` +
+      `Volvé a conectar el calendario desde el anuncio de este departamento (${OTA_IMPORT_PATH[link.channel]}) y cargá acá el enlace nuevo.` +
+      coincidence,
+    dedupeKey: `feed_gone:${link.id}`,
+  });
+  // Los genéricos decían lo mismo, peor y dos horas más tarde.
+  for (const key of [`feed:${link.id}`, `stale:${link.id}`]) {
+    await resolveIssuesByDedupe(
+      admin,
+      link.organization_id,
+      key,
+      "El enlace se dio de baja en la OTA: ver el aviso de esta conexión.",
+    );
+  }
+}
+
 const OWN_FEED_ERROR = "Está cargado el enlace de rentOS";
 
 async function flagOwnExportAsFeed(admin: AdminClient, link: ChannelLinkRow): Promise<void> {
@@ -1584,9 +1685,14 @@ async function runHousekeeping(admin: AdminClient): Promise<Record<string, numbe
   let stale = 0;
   for (const l of staleLinks ?? []) {
     if (!l.last_success_at && Date.parse(l.created_at) > Date.now() - 30 * 60 * 1000) continue;
-    // Ya tiene su aviso, que dice qué hacer (flagOwnExportAsFeed).
+    // Ya tiene su aviso, que dice qué hacer (flagOwnExportAsFeed, flagFeedLinkGone).
     const lastError = (l.health as { last_error?: unknown } | null)?.last_error;
-    if (typeof lastError === "string" && lastError.startsWith(OWN_FEED_ERROR)) continue;
+    if (
+      typeof lastError === "string" &&
+      (lastError.startsWith(OWN_FEED_ERROR) || lastError.startsWith(LINK_GONE_ERROR))
+    ) {
+      continue;
+    }
     await openIssue(admin, {
       organizationId: l.organization_id,
       linkId: l.id,

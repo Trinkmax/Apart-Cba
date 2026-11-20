@@ -90,6 +90,27 @@ describe("safeFetchFeed", () => {
     expect(fetchMock.mock.calls[0][1].headers["if-none-match"]).toBe('"abc"');
   });
 
+  // SALGUERO (Viaggiato), 20/11/2026: lo que contesta Booking cuando la
+  // conexión del calendario se borró. Antes se guardaba sólo «HTTP 400».
+  it("una respuesta de error trae el principio del cuerpo: ahí está el motivo", async () => {
+    const body = '{"detail":"Invalid Token","instance":"/v1/export","status":400,"title":"Bad Request"}';
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(body, { status: 400, headers: { "content-type": "application/problem+json" } }),
+      ),
+    );
+    const res = await safeFetchFeed("https://ical.booking.com/v1/export?t=borrado");
+    expect(res).toEqual({ status: 400, errorBody: body });
+  });
+
+  it("de un error enorme lee sólo el principio", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("x".repeat(50_000), { status: 500 })));
+    const res = await safeFetchFeed("https://ical.booking.com/v1/export?t=x");
+    expect(res.status).toBe(500);
+    expect(res.errorBody?.length).toBe(512);
+  });
+
   it("un redirect de verdad sin Location sigue siendo un error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 302 })));
     await expect(safeFetchFeed("https://www.airbnb.com/calendar/ical/123.ics")).rejects.toThrow(

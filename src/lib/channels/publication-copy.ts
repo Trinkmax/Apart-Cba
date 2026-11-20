@@ -25,6 +25,24 @@ export function formatTimeInTz(
 }
 
 /**
+ * «20/11 12:02»: un momento que ya pasó, siempre con el día. Va en el texto de
+ * avisos que se vuelven a armar en cada lectura: tiene que dar lo mismo hoy que
+ * mañana (el aviso se deduplica y se recuerda descartado por su texto).
+ */
+export function formatStampInTz(iso: string, timeZone: string = DEFAULT_ORG_TIMEZONE): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "—";
+  const ymd = ymdInTz(at, timeZone);
+  const time = new Intl.DateTimeFormat("es-AR", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(at);
+  return `${ymd.slice(8, 10)}/${ymd.slice(5, 7)} ${time}`;
+}
+
+/**
  * Cómo se le pide a la OTA que lea YA, sin esperar su próxima pasada. No hay
  * forma de hacerlo desde acá: con iCal la que viene a leer es ella.
  */

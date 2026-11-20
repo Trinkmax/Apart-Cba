@@ -2304,8 +2304,12 @@ export async function openIssue(
   // (issue-dismissal.ts). Vale para lo que apunta a una reserva y para «la OTA
   // no lee tu calendario» (un anuncio pausado no lee, y está bien). Los demás
   // avisos de una conexión —el calendario que no se puede leer— sí vuelven:
-  // una caída nueva es un hecho nuevo aunque el texto sea el mismo.
-  const stickyLinkNotice = !!input.linkId && !!input.dedupeKey?.startsWith("export_stale:");
+  // una caída nueva es un hecho nuevo aunque el texto sea el mismo. El de «la
+  // OTA dio de baja el enlace» lleva el momento de la caída en el texto: la
+  // misma caída no vuelve, una nueva sí.
+  const stickyLinkNotice =
+    !!input.linkId &&
+    (!!input.dedupeKey?.startsWith("export_stale:") || !!input.dedupeKey?.startsWith("feed_gone:"));
   if ((input.reservationId || stickyLinkNotice) && input.dedupeKey) {
     let query = admin
       .from("channel_issues")

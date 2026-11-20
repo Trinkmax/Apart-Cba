@@ -281,6 +281,13 @@ describe("issueResolution — se cierra sola cuando deja de ser verdad", () => {
     expect(issueResolution(issue("feed:l1"), { link: null }, opts)).toMatch(/ya no existe/);
     // «Está cargado el enlace de rentOS»: se cierra cuando la conexión lee bien.
     expect(issueResolution(issue("own_feed:l1"), { link: healthy }, opts)).toMatch(/volvió a funcionar/);
+    // «La OTA dio de baja el enlace»: se cierra cuando el enlace nuevo ya se lee,
+    // y se muestra en el momento (no es un fallo pasajero).
+    expect(issueResolution(issue("feed_gone:l1"), { link: healthy }, opts)).toMatch(/volvió a funcionar/);
+    expect(
+      issueResolution(issue("feed_gone:l1"), { link: { ...healthy, consecutiveFailures: 6 } }, opts),
+    ).toBeNull();
+    expect(issueVisibility(issue("feed_gone:l1", 1), NOW)).toBe("visible");
     expect(
       issueResolution(issue("own_feed:l1"), { link: { ...healthy, consecutiveFailures: 44 } }, opts),
     ).toBeNull();

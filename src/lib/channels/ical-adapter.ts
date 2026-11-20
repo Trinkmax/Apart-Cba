@@ -1,6 +1,7 @@
 import ICAL from "ical.js";
 import crypto from "crypto";
 import { safeFetchFeed, BlockedUrlError } from "./ssrf";
+import { isFeedLinkGone } from "./link-gone";
 import {
   LONG_RANGE_BLOCK_NIGHTS,
   daysBetweenYmd,
@@ -74,7 +75,12 @@ export async function fetchIcalFeed(input: {
 
   if (res.status === 304) return { status: "not_modified" };
   if (res.status !== 200 || res.body === undefined) {
-    return { status: "http_error", httpStatus: res.status, error: `HTTP ${res.status}` };
+    return {
+      status: "http_error",
+      httpStatus: res.status,
+      error: `HTTP ${res.status}`,
+      linkGone: isFeedLinkGone(input.channel, res.status, res.errorBody),
+    };
   }
 
   let events: NormalizedIcalEvent[];

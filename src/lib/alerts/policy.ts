@@ -305,6 +305,7 @@ export function issueResolution(
 
   if (
     key.startsWith("feed:") ||
+    key.startsWith("feed_gone:") ||
     key.startsWith("own_feed:") ||
     key.startsWith("stale:") ||
     key.startsWith("empty_feed:")

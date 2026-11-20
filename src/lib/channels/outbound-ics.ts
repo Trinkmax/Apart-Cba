@@ -159,7 +159,10 @@ export async function buildUnitCalendar(
     "PRODID:-//ApartCba//Canales de venta//ES",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:${escapeText(`Apart Cba — ${unit.code} ${unit.name}`)}`,
+    // Lo ve quien abra el calendario en una app (y algunas OTAs al conectarlo):
+    // dice de qué departamento es. Antes decía «Apart Cba» en el de todas las
+    // organizaciones.
+    `X-WR-CALNAME:${escapeText(`rentOS ${unit.code} · ${unit.name}`)}`,
     "X-WR-TIMEZONE:America/Argentina/Cordoba",
   ];
 

@@ -30,7 +30,7 @@ import {
 } from "@/lib/actions/channels";
 import type { ChannelLinkOverview } from "@/lib/actions/channels";
 import { BOOKING_SOURCE_META } from "@/lib/constants";
-import { OTA_FEED_PLACEHOLDER, OTA_IMPORT_PATH } from "@/lib/channels/ota-help";
+import { OTA_FEED_PLACEHOLDER, OTA_IMPORT_PATH, otaCalendarName } from "@/lib/channels/ota-help";
 import type { Channel } from "@/lib/channels/types";
 
 /**
@@ -386,6 +386,9 @@ function DraftChecklistCard({
         setFeedSaved(true);
         setFeedEvents(r.events);
         toast.success(`Calendario leído correctamente (${r.events} eventos)`);
+        // Algo que no puede esperar (el enlace de OTRO departamento acaba de
+        // dejar de funcionar): queda en pantalla hasta que lo cierren.
+        if (r.warning) toast.warning("Revisá otra conexión", { description: r.warning, duration: Infinity });
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "No se pudo leer el calendario");
       }
@@ -476,6 +479,14 @@ function DraftChecklistCard({
             )}
           </span>
         </div>
+        {/* El nombre es lo que la OTA muestra sobre cada fecha bloqueada: con el
+            código del departamento, un enlace pegado en el anuncio equivocado
+            se ve a simple vista. */}
+        <p className="text-[11px] text-muted-foreground leading-relaxed">
+          Cuando te pida un nombre para el calendario, poné{" "}
+          <span className="font-mono font-medium text-foreground">{otaCalendarName(link.unit.code)}</span>
+          : es lo que vas a ver sobre cada fecha bloqueada, y así sabés de qué departamento viene.
+        </p>
       </div>
 
       {/* Paso C: activar */}
